@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Production Build Output
+dist/
+bin/
+*.tsbuildinfo
+
+# Emit Workspace & SQLite Cache
+.emit/
+*.db
+*.db-wal
+*.db-shm
+
+# Temp & Scratch Folders
+Temp/
+temp/
+tmp/
+coverage/
+
+# Environment & Credentials Safeguard
+.env
+.env.*
+auth.json
+credentials.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS Specific
+.DS_Store
+Thumbs.db
