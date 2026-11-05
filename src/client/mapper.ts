@@ -97,10 +97,18 @@ export function localToApiPayload(
 
   if (frontmatter.bylines && frontmatter.bylines.length > 0) {
     const slugMap = options?.bylineSlugToId || {};
-    payload.bylines = frontmatter.bylines.map((slug) => ({
-      bylineId: slugMap[slug] || slug,
-      roleLabel: null,
-    }));
+    const validBylines: ContentBylineInput[] = [];
+    for (const slug of frontmatter.bylines) {
+      const mappedId = slugMap[slug];
+      if (mappedId) {
+        validBylines.push({ bylineId: mappedId, roleLabel: null });
+      } else if (/^[0-9A-Za-z_-]{16,36}$/.test(slug)) {
+        validBylines.push({ bylineId: slug, roleLabel: null });
+      }
+    }
+    if (validBylines.length > 0) {
+      payload.bylines = validBylines;
+    }
   }
 
   return payload;
