@@ -177,6 +177,11 @@ export function apiResponseToLocal(
     if (slugOrId) bylines = [idMap[slugOrId] || slugOrId];
   }
 
+  if (bylines.length === 0 && item.primaryBylineId && typeof item.primaryBylineId === 'string') {
+    const slugOrId = item.primaryBylineId;
+    bylines = [idMap[slugOrId] || slugOrId];
+  }
+
   const frontmatter: Frontmatter = {
     id,
     slug,
