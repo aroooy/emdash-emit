@@ -44,24 +44,24 @@ describe('Mapper (Local Frontend <-> EmDash API)', () => {
     rawYaml: '',
   };
 
-  it('omits status: published when allowPublish is not true (Staging Protection G3)', () => {
+  it('omits status from PUT payload (status transitions use /publish and /unpublish)', () => {
     const payload = localToApiPayload(sampleParsed, 'rev_test_1', {
       allowPublish: false,
     });
 
     expect(payload.id).toBe(validUlid);
-    expect(payload.status).toBeUndefined(); // Omitted for staging
+    expect(payload.status).toBeUndefined();
     expect(payload._rev).toBe('rev_test_1');
     expect(Array.isArray(payload.data.content)).toBe(true);
   });
 
-  it('includes status: published only when allowPublish is true', () => {
+  it('maps bylines correctly in payload', () => {
     const payload = localToApiPayload(sampleParsed, 'rev_test_1', {
       allowPublish: true,
       bylineSlugToId: { 'hiroaki-author': '01BYLINE_ID_123' },
     });
 
-    expect(payload.status).toBe('published');
+    expect(payload.status).toBeUndefined();
     expect(payload.bylines).toEqual([{ bylineId: '01BYLINE_ID_123', roleLabel: null }]);
   });
 

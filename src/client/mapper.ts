@@ -77,13 +77,9 @@ export function localToApiPayload(
     _rev: rev,
   };
 
-  // Staging Protection (G3): Only include status: 'published' if allowPublish is true
-  if (frontmatter.status === 'published' && options?.allowPublish) {
-    payload.status = 'published';
-  } else if (frontmatter.status === 'draft') {
-    // If explicitly set to draft, we can send draft or omit
-    // (Omission maintains draft/staging mode on remote)
-  }
+  // Note: In EmDash, publishing/unpublishing is performed via dedicated
+  // /publish and /unpublish endpoints rather than in PUT payloads.
+  // We omit status here to comply with EmDash PUT endpoint validation.
 
   if (frontmatter.publishedAt !== undefined) {
     payload.publishedAt = frontmatter.publishedAt;

@@ -157,6 +157,13 @@ describe('Pull & Push Synchronization Engine', () => {
 
     const mockFetch = vi.fn().mockImplementation((url, init) => {
       if (init.method === 'POST') {
+        const urlStr = String(url);
+        if (urlStr.includes('/publish')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ id: validUlid, _rev: 'rev_v3', status: 'published' }),
+          });
+        }
         // Lock acquisition
         return Promise.resolve({
           ok: true,
@@ -186,7 +193,7 @@ describe('Pull & Push Synchronization Engine', () => {
     });
 
     expect(res.success).toBe(true);
-    expect(res.rev).toBe('rev_v2');
+    expect(res.rev).toBe('rev_v3');
     expect(res.filePath).toBe(`posts/published/${todayPrefix}${validUlid}-Publishing-Post.md`);
 
     // Path tracking check: Old draft file unlinked, new published file created
@@ -197,7 +204,7 @@ describe('Pull & Push Synchronization Engine', () => {
     const updatedSync = cache.getSyncState(validUlid);
     expect(updatedSync?.status).toBe('published');
     expect(updatedSync?.localFilePath).toBe(res.filePath);
-    expect(updatedSync?.remoteRev).toBe('rev_v2');
+    expect(updatedSync?.remoteRev).toBe('rev_v3');
   });
 
   it('pushArticle renames file and updates sync_state when title is changed in frontmatter', async () => {

@@ -73,6 +73,55 @@ export class PushValidationError extends Error {
 }
 
 /**
+ * Helper to transition content status via EmDash /publish or /unpublish endpoints.
+ */
+async function transitionContentStatus(
+  collection: string,
+  id: string,
+  targetStatus: 'draft' | 'published',
+  currentRev: string,
+  publishedAt: string | null | undefined,
+  options: PushOptions,
+  fetchFn: typeof fetch,
+): Promise<string> {
+  const isPublishing = targetStatus === 'published';
+  const endpoint = new URL(
+    `/_emdash/api/content/${collection}/${id}/${isPublishing ? 'publish' : 'unpublish'}`,
+    options.origin,
+  ).toString();
+
+  const body: Record<string, unknown> = { _rev: currentRev };
+  if (isPublishing && publishedAt) {
+    body.publishedAt = publishedAt;
+  }
+
+  const res = await fetchFn(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new ApiError({
+      message: `Failed to ${isPublishing ? 'publish' : 'unpublish'} content: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
+      code: isPublishing ? 'PUBLISH_FAILED' : 'UNPUBLISH_FAILED',
+      status: res.status,
+      endpoint,
+      suggestion: isPublishing
+        ? 'Verify publish permissions and revision state.'
+        : 'Verify unpublish permissions and revision state.',
+    });
+  }
+
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return extractRev(json, currentRev);
+}
+
+/**
  * Pushes a local markdown article to remote EmDash with full preflight guards,
  * two-tier lock lease protection, and automatic 3-way merge on conflict.
  */
@@ -232,10 +281,24 @@ export async function pushArticle(
       }
     }
 
+    // Transition status to published if requested and permitted
+    let finalRev = newRev;
+    if (parsed.frontmatter.status === 'published' && options.allowPublish) {
+      finalRev = await transitionContentStatus(
+        collection,
+        actualId,
+        'published',
+        newRev,
+        parsed.frontmatter.publishedAt,
+        options,
+        fetchFn,
+      );
+    }
+
     // Update Base snapshot and Sync state
     options.cache.saveBaseSnapshot({
       id: actualId,
-      rev: newRev,
+      rev: finalRev,
       bodyMarkdown: parsed.body,
       frontmatterYaml: JSON.stringify(parsed.frontmatter),
       hash: newHash,
@@ -246,7 +309,7 @@ export async function pushArticle(
       id: actualId,
       localFilePath: newRelPath,
       localHash: newHash,
-      remoteRev: newRev,
+      remoteRev: finalRev,
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
@@ -255,7 +318,7 @@ export async function pushArticle(
     return {
       success: true,
       id: actualId,
-      rev: newRev,
+      rev: finalRev,
       filePath: newRelPath,
       conflict: false,
       warnings,
@@ -457,10 +520,35 @@ export async function pushArticle(
       fs.writeFileSync(fullPath, serializedContent, 'utf8');
     }
 
+    // Transition status (publish or unpublish) via dedicated endpoints if needed
+    let finalRev = newRev;
+    const previousStatus = syncState?.status || 'draft';
+    if (parsed.frontmatter.status === 'published' && options.allowPublish) {
+      finalRev = await transitionContentStatus(
+        collection,
+        id,
+        'published',
+        newRev,
+        parsed.frontmatter.publishedAt,
+        options,
+        fetchFn,
+      );
+    } else if (parsed.frontmatter.status === 'draft' && previousStatus === 'published') {
+      finalRev = await transitionContentStatus(
+        collection,
+        id,
+        'draft',
+        newRev,
+        null,
+        options,
+        fetchFn,
+      );
+    }
+
     // Update Base snapshot
     options.cache.saveBaseSnapshot({
       id,
-      rev: newRev,
+      rev: finalRev,
       bodyMarkdown: parsed.body,
       frontmatterYaml: JSON.stringify(parsed.frontmatter),
       hash: newHash,
@@ -472,7 +560,7 @@ export async function pushArticle(
       id,
       localFilePath: newRelPath,
       localHash: newHash,
-      remoteRev: newRev,
+      remoteRev: finalRev,
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
@@ -481,7 +569,7 @@ export async function pushArticle(
     return {
       success: true,
       id,
-      rev: newRev,
+      rev: finalRev,
       filePath: newRelPath,
       conflict: false,
       warnings,
