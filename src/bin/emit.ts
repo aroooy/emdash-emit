@@ -30,13 +30,14 @@ import { registerNewCommand } from '../cli/commands/new.js';
 import { registerPullCommands } from '../cli/commands/pull.js';
 import { registerPushCommand } from '../cli/commands/push.js';
 import { registerStatusInitCommands } from '../cli/commands/status.js';
+import { getPackageVersion } from '../utils/version.js';
 
 export const program = new Command();
 
 program
   .name('emit')
   .description('AI-First Local Workspace & Sync Tool for EmDash (Cloudflare Workers + D1)')
-  .version('0.1.0');
+  .version(getPackageVersion());
 
 const resolveContext = createCliContextResolver();
 

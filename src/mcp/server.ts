@@ -34,6 +34,7 @@ import { registerSyncPullTools } from './tools/sync-pull.js';
 import { registerSyncPushTool } from './tools/sync-push.js';
 import { registerSyncStatusTool } from './tools/sync-status.js';
 import { registerSyncDiffTool } from './tools/sync-diff.js';
+import { getPackageVersion } from '../utils/version.js';
 
 export interface CreateMcpServerOptions {
   workspaceRoot?: string;
@@ -89,7 +90,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
 
   const server = new McpServer({
     name: 'emit',
-    version: '0.1.0',
+    version: getPackageVersion(),
   });
 
   // Register modular tools
