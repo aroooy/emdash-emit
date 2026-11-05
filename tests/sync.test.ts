@@ -109,6 +109,8 @@ describe('Pull & Push Synchronization Engine', () => {
       collection: 'posts',
       status: 'draft',
       locale: 'ja',
+      taxonomies: {},
+      bylines: [],
     };
     // Include local image in body
     const invalidMd = serializeMarkdown(
@@ -136,6 +138,8 @@ describe('Pull & Push Synchronization Engine', () => {
       collection: 'posts',
       status: 'published', // changed from draft to published
       locale: 'ja',
+      taxonomies: {},
+      bylines: [],
     };
     const draftMd = serializeMarkdown(draftFm, 'Great article body ready for publication.');
 
@@ -215,6 +219,8 @@ describe('Pull & Push Synchronization Engine', () => {
       collection: 'posts',
       status: 'draft',
       locale: 'ja',
+      taxonomies: {},
+      bylines: [],
     };
     const draftMd = serializeMarkdown(draftFm, 'Body content of renovated article.');
 
@@ -292,6 +298,8 @@ describe('Pull & Push Synchronization Engine', () => {
       collection: 'posts',
       status: 'draft',
       locale: 'ja',
+      taxonomies: {},
+      bylines: [],
     };
 
     const targetRelPath = `posts/draft/${todayPrefix}${validUlid}-Conflict-Post.md`;
