@@ -30,6 +30,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import type { CacheDatabase } from '../db/cache.js';
 
 export interface CreateArticleOptions {
   workspaceRoot: string;
@@ -37,6 +38,8 @@ export interface CreateArticleOptions {
   title?: string;
   collection?: string;
   locale?: string;
+  byline?: string;
+  cache?: CacheDatabase;
   candidates?: TaxonomyCandidates;
 }
 
@@ -58,6 +61,16 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   const title = options.title || slug;
   const locale = options.locale || 'ja';
 
+  let initialBylines: string[] = [];
+  if (options.byline) {
+    initialBylines = [options.byline];
+  } else if (options.cache) {
+    const cached = options.cache.getBylines().filter((b) => !b.isGuest);
+    if (cached.length > 0 && cached[0].slug) {
+      initialBylines = [cached[0].slug];
+    }
+  }
+
   const frontmatter: Frontmatter = {
     id,
     slug,
@@ -70,7 +83,7 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
       categories: [],
       tags: [],
     },
-    bylines: [],
+    bylines: initialBylines,
   };
 
   const initialBody = 'Write article body content here...\n';

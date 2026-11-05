@@ -95,7 +95,7 @@ export function localToApiPayload(
     };
   }
 
-  if (frontmatter.bylines && frontmatter.bylines.length > 0) {
+  if (frontmatter.bylines !== undefined && Array.isArray(frontmatter.bylines)) {
     const slugMap = options?.bylineSlugToId || {};
     const validBylines: ContentBylineInput[] = [];
     for (const slug of frontmatter.bylines) {
@@ -106,7 +106,7 @@ export function localToApiPayload(
         validBylines.push({ bylineId: slug, roleLabel: null });
       }
     }
-    if (validBylines.length > 0) {
+    if (validBylines.length > 0 || frontmatter.bylines.length === 0) {
       payload.bylines = validBylines;
     }
   }

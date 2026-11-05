@@ -32,6 +32,7 @@ import {
 } from './pull.js';
 import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
+import { syncRemoteBylines } from './bylines.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -74,6 +75,15 @@ export interface PullBatchResult {
  * Reusable across CLI and MCP servers to ensure consistent behavior.
  */
 export async function pullBatch(options: PullBatchOptions): Promise<PullBatchResult> {
+  // Synchronize remote bylines into local SQLite cache before pulling articles
+  const bylineMaps = await syncRemoteBylines({
+    origin: options.origin,
+    token: options.token,
+    refreshToken: options.refreshToken,
+    cache: options.cache,
+    fetchFn: options.fetchFn,
+  }).catch(() => options.cache.getBylineMaps());
+
   const remoteList = await listRemoteArticles(options.collection, {
     origin: options.origin,
     token: options.token,
@@ -168,6 +178,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         rawItem: item.rawItem,
         force: options.force,
         fetchFn: options.fetchFn,
+        bylineIdToSlug: bylineMaps.idToSlug,
+        bylineSlugToId: bylineMaps.slugToId,
       });
 
       results.push(res);

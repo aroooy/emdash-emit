@@ -43,6 +43,7 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
         collection,
         locale,
         workspaceRoot: ctx.root,
+        cache: ctx.cache,
       });
 
       console.log(`✅ Created new article scaffold (ID: ${res.id})`);

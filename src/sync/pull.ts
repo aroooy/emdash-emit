@@ -35,6 +35,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { syncRemoteBylines } from './bylines.js';
 
 export interface PullOptions extends MapperOptions {
   workspaceRoot: string;
@@ -378,7 +379,30 @@ export async function pullArticle(
     rawItem = (await res.json()) as Record<string, unknown>;
   }
 
-  const { frontmatter, body, rev } = apiResponseToLocal(rawItem, options);
+  // Ensure byline ID-to-slug mapping is loaded
+  let bylineIdToSlug = options.bylineIdToSlug;
+  if (!bylineIdToSlug) {
+    const cachedMaps = options.cache.getBylineMaps();
+    if (Object.keys(cachedMaps.idToSlug).length > 0) {
+      bylineIdToSlug = cachedMaps.idToSlug;
+    } else {
+      const freshMaps = await syncRemoteBylines({
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        cache: options.cache,
+        fetchFn: options.fetchFn,
+      }).catch(() => ({ slugToId: {}, idToSlug: {} }));
+      bylineIdToSlug = freshMaps.idToSlug;
+    }
+  }
+
+  const effectiveOptions: PullOptions = {
+    ...options,
+    bylineIdToSlug,
+  };
+
+  const { frontmatter, body, rev } = apiResponseToLocal(rawItem, effectiveOptions);
 
   // Fetch remote taxonomy assignments (category & tag)
   const fetchAssignedTerms = async (taxonomy: 'category' | 'tag'): Promise<string[] | null> => {

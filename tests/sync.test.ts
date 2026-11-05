@@ -385,4 +385,89 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(contentOnDisk).toContain('Remote updated intro paragraph.');
     expect(contentOnDisk).toContain('Section 1 (Local edit)');
   });
+
+  it('pushArticle automatically resolves frontmatter bylines slug to ULID using DB cache', async () => {
+    cache.saveBylines([
+      {
+        id: '01M67MY3691HMDHDPS4HF5GBB0',
+        slug: 'aroooy',
+        displayName: 'aroooy',
+      },
+    ]);
+
+    const articleFm: Frontmatter = {
+      id: validUlid,
+      slug: 'byline-test-post',
+      title: 'Byline Test Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: ['aroooy'],
+    };
+    const articleMd = serializeMarkdown(articleFm, 'Testing byline slug to ULID mapping.');
+    const relPath = `posts/draft/${todayPrefix}${validUlid}-Byline-Post.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, articleMd, 'utf8');
+
+    // Existing article in sync state
+    cache.saveSyncState({
+      id: validUlid,
+      localFilePath: relPath,
+      localHash: 'hash_old',
+      remoteRev: 'rev_v1',
+      status: 'draft',
+      slug: 'byline-test-post',
+      lastSyncedAt: 1730500000,
+    });
+
+    let capturedPayload: any = null;
+    const mockFetch = vi.fn().mockImplementation((url, init) => {
+      const urlStr = String(url);
+      if (init.method === 'POST') {
+        if (!urlStr.includes('/terms/') && !urlStr.includes('/lock')) {
+          try {
+            capturedPayload = JSON.parse(init.body);
+          } catch {
+            // ignore
+          }
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            holder: null,
+            heldByCaller: true,
+            id: validUlid,
+            _rev: 'rev_v2',
+          }),
+        });
+      }
+      if (init.method === 'PUT') {
+        capturedPayload = JSON.parse(init.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ id: validUlid, _rev: 'rev_v2' }),
+        });
+      }
+      if (init.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.reject(new Error('Unexpected fetch call'));
+    });
+
+    const res = await pushArticle(relPath, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    expect(capturedPayload).not.toBeNull();
+    expect(capturedPayload.bylines).toEqual([
+      { bylineId: '01M67MY3691HMDHDPS4HF5GBB0', roleLabel: null },
+    ]);
+  });
 });

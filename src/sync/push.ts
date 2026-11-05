@@ -40,6 +40,7 @@ import { loadLocalTaxonomyMaps } from './taxonomies.js';
 import { runPreflightChecks, type PreflightError } from './preflight.js';
 import { calculateHash } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
+import { syncRemoteBylines } from './bylines.js';
 
 export interface PushOptions extends MapperOptions {
   workspaceRoot: string;
@@ -168,6 +169,29 @@ export async function pushArticle(
   const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
   const warnings = [...preflight.warnings];
 
+  // Load local bylines map for converting frontmatter byline slugs to ULIDs
+  let bylineSlugToId = options.bylineSlugToId;
+  if (!bylineSlugToId) {
+    const cachedMaps = options.cache.getBylineMaps();
+    if (Object.keys(cachedMaps.slugToId).length > 0) {
+      bylineSlugToId = cachedMaps.slugToId;
+    } else {
+      const freshMaps = await syncRemoteBylines({
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        cache: options.cache,
+        fetchFn: options.fetchFn,
+      }).catch(() => ({ slugToId: {}, idToSlug: {} }));
+      bylineSlugToId = freshMaps.slugToId;
+    }
+  }
+
+  const effectiveOptions: PushOptions = {
+    ...options,
+    bylineSlugToId,
+  };
+
   // 2. Determine whether this is a new article create (POST) or update (PUT)
   const isNewArticle = !syncState;
 
@@ -211,7 +235,7 @@ export async function pushArticle(
   };
 
   if (isNewArticle) {
-    let payload = localToApiPayload(parsed, '', options);
+    let payload = localToApiPayload(parsed, '', effectiveOptions);
     const postUrl = new URL(`/_emdash/api/content/${collection}`, options.origin).toString();
 
     const res = await fetchFn(postUrl, {
@@ -327,7 +351,7 @@ export async function pushArticle(
 
   // Existing article: execute within full 7-minute entry lock lease
   return await withEntryLock(collection, id, options, async () => {
-    let payload = localToApiPayload(parsed, currentRev, options);
+    let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
     const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
 
     let res = await fetchFn(putUrl, {
@@ -438,7 +462,7 @@ export async function pushArticle(
       // Auto-merged cleanly: retry PUT with remote's _rev
       parsed.frontmatter = mergeResult.frontmatter;
       parsed.body = mergeResult.body;
-      payload = localToApiPayload(parsed, remoteParsed.rev, options);
+      payload = localToApiPayload(parsed, remoteParsed.rev, effectiveOptions);
 
       res = await fetchFn(putUrl, {
         method: 'PUT',

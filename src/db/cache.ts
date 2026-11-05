@@ -55,6 +55,15 @@ export interface SyncState {
   lastSyncedAt: number;
 }
 
+export interface BylineRecord {
+  id: string;
+  slug: string;
+  displayName: string;
+  isGuest?: boolean;
+  rawJson?: string;
+  updatedAt?: number;
+}
+
 export class CacheDatabase {
   private db: DatabaseSync;
 
@@ -112,6 +121,19 @@ export class CacheDatabase {
         last_synced_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_sync_state_file_path ON sync_state (local_file_path);
+    `);
+
+    // 4. bylines table: local cache for author/byline resolution
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS bylines (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        is_guest INTEGER NOT NULL DEFAULT 0,
+        raw_json TEXT NOT NULL DEFAULT '{}',
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_bylines_slug ON bylines (slug);
     `);
   }
 
@@ -296,6 +318,66 @@ export class CacheDatabase {
     this.db.prepare('DELETE FROM entries WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM base_snapshots WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM sync_state WHERE id = ?').run(id);
+  }
+
+  // --- bylines operations ---
+
+  public saveBylines(bylines: BylineRecord[]): void {
+    if (bylines.length === 0) return;
+    const stmt = this.db.prepare(`
+      INSERT INTO bylines (id, slug, display_name, is_guest, raw_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        slug = excluded.slug,
+        display_name = excluded.display_name,
+        is_guest = excluded.is_guest,
+        raw_json = excluded.raw_json,
+        updated_at = excluded.updated_at
+    `);
+    const now = Math.floor(Date.now() / 1000);
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      for (const b of bylines) {
+        stmt.run(
+          b.id,
+          b.slug,
+          b.displayName,
+          b.isGuest ? 1 : 0,
+          b.rawJson || '{}',
+          b.updatedAt || now,
+        );
+      }
+      this.db.exec('COMMIT;');
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  public getBylines(): BylineRecord[] {
+    const stmt = this.db.prepare('SELECT * FROM bylines ORDER BY slug ASC');
+    const rows = stmt.all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      slug: String(r.slug),
+      displayName: String(r.display_name),
+      isGuest: Boolean(r.is_guest),
+      rawJson: String(r.raw_json),
+      updatedAt: Number(r.updated_at),
+    }));
+  }
+
+  public getBylineMaps(): { slugToId: Record<string, string>; idToSlug: Record<string, string> } {
+    const bylines = this.getBylines();
+    const slugToId: Record<string, string> = {};
+    const idToSlug: Record<string, string> = {};
+    for (const b of bylines) {
+      if (b.slug && b.id) {
+        slugToId[b.slug] = b.id;
+        idToSlug[b.id] = b.slug;
+      }
+    }
+    return { slugToId, idToSlug };
   }
 
   public close(): void {

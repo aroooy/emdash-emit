@@ -1,6 +1,6 @@
 {
   "name": "emdash-emit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI-First Local Workspace & Sync Tool for EmDash (Cloudflare Workers + D1)",
   "author": "hiroaki <45134003+aroooy@users.noreply.github.com>",
   "license": "MIT",
