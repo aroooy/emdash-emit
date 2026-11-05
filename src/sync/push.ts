@@ -290,21 +290,6 @@ export async function pushArticle(
     );
     const newHash = calculateHash(serializedContent);
 
-    // Save newly serialized file (with actual server ID)
-    fs.mkdirSync(path.dirname(newFullPath), { recursive: true });
-    fs.writeFileSync(newFullPath, serializedContent, 'utf8');
-
-    // If initial local file had a provisional ID, clean it up
-    if (fullPath !== newFullPath && fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch (unlinkErr: unknown) {
-        warnings.push(
-          `Failed to remove provisional file at ${fullPath}: ${(unlinkErr as Error).message}.`,
-        );
-      }
-    }
-
     // Transition status to published if requested and permitted
     let finalRev = newRev;
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
@@ -317,6 +302,20 @@ export async function pushArticle(
         options,
         fetchFn,
       );
+    }
+
+    // Save newly serialized file (with actual server ID) and clean up provisional file
+    fs.mkdirSync(path.dirname(newFullPath), { recursive: true });
+    fs.writeFileSync(newFullPath, serializedContent, 'utf8');
+
+    if (fullPath !== newFullPath && fs.existsSync(fullPath)) {
+      try {
+        fs.unlinkSync(fullPath);
+      } catch (unlinkErr: unknown) {
+        warnings.push(
+          `Failed to remove provisional file at ${fullPath}: ${(unlinkErr as Error).message}.`,
+        );
+      }
     }
 
     // Update Base snapshot and Sync state
@@ -527,23 +526,6 @@ export async function pushArticle(
     );
     const newHash = calculateHash(serializedContent);
 
-    // If status or slug changed the path, move file safely
-    if (fullPath !== newFullPath) {
-      fs.mkdirSync(path.dirname(newFullPath), { recursive: true });
-      fs.writeFileSync(newFullPath, serializedContent, 'utf8');
-      if (fs.existsSync(fullPath)) {
-        try {
-          fs.unlinkSync(fullPath);
-        } catch (unlinkErr: unknown) {
-          warnings.push(
-            `Failed to remove old file at ${fullPath} after path transition: ${(unlinkErr as Error).message}. Please remove it manually to prevent duplicates.`,
-          );
-        }
-      }
-    } else {
-      fs.writeFileSync(fullPath, serializedContent, 'utf8');
-    }
-
     // Transition status (publish or unpublish) via dedicated endpoints if needed
     let finalRev = newRev;
     const previousStatus = syncState?.status || 'draft';
@@ -567,6 +549,23 @@ export async function pushArticle(
         options,
         fetchFn,
       );
+    }
+
+    // Only move/rename file on disk AFTER remote update & status transition have succeeded!
+    if (fullPath !== newFullPath) {
+      fs.mkdirSync(path.dirname(newFullPath), { recursive: true });
+      fs.writeFileSync(newFullPath, serializedContent, 'utf8');
+      if (fs.existsSync(fullPath)) {
+        try {
+          fs.unlinkSync(fullPath);
+        } catch (unlinkErr: unknown) {
+          warnings.push(
+            `Failed to remove old file at ${fullPath} after path transition: ${(unlinkErr as Error).message}. Please remove it manually to prevent duplicates.`,
+          );
+        }
+      }
+    } else {
+      fs.writeFileSync(fullPath, serializedContent, 'utf8');
     }
 
     // Update Base snapshot

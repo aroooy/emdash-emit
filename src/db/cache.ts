@@ -322,8 +322,8 @@ export class CacheDatabase {
 
   // --- bylines operations ---
 
-  public saveBylines(bylines: BylineRecord[]): void {
-    if (bylines.length === 0) return;
+  public saveBylines(bylines: BylineRecord[], pruneMissing = false): void {
+    if (bylines.length === 0 && !pruneMissing) return;
     const stmt = this.db.prepare(`
       INSERT INTO bylines (id, slug, display_name, is_guest, raw_json, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -337,6 +337,16 @@ export class CacheDatabase {
     const now = Math.floor(Date.now() / 1000);
     this.db.exec('BEGIN TRANSACTION;');
     try {
+      if (pruneMissing) {
+        const activeIds = new Set(bylines.map((b) => b.id));
+        const existing = this.getBylines();
+        const deleteStmt = this.db.prepare('DELETE FROM bylines WHERE id = ?');
+        for (const ex of existing) {
+          if (!activeIds.has(ex.id)) {
+            deleteStmt.run(ex.id);
+          }
+        }
+      }
       for (const b of bylines) {
         stmt.run(
           b.id,

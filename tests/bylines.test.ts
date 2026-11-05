@@ -49,6 +49,21 @@ describe('Byline Cache & Sync System', () => {
     expect(maps.idToSlug['01M65FEE30X98KF114R36G3PBK']).toBe('guest-contributor');
   });
 
+  it('saveBylines prunes stale bylines when pruneMissing is true', () => {
+    cache.saveBylines([
+      { id: '01AUTHOR_1', slug: 'author-1', displayName: 'Author 1' },
+      { id: '01AUTHOR_2', slug: 'author-2', displayName: 'Author 2' },
+    ]);
+    expect(cache.getBylines()).toHaveLength(2);
+
+    // Save with only author 1 and pruneMissing = true
+    cache.saveBylines([{ id: '01AUTHOR_1', slug: 'author-1', displayName: 'Author 1' }], true);
+
+    const updated = cache.getBylines();
+    expect(updated).toHaveLength(1);
+    expect(updated[0].slug).toBe('author-1');
+  });
+
   it('syncRemoteBylines parses MCP JSON-RPC SSE response and updates cache', async () => {
     const mockMcpSseResponse =
       'event: message\n' +

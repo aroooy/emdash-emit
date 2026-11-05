@@ -38,5 +38,5 @@ export function getPackageVersion(): string {
   } catch {
     // fallback
   }
-  return '0.1.1';
+  return 'unknown';
 }

@@ -91,7 +91,6 @@ export async function syncRemoteBylines(options: SyncBylinesOptions): Promise<By
     const res = await fetchFn(mcpUrl, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${options.token}`,
         'Content-Type': 'application/json',
         Accept: 'application/json, text/event-stream',
       },
@@ -130,9 +129,7 @@ export async function syncRemoteBylines(options: SyncBylinesOptions): Promise<By
           }
         }
 
-        if (records.length > 0) {
-          options.cache.saveBylines(records);
-        }
+        options.cache.saveBylines(records, true);
       }
     }
   } catch {

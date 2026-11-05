@@ -470,4 +470,81 @@ describe('Pull & Push Synchronization Engine', () => {
       { bylineId: '01M67MY3691HMDHDPS4HF5GBB0', roleLabel: null },
     ]);
   });
+
+  it('pushArticle does not move draft file if publish endpoint fails', async () => {
+    const draftFm: Frontmatter = {
+      id: validUlid,
+      slug: 'failing-publish-post',
+      title: 'Failing Publish Post',
+      collection: 'posts',
+      status: 'published',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const draftMd = serializeMarkdown(
+      draftFm,
+      'Ready for publish but remote publish endpoint fails.',
+    );
+    const relPath = `posts/draft/${todayPrefix}${validUlid}-Failing-Post.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, draftMd, 'utf8');
+
+    cache.saveSyncState({
+      id: validUlid,
+      localFilePath: relPath,
+      localHash: 'hash_old',
+      remoteRev: 'rev_v1',
+      status: 'draft',
+      slug: 'failing-publish-post',
+      lastSyncedAt: 1730500000,
+    });
+
+    const mockFetch = vi.fn().mockImplementation((url, init) => {
+      const urlStr = String(url);
+      if (init.method === 'POST') {
+        if (urlStr.includes('/publish')) {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            statusText: 'Internal Server Error',
+            text: async () => 'Publish failed',
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ enabled: true, holder: null, heldByCaller: true }),
+        });
+      }
+      if (init.method === 'PUT') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ id: validUlid, _rev: 'rev_v2' }),
+        });
+      }
+      if (init.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.reject(new Error('Unexpected fetch call'));
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        allowPublish: true,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow();
+
+    // Verify local file is still in draft/ and NOT moved to published/
+    expect(fs.existsSync(fullPath)).toBe(true);
+    const publishedPath = path.join(
+      tempDir,
+      `posts/published/${todayPrefix}${validUlid}-Failing-Post.md`,
+    );
+    expect(fs.existsSync(publishedPath)).toBe(false);
+  });
 });
