@@ -32,6 +32,7 @@ import { extractUlidFromFilename } from '../../utils/naming.js';
 export function registerSyncDiffTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_diff',
+    'Display line-by-line differences between local article edits and the baseline snapshot/remote version before pushing. Useful for reviewing changes or diagnosing unpushed modifications.',
     {
       filePath: z
         .string()

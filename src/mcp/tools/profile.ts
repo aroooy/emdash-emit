@@ -32,36 +32,42 @@ export function registerProfileTools(
   },
 ): void {
   // profile_list: List available profiles and indicate active one
-  server.tool('profile_list', {}, async () => {
-    const data = loadProfilesFile();
-    const currentActive = options.getActiveOverride() || data.active;
-    const profiles = Object.entries(data.profiles).map(([name, p]) => ({
-      name,
-      origin: p.origin,
-      workspace: p.workspace,
-      active: name === currentActive,
-    }));
+  server.tool(
+    'profile_list',
+    'List configured site profiles from ~/.config/emit/profiles.yaml, showing their origin URLs, workspace roots, and active selection.',
+    {},
+    async () => {
+      const data = loadProfilesFile();
+      const currentActive = options.getActiveOverride() || data.active;
+      const profiles = Object.entries(data.profiles).map(([name, p]) => ({
+        name,
+        origin: p.origin,
+        workspace: p.workspace,
+        active: name === currentActive,
+      }));
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              activeProfile: currentActive,
-              profiles,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeProfile: currentActive,
+                profiles,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
 
   // profile_switch: Switch active profile for this session or globally
   server.tool(
     'profile_switch',
+    'Switch the active site profile for the current MCP session (or globally with persist: true) when managing multiple EmDash instances.',
     {
       name: z.string().describe('Profile name to switch to'),
       persist: z

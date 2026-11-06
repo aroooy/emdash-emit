@@ -58,9 +58,42 @@ describe('Emit MCP Server', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('initializes MCP server and registers sync tools including sync_diff', () => {
+  it('initializes MCP server and registers sync tools with comprehensive descriptions and instructions', () => {
     const server = createMcpServer({ workspaceRoot: tempDir, cache });
     expect(server).toBeDefined();
+
+    // Verify MCP instructions
+    const instructions = (server.server as unknown as { _instructions?: string })._instructions;
+    expect(instructions).toBeDefined();
+    expect(instructions).toContain('The Golden Path');
+    expect(instructions).toContain('posts/published');
+
+    // Expected tools
+    const expectedTools = [
+      'profile_list',
+      'profile_switch',
+      'sync_diff',
+      'sync_new',
+      'sync_pull',
+      'sync_pull_taxonomies',
+      'sync_pull_media',
+      'sync_push',
+      'sync_status',
+    ];
+
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<string, { description?: string }>;
+      }
+    )._registeredTools;
+
+    for (const toolName of expectedTools) {
+      expect(registered[toolName]).toBeDefined();
+      const desc = registered[toolName].description;
+      expect(desc).toBeDefined();
+      expect(typeof desc).toBe('string');
+      expect(desc!.length).toBeGreaterThan(20);
+    }
   });
 
   it('correctly resolves ULID from filePath with yyyyMMdd_ date prefix in sync_pull', () => {

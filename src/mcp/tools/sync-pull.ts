@@ -35,6 +35,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull: Pull remote article(s)
   server.tool(
     'sync_pull',
+    'Pull remote articles from EmDash into local Markdown files (posts/published/ and posts/draft/). Supports pulling a single article by id/filePath or batch sync with sliding-window pagination and pruning. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -86,13 +87,16 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           force: args.force,
         });
 
+        const actionText = res.skipped
+          ? 'ℹ️ Article is already up-to-date'
+          : '✅ Successfully pulled article';
+        const titleText = res.title ? ` "${res.title}"` : '';
+
         return {
           content: [
             {
               type: 'text',
-              text: res.skipped
-                ? `ℹ️ Article '${res.slug}' is already up-to-date at ${res.filePath}.`
-                : `✅ Successfully pulled article '${res.slug}' to ${res.filePath}.`,
+              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}\n\nYou can now read or edit this local Markdown file directly.`,
             },
           ],
         };
@@ -117,11 +121,24 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
+        const updatedItems = batchResult.items.filter((i) => i.updated);
+        const sampleItems = (updatedItems.length > 0 ? updatedItems : batchResult.items).slice(
+          0,
+          10,
+        );
+        const listLines = sampleItems.map(
+          (item) => `  - [${item.status}] ${item.filePath}${item.title ? ` (${item.title})` : ''}`,
+        );
+        const headerLabel =
+          updatedItems.length > 0 ? 'Updated Articles' : 'Recent Articles in Workspace';
+        const detailBlock =
+          listLines.length > 0 ? `\n\n${headerLabel}:\n${listLines.join('\n')}` : '';
+
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).`,
+              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${detailBlock}\n\nYou can now read or edit these local Markdown files directly.`,
             },
           ],
         };
@@ -145,6 +162,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_taxonomies
   server.tool(
     'sync_pull_taxonomies',
+    'Pull remote categories and tags into local YAML definitions (categories/<id>-<name>.yaml and tags/<id>-<name>.yaml). Use before writing articles to inspect valid category and tag IDs/slugs.',
     {
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
@@ -171,6 +189,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Enables offline browsing and referencing of uploaded images.',
     {
       limit: z
         .number()

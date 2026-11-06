@@ -28,6 +28,7 @@ import { createArticleScaffold } from '../../sync/new.js';
 export function registerSyncNewTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_new',
+    'Create a new article draft scaffold in posts/draft/ with standardized frontmatter (ULID, slug, title, default bylines). Returns the created relative file path so you can edit the Markdown file directly before pushing.',
     {
       slug: z.string().describe('URL slug for the new article'),
       title: z.string().optional().describe('Article title'),

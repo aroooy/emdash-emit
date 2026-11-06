@@ -41,6 +41,26 @@ export interface CreateMcpServerOptions {
   cache?: CacheDatabase;
 }
 
+export const EMIT_MCP_INSTRUCTIONS = `
+# Emit - AI-First Local Workspace & Sync Engine for EmDash
+
+Emit manages articles, taxonomies, and media as plain files on your local filesystem, backed by a local SQLite cache.
+
+## Local Directory Structure
+- posts/published/YYYYMMDD_<ulid>-<title>.md : Published articles in Markdown
+- posts/draft/YYYYMMDD_<ulid>-<title>.md : Draft articles in Markdown
+- categories/<id>-<name>.yaml : Category definitions
+- tags/<id>-<name>.yaml : Tag definitions
+- media/<yyyyMMdd>_<id>-<name>.<ext> & .yaml : Media assets & companion metadata
+
+## AI Workflow (The Golden Path)
+1. [CHECK]: Use sync_status to list locally tracked articles and their file paths. If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).
+2. [PULL]: Use sync_pull to sync articles from EmDash remote into local Markdown files.
+3. [READ & EDIT]: Read and edit the local Markdown files directly using your standard filesystem tools. Full article content and metadata (title, slug, status, bylines, taxonomies) are stored in the Markdown files.
+4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.
+5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/, edit it locally, and push when ready.
+`.trim();
+
 export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   let activeProfileOverride: string | undefined;
 
@@ -88,10 +108,15 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
     };
   };
 
-  const server = new McpServer({
-    name: 'emit',
-    version: getPackageVersion(),
-  });
+  const server = new McpServer(
+    {
+      name: 'emit',
+      version: getPackageVersion(),
+    },
+    {
+      instructions: EMIT_MCP_INSTRUCTIONS,
+    },
+  );
 
   // Register modular tools
   registerProfileTools(server, {

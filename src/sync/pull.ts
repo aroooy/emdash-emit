@@ -57,6 +57,7 @@ export interface PullResult {
   updated: boolean;
   skipped?: boolean;
   deleted?: boolean;
+  title?: string;
 }
 
 export interface RemoteArticleItem {
@@ -306,6 +307,7 @@ export async function pullArticle(
                 filePath: existingSync.localFilePath,
                 updated: false,
                 skipped: true,
+                title: rawTitle,
               };
             }
 
@@ -317,6 +319,7 @@ export async function pullArticle(
               filePath: existingSync.localFilePath,
               updated: false,
               skipped: true,
+              title: rawTitle,
             };
           }
         } catch {
@@ -528,5 +531,6 @@ export async function pullArticle(
     status: frontmatter.status,
     filePath: relPath,
     updated: true,
+    title: frontmatter.title,
   };
 }

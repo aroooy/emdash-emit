@@ -28,6 +28,7 @@ import { getWorkspaceStatus } from '../../sync/status.js';
 export function registerSyncStatusTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_status',
+    'Inspect local workspace sync status. Returns all tracked articles, relative file paths (e.g. posts/published/YYYYMMDD_<id>-<title>.md), publication status (draft/published), and modification state (synced/modified/untracked). ALWAYS use this tool first to locate local files instead of querying remote APIs.',
     {
       collection: z
         .string()
