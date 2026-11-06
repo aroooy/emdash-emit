@@ -27,6 +27,8 @@ import {
   formatDatePrefix,
   computeArticleRelativePath,
   sanitizeTitleForFilename,
+  truncateUtf8Bytes,
+  DEFAULT_MAX_TITLE_BYTES,
 } from '../src/utils/naming.js';
 
 describe('naming utils', () => {
@@ -74,5 +76,75 @@ describe('naming utils', () => {
     expect(rel).toBe(
       'posts/draft/20261103_01M6FBAJ2JKNX8VAYXXASYSFGA-My-Awesome-Title-Special-Edition.md',
     );
+  });
+
+  describe('truncateUtf8Bytes', () => {
+    it('returns original string when within maxBytes', () => {
+      expect(truncateUtf8Bytes('Hello', 10)).toBe('Hello');
+      expect(truncateUtf8Bytes('日本語', 9)).toBe('日本語');
+    });
+
+    it('truncates ASCII string at exact maxBytes', () => {
+      expect(truncateUtf8Bytes('abcdefghij', 5)).toBe('abcde');
+    });
+
+    it('does not split multi-byte UTF-8 Japanese characters', () => {
+      // 'あ' is 3 bytes, 'い' is 3 bytes (total 6 bytes)
+      // When truncated to 5 bytes, it should include only 'あ' (3 bytes), not split 'い'
+      const truncated = truncateUtf8Bytes('あい', 5);
+      expect(truncated).toBe('あ');
+      expect(Buffer.byteLength(truncated, 'utf8')).toBe(3);
+    });
+
+    it('safely handles emojis without splitting surrogate pairs', () => {
+      // '🚀' is 4 bytes
+      const text = 'Launch🚀Now';
+      const truncated = truncateUtf8Bytes(text, 8); // 'Launch' is 6B, + '🚀' is 10B (>8)
+      expect(truncated).toBe('Launch');
+    });
+  });
+
+  describe('sanitizeTitleForFilename with Linux NAME_MAX protection', () => {
+    it('returns "untitled" for empty or whitespace titles', () => {
+      expect(sanitizeTitleForFilename('')).toBe('untitled');
+      expect(sanitizeTitleForFilename('   ')).toBe('untitled');
+    });
+
+    it('decodes HTML entities properly', () => {
+      expect(sanitizeTitleForFilename('Tom &amp; Jerry')).toBe('Tom-&-Jerry');
+      expect(sanitizeTitleForFilename('Part 1 &#8211; Intro')).toBe('Part-1-Intro');
+    });
+
+    it('collapses multiple hyphens and trims edges', () => {
+      expect(sanitizeTitleForFilename('---A----B---')).toBe('A-B');
+    });
+
+    it('truncates very long Japanese titles to DEFAULT_MAX_TITLE_BYTES (120 bytes)', () => {
+      const veryLongJapaneseTitle =
+        '【AI執筆】Web畑じゃない（けど素人でもない）オーナーと、13年分のWordPress（755記事・画像4,005枚）をEmDash＋Cloudflare-Workersへ移行した全記録-——-毒舌AIと人間の珍道中、ときどき神指摘';
+      const sanitized = sanitizeTitleForFilename(veryLongJapaneseTitle);
+
+      expect(Buffer.byteLength(sanitized, 'utf8')).toBeLessThanOrEqual(DEFAULT_MAX_TITLE_BYTES);
+      expect(sanitized.endsWith('-')).toBe(false);
+      // Valid UTF-8 string that does not end in corrupted character
+      expect(() => Buffer.from(sanitized, 'utf8').toString('utf8')).not.toThrow();
+    });
+
+    it('guarantees computeArticleRelativePath basename is safely within Linux 255 bytes limit', () => {
+      const longTitle = 'あ'.repeat(150); // 150 chars * 3 = 450 bytes
+      const rel = computeArticleRelativePath(
+        'posts',
+        'published',
+        '01M6A7AZYPW56CKSVNTXER9ASN',
+        longTitle,
+        '2026-11-01',
+      );
+      const filename = rel.split('/').pop()!;
+      const byteLength = Buffer.byteLength(filename, 'utf8');
+
+      // 9 (prefix) + 26 (ulid) + 1 (-) + <=120 (title) + 3 (.md) = <= 159 bytes
+      expect(byteLength).toBeLessThanOrEqual(160);
+      expect(byteLength).toBeLessThan(255);
+    });
   });
 });

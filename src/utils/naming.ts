@@ -23,14 +23,68 @@
 import path from 'node:path';
 
 /**
- * Sanitizes a title or slug for safe inclusion in a filename.
- * Preserves alphanumeric characters, hyphens, underscores, and non-ASCII (e.g. Japanese kanji/kana).
+ * Default maximum UTF-8 byte length for the title portion in generated filenames.
+ * Standard article filename: <yyyyMMdd_ (9B)><ulid (26B)>-<title (<=120B)>.md (3B) = <=158B,
+ * which comfortably fits within the 255-byte POSIX NAME_MAX limit on Linux/ext4.
  */
-export function sanitizeTitleForFilename(title: string): string {
-  return title
+export const DEFAULT_MAX_TITLE_BYTES = 120;
+
+/**
+ * Truncates a string to at most `maxBytes` UTF-8 bytes without splitting multi-byte Unicode code points.
+ */
+export function truncateUtf8Bytes(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, 'utf8') <= maxBytes) {
+    return str;
+  }
+  let result = '';
+  for (const char of str) {
+    if (Buffer.byteLength(result + char, 'utf8') > maxBytes) {
+      break;
+    }
+    result += char;
+  }
+  return result;
+}
+
+/**
+ * Sanitizes a title or slug for safe, cross-platform inclusion in a filename.
+ * Decodes basic HTML entities, removes invalid filesystem characters, collapses hyphens,
+ * and cleanly truncates to `maxBytes` UTF-8 bytes without breaking multi-byte characters.
+ */
+export function sanitizeTitleForFilename(
+  title: string,
+  maxBytes: number = DEFAULT_MAX_TITLE_BYTES,
+): string {
+  if (!title || !title.trim()) {
+    return 'untitled';
+  }
+
+  // Basic HTML entity decoding (e.g. &amp; -> &, &quot; -> ", &#8211; -> -)
+  let clean = title
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#8211;/g, '-')
+    .replace(/&#8212;/g, '-');
+
+  // Remove filesystem-invalid characters and control characters
+  clean = clean
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
     .trim()
     .replace(/\s+/g, '-');
+
+  // Collapse consecutive hyphens and trim leading/trailing hyphens
+  clean = clean.replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+
+  // Truncate cleanly on UTF-8 code point boundary
+  clean = truncateUtf8Bytes(clean, maxBytes);
+
+  // Clean up trailing hyphens left by truncation
+  clean = clean.replace(/-+$/, '');
+
+  return clean || 'untitled';
 }
 
 /**

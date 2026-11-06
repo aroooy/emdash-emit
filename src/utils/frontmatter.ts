@@ -146,41 +146,11 @@ export function serializeMarkdown(
   return `${yaml}${cleanBody.endsWith('\n') ? cleanBody : cleanBody + '\n'}`;
 }
 
-/**
- * Sanitizes an article title for cross-platform safe filenames,
- * preserving Japanese characters while replacing invalid filesystem chars and whitespace with hyphens.
- */
-export function sanitizeTitleForFilename(title: string): string {
-  if (!title || !title.trim()) {
-    return 'untitled';
-  }
-
-  // Basic HTML entity decoding (e.g. &amp; -> &, &quot; -> ", &#8211; -> -)
-  let clean = title
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#8211;/g, '-')
-    .replace(/&#8212;/g, '-');
-
-  // Replace whitespace and filesystem invalid characters (\ / : * ? " < > |) with hyphens
-  clean = clean.replace(/[\s/\\:*?"<>|]+/g, '-');
-
-  // Collapse multiple hyphens and trim leading/trailing hyphens
-  clean = clean.replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
-
-  const maxLen = 100;
-  if (clean.length > maxLen) {
-    clean = clean.slice(0, maxLen).replace(/-+$/, '');
-  }
-
-  return clean || 'untitled';
-}
-
 export {
   formatDatePrefix,
   extractDatePrefixFromPath,
   computeArticleRelativePath,
+  sanitizeTitleForFilename,
+  DEFAULT_MAX_TITLE_BYTES,
+  truncateUtf8Bytes,
 } from './naming.js';
