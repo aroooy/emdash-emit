@@ -52,6 +52,8 @@ export interface PullTaxonomiesResult {
   tagsCount: number;
   deletedCategoriesCount: number;
   deletedTagsCount: number;
+  categoriesFailed?: boolean;
+  tagsFailed?: boolean;
 }
 
 /**
@@ -96,6 +98,9 @@ export async function pullTaxonomies(
     fetchTerms('category').catch(() => null),
     fetchTerms('tag').catch(() => null),
   ]);
+
+  const categoriesFailed = categories === null;
+  const tagsFailed = tags === null;
 
   const categoriesDir = path.join(options.workspaceRoot, 'categories');
   const tagsDir = path.join(options.workspaceRoot, 'tags');
@@ -195,6 +200,8 @@ export async function pullTaxonomies(
     tagsCount,
     deletedCategoriesCount,
     deletedTagsCount,
+    categoriesFailed,
+    tagsFailed,
   };
 }
 
@@ -259,12 +266,23 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
   const catItems = readTaxonomyDir(path.join(workspaceRoot, 'categories'));
   const tagItems = readTaxonomyDir(path.join(workspaceRoot, 'tags'));
 
+  // Sort items deterministically: highest count first, ties broken by newest ULID (descending).
+  // Ensures the chosen mapping for duplicate slugs matches getLocalTaxonomiesSummary.
+  const sortDeterministically = (items: LocalTaxonomyItem[]) =>
+    [...items].sort((a, b) => {
+      const countDiff = (b.count ?? 0) - (a.count ?? 0);
+      if (countDiff !== 0) return countDiff;
+      return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+    });
+
   const toMaps = (items: LocalTaxonomyItem[]) => {
     const slugToId: Record<string, string> = {};
     const idToSlug: Record<string, string> = {};
-    for (const item of items) {
-      slugToId[item.slug] = item.id;
+    for (const item of sortDeterministically(items)) {
       idToSlug[item.id] = item.slug;
+      if (!slugToId[item.slug]) {
+        slugToId[item.slug] = item.id;
+      }
     }
     return { slugToId, idToSlug };
   };
@@ -292,15 +310,18 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): {
   tags: string[];
 } {
   return {
-    categories: readTaxonomyDir(path.join(workspaceRoot, 'categories')).map((c) => c.slug),
-    tags: readTaxonomyDir(path.join(workspaceRoot, 'tags')).map((t) => t.slug),
+    categories: Array.from(
+      new Set(readTaxonomyDir(path.join(workspaceRoot, 'categories')).map((c) => c.slug)),
+    ),
+    tags: Array.from(new Set(readTaxonomyDir(path.join(workspaceRoot, 'tags')).map((t) => t.slug))),
   };
 }
 
 /**
  * Reads local categories/ and tags/ YAML definitions and returns structured summary.
  * Tags are sorted by count descending (most used first), then by ULID descending (newest first).
- * Categories are sorted alphabetically by slug using deterministic ordinal comparison.
+ * Categories are sorted alphabetically by slug using deterministic ordinal comparison,
+ * with ties broken by count descending and ULID descending.
  */
 export function getLocalTaxonomiesSummary(workspaceRoot: string): LocalTaxonomiesSummary {
   const categoriesDir = path.join(workspaceRoot, 'categories');
@@ -319,7 +340,13 @@ export function getLocalTaxonomiesSummary(workspaceRoot: string): LocalTaxonomie
   };
 
   const categories = dedupeBySlug(
-    readTaxonomyDir(categoriesDir).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)),
+    readTaxonomyDir(categoriesDir).sort((a, b) => {
+      if (a.slug < b.slug) return -1;
+      if (a.slug > b.slug) return 1;
+      const countDiff = (b.count ?? 0) - (a.count ?? 0);
+      if (countDiff !== 0) return countDiff;
+      return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+    }),
   );
   // Sort tags: highest count (usage frequency) first; ties broken by newest ULID (descending)
   const tags = dedupeBySlug(

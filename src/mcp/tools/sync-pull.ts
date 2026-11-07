@@ -134,7 +134,14 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
           });
-          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
+          const failNotes: string[] = [];
+          if (taxResult.categoriesFailed) failNotes.push('categories');
+          if (taxResult.tagsFailed) failNotes.push('tags');
+          if (failNotes.length > 0) {
+            taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
+          } else {
+            taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
+          }
         }
 
         const taxSummary = getLocalTaxonomiesSummary(ctx.root);
@@ -232,11 +239,19 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 200 });
       const hintBlock = taxHint ? `\n\n${taxHint}` : '';
 
+      const failNotes: string[] = [];
+      if (res.categoriesFailed) failNotes.push('categories');
+      if (res.tagsFailed) failNotes.push('tags');
+      const statusLine =
+        failNotes.length > 0
+          ? `⚠️ Warning: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions in categories/ and tags/).`
+          : `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`;
+
       return {
         content: [
           {
             type: 'text',
-            text: `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.${hintBlock}`,
+            text: `${statusLine}${hintBlock}`,
           },
         ],
       };

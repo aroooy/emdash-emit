@@ -88,6 +88,37 @@ describe('AI Misbehavior Preflight Guards (G2 - G9)', () => {
     expect(res.errors[0].message).toContain('tech');
   });
 
+  it('G4: notes staleness only for canonical ULID term IDs, not for 26-character slugs', () => {
+    const staleIdParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        taxonomies: { categories: ['01M6G4ST000000000000000000'], tags: ['cloudflare'] },
+      },
+    };
+    const idRes = runPreflightChecks(filePath, staleIdParsed, {
+      knownTaxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+    });
+    expect(idRes.valid).toBe(false);
+    expect(idRes.errors[0].message).toContain('01M6G4ST000000000000000000');
+    expect(idRes.errors[0].message).toContain('may be stale or deleted');
+
+    // A 26-character lowercase slug must not be described as a term ID
+    const slugParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        taxonomies: { categories: ['abcdefghijklmnopqrstuvwxyz'], tags: ['cloudflare'] },
+      },
+    };
+    const slugRes = runPreflightChecks(filePath, slugParsed, {
+      knownTaxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+    });
+    expect(slugRes.valid).toBe(false);
+    expect(slugRes.errors[0].message).toContain('abcdefghijklmnopqrstuvwxyz');
+    expect(slugRes.errors[0].message).not.toContain('stale or deleted');
+  });
+
   it('G5: blocks local image paths but ignores local paths inside code fences', () => {
     // 1. Invalid: local image path in body
     const badParsed: ParsedMarkdown = {

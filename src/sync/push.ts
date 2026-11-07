@@ -151,21 +151,30 @@ export async function pushArticle(
   // Pre-load local taxonomy maps once for canonicalization, G4 guard, and remote sync
   const taxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
 
-  // Canonicalize term ULIDs in frontmatter to slugs before running G4 guard
-  // (Prevents G4 false positives when pull.ts populated term-as-ULID or user wrote ULID)
+  // Build a frontmatter view for G4 preflight guard where known term ULIDs are resolved to slugs
+  // (Prevents G4 false positives when frontmatter contains ULID without mutating parsed AST)
+  let preflightParsed = parsed;
   if (parsed.frontmatter.taxonomies) {
     const canon = (name: 'category' | 'tag', terms: string[]): string[] =>
       terms.map((t) => taxonomyMaps.idToSlug[name][t] || t);
 
+    const preflightTaxonomies: Record<string, string[]> = {
+      ...parsed.frontmatter.taxonomies,
+    };
     if (parsed.frontmatter.taxonomies.categories) {
-      parsed.frontmatter.taxonomies.categories = canon(
-        'category',
-        parsed.frontmatter.taxonomies.categories,
-      );
+      preflightTaxonomies.categories = canon('category', parsed.frontmatter.taxonomies.categories);
     }
     if (parsed.frontmatter.taxonomies.tags) {
-      parsed.frontmatter.taxonomies.tags = canon('tag', parsed.frontmatter.taxonomies.tags);
+      preflightTaxonomies.tags = canon('tag', parsed.frontmatter.taxonomies.tags);
     }
+
+    preflightParsed = {
+      ...parsed,
+      frontmatter: {
+        ...parsed.frontmatter,
+        taxonomies: preflightTaxonomies,
+      },
+    };
   }
 
   // If knownTaxonomies is not explicitly passed, populate from local categories/ and tags/ (if present)
@@ -182,7 +191,7 @@ export async function pushArticle(
   }
 
   // 1. Run Preflight Guards G2 - G9
-  const preflight = runPreflightChecks(targetFilePath, parsed, {
+  const preflight = runPreflightChecks(targetFilePath, preflightParsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
     baseMarkdown: baseSnapshot?.bodyMarkdown,
@@ -235,9 +244,18 @@ export async function pushArticle(
 
     const updateTaxonomy = async (taxonomyName: 'category' | 'tag', termSlugsOrIds: string[]) => {
       const slugMap = taxMaps.slugToId[taxonomyName] || {};
-      const resolvedTermIds = termSlugsOrIds
-        .map((item) => slugMap[item] || item)
-        .filter((tid): tid is string => Boolean(tid));
+      const idMap = taxMaps.idToSlug[taxonomyName] || {};
+      const resolvedTermIds = Array.from(
+        new Set(
+          termSlugsOrIds
+            .map((item) => {
+              // If item is already a known ULID, preserve it directly to avoid silent substitution
+              if (idMap[item]) return item;
+              return slugMap[item] || item;
+            })
+            .filter((tid): tid is string => Boolean(tid)),
+        ),
+      );
 
       const termsUrl = new URL(
         `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,

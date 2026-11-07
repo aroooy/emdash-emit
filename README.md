@@ -324,9 +324,11 @@ Markdown body begins here...
 1. **Do Not Duplicate the Title in the Body**:
    - The article title is managed by the `title:` field in the frontmatter.
    - **Do not** add `# Article Title` as the first heading in the Markdown body. Doing so causes duplicate title displays on the site frontend. (Emit's preflight guard G7 will detect and automatically trim redundant top headings).
-2. **Taxonomy Slugs**:
-   - Items under `categories:` and `tags:` must match existing slug names from `categories/` and `tags/`.
-   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy slugs before pushing.
+2. **Taxonomy Slugs & Normalization**:
+   - Items under `categories:` and `tags:` should use existing slug names from `categories/` and `tags/` (e.g. `- tech`, `- nodejs`).
+   - If a valid term ULID is specified in the frontmatter, Emit automatically resolves it transparently to its corresponding slug for Preflight Guard G4 validation and maintains accurate term assignment on remote sync.
+   - Do not duplicate the same term using both its slug and ULID within the same taxonomy (e.g. `[- tech, 01M6CAT1]`). Emit de-duplicates identical term assignments, but a slug and a ULID that resolve to **different** terms will both be assigned to the article.
+   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy terms before pushing.
 3. **Status Transitions**:
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.

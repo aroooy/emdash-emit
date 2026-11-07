@@ -246,5 +246,18 @@ describe('Emit MCP Server', () => {
     expect(res.content[0].text).toContain('- tech (技術)');
     expect(res.content[0].text).toContain('Available Tags:');
     expect(res.content[0].text).toContain('nodejs');
+
+    // Test sync_pull with postsOnly: true still shows local hint without remote taxonomy sync message
+    mockFetch.mockClear();
+    const resPostsOnly = await registered['sync_pull'].handler({ postsOnly: true });
+    expect(resPostsOnly.content[0].text).toContain('Synced 0 articles');
+    expect(resPostsOnly.content[0].text).not.toContain('Taxonomies:');
+    expect(resPostsOnly.content[0].text).toContain('Available Categories:');
+    expect(resPostsOnly.content[0].text).toContain('- tech (技術)');
+    // Remote taxonomy endpoints should not have been called
+    expect(mockFetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/taxonomies/category/terms'),
+      expect.anything(),
+    );
   });
 });

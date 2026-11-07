@@ -163,22 +163,29 @@ describe('Pull & Push Synchronization Engine', () => {
     ).rejects.toThrowError(/Push blocked by Preflight Guards/);
   });
 
-  it('pushArticle canonicalizes term ULIDs to slugs and passes G4 guard for valid taxonomies', async () => {
-    // Pre-create local category 'tech' (id: 01M6CAT1) and tag 'nodejs' (id: 01M6TAG1)
+  it('pushArticle canonicalizes term ULIDs to slugs, passes G4 guard, and preserves exact ULIDs or resolves slugs deterministically', async () => {
+    // Pre-create local categories with duplicate slug 'tech':
+    // 01M6CAT1: count 5 (lower count)
+    // 01M6CAT2: count 99 (deterministic winner for slug input)
     const catDir = path.join(tempDir, 'categories');
     const tagDir = path.join(tempDir, 'tags');
     fs.mkdirSync(catDir, { recursive: true });
     fs.mkdirSync(tagDir, { recursive: true });
     fs.writeFileSync(
-      path.join(catDir, '01M6CAT1-Tech.yaml'),
-      'id: 01M6CAT1\nname: Tech\nslug: tech\n',
+      path.join(catDir, '01M6CAT1-Tech-old.yaml'),
+      'id: 01M6CAT1\nname: Tech-old\nslug: tech\ncount: 5\n',
+    );
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT2-Tech-new.yaml'),
+      'id: 01M6CAT2\nname: Tech-new\nslug: tech\ncount: 99\n',
     );
     fs.writeFileSync(
       path.join(tagDir, '01M6TAG1-Nodejs.yaml'),
       'id: 01M6TAG1\nname: Nodejs\nslug: nodejs\n',
     );
 
-    // Frontmatter uses ULID for category ('01M6CAT1') and slug for tag ('nodejs')
+    // Case 1: Frontmatter uses ULID for category ('01M6CAT1') and slug for tag ('nodejs')
+    // M1 regression test: 01M6CAT1 must NOT be silently substituted by 01M6CAT2
     const validFm: Frontmatter = {
       id: validUlid,
       slug: 'valid-tax-post',
@@ -187,7 +194,7 @@ describe('Pull & Push Synchronization Engine', () => {
       status: 'draft',
       locale: 'ja',
       taxonomies: {
-        categories: ['01M6CAT1'], // ULID: will be canonicalized to 'tech'
+        categories: ['01M6CAT1'], // ULID: passes G4 guard, must retain 01M6CAT1
         tags: ['nodejs'], // Valid slug
       },
       bylines: [],
@@ -197,8 +204,13 @@ describe('Pull & Push Synchronization Engine', () => {
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
     fs.writeFileSync(targetFile, validMd, 'utf8');
 
+    let postedCalls: Array<{ url: string; body: any }> = [];
     const mockFetch = vi.fn().mockImplementation((url, init) => {
       if (init.method === 'POST') {
+        postedCalls.push({
+          url: String(url),
+          body: init.body ? JSON.parse(init.body as string) : undefined,
+        });
         return Promise.resolve({
           ok: true,
           json: async () => ({ id: validUlid, _rev: 'rev_v1' }),
@@ -216,6 +228,87 @@ describe('Pull & Push Synchronization Engine', () => {
 
     expect(res.success).toBe(true);
     expect(res.errors).toBeUndefined();
+
+    // Verify remote term assignment preserved the exact ULID (01M6CAT1, not 01M6CAT2)
+    const catPost = postedCalls.find((c) => c.url.includes('/terms/category'));
+    expect(catPost).toBeDefined();
+    expect(catPost?.body).toEqual({ termIds: ['01M6CAT1'] });
+
+    const tagPost = postedCalls.find((c) => c.url.includes('/terms/tag'));
+    expect(tagPost).toBeDefined();
+    expect(tagPost?.body).toEqual({ termIds: ['01M6TAG1'] });
+
+    // Case 2: Frontmatter uses slug 'tech'. M1' regression test:
+    // Must deterministically resolve to 01M6CAT2 (the winner by count: 99)
+    const slugFm: Frontmatter = {
+      id: '01M6ZZZZZZZZZZZZZZZZZZZZZZ',
+      slug: 'slug-tax-post',
+      title: 'Slug Taxonomy Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {
+        categories: ['tech'], // Slug: should resolve to highest-count winner 01M6CAT2
+      },
+      bylines: [],
+    };
+    const slugMd = serializeMarkdown(slugFm, 'Slug taxonomy body');
+    const slugFile = path.join(
+      tempDir,
+      'posts',
+      'draft',
+      `01M6ZZZZZZZZZZZZZZZZZZZZZZ-slug-tax-post.md`,
+    );
+    fs.writeFileSync(slugFile, slugMd, 'utf8');
+
+    postedCalls = [];
+    const resSlug = await pushArticle(slugFile, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(resSlug.success).toBe(true);
+    const catPostSlug = postedCalls.find((c) => c.url.includes('/terms/category'));
+    expect(catPostSlug).toBeDefined();
+    expect(catPostSlug?.body).toEqual({ termIds: ['01M6CAT2'] });
+
+    // Case 3: Mixed input where slug and ULID point to the SAME term ('tech' === 01M6CAT2).
+    // Both entries resolve to 01M6CAT2, so the remote payload must assign it exactly once.
+    const mixedFm: Frontmatter = {
+      id: '01M6YYYYYYYYYYYYYYYYYYYYYY',
+      slug: 'mixed-tax-post',
+      title: 'Mixed Taxonomy Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {
+        categories: ['tech', '01M6CAT2'],
+      },
+      bylines: [],
+    };
+    const mixedMd = serializeMarkdown(mixedFm, 'Mixed taxonomy body');
+    const mixedFile = path.join(
+      tempDir,
+      'posts',
+      'draft',
+      `01M6YYYYYYYYYYYYYYYYYYYYYY-mixed-tax-post.md`,
+    );
+    fs.writeFileSync(mixedFile, mixedMd, 'utf8');
+
+    postedCalls = [];
+    const resMixed = await pushArticle(mixedFile, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(resMixed.success).toBe(true);
+    const catPostMixed = postedCalls.find((c) => c.url.includes('/terms/category'));
+    expect(catPostMixed).toBeDefined();
+    expect(catPostMixed?.body).toEqual({ termIds: ['01M6CAT2'] });
   });
 
   it('pushArticle acquires lock, sends PUT, and moves file when status changes (Path Tracking)', async () => {

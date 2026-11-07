@@ -78,9 +78,21 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             const taxPrunedTag = taxResult.deletedTagsCount
               ? `, ${taxResult.deletedTagsCount} tags pruned`
               : '';
-            console.log(
-              `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
-            );
+            if (taxResult.categoriesFailed) {
+              console.warn(
+                '  ⚠️  Failed to fetch remote categories: preserved existing local definitions.',
+              );
+            }
+            if (taxResult.tagsFailed) {
+              console.warn(
+                '  ⚠️  Failed to fetch remote tags: preserved existing local definitions.',
+              );
+            }
+            if (!taxResult.categoriesFailed || !taxResult.tagsFailed) {
+              console.log(
+                `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
+              );
+            }
           }
 
           const taxSummary = getLocalTaxonomiesSummary(ctx.root);
@@ -198,9 +210,19 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         ? `, ${res.deletedCategoriesCount} categories pruned`
         : '';
       const prunedTagMsg = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
-      console.log(
-        `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
-      );
+      if (res.categoriesFailed) {
+        console.warn(
+          '⚠️  Failed to fetch remote categories: preserved existing local definitions.',
+        );
+      }
+      if (res.tagsFailed) {
+        console.warn('⚠️  Failed to fetch remote tags: preserved existing local definitions.');
+      }
+      if (!res.categoriesFailed || !res.tagsFailed) {
+        console.log(
+          `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
+        );
+      }
       const taxSummary = getLocalTaxonomiesSummary(ctx.root);
       const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
       if (taxHint) {

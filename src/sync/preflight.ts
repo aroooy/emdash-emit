@@ -102,9 +102,15 @@ export function runPreflightChecks(
           if (!allowed.includes(term)) {
             const allowedPreview = allowed.slice(0, 20).join(', ');
             const moreSuffix = allowed.length > 20 ? ' ...' : '';
+            // Term IDs are canonical 26-char ULIDs: uppercase Crockford base32 (excludes I, L, O, U).
+            // Restricting to that alphabet prevents 26-character slugs from being mislabeled as IDs.
+            const isTermId = /^[0-9A-HJ-NP-Z]{26}$/.test(term);
+            const staleNote = isTermId
+              ? ' (term ID was not found in local definitions and may be stale or deleted)'
+              : '';
             errors.push({
               code: 'INVALID_TAXONOMY_ERROR',
-              message: `Unknown ${taxName} term: '${term}'.`,
+              message: `Unknown ${taxName} term: '${term}'${staleNote}.`,
               suggestion: `Use one of the allowed ${taxName}: [${allowedPreview}${moreSuffix}], run sync_pull_taxonomies to refresh, or create it via official MCP first.`,
             });
           }

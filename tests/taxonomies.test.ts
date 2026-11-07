@@ -101,14 +101,18 @@ describe('Taxonomies Sync Engine', () => {
     fs.mkdirSync(catDir, { recursive: true });
     fs.mkdirSync(tagDir, { recursive: true });
 
-    // Categories: beta, alpha
+    // Categories: beta, alpha (with duplicate alpha slug: count 5 vs count 20)
     fs.writeFileSync(
       path.join(catDir, '01M6CAT1-Beta.yaml'),
-      'id: 01M6CAT1\nname: Beta\nslug: beta\n',
+      'id: 01M6CAT1\nname: Beta\nslug: beta\ncount: 0\n',
     );
     fs.writeFileSync(
-      path.join(catDir, '01M6CAT2-Alpha.yaml'),
-      'id: 01M6CAT2\nname: アルファ\nslug: alpha\n',
+      path.join(catDir, '01M6CAT2-AlphaLow.yaml'),
+      'id: 01M6CAT2\nname: アルファ低\nslug: alpha\ncount: 5\n',
+    );
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT3-AlphaHigh.yaml'),
+      'id: 01M6CAT3\nname: アルファ高\nslug: alpha\ncount: 20\n',
     );
 
     // Tags:
@@ -130,15 +134,16 @@ describe('Taxonomies Sync Engine', () => {
 
     const summary = getLocalTaxonomiesSummary(tempDir);
 
-    // Categories: alpha, beta (ordinal slug asc)
+    // Categories: alpha (deduped to AlphaHigh with count 20), beta (ordinal slug asc)
     expect(summary.categories.map((c) => c.slug)).toEqual(['alpha', 'beta']);
+    expect(summary.categories.find((c) => c.slug === 'alpha')?.id).toBe('01M6CAT3');
 
     // Tags: popular (count 20), trending (count 10, ULID 'Z'), legacy (count 10, ULID 'M')
     expect(summary.tags.map((t) => t.slug)).toEqual(['popular', 'trending', 'legacy']);
 
     // Test formatTaxonomiesHint
     const hint = formatTaxonomiesHint(summary, { maxTags: 10 });
-    expect(hint).toContain('- alpha (アルファ)');
+    expect(hint).toContain('- alpha (アルファ高)');
     expect(hint).toContain('- beta'); // slug.toLowerCase() === name.toLowerCase()
     expect(hint).toContain('Available Tags:');
     expect(hint).toContain('popular, trending (トレンド), legacy');
@@ -201,6 +206,8 @@ describe('Taxonomies Sync Engine', () => {
     });
 
     expect(res.deletedCategoriesCount).toBe(0);
+    expect(res.categoriesFailed).toBe(true);
+    expect(res.tagsFailed).toBe(true);
     // Local YAML must NOT be pruned or deleted on fetch error
     expect(fs.existsSync(localCatFile)).toBe(true);
   });
