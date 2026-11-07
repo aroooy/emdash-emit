@@ -160,3 +160,13 @@ export function computeArticleRelativePath(
   const safeTitle = sanitizeTitleForFilename(titleOrSlug);
   return `${collection}/${status}/${prefix}${id}-${safeTitle}.md`;
 }
+
+/**
+ * Comparator for sorting article file paths descending by filename (newest first).
+ * Uses deterministic ordinal comparison on basenames (YYYYMMDD_<ulid>-<title>.md).
+ */
+export function compareArticleFilenameDesc(aPath: string, bPath: string): number {
+  const a = path.basename(aPath);
+  const b = path.basename(bPath);
+  return b < a ? -1 : b > a ? 1 : 0;
+}

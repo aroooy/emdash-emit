@@ -29,6 +29,7 @@ import {
   sanitizeTitleForFilename,
   truncateUtf8Bytes,
   DEFAULT_MAX_TITLE_BYTES,
+  compareArticleFilenameDesc,
 } from '../src/utils/naming.js';
 
 describe('naming utils', () => {
@@ -145,6 +146,46 @@ describe('naming utils', () => {
       // 9 (prefix) + 26 (ulid) + 1 (-) + <=120 (title) + 3 (.md) = <= 159 bytes
       expect(byteLength).toBeLessThanOrEqual(160);
       expect(byteLength).toBeLessThan(255);
+    });
+  });
+
+  describe('compareArticleFilenameDesc', () => {
+    it('sorts canonical filenames descending by date prefix (newest first)', () => {
+      const files = [
+        'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
+        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
+        'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
+      ];
+      files.sort(compareArticleFilenameDesc);
+      expect(files).toEqual([
+        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
+        'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
+        'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
+      ]);
+    });
+
+    it('breaks ties on the same date using ULID descending (time order guarantee)', () => {
+      const files = [
+        'posts/draft/20261105_01M6AAA0000000000000000001-First.md',
+        'posts/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
+      ];
+      files.sort(compareArticleFilenameDesc);
+      expect(files).toEqual([
+        'posts/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
+        'posts/draft/20261105_01M6AAA0000000000000000001-First.md',
+      ]);
+    });
+
+    it('places unprefixed legacy filenames last', () => {
+      const files = [
+        'posts/draft/01M67MP2000000000000000001-Legacy.md',
+        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
+      ];
+      files.sort(compareArticleFilenameDesc);
+      expect(files).toEqual([
+        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
+        'posts/draft/01M67MP2000000000000000001-Legacy.md',
+      ]);
     });
   });
 });

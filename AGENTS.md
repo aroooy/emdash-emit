@@ -49,7 +49,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 [4. PUSH]           Explicit push to remote    -->  sync_push (filePath or id required)
 ```
 
-1. **PULL (`sync_pull`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. Batch mode automatically syncs taxonomies (categories/tags) alongside articles. Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to also pull media assets.
+1. **PULL / STATUS (`sync_pull` / `sync_status`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. `sync_status` returns tracked articles sorted newest-first (descending by date prefix and ULID; date reflects publication/creation date, not last modified). To locate active edits, filter by `syncStatus: 'modified'`. Batch mode `sync_pull` automatically syncs taxonomies (categories/tags) alongside articles. Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to also pull media assets.
 2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files.
 3. **DIRECT EDIT**: Edit the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly (frontmatter and body).
 4. **PUSH (`sync_push`)**: When editing is complete, push the specific file or ID to remote EmDash.

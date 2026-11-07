@@ -29,7 +29,7 @@ import { pullArticle } from '../../sync/pull.js';
 import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
 import { pullTaxonomies } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { extractUlidFromFilename } from '../../utils/naming.js';
+import { extractUlidFromFilename, compareArticleFilenameDesc } from '../../utils/naming.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
   // sync_pull: Pull remote article(s) and taxonomies
@@ -150,7 +150,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
         // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first
         const sortedItems = [...batchResult.items].sort((a, b) =>
-          path.basename(b.filePath).localeCompare(path.basename(a.filePath)),
+          compareArticleFilenameDesc(a.filePath, b.filePath),
         );
         const updatedItems = sortedItems.filter((i) => i.updated);
         const sampleItems = (updatedItems.length > 0 ? updatedItems : sortedItems).slice(0, 10);

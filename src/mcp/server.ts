@@ -54,7 +54,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - media/<yyyyMMdd>_<id>-<name>.<ext> & .yaml : Media assets & companion metadata
 
 ## AI Workflow (The Golden Path)
-1. [CHECK]: Use sync_status to list locally tracked articles and their file paths. If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).
+1. [CHECK]: Use sync_status to list locally tracked articles and their file paths (returned newest-first, descending by date). If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).
 2. [PULL]: Use sync_pull to sync articles AND taxonomies (categories/tags) from EmDash remote. Batch mode automatically pulls both. Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets.
 3. [READ & EDIT]: Read and edit the local Markdown files directly using your standard filesystem tools. Full article content and metadata (title, slug, status, bylines, taxonomies) are stored in the Markdown files.
 4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.

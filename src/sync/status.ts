@@ -25,6 +25,7 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown } from '../utils/frontmatter.js';
 import { calculateHash } from './pull.js';
+import { compareArticleFilenameDesc } from '../utils/naming.js';
 
 export interface ArticleStatusItem {
   id: string;
@@ -106,7 +107,7 @@ export function getWorkspaceStatus(
   }
 
   // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first
-  items.sort((a, b) => path.basename(b.filePath).localeCompare(path.basename(a.filePath)));
+  items.sort((a, b) => compareArticleFilenameDesc(a.filePath, b.filePath));
 
   const summary = {
     total: items.length,

@@ -588,11 +588,16 @@ emit status [-c, --collection <collection>] [-p, --profile <name>]
 
 ```text
 --- Workspace Status (posts | origin: https://your-blog.example.com) ---
-  🟢 [synced  ] published posts/published/20261015_01M5...-getting-started.md (Getting Started)
-  🟡 [modified] draft     posts/draft/20261104_01M6...-ai-workflow-guide.md (AI Workflow Guide)
-  ⚪ [untracked] draft     posts/draft/20261104_01M6...-notes.md (Draft Notes)
+  🟡 [modified] draft     posts/draft/20261104_01M6BBB...-ai-workflow-guide.md (AI Workflow Guide)
+  ⚪ [untracked] draft     posts/draft/20261104_01M6AAA...-notes.md (Draft Notes)
+  🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-getting-started.md (Getting Started)
 
 Summary: 3 total (1 synced, 1 modified, 1 untracked)
+
+```
+
+> [!NOTE]
+> Articles are sorted newest-first by date prefix and ULID. The date prefix reflects the article's publication or creation date, not the last-modified time. To locate currently active edits, look for files marked `[modified]`.
 
 ```
 
@@ -720,7 +725,7 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
-| `sync_status` | Inspect local sync state (`synced`, `modified`, `untracked`) | `collection` |
+| `sync_status` | Inspect local sync state (articles returned newest-first) | `collection` |
 | `sync_pull` | Pull remote articles **and taxonomies** into local workspace | `id`, `force`, `status`, `noPrune`, `postsOnly`, `includeMedia`, `metadataOnly` |
 | `sync_new` | Scaffold new article with canonical ULID and frontmatter | `slug`, `title`, `locale`, `collection` |
 | `sync_push` | Push local article changes to remote with preflight checks | `filePath`, `id`, `allowPublish` |
