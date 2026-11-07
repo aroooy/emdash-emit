@@ -137,6 +137,23 @@ describe('AI Misbehavior Preflight Guards (G2 - G9)', () => {
     };
     const res2 = runPreflightChecks(filePath, codeParsed);
     expect(res2.valid).toBe(true);
+
+    // 3. Valid: root-relative canonical remote media URL (used in EmDash published posts)
+    const remoteCanonicalParsed: ParsedMarkdown = {
+      ...validParsed,
+      body: 'Here is an uploaded photo: ![Photo](/_emdash/api/media/file/01M67NPPKKGDWBH3HVQ1JR4JSB.jpg)\nAnd another: ![](https://aroooy.net/_emdash/api/media/file/01M67NPRAFFQQMPT3S9148JC0Z.jpeg)',
+    };
+    const res3 = runPreflightChecks(filePath, remoteCanonicalParsed);
+    expect(res3.valid).toBe(true);
+
+    // 4. Invalid: absolute filesystem path
+    const absoluteFsParsed: ParsedMarkdown = {
+      ...validParsed,
+      body: 'Dangerous absolute path: ![Secret](/Users/hiroaki/Desktop/secret.png)',
+    };
+    const res4 = runPreflightChecks(filePath, absoluteFsParsed);
+    expect(res4.valid).toBe(false);
+    expect(res4.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
   });
 
   it('G6: blocks push when unresolved conflict markers exist in body', () => {

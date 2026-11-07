@@ -73,6 +73,9 @@ export function localToApiPayload(
     data: {
       title: frontmatter.title,
       content: ptBody,
+      ...(frontmatter.featuredImage !== undefined
+        ? { featured_image: frontmatter.featuredImage }
+        : {}),
     },
     _rev: rev,
   };
@@ -182,6 +185,15 @@ export function apiResponseToLocal(
     bylines = [idMap[slugOrId] || slugOrId];
   }
 
+  const rawFeaturedImage =
+    data.featured_image ?? data.featuredImage ?? item.featured_image ?? item.featuredImage;
+  const featuredImage =
+    rawFeaturedImage !== undefined && rawFeaturedImage !== null
+      ? String(rawFeaturedImage)
+      : rawFeaturedImage === null
+        ? null
+        : undefined;
+
   const frontmatter: Frontmatter = {
     id,
     slug,
@@ -190,6 +202,7 @@ export function apiResponseToLocal(
     status,
     publishedAt,
     locale,
+    ...(featuredImage !== undefined ? { featuredImage } : {}),
     taxonomies,
     seo,
     bylines,

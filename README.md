@@ -116,7 +116,7 @@ By leveraging Node.js 22's built-in `node:sqlite` module (`DatabaseSync`), Emit 
 
 To prevent concurrent race conditions when multiple authors or AI agents collaborate:
 
-* Emit acquires a distributed 7-minute lease via `POST /api/v1/content/lock` before writing to remote articles, with automatic heartbeats and `try/finally` release guarantees.
+* Emit acquires a distributed 7-minute lease via `POST /_emdash/api/content/{collection}/{id}/lock` before writing to remote articles, with automatic heartbeats and `try/finally` release guarantees.
 * If concurrent edits occur, Emit utilizes a **Hybrid 3-Way Merge** engine (`node-diff3`), merging YAML frontmatter fields and Markdown body text independently.
 
 ---
@@ -356,7 +356,7 @@ EmDash stores media files (images, documents) in Cloudflare R2 via multipart upl
 2. **Sync Media Locally**: Run `emit pull-media` in your workspace. This downloads the images and companion `.yaml` metadata files into `media/`.
 3. **Embed in Articles**:
    - For featured hero images: set `featuredImage: "01M6..."` in frontmatter.
-   - For inline images in body: use standard Markdown syntax with remote URLs: `![Alt text](https://your-blog.example.com/api/v1/media/01M6.../file.jpg)`.
+   - For inline images in body: use standard Markdown syntax with remote URLs: `![Alt text](/_emdash/api/media/file/<ULID>.<ext>)` (or absolute URL `https://your-blog.example.com/_emdash/api/media/file/<ULID>.<ext>`).
 
 > [!WARNING]
 > **No Local Image Paths in Markdown**: Preflight Guard **G5** strictly forbids pushing articles containing local filesystem paths like `![pic](./my-image.png)`. Images must be uploaded to Cloudflare R2 before publishing to prevent broken images in production.
@@ -772,7 +772,7 @@ With Emit connected via MCP, you can give high-level natural language instructio
 
 To eliminate race conditions when multiple users or agents edit the same post:
 
-1. Emit issues a `POST /api/v1/content/lock` request to EmDash before pushing.
+1. Emit issues a `POST /_emdash/api/content/{collection}/{id}/lock` request to EmDash before pushing.
 2. EmDash grants a 7-minute mutual exclusion lease.
 3. If another author currently holds the lock, Emit aborts with an informative message indicating who owns the lock and when the lease expires.
 4. Emit guarantees lock release using strict `try/finally` execution.

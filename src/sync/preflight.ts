@@ -51,7 +51,7 @@ export interface PreflightError {
 }
 
 const CONFLICT_MARKER_REGEX = /^<{7}\s|^={7}$|^>{7}\s/m;
-const LOCAL_IMAGE_REGEX = /!\[.*?\]\((?!https?:\/\/|data:).*?\)/;
+const LOCAL_IMAGE_REGEX = /!\[.*?\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/).*?\)/;
 
 /**
  * Runs Preflight Guards G2 through G9 against the article to prevent AI misbehavior.
@@ -127,7 +127,7 @@ export function runPreflightChecks(
       code: 'LOCAL_IMAGE_DETECTED',
       message: `Local image path detected in markdown body: '${localImageMatch[0]}'.`,
       suggestion:
-        'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL.',
+        'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL (e.g. /_emdash/api/media/file/<id>.<ext>).',
     });
   }
 

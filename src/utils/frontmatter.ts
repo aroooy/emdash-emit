@@ -40,6 +40,7 @@ export const FrontmatterSchema = z.object({
   status: z.enum(['draft', 'published']).default('draft'),
   publishedAt: z.string().nullable().optional(),
   locale: z.string().default('ja'),
+  featuredImage: z.string().nullable().optional(),
   taxonomies: z.record(z.array(z.string())).optional().default({}),
   seo: FrontmatterSeoSchema.optional(),
   bylines: z.array(z.string()).optional().default([]),
@@ -87,6 +88,11 @@ export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCa
   lines.push(`status: ${data.status}`);
   lines.push(`publishedAt: ${data.publishedAt ? JSON.stringify(data.publishedAt) : 'null'}`);
   lines.push(`locale: ${data.locale}`);
+  if (data.featuredImage !== undefined) {
+    lines.push(
+      `featuredImage: ${data.featuredImage ? JSON.stringify(data.featuredImage) : 'null'}`,
+    );
+  }
 
   // Taxonomies
   lines.push('taxonomies:');

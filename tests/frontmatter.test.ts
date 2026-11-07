@@ -100,6 +100,30 @@ describe('Frontmatter & Markdown Serialization', () => {
     expect(yaml).toContain('- hiroaki-hayase');
   });
 
+  it('preserves featuredImage across parse and serialization round-trips', () => {
+    const raw = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: hero-post',
+      'title: "Hero Post"',
+      'collection: posts',
+      'status: draft',
+      'featuredImage: "01M6MEDIA1234567890123456"',
+      '---',
+      '',
+      'Body with featured hero image.',
+    ].join('\n');
+
+    const parsed = parseMarkdown(raw);
+    expect(parsed.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+
+    const serialized = serializeMarkdown(parsed.frontmatter, parsed.body);
+    expect(serialized).toContain('featuredImage: "01M6MEDIA1234567890123456"');
+
+    const reparsed = parseMarkdown(serialized);
+    expect(reparsed.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+  });
+
   it('serializes full document cleanly', () => {
     const data: Frontmatter = {
       id: validUlid,

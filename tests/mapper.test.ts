@@ -101,4 +101,30 @@ describe('Mapper (Local Frontend <-> EmDash API)', () => {
     // Ensure _rev is NOT in frontmatter
     expect((local.frontmatter as Record<string, unknown>)._rev).toBeUndefined();
   });
+
+  it('maps featuredImage to payload.data.featured_image and back to frontmatter.featuredImage', () => {
+    const withFeatured: ParsedMarkdown = {
+      ...sampleParsed,
+      frontmatter: {
+        ...sampleParsed.frontmatter,
+        featuredImage: '01M6MEDIA1234567890123456',
+      },
+    };
+
+    const payload = localToApiPayload(withFeatured, 'rev_test_1');
+    expect(payload.data.featured_image).toBe('01M6MEDIA1234567890123456');
+
+    const apiItem = {
+      id: validUlid,
+      title: 'Post with Featured Image',
+      data: {
+        title: 'Post with Featured Image',
+        featured_image: '01M6MEDIA1234567890123456',
+        content: [],
+      },
+    };
+
+    const local = apiResponseToLocal(apiItem);
+    expect(local.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+  });
 });
