@@ -49,7 +49,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 [4. PUSH]           Explicit push to remote    -->  sync_push (filePath or id required)
 ```
 
-1. **PULL (`sync_pull`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision.
+1. **PULL (`sync_pull`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. Batch mode automatically syncs taxonomies (categories/tags) alongside articles. Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to also pull media assets.
 2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files.
 3. **DIRECT EDIT**: Edit the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly (frontmatter and body).
 4. **PUSH (`sync_push`)**: When editing is complete, push the specific file or ID to remote EmDash.
@@ -85,3 +85,4 @@ These rules are enforced at the code level via Preflight Guards (G1–G9):
 - All new features and bug fixes must include unit tests under `tests/` using Vitest.
 - Run `npm run check` (`format:check`, `typecheck`, and `test`) before committing.
 - Ensure 100% clean exit (zero errors, all tests green).
+- `tsconfig.json` builds `src/` only (tests excluded). `tsconfig.test.json` type-checks `src/` **and** `tests/` and is wired into `npm run typecheck`, so test files are fully typed and editors resolve `node:*` imports correctly. Do not add `@types/node`; it is already configured via `"types": ["node"]`.

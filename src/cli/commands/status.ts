@@ -84,7 +84,7 @@ export function registerStatusInitCommands(
 
 ■ Handy Commands
   - emit status     ... View local editing status and diff against remote
-  - emit pull [id]  ... Sync remote content into local workspace window
+  - emit pull [id]  ... Sync remote articles + taxonomies into local workspace
   - emit mcp        ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
 
 ■ Collaboration Rules with AI (AGENTS.md)

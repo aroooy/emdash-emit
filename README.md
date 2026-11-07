@@ -326,7 +326,7 @@ Markdown body begins here...
    - **Do not** add `# Article Title` as the first heading in the Markdown body. Doing so causes duplicate title displays on the site frontend. (Emit's preflight guard G7 will detect and automatically trim redundant top headings).
 2. **Taxonomy Slugs**:
    - Items under `categories:` and `tags:` must match existing slug names from `categories/` and `tags/`.
-   - Never invent arbitrary IDs or invalid names; pull taxonomies with `emit pull-taxonomies` to see available options.
+   - Never invent arbitrary IDs or invalid names; taxonomies are synced automatically with `emit pull`, or use `emit pull-taxonomies` standalone to see available options.
 3. **Status Transitions**:
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
@@ -368,7 +368,7 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 ```text
 [1. CHECK]  Inspect local workspace state   ──►  emit status
     │
-[2. PULL]   Sync remote updates safely       ──►  emit pull
+[2. PULL]   Sync remote updates safely       ──►  emit pull  (articles + taxonomies)
     │
 [3. EDIT]   Write & refine Markdown directly ──►  posts/draft/*.md
     │
@@ -379,7 +379,7 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 ### The 4-Step Authoring Cycle
 
 1. **CHECK (`emit status`)**: Check your workspace status to see synced, modified, and untracked files.
-2. **PULL (`emit pull`)**: Synchronize the latest sliding window from the server into your local workspace.
+2. **PULL (`emit pull`)**: Synchronize the latest articles and taxonomies from the server into your local workspace. Taxonomies (categories/tags) are synced automatically in batch mode.
 3. **EDIT (Direct Editing)**:
 * For new posts: run `emit new <slug> --title "My Title"` to scaffold a canonical draft.
 * Edit the Markdown body and YAML frontmatter in `posts/draft/` or `posts/published/`.
@@ -489,19 +489,25 @@ Next: Write your content in Markdown, then run:
 
 ### `emit pull`
 
-Synchronizes remote articles into the local workspace sliding window.
+Synchronizes remote articles **and taxonomies** (categories/tags) into the local workspace.
 
 ```bash
 emit pull [id] [options]
 
 ```
 
-* `[id]`: Optional article ID or ULID. If specified, pulls only that specific article (even if outside the window).
+* `[id]`: Optional article ID or ULID. If specified, pulls only that specific article (even if outside the window). Taxonomies are not pulled in single-article mode.
 * `-s, --status <draft|published|all>`: Filter by publication status (default: `all`).
 * `-c, --collection <collection>`: Collection name (default: `posts`).
 * `--no-prune`: Do not prune local articles that have fallen outside the sliding window (escape hatch; not intended for routine use).
 * `--force`: Force overwrite local files and bypass differential hash checking.
 * `--concurrency <n>`: Parallel processing task limit (default: `8`).
+* `--posts-only`: Skip automatic taxonomy (categories/tags) sync. Pull articles only.
+* `--media`: Also pull media assets and companion metadata into `media/`.
+* `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
+
+> [!NOTE]
+> **Taxonomies are pulled by default in batch mode.** Categories and tags are lightweight (2 API calls) and required for valid push operations (Preflight Guard G4 validates taxonomy slugs). This eliminates a common source of push failures. Use `--posts-only` if you need articles only.
 
 > [!NOTE]
 > **Why `--no-prune` is rarely needed:**  
@@ -510,11 +516,33 @@ emit pull [id] [options]
 **Example:**
 
 ```bash
-# Pull the latest sliding window (prunes older cached files automatically)
+# Pull latest articles + taxonomies (default unified sync)
 emit pull
 
-# Pull a specific legacy article by ID
+# Pull articles only (skip taxonomies)
+emit pull --posts-only
+
+# Pull articles + taxonomies + media
+emit pull --media
+
+# Pull articles + taxonomies + media metadata only (no binary downloads)
+emit pull --media --metadata-only
+
+# Pull a specific legacy article by ID (no taxonomy overhead)
 emit pull 01M5XYZ9876543210123456789
+
+```
+
+**Example Output:**
+
+```text
+Syncing categories and tags...
+  ✅ Taxonomies: 12 categories, 34 tags
+Fetching articles from remote (posts, status: all, window: 100, concurrency: 8)...
+  [1/100] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
+  [2/100] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
+
+🎉 Articles: 100 total (12 updated, 88 skipped/up-to-date)
 
 ```
 
@@ -583,7 +611,7 @@ emit diff [filePath]
 
 ### `emit pull-taxonomies`
 
-Downloads categories and tags from EmDash and generates local YAML definitions under `categories/` and `tags/`.
+Downloads categories and tags from EmDash and generates local YAML definitions under `categories/` and `tags/`. This is also performed automatically by `emit pull` in batch mode.
 
 ```bash
 emit pull-taxonomies
@@ -693,11 +721,11 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
 | `sync_status` | Inspect local sync state (`synced`, `modified`, `untracked`) | `collection` |
-| `sync_pull` | Pull remote posts into local sliding window or pull by ID | `id`, `force`, `status`, `noPrune` (escape hatch) |
+| `sync_pull` | Pull remote articles **and taxonomies** into local workspace | `id`, `force`, `status`, `noPrune`, `postsOnly`, `includeMedia`, `metadataOnly` |
 | `sync_new` | Scaffold new article with canonical ULID and frontmatter | `slug`, `title`, `locale`, `collection` |
 | `sync_push` | Push local article changes to remote with preflight checks | `filePath`, `id`, `allowPublish` |
 | `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath` |
-| `sync_pull_taxonomies` | Pull remote category and tag definitions into local YAML files | (none) |
+| `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; also included in `sync_pull`) | (none) |
 | `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `prune`, `metadataOnly` |
 | `profile_list` | List all configured connection profiles | (none) |
 | `profile_switch` | Switch active profile for multi-site environments | `name` |
@@ -763,7 +791,7 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 
 **Cause**: Categories or tags in frontmatter do not exist in the remote database.
 
-**Solution**: Run `emit pull-taxonomies` to refresh your local category and tag list, and ensure frontmatter values match existing slugs.
+**Solution**: Run `emit pull` (taxonomies are synced automatically), or use `emit pull-taxonomies` standalone to refresh your local category and tag list. Ensure frontmatter values match existing slugs.
 
 ---
 

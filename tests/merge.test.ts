@@ -123,6 +123,8 @@ describe('Hybrid 3-Way Merge Engine', () => {
           collection: 'posts',
           status: 'draft' as const,
           locale: 'ja',
+          taxonomies: {},
+          bylines: [],
         },
         body: '# Intro\n\nBase Section 1\n\nMiddle Section\n\nBase Section 2\n\nFooter',
       };

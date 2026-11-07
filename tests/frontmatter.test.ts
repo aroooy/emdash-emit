@@ -109,6 +109,8 @@ describe('Frontmatter & Markdown Serialization', () => {
       status: 'draft',
       publishedAt: null,
       locale: 'ja',
+      taxonomies: {},
+      bylines: [],
     };
 
     const fullDoc = serializeMarkdown(data, 'Hello world body');

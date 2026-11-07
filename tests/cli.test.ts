@@ -60,6 +60,15 @@ describe('Emit CLI (Commander)', () => {
     expect(optionNames).not.toContain('--all');
   });
 
+  it('pull command exposes unified sync options (--posts-only, --media, --metadata-only)', () => {
+    const pullCmd = program.commands.find((c) => c.name() === 'pull');
+    expect(pullCmd).toBeDefined();
+    const optionNames = pullCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--posts-only');
+    expect(optionNames).toContain('--media');
+    expect(optionNames).toContain('--metadata-only');
+  });
+
   it('executes emit guide cleanly', () => {
     const guideCmd = program.commands.find((c) => c.name() === 'guide');
     expect(guideCmd).toBeDefined();

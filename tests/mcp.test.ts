@@ -67,6 +67,7 @@ describe('Emit MCP Server', () => {
     expect(instructions).toBeDefined();
     expect(instructions).toContain('The Golden Path');
     expect(instructions).toContain('posts/published');
+    expect(instructions).toContain('taxonomies');
 
     // Expected tools
     const expectedTools = [
@@ -94,6 +95,20 @@ describe('Emit MCP Server', () => {
       expect(typeof desc).toBe('string');
       expect(desc!.length).toBeGreaterThan(20);
     }
+
+    // sync_pull description must mention taxonomies (new unified behavior)
+    expect(registered['sync_pull'].description).toContain('taxonomies');
+
+    // sync_pull must include postsOnly / includeMedia / metadataOnly parameters.
+    // The MCP SDK stores inputSchema as the raw Zod object; shape keys expose the parameter names.
+    const syncPullTool = registered['sync_pull'] as unknown as {
+      inputSchema?: { _def?: { shape?: () => Record<string, unknown> } };
+    };
+    const shape = syncPullTool.inputSchema?._def?.shape?.();
+    expect(shape).toBeDefined();
+    expect(shape!['postsOnly']).toBeDefined();
+    expect(shape!['includeMedia']).toBeDefined();
+    expect(shape!['metadataOnly']).toBeDefined();
   });
 
   it('correctly resolves ULID from filePath with yyyyMMdd_ date prefix in sync_pull', () => {

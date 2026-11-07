@@ -32,7 +32,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
   program
     .command('pull [id]')
     .description(
-      'Pull articles from remote EmDash into workspace window (or specific article by ID)',
+      'Pull articles and taxonomies from remote EmDash into workspace (or specific article by ID)',
     )
     .option('-c, --collection <collection>', 'Collection name (defaults to "posts")')
     .option('-s, --status <status>', 'Filter by status: "all", "draft", or "published"', 'all')
@@ -42,13 +42,44 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Number of parallel article processing tasks (default: 8 or config)',
     )
     .option('--force', 'Force overwrite local files and bypass differential skip')
+    .option('--posts-only', 'Skip automatic taxonomy (categories/tags) sync. Pull articles only.')
+    .option('--media', 'Also pull media assets and metadata into media/ directory.')
+    .option(
+      '--metadata-only',
+      'With --media: download only metadata YAML, skip binary file downloads.',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (id, options) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
+      const postsOnly = options.postsOnly === true;
+      const includeMedia = options.media === true;
 
       try {
         if (!id) {
+          // Batch mode: taxonomies + articles (+ media if --media)
+
+          // 1. Pull taxonomies (unless --posts-only)
+          if (!postsOnly) {
+            console.log('Syncing categories and tags...');
+            const taxResult = await pullTaxonomies({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+            });
+            const taxPrunedCat = taxResult.deletedCategoriesCount
+              ? `, ${taxResult.deletedCategoriesCount} categories pruned`
+              : '';
+            const taxPrunedTag = taxResult.deletedTagsCount
+              ? `, ${taxResult.deletedTagsCount} tags pruned`
+              : '';
+            console.log(
+              `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
+            );
+          }
+
+          // 2. Pull articles (batch)
           const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 100;
 
           const concurrency = options.concurrency
@@ -88,9 +119,30 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
           const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
           console.log(
-            `\n🎉 Sync complete: ${batchResult.total} total (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
+            `\n🎉 Articles: ${batchResult.total} total (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
           );
+
+          // 3. Pull media (if --media)
+          if (includeMedia) {
+            const mediaLimit = ctx.config.mediaSyncLimit || 300;
+            const downloadFiles = options.metadataOnly !== true;
+            console.log(
+              `\nPulling media from remote (limit: ${mediaLimit}${downloadFiles ? '' : ', metadata only'})...`,
+            );
+            const mediaResult = await pullMedia({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+              limit: mediaLimit,
+              downloadFiles,
+            });
+            console.log(
+              `  ✅ Media: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
+            );
+          }
         } else {
+          // Single article mode: articles only (no taxonomy/media overhead)
           const res = await pullArticle(collection, id, {
             workspaceRoot: ctx.root,
             cache: ctx.cache,
@@ -116,11 +168,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       }
     });
 
-  // emit pull-taxonomies
+  // emit pull-taxonomies (standalone; taxonomies are also pulled automatically by emit pull)
   program
     .command('pull-taxonomies')
     .description(
-      'Pull remote categories and tags into local categories/ and tags/ YAML definitions',
+      'Pull remote categories and tags into local categories/ and tags/ YAML definitions (also pulled automatically by emit pull)',
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (options) => {

@@ -38,6 +38,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G9)', () => {
       publishedAt: null,
       locale: 'ja',
       taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+      bylines: [],
     },
     body: 'This is valid body text with an image ![Remote](https://example.com/img.jpg).',
     rawYaml: '',

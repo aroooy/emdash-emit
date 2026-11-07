@@ -32,10 +32,10 @@ import { pullMedia } from '../../sync/media.js';
 import { extractUlidFromFilename } from '../../utils/naming.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
-  // sync_pull: Pull remote article(s)
+  // sync_pull: Pull remote article(s) and taxonomies
   server.tool(
     'sync_pull',
-    'Pull remote articles from EmDash into local Markdown files (posts/published/ and posts/draft/). Supports pulling a single article by id/filePath or batch sync with sliding-window pagination and pruning. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
+    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles. Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -61,6 +61,18 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe('Explicitly control whether to prune articles outside the sync window'),
+      postsOnly: z
+        .boolean()
+        .optional()
+        .describe('Skip taxonomy (categories/tags) sync. Pull articles only.'),
+      includeMedia: z
+        .boolean()
+        .optional()
+        .describe('Also pull media assets and metadata into media/ directory.'),
+      metadataOnly: z
+        .boolean()
+        .optional()
+        .describe('With includeMedia: download only metadata YAML, skip binary file downloads.'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -102,11 +114,26 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         };
       }
 
-      // Batch sync mode: Uses configured sliding window limit
+      // Batch sync mode: taxonomies + articles (+ media if includeMedia)
       const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 100;
       const shouldPrune = args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
+      const postsOnly = args.postsOnly === true;
+      const includeMedia = args.includeMedia === true;
 
       try {
+        // 1. Pull taxonomies (unless postsOnly or single-article mode)
+        let taxonomiesMsg = '';
+        if (!postsOnly) {
+          const taxResult = await pullTaxonomies({
+            workspaceRoot: ctx.root,
+            origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+          });
+          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
+        }
+
+        // 2. Pull articles
         const batchResult = await pullBatch({
           collection,
           workspaceRoot: ctx.root,
@@ -134,11 +161,26 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const detailBlock =
           listLines.length > 0 ? `\n\n${headerLabel}:\n${listLines.join('\n')}` : '';
 
+        // 3. Pull media if includeMedia
+        let mediaMsg = '';
+        if (includeMedia) {
+          const mediaLimit = ctx.config.mediaSyncLimit || 300;
+          const mediaResult = await pullMedia({
+            workspaceRoot: ctx.root,
+            origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            limit: mediaLimit,
+            downloadFiles: args.metadataOnly !== true,
+          });
+          mediaMsg = `\nMedia: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
+        }
+
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${detailBlock}\n\nYou can now read or edit these local Markdown files directly.`,
+              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${detailBlock}\n\nYou can now read or edit these local Markdown files directly.`,
             },
           ],
         };
