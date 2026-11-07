@@ -103,28 +103,82 @@ describe('Mapper (Local Frontend <-> EmDash API)', () => {
   });
 
   it('maps featuredImage to payload.data.featured_image and back to frontmatter.featuredImage', () => {
+    const validMediaUlid = '01M67MP2W0VKCK2DFWM166CR24';
     const withFeatured: ParsedMarkdown = {
       ...sampleParsed,
       frontmatter: {
         ...sampleParsed.frontmatter,
-        featuredImage: '01M6MEDIA1234567890123456',
+        featuredImage: validMediaUlid,
       },
     };
 
     const payload = localToApiPayload(withFeatured, 'rev_test_1');
-    expect(payload.data.featured_image).toBe('01M6MEDIA1234567890123456');
+    expect(payload.data.featured_image).toEqual({ id: validMediaUlid });
 
-    const apiItem = {
+    // Legacy direct string shape
+    const apiItemString = {
       id: validUlid,
-      title: 'Post with Featured Image',
+      title: 'Post with Featured Image String',
       data: {
-        title: 'Post with Featured Image',
-        featured_image: '01M6MEDIA1234567890123456',
+        title: 'Post with Featured Image String',
+        featured_image: validMediaUlid,
         content: [],
       },
     };
+    const localString = apiResponseToLocal(apiItemString);
+    expect(localString.frontmatter.featuredImage).toBe(validMediaUlid);
 
-    const local = apiResponseToLocal(apiItem);
-    expect(local.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+    // Real EmDash provider: "external" object shape
+    const apiItemExternal = {
+      id: validUlid,
+      title: 'Post with External Featured Image',
+      data: {
+        title: 'Post with External Featured Image',
+        featured_image: {
+          provider: 'external',
+          id: '',
+          src: '/_emdash/api/media/file/01M67NT31TW9WXJVC83ZRGK994.jpg',
+        },
+        content: [],
+      },
+    };
+    const localExternal = apiResponseToLocal(apiItemExternal);
+    expect(localExternal.frontmatter.featuredImage).toBe('01M67NT31TW9WXJVC83ZRGK994');
+    expect(localExternal.frontmatter.featuredImage).not.toBe('[object Object]');
+
+    // Real EmDash provider: "local" object shape
+    const apiItemLocal = {
+      id: validUlid,
+      title: 'Post with Local Featured Image',
+      data: {
+        title: 'Post with Local Featured Image',
+        featured_image: {
+          id: '01M6A7SJ82SMPWKTJ7GSSDC6VZ',
+          provider: 'local',
+          filename: 'Gemini_Generated_Image.jpeg',
+          mimeType: 'image/jpeg',
+          meta: {
+            storageKey: '01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19.jpeg',
+          },
+        },
+        content: [],
+      },
+    };
+    const localLocal = apiResponseToLocal(apiItemLocal);
+    expect(localLocal.frontmatter.featuredImage).toBe('01M6A7SJ82SMPWKTJ7GSSDC6VZ');
+    expect(localLocal.frontmatter.featuredImage).not.toBe('[object Object]');
+
+    // Null featured image clears it
+    const apiItemNull = {
+      id: validUlid,
+      title: 'Post without Featured Image',
+      data: {
+        title: 'Post without Featured Image',
+        featured_image: null,
+        content: [],
+      },
+    };
+    const localNull = apiResponseToLocal(apiItemNull);
+    expect(localNull.frontmatter.featuredImage).toBeNull();
   });
 });

@@ -53,6 +53,7 @@ export function mergeFrontmatter(
     'status',
     'publishedAt',
     'locale',
+    'featuredImage',
     'taxonomies',
     'seo',
     'bylines',

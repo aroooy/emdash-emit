@@ -55,6 +55,49 @@ export interface MapperOptions {
 }
 
 /**
+ * Derives a canonical 26-character media ULID from a featured_image representation.
+ * Supports:
+ * - Direct 26-char ULID string
+ * - { provider: 'local', id: '<ULID>', ... }
+ * - { provider: 'external', src: '/_emdash/api/media/file/<ULID>.<ext>', ... }
+ * - URL strings containing /_emdash/api/media/file/<ULID>.<ext>
+ */
+export function extractMediaUlid(val: unknown): string | null {
+  if (val === null) return null;
+  if (!val) return null;
+
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^[0-9A-HJ-NP-Z]{26}$/i.test(trimmed)) {
+      return trimmed;
+    }
+    const match = trimmed.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
+    if (match) return match[1];
+    return null;
+  }
+
+  if (typeof val === 'object') {
+    const obj = val as Record<string, unknown>;
+    // 1. Direct ULID id field (provider: 'local')
+    if (typeof obj.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(obj.id.trim())) {
+      return obj.id.trim();
+    }
+    // 2. src URL in object (provider: 'external')
+    if (typeof obj.src === 'string') {
+      const match = obj.src.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
+      if (match) return match[1];
+    }
+    // 3. url field fallback
+    if (typeof obj.url === 'string') {
+      const match = obj.url.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
+      if (match) return match[1];
+    }
+  }
+
+  return null;
+}
+
+/**
  * Converts local markdown representation into EmDash REST API update payload.
  */
 export function localToApiPayload(
@@ -74,7 +117,10 @@ export function localToApiPayload(
       title: frontmatter.title,
       content: ptBody,
       ...(frontmatter.featuredImage !== undefined
-        ? { featured_image: frontmatter.featuredImage }
+        ? {
+            featured_image:
+              frontmatter.featuredImage === null ? null : { id: frontmatter.featuredImage },
+          }
         : {}),
     },
     _rev: rev,
@@ -186,12 +232,18 @@ export function apiResponseToLocal(
   }
 
   const rawFeaturedImage =
-    data.featured_image ?? data.featuredImage ?? item.featured_image ?? item.featuredImage;
+    data.featured_image !== undefined
+      ? data.featured_image
+      : data.featuredImage !== undefined
+        ? data.featuredImage
+        : item.featured_image !== undefined
+          ? item.featured_image
+          : item.featuredImage;
   const featuredImage =
-    rawFeaturedImage !== undefined && rawFeaturedImage !== null
-      ? String(rawFeaturedImage)
-      : rawFeaturedImage === null
-        ? null
+    rawFeaturedImage === null
+      ? null
+      : rawFeaturedImage !== undefined
+        ? (extractMediaUlid(rawFeaturedImage) ?? undefined)
         : undefined;
 
   const frontmatter: Frontmatter = {

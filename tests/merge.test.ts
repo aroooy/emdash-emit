@@ -81,6 +81,7 @@ describe('Hybrid 3-Way Merge Engine', () => {
       const localFm: Frontmatter = {
         ...baseFm,
         title: 'Local Title Changed',
+        featuredImage: '01M67MP2W0VKCK2DFWM166CR24',
       };
       const remoteFm: Frontmatter = {
         ...baseFm,
@@ -91,8 +92,25 @@ describe('Hybrid 3-Way Merge Engine', () => {
       const res = mergeFrontmatter(localFm, baseFm, remoteFm);
       expect(res.merged.title).toBe('Local Title Changed');
       expect(res.merged.status).toBe('published');
+      expect(res.merged.featuredImage).toBe('01M67MP2W0VKCK2DFWM166CR24');
       expect(res.merged.bylines).toEqual(['author1', 'author2']);
       expect(res.warnings).toHaveLength(0);
+    });
+
+    it('correctly detects conflict on featuredImage field and warns', () => {
+      const localFm: Frontmatter = {
+        ...baseFm,
+        featuredImage: '01M6LOCAL11111111111111111',
+      };
+      const remoteFm: Frontmatter = {
+        ...baseFm,
+        featuredImage: '01M6REMOTE2222222222222222',
+      };
+
+      const res = mergeFrontmatter(localFm, baseFm, remoteFm);
+      expect(res.merged.featuredImage).toBe('01M6REMOTE2222222222222222');
+      expect(res.warnings.length).toBe(1);
+      expect(res.warnings[0]).toContain('featuredImage');
     });
 
     it('resolves conflicting frontmatter field by favoring remote and logging warning', () => {

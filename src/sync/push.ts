@@ -24,7 +24,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { withEntryLock } from '../client/lock.js';
-import { apiResponseToLocal, localToApiPayload, type MapperOptions } from '../client/mapper.js';
+import {
+  apiResponseToLocal,
+  extractMediaUlid,
+  localToApiPayload,
+  type MapperOptions,
+} from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { createAuthedFetch } from '../client/http.js';
 import { unwrapItem, extractRev } from '../client/api.js';
@@ -120,6 +125,32 @@ async function transitionContentStatus(
 
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   return extractRev(json, currentRev);
+}
+
+function preserveOrResolveFeaturedImage(
+  payload: ReturnType<typeof localToApiPayload>,
+  featuredImage: string | null | undefined,
+  cache: CacheDatabase | undefined,
+  id: string,
+): void {
+  if (featuredImage === undefined) return;
+  if (featuredImage === null) {
+    payload.data.featured_image = null;
+    return;
+  }
+  if (!cache) return;
+  try {
+    const cachedEntry = cache.getEntry(id);
+    if (cachedEntry) {
+      const raw = JSON.parse(cachedEntry.rawJson);
+      const item = (raw.item || raw) as Record<string, unknown>;
+      const itemData = (item.data || {}) as Record<string, unknown>;
+      const remoteFi = itemData.featured_image;
+      if (remoteFi && extractMediaUlid(remoteFi) === featuredImage) {
+        payload.data.featured_image = remoteFi;
+      }
+    }
+  } catch {}
 }
 
 /**
@@ -402,6 +433,7 @@ export async function pushArticle(
   // Existing article: execute within full 7-minute entry lock lease
   return await withEntryLock(collection, id, options, async () => {
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
+    preserveOrResolveFeaturedImage(payload, parsed.frontmatter.featuredImage, options.cache, id);
     const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
 
     let res = await fetchFn(putUrl, {
@@ -513,6 +545,7 @@ export async function pushArticle(
       parsed.frontmatter = mergeResult.frontmatter;
       parsed.body = mergeResult.body;
       payload = localToApiPayload(parsed, remoteParsed.rev, effectiveOptions);
+      preserveOrResolveFeaturedImage(payload, parsed.frontmatter.featuredImage, options.cache, id);
 
       res = await fetchFn(putUrl, {
         method: 'PUT',
