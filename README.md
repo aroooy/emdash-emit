@@ -32,7 +32,7 @@
   - [Media Management & Upload Workflow](#media-management--upload-workflow)
 - [🤖 The Golden Path for AI & Humans (4-Step Cycle)](#-the-golden-path-for-ai--humans-4-step-cycle)
   - [The 4-Step Authoring Cycle](#the-4-step-authoring-cycle)
-  - [Preflight Safety Guardrails (G1–G9)](#preflight-safety-guardrails-g1g9)
+  - [Preflight Safety Guardrails (G1–G10)](#preflight-safety-guardrails-g1g10)
 - [🛠 CLI Command Reference](#-cli-command-reference)
   - [`emit init`](#emit-init)
   - [`emit profile`](#emit-profile)
@@ -333,6 +333,12 @@ Markdown body begins here...
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
    - **Never move or rename files manually using `mv`**.
+4. **Featured Image References**:
+   - `featuredImage` must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Emit normalizes the value to uppercase, so lowercase input is accepted and canonicalized on pull, merge, and push.
+   - To remove the hero image, set `featuredImage: null`. Omitting the field leaves the remote value untouched.
+   - When the referenced ULID matches the cached remote entry, Emit resends the original remote `featured_image` object verbatim (provider, `src`, `meta.storageKey`, dimensions, MIME type) so nothing is lost. When it does not match, Emit sends the bare `{ id: <ULID> }` and lets EmDash resolve the media record.
+   - Emit never fabricates media metadata from local `media/*.yaml` files: companion files are used only to verify the reference. In a workspace that mirrors media (`media/` exists), a missing or mismatched companion file is reported as a push warning.
+   - Preflight Guard **G10** rejects local file paths and malformed values before pushing.
 
 ### EmDash Custom Block Preservation
 
@@ -390,9 +396,9 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 * To push a draft: `emit push posts/draft/<filename>.md`
 * To publish live: update `status: published` and run `emit push posts/draft/<filename>.md --allow-publish`.
 
-### Preflight Safety Guardrails (G1–G9)
+### Preflight Safety Guardrails (G1–G10)
 
-To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 9 strict preflight guardrails before executing any write operation:
+To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 10 strict preflight guardrails before executing any write operation:
 
 | Guard | Code Name | Description | Severity |
 | --- | --- | --- | --- |
@@ -405,6 +411,7 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G7** | `TITLE_DUPLICATION_AUTOTRIM` | Detects redundant `# Title` headings at the top of the body and automatically trims them safely | Warning |
 | **G8** | `UNSUPPORTED_SYNTAX_WARNING` | Warns if unsupported block HTML or incompatible constructs are detected in Markdown | Warning |
 | **G9** | `MODIFIED_OPAQUE_BLOCK` | Verifies that `<!--ec:block ... -->` opaque fences have not been tampered with or corrupted | Error |
+| **G10** | `INVALID_FEATURED_IMAGE` | Verifies that `featuredImage` is a 26-character canonical media ULID (normalized to uppercase) or `null`. A remote media URL that contains a ULID is resolved with a warning; local file paths and malformed values are rejected | Error |
 
 ---
 

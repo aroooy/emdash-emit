@@ -22,6 +22,7 @@
 
 import path from 'node:path';
 import { extractUlidFromFilename } from '../utils/naming.js';
+import { extractMediaUlid } from '../client/mapper.js';
 import {
   stripCodeBlocks,
   verifyOpaqueBlocksUntampered,
@@ -52,9 +53,12 @@ export interface PreflightError {
 
 const CONFLICT_MARKER_REGEX = /^<{7}\s|^={7}$|^>{7}\s/m;
 const LOCAL_IMAGE_REGEX = /!\[.*?\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/).*?\)/;
+// Canonical ULID shape (Crockford base32: 26 chars, excludes I and O). Casing is
+// case-insensitive here because parseMarkdown() normalizes local frontmatter to uppercase.
+const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
 
 /**
- * Runs Preflight Guards G2 through G9 against the article to prevent AI misbehavior.
+ * Runs Preflight Guards G2 through G10 against the article to prevent AI misbehavior.
  * (G1 is enforced at the MCP / CLI invocation layer).
  */
 export function runPreflightChecks(
@@ -131,16 +135,25 @@ export function runPreflightChecks(
     });
   }
 
-  // G10: featuredImage format guard (must be a valid 26-character Crockford ULID or null)
+  // G10: featuredImage must reference a canonical 26-character media ULID (or null).
+  // A root-relative or absolute media URL that unambiguously contains a media ULID is
+  // accepted with a warning, because Emit resolves it to the canonical ULID on push.
   if (frontmatter.featuredImage !== undefined && frontmatter.featuredImage !== null) {
-    const trimmedFi = frontmatter.featuredImage.trim();
-    if (!/^[0-9A-HJ-NP-Z]{26}$/i.test(trimmedFi)) {
-      errors.push({
-        code: 'INVALID_FEATURED_IMAGE',
-        message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID or null.`,
-        suggestion:
-          'Upload the image first using EmDash Admin or MCP "media_upload", and specify the returned 26-character ULID (e.g. 01M67P0MBMJQQXH2K95HHCYRYB). To remove the featured image, set featuredImage: null.',
-      });
+    const rawFeaturedImage = frontmatter.featuredImage.trim();
+    if (!CANONICAL_ULID_REGEX.test(rawFeaturedImage)) {
+      const resolved = extractMediaUlid(rawFeaturedImage);
+      if (resolved) {
+        warnings.push(
+          `featuredImage '${rawFeaturedImage}' was resolved to the canonical media ULID '${resolved}'. Prefer writing the bare 26-character ULID in frontmatter.`,
+        );
+      } else {
+        errors.push({
+          code: 'INVALID_FEATURED_IMAGE',
+          message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID or null.`,
+          suggestion:
+            'Upload the image first using EmDash Admin or MCP "media_upload", then specify the returned 26-character ULID (e.g. 01M67P0MBMJQQXH2K95HHCYRYB). To remove the featured image, set featuredImage: null. Local file paths are never allowed.',
+        });
+      }
     }
   }
 

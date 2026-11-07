@@ -129,8 +129,20 @@ async function transitionContentStatus(
 }
 
 /**
- * Preserves the exact remote featured_image object if unchanged from cache,
- * or resolves local companion media YAML if available, defaulting to minimal { id }.
+ * Determines the featured_image value to send to EmDash, returning any warnings.
+ *
+ * - undefined : leave the payload untouched (field omitted, remote value preserved).
+ * - null      : send an explicit null to clear the hero image.
+ * - otherwise : if the cached remote entry references the same media ULID, resend the
+ *               remote object verbatim so provider, src, meta.storageKey, blurhash and
+ *               dimensions survive the round-trip byte-for-byte. Otherwise send the
+ *               canonical minimal { id: <ULID> }.
+ *
+ * Emit never fabricates provider or media metadata from local companion YAML: EmDash owns
+ * those fields (remote "local" records keep storageKey under meta.storageKey, which local
+ * media/*.yaml never contains), and re-sending possibly stale companion metadata would
+ * overwrite authoritative remote state. The companion file is therefore used only to verify
+ * the reference, and an unverifiable reference is surfaced as a warning.
  */
 function preserveOrResolveFeaturedImage(
   payload: ReturnType<typeof localToApiPayload>,
@@ -138,14 +150,19 @@ function preserveOrResolveFeaturedImage(
   cache: CacheDatabase | undefined,
   id: string,
   workspaceRoot?: string,
-): void {
-  if (featuredImage === undefined) return;
+): string[] {
+  const warnings: string[] = [];
+  if (featuredImage === undefined) return warnings;
   if (featuredImage === null) {
     payload.data.featured_image = null;
-    return;
+    return warnings;
   }
 
-  // 1. Try restoring from cache if ULID matches the existing remote entry
+  // Canonicalize once: uppercase Crockford base32. extractMediaUlid() also folds a media
+  // URL-shaped value back to its ULID so cached-remote comparison still succeeds.
+  const targetUlid = (extractMediaUlid(featuredImage) ?? featuredImage.trim()).toUpperCase();
+
+  // 1. Resend the exact remote object when it already points at this media ULID.
   if (cache) {
     try {
       const cachedEntry = cache.getEntry(id);
@@ -154,50 +171,61 @@ function preserveOrResolveFeaturedImage(
         const item = (raw.item || raw) as Record<string, unknown>;
         const itemData = (item.data || {}) as Record<string, unknown>;
         const remoteFi = itemData.featured_image;
-        if (remoteFi && extractMediaUlid(remoteFi) === featuredImage) {
+        if (remoteFi && extractMediaUlid(remoteFi) === targetUlid) {
           payload.data.featured_image = remoteFi;
-          return;
+          return warnings;
         }
       }
     } catch (err: unknown) {
-      // Non-fatal: if cache read fails, proceed to local media resolution / fallback
-      console.warn(
+      // Non-fatal: cache inspection failure falls through to canonical minimal payload.
+      warnings.push(
         `[push] Unable to inspect cache for featured_image restoration: ${(err as Error).message}`,
       );
     }
   }
 
-  // 2. If new or changed, check if workspace media/ has a companion metadata YAML
+  // 2. Verify the reference against workspace companion metadata (verification only).
   if (workspaceRoot) {
-    try {
-      const mediaDir = path.join(workspaceRoot, 'media');
-      if (fs.existsSync(mediaDir)) {
-        const files = fs.readdirSync(mediaDir);
-        const yamlFile = files.find((f) => f.endsWith('.yaml') && f.includes(featuredImage));
-        if (yamlFile) {
-          const yamlContent = fs.readFileSync(path.join(mediaDir, yamlFile), 'utf8');
-          const meta = yaml.load(yamlContent) as Record<string, unknown>;
-          if (meta && typeof meta === 'object') {
-            payload.data.featured_image = {
-              id: featuredImage,
-              provider: 'local',
-              filename: meta.filename,
-              mimeType: meta.mimeType,
-              width: meta.width ?? null,
-              height: meta.height ?? null,
-              alt: meta.alt ?? '',
-            };
-            return;
+    const mediaDir = path.join(workspaceRoot, 'media');
+    if (fs.existsSync(mediaDir)) {
+      // Anchored on the id segment so a ULID appearing inside another media item's
+      // filename can never be mistaken for its own metadata file.
+      const companion = fs
+        .readdirSync(mediaDir)
+        .find(
+          (f) =>
+            f.endsWith('.yaml') &&
+            (f.includes(`_${targetUlid}-`) || f.startsWith(`${targetUlid}-`)),
+        );
+      if (companion) {
+        try {
+          const meta = yaml.load(fs.readFileSync(path.join(mediaDir, companion), 'utf8')) as Record<
+            string,
+            unknown
+          > | null;
+          const metaId = typeof meta?.id === 'string' ? meta.id.trim().toUpperCase() : undefined;
+          if (metaId && metaId !== targetUlid) {
+            warnings.push(
+              `Local media metadata '${companion}' describes a different media ID (${metaId}); it was ignored for featuredImage ${targetUlid}.`,
+            );
           }
+        } catch (err: unknown) {
+          // Non-fatal: metadata inspection is advisory only.
+          warnings.push(
+            `[push] Failed to read local media metadata '${companion}': ${(err as Error).message}`,
+          );
         }
+      } else {
+        warnings.push(
+          `featuredImage ${targetUlid} has no companion metadata under media/. It is pushed as a bare media ID; run "emit pull-media" to mirror remote media locally or verify the ULID.`,
+        );
       }
-    } catch {
-      // Non-fatal: fall back to minimal { id }
     }
   }
 
-  // 3. Fallback: minimal { id }
-  payload.data.featured_image = { id: featuredImage };
+  // 3. Canonical minimal payload (identical to what localToApiPayload produces).
+  payload.data.featured_image = { id: targetUlid };
+  return warnings;
 }
 
 /**
@@ -268,7 +296,7 @@ export async function pushArticle(
     }
   }
 
-  // 1. Run Preflight Guards G2 - G9
+  // 1. Run Preflight Guards G2 - G10
   const preflight = runPreflightChecks(targetFilePath, preflightParsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
@@ -365,12 +393,14 @@ export async function pushArticle(
 
   if (isNewArticle) {
     let payload = localToApiPayload(parsed, '', effectiveOptions);
-    preserveOrResolveFeaturedImage(
-      payload,
-      parsed.frontmatter.featuredImage,
-      options.cache,
-      id,
-      options.workspaceRoot,
+    warnings.push(
+      ...preserveOrResolveFeaturedImage(
+        payload,
+        parsed.frontmatter.featuredImage,
+        options.cache,
+        id,
+        options.workspaceRoot,
+      ),
     );
     const postUrl = new URL(`/_emdash/api/content/${collection}`, options.origin).toString();
 
@@ -487,12 +517,14 @@ export async function pushArticle(
   // Existing article: execute within full 7-minute entry lock lease
   return await withEntryLock(collection, id, options, async () => {
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
-    preserveOrResolveFeaturedImage(
-      payload,
-      parsed.frontmatter.featuredImage,
-      options.cache,
-      id,
-      options.workspaceRoot,
+    warnings.push(
+      ...preserveOrResolveFeaturedImage(
+        payload,
+        parsed.frontmatter.featuredImage,
+        options.cache,
+        id,
+        options.workspaceRoot,
+      ),
     );
     const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
 
@@ -605,12 +637,14 @@ export async function pushArticle(
       parsed.frontmatter = mergeResult.frontmatter;
       parsed.body = mergeResult.body;
       payload = localToApiPayload(parsed, remoteParsed.rev, effectiveOptions);
-      preserveOrResolveFeaturedImage(
-        payload,
-        parsed.frontmatter.featuredImage,
-        options.cache,
-        id,
-        options.workspaceRoot,
+      warnings.push(
+        ...preserveOrResolveFeaturedImage(
+          payload,
+          parsed.frontmatter.featuredImage,
+          options.cache,
+          id,
+          options.workspaceRoot,
+        ),
       );
 
       res = await fetchFn(putUrl, {

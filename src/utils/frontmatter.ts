@@ -61,12 +61,27 @@ export interface ParsedMarkdown {
   rawYaml: string;
 }
 
+// Canonical ULID shape (Crockford base32: excludes I and O; 26 characters).
+// Emitted uppercase by EmDash, so local frontmatter is normalized to match.
+const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
+
 /**
  * Parses markdown text into validated frontmatter and body.
  */
 export function parseMarkdown(content: string): ParsedMarkdown {
   const parsed = matter(content);
   const validated = FrontmatterSchema.parse(parsed.data);
+
+  // Normalize featuredImage casing to the canonical uppercase ULID form so that
+  // merge comparisons, cache matching, and push payloads all agree with what
+  // EmDash returns. Values that are not a ULID (e.g. a media URL or a local path)
+  // are left untouched here and handled by Preflight Guard G10 on push.
+  if (typeof validated.featuredImage === 'string') {
+    const trimmed = validated.featuredImage.trim();
+    if (CANONICAL_ULID_REGEX.test(trimmed)) {
+      validated.featuredImage = trimmed.toUpperCase();
+    }
+  }
 
   return {
     frontmatter: validated,

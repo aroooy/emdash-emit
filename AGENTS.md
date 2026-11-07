@@ -61,7 +61,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 
 ## 4. Strict Safety Guardrails for AI Agents
 
-These rules are enforced at the code level via Preflight Guards (G1–G9):
+These rules are enforced at the code level via Preflight Guards (G1–G10):
 
 ### 1. Prohibition of Throwaway Temporary Files
 - **Never create disposable files** such as `temp.md`, `draft.md`, or `scratch.md` in the workspace.
@@ -82,6 +82,13 @@ These rules are enforced at the code level via Preflight Guards (G1–G9):
 - Do not invent nonexistent taxonomy terms. Preflight Guard G4 validates taxonomy terms on `sync_push` against the local `categories/` and `tags/` definitions. Validation only runs when those local definitions exist, so always run `emit pull` (or `sync_pull`) first to populate them.
 - Valid category and tag slugs are automatically provided as hints in the output of `sync_new`, `sync_pull` (batch mode, even with `postsOnly: true`), and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first). Hint lists are capped per command, so the complete authoritative list is always the `categories/` and `tags/` YAML files themselves.
 - Canonical term ULIDs in frontmatter are transparently accepted and verified against local definitions; unknown or obsolete ULIDs not found locally are rejected as stale.
+
+### 6. Featured Image References (Never Invent Media IDs)
+- `featuredImage` in frontmatter must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard G10 rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
+- Upload media first (EmDash Admin `/admin/media` or the official EmDash MCP `media_upload`), then use the ULID it returns. Run `emit pull-media` to mirror media and companion metadata locally.
+- Emit canonicalizes the value to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
+- `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
+- Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.
 
 ---
 

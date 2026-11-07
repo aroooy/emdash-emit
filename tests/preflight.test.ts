@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 import { runPreflightChecks } from '../src/sync/preflight.js';
 import type { ParsedMarkdown } from '../src/utils/frontmatter.js';
 
-describe('AI Misbehavior Preflight Guards (G2 - G9)', () => {
+describe('AI Misbehavior Preflight Guards (G2 - G10)', () => {
   const validUlid = '01M67MP2W0VKCK2DFWM166CR24';
   const filePath = `posts/draft/${validUlid}-test-article.md`;
 
