@@ -26,9 +26,12 @@ This document defines the **official workflow rules (The Golden Path) and coding
 ├── .emit/                          <-- [Hidden Configuration & Cache Directory]
 │   ├── cache.db                    <-- SQLite local cache (node:sqlite)
 │   └── config.json                 <-- Instance connection and collection settings
+├── categories/                     <-- Category definitions (<id>-<label>.yaml)
+├── tags/                           <-- Tag definitions (<id>-<label>.yaml)
+├── media/                          <-- Media files & companion YAML (<yyyyMMdd>_<id>-<name>.<ext>)
 └── posts/                          <-- [Local Markdown Files for Humans & AI]
-    ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md)
-    └── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md)
+    ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
+    └── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
 ```
 
 - **Boundary Rule**: All operations take place relative to the workspace root containing `.emit/`. Commands run from subdirectories (e.g. `posts/draft/`) automatically discover the parent workspace root.
@@ -76,8 +79,9 @@ These rules are enforced at the code level via Preflight Guards (G1–G9):
 - Promoting to `status: published` requires explicit `allowPublish: true` confirmation.
 
 ### 5. Taxonomy Validation
-- Do not invent nonexistent taxonomy slugs. Preflight Guard G4 strictly enforces this on `sync_push`.
-- Valid category and tag slugs are automatically provided in the output of `sync_new`, `sync_pull`, and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first).
+- Do not invent nonexistent taxonomy terms. Preflight Guard G4 validates taxonomy terms on `sync_push` against the local `categories/` and `tags/` definitions. Validation only runs when those local definitions exist, so always run `emit pull` (or `sync_pull`) first to populate them.
+- Valid category and tag slugs are automatically provided as hints in the output of `sync_new`, `sync_pull` (batch mode, even with `postsOnly: true`), and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first). Hint lists are capped per command, so the complete authoritative list is always the `categories/` and `tags/` YAML files themselves.
+- Canonical term ULIDs in frontmatter are transparently accepted and verified against local definitions; unknown or obsolete ULIDs not found locally are rejected as stale.
 
 ---
 

@@ -39,7 +39,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull: Pull remote article(s) and taxonomies
   server.tool(
     'sync_pull',
-    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles. Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
+    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -222,7 +222,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_taxonomies
   server.tool(
     'sync_pull_taxonomies',
-    'Pull remote categories and tags into local YAML definitions (categories/<id>-<name>.yaml and tags/<id>-<name>.yaml). Use before writing articles to inspect valid category and tag IDs/slugs.',
+    'Pull remote categories and tags into local YAML definitions (categories/<id>-<name>.yaml and tags/<id>-<name>.yaml) and return formatted available categories/tags hints (up to 200 tags). Use before writing articles to inspect valid category and tag IDs/slugs.',
     {
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },

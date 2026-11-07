@@ -271,20 +271,20 @@ your-blog/
 ├── .emit/                          # [Hidden System Directory - Do not edit manually]
 │   ├── config.json                 # Workspace configuration (origin, postsSyncLimit, etc.)
 │   └── cache.db                    # SQLite baseline tracking & hash database
-├── categories/                     # Category definition files
-│   ├── tech.yaml
-│   └── lifestyle.yaml
-├── tags/                           # Tag definition files
-│   ├── typescript.yaml
-│   └── ai.yaml
-├── media/                          # Media files and metadata
-│   ├── 01M6ABCDEF.jpg
-│   └── 01M6ABCDEF.jpg.yaml
-└── posts/                          # Local Markdown Articles
-    ├── draft/                      # Draft articles (<yyyyMMdd>_<ulid>-<slug>.md)
-    │   └── 20261104_01M6...-my-new-post.md
-    └── published/                  # Live published articles (<yyyyMMdd>_<ulid>-<slug>.md)
-        └── 20261015_01M5...-getting-started.md
+├── categories/                     # Category definition files (<id>-<label>.yaml)
+│   ├── 01M6CAT1-Tech.yaml
+│   └── 01M6CAT2-カメラ.yaml
+├── tags/                           # Tag definition files (<id>-<label>.yaml)
+│   ├── 01M6TAG1-Typescript.yaml
+│   └── 01M6TAG2-Ai.yaml
+├── media/                          # Media files and companion metadata (<yyyyMMdd>_<id>-<name>.<ext>)
+│   ├── 20261101_01M6ABCDEF-header.jpg
+│   └── 20261101_01M6ABCDEF-header.yaml
+└── posts/                          # Local Markdown Articles (<yyyyMMdd>_<ulid>-<title>.md)
+    ├── draft/                      # Draft articles (named after title; falls back to slug if empty)
+    │   └── 20261104_01M6...-My-New-Post.md
+    └── published/                  # Live published articles
+        └── 20261015_01M5...-Getting-Started.md
 
 ```
 
@@ -306,9 +306,9 @@ publishedAt: null                   # ISO 8601 timestamp (null for drafts)
 updatedAt: "2026-11-04T12:00:00.000Z"
 excerpt: "A deep dive into building autonomous content workflows with EmDash and Emit."
 featuredImage: "01M6MEDIA123456"    # Media ULID or null
-categories:                         # Slugs matching definitions in categories/*.yaml
+categories:                         # Slugs (or canonical term ULIDs) matching categories/*.yaml
   - tech
-tags:                               # Slugs matching definitions in tags/*.yaml
+tags:                               # Slugs (or canonical term ULIDs) matching tags/*.yaml
   - typescript
   - ai
 customFields:                       # Optional custom field definitions
@@ -328,7 +328,7 @@ Markdown body begins here...
    - Items under `categories:` and `tags:` should use existing slug names from `categories/` and `tags/` (e.g. `- tech`, `- nodejs`).
    - If a valid term ULID is specified in the frontmatter, Emit automatically resolves it transparently to its corresponding slug for Preflight Guard G4 validation and maintains accurate term assignment on remote sync.
    - Do not duplicate the same term using both its slug and ULID within the same taxonomy (e.g. `[- tech, 01M6CAT1]`). Emit de-duplicates identical term assignments, but a slug and a ULID that resolve to **different** terms will both be assigned to the article.
-   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy terms before pushing.
+   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed as hints during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Hint lists are capped per command (with an `...and N more` marker), so the authoritative full list is always the `categories/` and `tags/` YAML files. Preflight Guard G4 strictly validates taxonomy terms before pushing.
 3. **Status Transitions**:
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
@@ -399,7 +399,7 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G1** | `SINGLE_TARGET_GUARD` | Enforces explicit target (`filePath`, `id`, or `--all`) for push/pull; forbids blind bulk push without inspection | Error |
 | **G2** | `ID_MISMATCH_ERROR` | Verifies that frontmatter `id` exactly matches the filename ULID; forbids manual `mv` renames | Error |
 | **G3** | `UNINTENDED_PUBLISH_GUARD` | Rejects promoting `draft` to `published` unless `--allow-publish` (`allowPublish: true`) is explicitly given | Error |
-| **G4** | `INVALID_TAXONOMY_ERROR` | Validates category and tag slugs against local YAML definitions to stop AI taxonomy hallucination | Error |
+| **G4** | `INVALID_TAXONOMY_ERROR` | Validates taxonomy terms against local definitions (transparently resolves valid term ULIDs) to stop AI taxonomy hallucination | Error |
 | **G5** | `LOCAL_IMAGE_DETECTED` | Detects unresolved local image paths (`![alt](./path.png)`); requires remote R2 URLs | Error |
 | **G6** | `UNRESOLVED_CONFLICT_MARKERS` | Scans for Git 3-way merge conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) and blocks push | Error |
 | **G7** | `TITLE_DUPLICATION_AUTOTRIM` | Detects redundant `# Title` headings at the top of the body and automatically trims them safely | Warning |
@@ -480,7 +480,7 @@ emit new ai-workflow-guide --title "AI Workflow Guide"
 
 ```text
 ✅ Created new article scaffold (ID: 01M6ABCDEF1234567890123456)
-   Path: posts/draft/20261104_01M6ABCDEF1234567890123456-ai-workflow-guide.md
+   Path: posts/draft/20261104_01M6ABCDEF1234567890123456-AI-Workflow-Guide.md
 
 Available Categories:
   - tech (技術)
@@ -490,7 +490,7 @@ Available Tags:
   - ai, cloudflare, emit, typescript
 
 Next: Write your content in Markdown, then run:
-   emit push posts/draft/20261104_01M6ABCDEF1234567890123456-ai-workflow-guide.md
+   emit push posts/draft/20261104_01M6ABCDEF1234567890123456-AI-Workflow-Guide.md
 
 ```
 
@@ -511,12 +511,12 @@ emit pull [id] [options]
 * `--no-prune`: Do not prune local articles that have fallen outside the sliding window (escape hatch; not intended for routine use).
 * `--force`: Force overwrite local files and bypass differential hash checking.
 * `--concurrency <n>`: Parallel processing task limit (default: `8`).
-* `--posts-only`: Skip automatic taxonomy (categories/tags) sync. Pull articles only.
+* `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
 * `--media`: Also pull media assets and companion metadata into `media/`.
 * `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
 
 > [!NOTE]
-> **Taxonomies are pulled by default in batch mode.** Categories and tags are lightweight (2 API calls) and required for valid push operations (Preflight Guard G4 validates taxonomy slugs). This eliminates a common source of push failures. Use `--posts-only` if you need articles only.
+> **Taxonomies are pulled by default in batch mode.** Categories and tags are lightweight (2 API calls) and required for valid push operations (Preflight Guard G4 validates taxonomy terms against these local definitions). This eliminates a common source of push failures. Use `--posts-only` if you need articles only.
 
 > [!NOTE]
 > **Why `--no-prune` is rarely needed:**  
@@ -547,6 +547,14 @@ emit pull 01M5XYZ9876543210123456789
 ```text
 Syncing categories and tags...
   ✅ Taxonomies: 12 categories, 34 tags
+
+Available Categories:
+  - tech (技術)
+  - column (コラム)
+
+Available Tags:
+  - ai, cloudflare, emit, typescript
+
 Fetching articles from remote (posts, status: all, window: 100, concurrency: 8)...
   [1/100] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
   [2/100] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
@@ -597,9 +605,9 @@ emit status [-c, --collection <collection>] [-p, --profile <name>]
 
 ```text
 --- Workspace Status (posts | origin: https://your-blog.example.com) ---
-  🟡 [modified] draft     posts/draft/20261104_01M6BBB...-ai-workflow-guide.md (AI Workflow Guide)
-  ⚪ [untracked] draft     posts/draft/20261104_01M6AAA...-notes.md (Draft Notes)
-  🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-getting-started.md (Getting Started)
+  🟡 [modified] draft     posts/draft/20261104_01M6BBB...-AI-Workflow-Guide.md (AI Workflow Guide)
+  ⚪ [untracked] draft     posts/draft/20261104_01M6AAA...-Draft-Notes.md (Draft Notes)
+  🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-Getting-Started.md (Getting Started)
 
 Summary: 3 total (1 synced, 1 modified, 1 untracked)
 ```
@@ -634,6 +642,13 @@ emit pull-taxonomies
 ```text
 Pulling categories and tags from remote...
 ✅ Successfully synced taxonomies: 12 categories, 34 tags.
+
+Available Categories:
+  - tech (技術)
+  - column (コラム)
+
+Available Tags:
+  - ai, cloudflare, emit, typescript
 
 ```
 
@@ -732,11 +747,11 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
 | `sync_status` | Inspect local sync state (articles returned newest-first) | `collection` |
-| `sync_pull` | Pull remote articles **and taxonomies** into local workspace | `id`, `force`, `status`, `noPrune`, `postsOnly`, `includeMedia`, `metadataOnly` |
-| `sync_new` | Scaffold new article with canonical ULID and frontmatter | `slug`, `title`, `locale`, `collection` |
+| `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints) | `id`, `force`, `status`, `noPrune`, `postsOnly`, `includeMedia`, `metadataOnly` |
+| `sync_new` | Scaffold new article with canonical ULID, frontmatter, and taxonomy hints | `slug`, `title`, `locale`, `collection` |
 | `sync_push` | Push local article changes to remote with preflight checks | `filePath`, `id`, `allowPublish` |
 | `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath` |
-| `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; also included in `sync_pull`) | (none) |
+| `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints) | (none) |
 | `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `prune`, `metadataOnly` |
 | `profile_list` | List all configured connection profiles | (none) |
 | `profile_switch` | Switch active profile for multi-site environments | `name` |

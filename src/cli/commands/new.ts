@@ -28,7 +28,9 @@ import type { CliContextResolver } from '../context.js';
 export function registerNewCommand(program: Command, resolveContext: CliContextResolver): void {
   program
     .command('new <slug>')
-    .description('Create a new draft article template with an auto-generated ULID')
+    .description(
+      'Create a new draft article template with an auto-generated ULID and taxonomy hints',
+    )
     .option('-t, --title <title>', 'Article title')
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-l, --locale <locale>', 'Article locale (defaults to "ja")')
