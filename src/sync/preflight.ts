@@ -20,9 +20,11 @@
  * SOFTWARE.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { extractMediaUlid } from '../client/mapper.js';
+import { MAX_MEDIA_UPLOAD_BYTES, resolveImageMimeType } from '../client/media.js';
 import {
   stripCodeBlocks,
   verifyOpaqueBlocksUntampered,
@@ -35,6 +37,20 @@ export interface PreflightOptions {
   knownTaxonomies?: Record<string, string[]>;
   baseMarkdown?: string;
   previousStatus?: 'draft' | 'published';
+  workspaceRoot?: string;
+}
+
+export interface DraftImageReference {
+  /** Exact standalone Markdown line matched in body */
+  line: string;
+  /** Alt text inside `![alt](...)` */
+  alt: string;
+  /** Raw path string written in Markdown `![alt](rawPath)` */
+  rawPath: string;
+  /** Basename of the draft image file under `media/drafts/` */
+  filename: string;
+  /** Resolved absolute path on disk (when `workspaceRoot` is known) */
+  resolvedAbsPath: string;
 }
 
 export interface PreflightResult {
@@ -43,6 +59,8 @@ export interface PreflightResult {
   frontmatter: Frontmatter;
   errors: PreflightError[];
   warnings: string[];
+  /** G11: Validated standalone local draft images queued for automatic upload on push */
+  draftImages: DraftImageReference[];
 }
 
 export interface PreflightError {
@@ -52,13 +70,66 @@ export interface PreflightError {
 }
 
 const CONFLICT_MARKER_REGEX = /^<{7}\s|^={7}$|^>{7}\s/m;
-const LOCAL_IMAGE_REGEX = /!\[.*?\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/).*?\)/;
+const OPAQUE_FENCE_LINE_REGEX = /^<!--ec:block .+ -->$/;
+const STANDALONE_IMAGE_LINE_REGEX = /^!\[([^\]]*)\]\(([^)]+)\)$/;
+const REMOTE_OR_DATA_URL_REGEX = /^(?:https?:\/\/|data:|\/_emdash\/api\/media\/file\/)/i;
+const ANY_LOCAL_IMAGE_REGEX =
+  /!\[([^\]]*)\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/)([^)]+)\)/g;
 // Canonical ULID shape (Crockford base32: 26 chars, excludes I and O). Casing is
 // case-insensitive here because parseMarkdown() normalizes local frontmatter to uppercase.
 const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
 
+interface ResolvedDraftPathInfo {
+  isInsideDraftsDir: boolean;
+  isInsideMediaDir: boolean;
+  candidateAbs: string;
+  filename: string;
+}
+
+function resolveDraftImagePath(
+  articleFilePath: string,
+  rawImagePath: string,
+  workspaceRoot?: string,
+): ResolvedDraftPathInfo {
+  const root = workspaceRoot ? path.resolve(workspaceRoot) : '/__emit_virtual_workspace__';
+  const articleAbs = path.isAbsolute(articleFilePath)
+    ? articleFilePath
+    : path.resolve(root, articleFilePath);
+  const articleDir = path.dirname(articleAbs);
+  const trimmed = rawImagePath.trim();
+
+  if (path.isAbsolute(trimmed)) {
+    return {
+      isInsideDraftsDir: false,
+      isInsideMediaDir: false,
+      candidateAbs: trimmed,
+      filename: path.basename(trimmed),
+    };
+  }
+
+  const normalized = trimmed.replace(/\\/g, '/');
+  const candidateAbs =
+    normalized.startsWith('media/') || normalized.startsWith('./media/')
+      ? path.resolve(root, normalized)
+      : path.resolve(articleDir, normalized);
+
+  const draftsDirAbs = path.resolve(root, 'media', 'drafts');
+  const mediaDirAbs = path.resolve(root, 'media');
+  const isInsideDraftsDir =
+    path.dirname(candidateAbs) === draftsDirAbs && path.basename(candidateAbs).length > 0;
+  const isInsideMediaDir =
+    candidateAbs.startsWith(mediaDirAbs + path.sep) && path.basename(candidateAbs).length > 0;
+
+  return {
+    isInsideDraftsDir,
+    isInsideMediaDir,
+    candidateAbs,
+    filename: path.basename(candidateAbs),
+  };
+}
+
 /**
- * Runs Preflight Guards G2 through G10 against the article to prevent AI misbehavior.
+ * Runs Preflight Guards G2 through G11 against the article to prevent AI misbehavior.
  * (G1 is enforced at the MCP / CLI invocation layer).
  */
 export function runPreflightChecks(
@@ -68,6 +139,7 @@ export function runPreflightChecks(
 ): PreflightResult {
   const errors: PreflightError[] = [];
   const warnings: string[] = [];
+  const draftImages: DraftImageReference[] = [];
   let cleanedBody = parsed.body;
   const { frontmatter } = parsed;
 
@@ -123,16 +195,113 @@ export function runPreflightChecks(
     }
   }
 
-  // G5: Local image path detection (stripping code blocks first)
+  // G5 & G11: Local image path inspection & offline draft media auto-upload resolution
+  // Code blocks and opaque fences (<!--ec:block ... -->) are excluded from scanning.
   const bodyWithoutCode = stripCodeBlocks(cleanedBody);
-  const localImageMatch = bodyWithoutCode.match(LOCAL_IMAGE_REGEX);
-  if (localImageMatch) {
-    errors.push({
-      code: 'LOCAL_IMAGE_DETECTED',
-      message: `Local image path detected in markdown body: '${localImageMatch[0]}'.`,
-      suggestion:
-        'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL (e.g. /_emdash/api/media/file/<id>.<ext>).',
-    });
+  const bodyLines = bodyWithoutCode.split('\n');
+  for (const rawLine of bodyLines) {
+    const trimmedLine = rawLine.replace(/\r$/, '').trim();
+    if (!trimmedLine) continue;
+
+    // Opaque fences are managed by G9 and must never be touched by image replacement
+    if (OPAQUE_FENCE_LINE_REGEX.test(trimmedLine)) {
+      continue;
+    }
+
+    const standaloneMatch = trimmedLine.match(STANDALONE_IMAGE_LINE_REGEX);
+    if (standaloneMatch) {
+      const alt = standaloneMatch[1];
+      const rawPath = standaloneMatch[2].trim();
+
+      if (REMOTE_OR_DATA_URL_REGEX.test(rawPath)) {
+        continue;
+      }
+
+      const resolved = resolveDraftImagePath(filePath, rawPath, options?.workspaceRoot);
+      if (!resolved.isInsideDraftsDir) {
+        errors.push({
+          code: 'LOCAL_IMAGE_DETECTED',
+          message: `Local image path detected in markdown body: '${trimmedLine}'. Only images placed directly under "media/drafts/" can be automatically uploaded.`,
+          suggestion:
+            'Place the image in "media/drafts/<filename>" and reference it on a standalone line (e.g. ![alt](../../media/drafts/<filename>)), or upload first using EmDash MCP "media_upload" and replace with /_emdash/api/media/file/<storageKey>.',
+        });
+        continue;
+      }
+
+      // G11: Standalone image referencing media/drafts/<filename>
+      if (options?.workspaceRoot) {
+        if (!fs.existsSync(resolved.candidateAbs)) {
+          errors.push({
+            code: 'MISSING_LOCAL_IMAGE_FILE',
+            message: `Draft image file not found on disk: '${rawPath}' (resolved to '${resolved.candidateAbs}').`,
+            suggestion: `Verify that "${resolved.filename}" exists inside the "media/drafts/" directory before pushing.`,
+          });
+          continue;
+        }
+
+        const stat = fs.statSync(resolved.candidateAbs);
+        if (!stat.isFile()) {
+          errors.push({
+            code: 'MISSING_LOCAL_IMAGE_FILE',
+            message: `Draft image path is not a regular file: '${rawPath}'.`,
+            suggestion: `Ensure "${resolved.filename}" is a valid image file inside "media/drafts/".`,
+          });
+          continue;
+        }
+
+        if (!resolveImageMimeType(resolved.filename)) {
+          errors.push({
+            code: 'INVALID_LOCAL_IMAGE_TYPE',
+            message: `Unsupported image file extension for draft image: '${resolved.filename}'.`,
+            suggestion:
+              'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
+          });
+          continue;
+        }
+
+        if (stat.size > MAX_MEDIA_UPLOAD_BYTES) {
+          errors.push({
+            code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
+            message: `Draft image '${resolved.filename}' (${stat.size} bytes) exceeds the maximum allowed upload size of ${MAX_MEDIA_UPLOAD_BYTES} bytes (50 MiB).`,
+            suggestion: 'Compress or resize the image below 50 MiB before pushing.',
+          });
+          continue;
+        }
+      }
+
+      draftImages.push({
+        line: trimmedLine,
+        alt,
+        rawPath: standaloneMatch[2],
+        filename: resolved.filename,
+        resolvedAbsPath: resolved.candidateAbs,
+      });
+      continue;
+    }
+
+    // Non-standalone line: check if any inline local image is embedded within paragraph text
+    const inlineMatches = [...rawLine.matchAll(ANY_LOCAL_IMAGE_REGEX)];
+    for (const match of inlineMatches) {
+      const fullImgSyntax = match[0];
+      const rawPath = match[2].trim();
+      const resolved = resolveDraftImagePath(filePath, rawPath, options?.workspaceRoot);
+
+      if (resolved.isInsideDraftsDir || resolved.isInsideMediaDir) {
+        errors.push({
+          code: 'INLINE_LOCAL_IMAGE_NOT_SUPPORTED',
+          message: `Inline local image detected inside paragraph: '${fullImgSyntax}'. EmDash Portable Text only supports block-level standalone images for automatic sync.`,
+          suggestion:
+            'Move the image onto its own standalone line at the beginning of the line (e.g. ![alt](../../media/drafts/<filename>)).',
+        });
+      } else {
+        errors.push({
+          code: 'LOCAL_IMAGE_DETECTED',
+          message: `Local image path detected in markdown body: '${fullImgSyntax}'.`,
+          suggestion:
+            'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL (e.g. /_emdash/api/media/file/<id>.<ext>), or place it in "media/drafts/" on a standalone line.',
+        });
+      }
+    }
   }
 
   // G10: featuredImage must reference a canonical 26-character media ULID (or null).
@@ -209,5 +378,6 @@ export function runPreflightChecks(
     frontmatter,
     errors,
     warnings,
+    draftImages,
   };
 }

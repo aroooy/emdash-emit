@@ -43,10 +43,12 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps } from './taxonomies.js';
-import { runPreflightChecks, type PreflightError } from './preflight.js';
+import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import { calculateHash } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
+import { uploadMediaFile, type UploadMediaResult } from '../client/media.js';
+import { promoteDraftMediaFile } from './media.js';
 
 export interface PushOptions extends MapperOptions {
   workspaceRoot: string;
@@ -235,6 +237,112 @@ function preserveOrResolveFeaturedImage(
 }
 
 /**
+ * Rewrites standalone local draft image lines in Markdown body to their confirmed
+ * canonical root-relative URLs (`/_emdash/api/media/file/<storageKey>`), skipping
+ * fenced code blocks and opaque block fences.
+ */
+function rewriteDraftImagesInBody(
+  body: string,
+  draftImages: DraftImageReference[],
+  uploadedByAbsPath: Map<string, UploadMediaResult>,
+): string {
+  if (draftImages.length === 0) return body;
+
+  const rawPathToResult = new Map<string, UploadMediaResult>();
+  for (const ref of draftImages) {
+    const res = uploadedByAbsPath.get(ref.resolvedAbsPath);
+    if (res) {
+      rawPathToResult.set(ref.rawPath, res);
+      rawPathToResult.set(ref.rawPath.trim(), res);
+    }
+  }
+
+  const lines = body.split('\n');
+  let inCodeFence = false;
+  const standaloneRegex = /^!\[([^\]]*)\]\(([^)]+)\)$/;
+
+  return lines
+    .map((line) => {
+      const hasCr = line.endsWith('\r');
+      const cleanLine = hasCr ? line.slice(0, -1) : line;
+      const trimmed = cleanLine.trim();
+
+      if (trimmed.startsWith('```')) {
+        inCodeFence = !inCodeFence;
+        return line;
+      }
+      if (inCodeFence || /^<!--ec:block .+ -->$/.test(trimmed)) {
+        return line;
+      }
+
+      const match = trimmed.match(standaloneRegex);
+      if (!match) return line;
+
+      const alt = match[1];
+      const rawPath = match[2];
+      const uploaded = rawPathToResult.get(rawPath) ?? rawPathToResult.get(rawPath.trim());
+      if (!uploaded) return line;
+
+      const replaced = `![${alt}](${uploaded.url})`;
+      return hasCr ? `${replaced}\r` : replaced;
+    })
+    .join('\n');
+}
+
+/**
+ * Promotes uploaded draft images from `media/drafts/<filename>` into
+ * `media/<yyyyMMdd>_<mediaId>-<name>.<ext>` along with companion `.yaml` metadata,
+ * and commits `status = 'ready'` in `media_state`.
+ */
+function finalizePromotedDraftImages(
+  draftImages: DraftImageReference[],
+  uploadedByAbsPath: Map<string, UploadMediaResult>,
+  options: PushOptions,
+): void {
+  if (draftImages.length === 0) return;
+
+  const processedAbsPaths = new Set<string>();
+  for (const ref of draftImages) {
+    if (processedAbsPaths.has(ref.resolvedAbsPath)) continue;
+    processedAbsPaths.add(ref.resolvedAbsPath);
+
+    const uploaded = uploadedByAbsPath.get(ref.resolvedAbsPath);
+    if (!uploaded) continue;
+
+    const promotedRelPath = promoteDraftMediaFile({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      draftAbsPath: ref.resolvedAbsPath,
+      item: {
+        id: uploaded.mediaId,
+        filename: uploaded.filename,
+        mimeType: uploaded.mimeType,
+        size: uploaded.size,
+        width: uploaded.width ?? null,
+        height: uploaded.height ?? null,
+        alt: ref.alt || '',
+        caption: '',
+        storageKey: uploaded.storageKey,
+        contentHash: uploaded.contentHash,
+        status: 'ready',
+        url: uploaded.url,
+        createdAt: uploaded.createdAt || new Date().toISOString(),
+      },
+      removeDraft: true,
+    });
+
+    options.cache.saveMediaState({
+      localHash: uploaded.localHash,
+      mediaId: uploaded.mediaId,
+      storageKey: uploaded.storageKey,
+      url: uploaded.url,
+      workspacePath: promotedRelPath,
+      status: 'ready',
+    });
+  }
+}
+
+/**
  * Pushes a local markdown article to remote EmDash with full preflight guards,
  * two-tier lock lease protection, and automatic 3-way merge on conflict.
  */
@@ -302,12 +410,13 @@ export async function pushArticle(
     }
   }
 
-  // 1. Run Preflight Guards G2 - G10
+  // 1. Run Preflight Guards G2 - G11
   const preflight = runPreflightChecks(targetFilePath, preflightParsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
     baseMarkdown: baseSnapshot?.bodyMarkdown,
     previousStatus: (syncState?.status as 'draft' | 'published') || 'draft',
+    workspaceRoot: options.workspaceRoot,
   });
 
   if (!preflight.valid) {
@@ -322,6 +431,30 @@ export async function pushArticle(
 
   const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
   const warnings = [...preflight.warnings];
+
+  // [P2 & P3] Upload and confirm any standalone local draft images (`media/drafts/*`)
+  const uploadedByAbsPath = new Map<string, UploadMediaResult>();
+  if (preflight.draftImages.length > 0) {
+    for (const draftRef of preflight.draftImages) {
+      if (uploadedByAbsPath.has(draftRef.resolvedAbsPath)) {
+        continue;
+      }
+      const uploadRes = await uploadMediaFile({
+        filePath: draftRef.resolvedAbsPath,
+        filename: draftRef.filename,
+        alt: draftRef.alt || undefined,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        cache: options.cache,
+        fetchFn: options.fetchFn,
+      });
+      uploadedByAbsPath.set(draftRef.resolvedAbsPath, uploadRes);
+    }
+
+    // [P4] Rewrite Markdown body in-memory with confirmed root-relative URLs
+    parsed.body = rewriteDraftImagesInBody(parsed.body, preflight.draftImages, uploadedByAbsPath);
+  }
 
   // Load local bylines map for converting frontmatter byline slugs to ULIDs
   let bylineSlugToId = options.bylineSlugToId;
@@ -489,6 +622,9 @@ export async function pushArticle(
         );
       }
     }
+
+    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options);
 
     // Update Base snapshot and Sync state
     options.cache.saveBaseSnapshot({
@@ -757,6 +893,9 @@ export async function pushArticle(
     } else {
       fs.writeFileSync(fullPath, serializedContent, 'utf8');
     }
+
+    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options);
 
     // Update Base snapshot
     options.cache.saveBaseSnapshot({

@@ -32,7 +32,7 @@
   - [Media Management & Upload Workflow](#media-management--upload-workflow)
 - [🤖 The Golden Path for AI & Humans (4-Step Cycle)](#-the-golden-path-for-ai--humans-4-step-cycle)
   - [The 4-Step Authoring Cycle](#the-4-step-authoring-cycle)
-  - [Preflight Safety Guardrails (G1–G10)](#preflight-safety-guardrails-g1g10)
+  - [Preflight Safety Guardrails (G1–G11)](#preflight-safety-guardrails-g1g11)
 - [🛠 CLI Command Reference](#-cli-command-reference)
   - [`emit init`](#emit-init)
   - [`emit profile`](#emit-profile)
@@ -78,10 +78,10 @@ To prevent user expectations from misaligning with the tool's purpose, it is imp
 
 * **What Emit IS (Core Goal)**:
   * An **active authoring and editing workbench (Staging Desk)** where human authors and AI coding agents collaborate seamlessly.
-  * A tool focused on drafting, reviewing, polishing, diffing, and publishing current and recent articles with strict safety guards.
+  * A tool focused on drafting, reviewing, polishing, diffing, and publishing current and recent articles with strict safety guards—including **automatic offline draft image upload** (`media/drafts/`) for images referenced in the article being pushed.
 * **What Emit is NOT (Non-Goals)**:
-  * **Not a full-site database archiver / backup dumper**: Emit is not designed to clone an entire 15-year history of 20,000 blog posts onto your laptop.
-  * **Not an offline bulk mass-migration converter**: Emit does not perform batch transformation across thousands of historical posts at once.
+  * **Not a full-site database archiver / backup dumper**: Emit is not designed to clone an entire 15-year history of 20,000 blog posts or an entire multi-gigabyte media library onto your laptop.
+  * **Not an offline bulk mass-migration converter**: Emit does not perform batch transformation across thousands of historical posts or bulk media migrations at once.
 
 If your site contains thousands of articles, they remain safe, searchable, and intact in your Cloudflare D1 database. Emit only pulls the active working set into your local workspace, keeping your directory clean and searches instant. Need to edit a specific older article outside the active window? Simply pull it on demand using `emit pull <article-id>`.
 
@@ -256,9 +256,8 @@ tmp/
 > [!TIP]
 > * `.emit/cache.db*` **must be excluded** from Git because it is a machine-local SQLite tracking database.
 > * `.emit/config.json` **can be safely committed** to Git because it contains workspace configuration (origin URL, default collections), while sensitive authentication tokens remain securely isolated in `~/.config/emit/profiles.yaml`.
-> * `media/*.yaml` metadata files can be committed to Git to track asset metadata alongside your Markdown articles.
-> 
-> 
+> * `media/*.yaml` metadata files can be committed to Git to track asset metadata (`storageKey`, `contentHash`, `status`, dimensions) alongside your Markdown articles.
+> * **Local-First Git Tracking for `media/`**: If you use your Git repository as a self-contained Local-First source of truth (including offline drafts in `media/drafts/`), keep `media/` tracked in Git (or via Git LFS). If you treat Cloudflare R2 as the sole binary store and want a lightweight Git repo, uncomment the `media/*.jpg` ignore rules above while keeping `media/*.yaml` tracked.
 
 ---
 
@@ -278,6 +277,8 @@ your-blog/
 │   ├── 01M6TAG1-Typescript.yaml
 │   └── 01M6TAG2-Ai.yaml
 ├── media/                          # Media files and companion metadata (<yyyyMMdd>_<id>-<name>.<ext>)
+│   ├── drafts/                     # Staging folder for offline draft images (auto-uploaded on push)
+│   │   └── sunset.png
 │   ├── 20261101_01M6ABCDEF-header.jpg
 │   └── 20261101_01M6ABCDEF-header.yaml
 └── posts/                          # Local Markdown Articles (<yyyyMMdd>_<ulid>-<title>.md)
@@ -354,18 +355,43 @@ EmDash supports rich visual blocks (e.g., galleries, callouts, audio players). W
 
 ### Media Management & Upload Workflow
 
-EmDash stores media files (images, documents) in Cloudflare R2 via multipart upload endpoints.
+EmDash stores media files (images, documents) in Cloudflare R2 and uses **two distinct identifier spaces**:
 
-**How to add and use images in your articles:**
+| Usage | Identifier Used | Format / Example |
+| --- | --- | --- |
+| Frontmatter `featuredImage` | **Media Record `id`** | 26-character ULID (`01M67P0MBMJQQXH2K95HHCYRYB`) or `null` |
+| Body `![alt](...)` URL | **Media `storageKey`** | `/_emdash/api/media/file/<storageKey>` (e.g. `/_emdash/api/media/file/01M67P07X2VPW0MYRRRGMA6T5A.jpg` or double-ULID `01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png`) |
 
-1. **Upload New Images**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`). This generates a canonical ULID and uploads the asset to Cloudflare R2.
-2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace. This downloads the images and companion `.yaml` metadata files into `media/`. Mirroring media lets Emit cross-check `featuredImage` references during push; it is not required to push articles.
+> [!IMPORTANT]
+> Never put a media record `id` into `/_emdash/api/media/file/<id>.<ext>`—the public file route resolves by **`storageKey`**, so using a record `id` returns HTTP 404.
+
+#### Workflow A: Offline Draft Image Auto-Upload (`media/drafts/` — Recommended for Body Images)
+
+You can author articles completely offline using local images and let `emit push` handle uploading, URL rewriting, and local file promotion automatically:
+
+1. **Stage Image in `media/drafts/`**: Place your image in `<workspace>/media/drafts/<filename>` (supported extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.avif`, `.svg`; max 50 MiB).
+2. **Reference on a Standalone Line**: In your Markdown body, reference the staged image on its own standalone line:
+   ```markdown
+   ![Sunset over clouds](../../media/drafts/sunset.png)
+   ```
+3. **Push the Article (`emit push` / `sync_push`)**: Emit automatically:
+   - Uploads the image via EmDash's 4-stage flow (`POST /_emdash/api/media/upload-url` with `sha1:<hex>` deduplication → `PUT` upload → `POST /_emdash/api/media/{id}/confirm`), cleaning up any orphan `pending` record if an upload fails midway.
+   - Rewrites the Markdown line in place to the canonical root-relative `/_emdash/api/media/file/<storageKey>` URL.
+   - Pushes the article to EmDash.
+   - Promotes the local file from `media/drafts/<filename>` to `media/<yyyyMMdd>_<mediaId>-<filename>` alongside a companion `.yaml` metadata file (`storageKey`, `contentHash`, `status`).
+
+#### Workflow B: Pre-Uploaded Media & Featured Hero Images
+
+1. **Upload via Admin / EmDash MCP**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`).
+2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`.Note that `emit pull-media --prune` safely ignores `media/drafts/`.
 3. **Embed in Articles**:
-   - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media ULID) or `null` in frontmatter.
-   - For inline images in body: use standard Markdown syntax with remote URLs: `![Alt text](/_emdash/api/media/file/<ULID>.<ext>)` (or absolute URL `https://your-blog.example.com/_emdash/api/media/file/<ULID>.<ext>`).
+   - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media record `id`) or `null` in frontmatter.
+   - For body images: use `![Alt text](/_emdash/api/media/file/<storageKey>)`.
 
 > [!WARNING]
-> **No Local Image Paths in Markdown**: Preflight Guard **G5** strictly forbids pushing articles containing local filesystem paths like `![pic](./my-image.png)`. Images must be uploaded to Cloudflare R2 before publishing to prevent broken images in production.
+> **Local Image Guardrails (G5 & G11)**:
+> - Arbitrary local paths outside `media/drafts/` (e.g. `![pic](./my-image.png)`) are blocked by Preflight Guard **G5 (`LOCAL_IMAGE_DETECTED`)**.
+> - Local images placed inline inside a paragraph (e.g. `Text ![pic](../../media/drafts/a.png) more text`) are blocked with `INLINE_LOCAL_IMAGE_NOT_SUPPORTED` because EmDash Portable Text requires images to be standalone top-level blocks.
 
 ---
 
@@ -396,9 +422,9 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 * To push a draft: `emit push posts/draft/<filename>.md`
 * To publish live: update `status: published` and run `emit push posts/draft/<filename>.md --allow-publish`.
 
-### Preflight Safety Guardrails (G1–G10)
+### Preflight Safety Guardrails (G1–G11)
 
-To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 10 strict preflight guardrails before executing any write operation:
+To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 11 strict preflight guardrails before executing any write operation:
 
 | Guard | Code Name | Description | Severity |
 | --- | --- | --- | --- |
@@ -406,12 +432,13 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G2** | `ID_MISMATCH_ERROR` | Verifies that frontmatter `id` exactly matches the filename ULID; forbids manual `mv` renames | Error |
 | **G3** | `UNINTENDED_PUBLISH_GUARD` | Rejects promoting `draft` to `published` unless `--allow-publish` (`allowPublish: true`) is explicitly given | Error |
 | **G4** | `INVALID_TAXONOMY_ERROR` | Validates taxonomy terms against local definitions (transparently resolves valid term ULIDs) to stop AI taxonomy hallucination | Error |
-| **G5** | `LOCAL_IMAGE_DETECTED` | Detects unresolved local image paths (`![alt](./path.png)`); requires remote R2 URLs | Error |
+| **G5** | `LOCAL_IMAGE_DETECTED` / `INLINE_LOCAL_IMAGE_NOT_SUPPORTED` | Rejects arbitrary local image paths outside `media/drafts/` and rejects inline paragraph local images (must be a standalone line in `media/drafts/`) | Error |
 | **G6** | `UNRESOLVED_CONFLICT_MARKERS` | Scans for Git 3-way merge conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) and blocks push | Error |
 | **G7** | `TITLE_DUPLICATION_AUTOTRIM` | Detects redundant `# Title` headings at the top of the body and automatically trims them safely | Warning |
 | **G8** | `UNSUPPORTED_SYNTAX_WARNING` | Warns if unsupported block HTML or incompatible constructs are detected in Markdown | Warning |
 | **G9** | `MODIFIED_OPAQUE_BLOCK` | Verifies that `<!--ec:block ... -->` opaque fences have not been tampered with or corrupted | Error |
 | **G10** | `INVALID_FEATURED_IMAGE` | Verifies that `featuredImage` is a 26-character canonical media ULID (normalized to uppercase) or `null`. A remote media URL that contains a ULID is resolved with a warning; local file paths and malformed values are rejected | Error |
+| **G11** | `LOCAL_IMAGE_AUTO_UPLOAD` | Detects standalone `media/drafts/<file>` image lines, validates file existence, extension, and size (≤ 50 MiB), and queues them for automatic upload, URL rewrite, and `media/` promotion during `push` | Info / Error |
 
 ---
 

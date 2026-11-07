@@ -1,0 +1,480 @@
+/*
+ * Copyright (C) 2026 SPORT-SERVICE RS★R
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CacheDatabase } from '../src/db/cache.js';
+import { computeMediaHashes } from '../src/client/media.js';
+import { calculateHash } from '../src/sync/pull.js';
+import { pushArticle } from '../src/sync/push.js';
+import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+
+const TINY_PNG_BUFFER = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', () => {
+  let tempDir: string;
+  let cache: CacheDatabase;
+
+  const articleId = '01M67MP2W0VKCK2DFWM166CR24';
+  const mediaRecordId = '01M6TF1XXBS2KC9EVYG6RBT0J0';
+  const pendingStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
+  const confirmedStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
+  const confirmedUrl = `/_emdash/api/media/file/${confirmedStorageKey}`;
+  const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  const baseOptions = {
+    origin: 'https://aroooy.net',
+    token: 'test-token',
+    bylineSlugToId: { aroooy: '01M6BYLINE0000000000000000' },
+    knownTaxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+  };
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-push-media-pipeline-'));
+    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'media', 'drafts'), { recursive: true });
+    cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+  });
+
+  afterEach(() => {
+    cache.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function seedTrackedArticle(slug: string, body: string): string {
+    const fm: Frontmatter = {
+      id: articleId,
+      slug,
+      title: `Title ${slug}`,
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+      bylines: ['aroooy'],
+    };
+    const relPath = `posts/draft/${todayPrefix}_${articleId}-${slug}.md`;
+    const serialized = serializeMarkdown(fm, body);
+    fs.writeFileSync(path.join(tempDir, relPath), serialized, 'utf8');
+
+    cache.saveEntry({
+      id: articleId,
+      collection: 'posts',
+      slug,
+      status: 'draft',
+      title: fm.title,
+      rev: '1',
+      publishedAt: null,
+      rawJson: JSON.stringify({
+        id: articleId,
+        slug,
+        status: 'draft',
+        data: { title: fm.title, content: [] },
+      }),
+      updatedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: 'Initial paragraph.',
+      frontmatterYaml: JSON.stringify(fm),
+      hash: calculateHash(serializeMarkdown(fm, 'Initial paragraph.')),
+      savedAt: 1700000000,
+    });
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(serialized),
+      remoteRev: '1',
+      status: 'draft',
+      slug,
+      lastSyncedAt: 1700000000,
+    });
+
+    return relPath;
+  }
+
+  it('uploads media/drafts/* via 4-phase flow, rewrites body to storageKey URL (never record ID), promotes asset, and stays idempotent on second push', async () => {
+    const draftImgPath = path.join(tempDir, 'media', 'drafts', 'flight-sunset.png');
+    fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
+
+    const relPath = seedTrackedArticle(
+      'offline-flight',
+      [
+        'Writing offline on the plane.',
+        '',
+        '![Sunset from window](../../media/drafts/flight-sunset.png)',
+        '',
+        '```markdown',
+        '![Example in code fence](../../media/drafts/flight-sunset.png)',
+        '```',
+      ].join('\n'),
+    );
+
+    const requestLog: string[] = [];
+    let capturedPutPayload: Record<string, unknown> | null = null;
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      requestLog.push(`${method} ${new URL(url).pathname}`);
+
+      // Lock acquire / release
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
+      }
+      // Terms sync
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      // Phase A: upload-url
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              uploadUrl: `/_emdash/api/media/${mediaRecordId}/upload`,
+              method: 'PUT',
+              headers: { 'Content-Type': 'image/png', 'X-EmDash-Request': '1' },
+              mediaId: mediaRecordId,
+              storageKey: pendingStorageKey,
+              expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      // Phase B: PUT binary
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/upload`)) {
+        return new Response(
+          JSON.stringify({ success: true, data: { uploaded: true, size: TINY_PNG_BUFFER.length } }),
+          { status: 200 },
+        );
+      }
+      // Phase C: confirm (returns double-ULID storageKey)
+      if (method === 'POST' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/confirm`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaRecordId,
+                filename: 'flight-sunset.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                width: 1,
+                height: 1,
+                storageKey: confirmedStorageKey,
+                contentHash: 'sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be',
+                status: 'ready',
+                createdAt: '2026-11-07T07:37:33.355Z',
+                url: confirmedUrl,
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      // Phase D: Article PUT
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/content/posts/${articleId}`)) {
+        capturedPutPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ item: { id: articleId }, _rev: '2' }), {
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    const res1 = await pushArticle(relPath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn,
+    });
+
+    expect(res1.success).toBe(true);
+    expect(res1.rev).toBe('2');
+
+    // Verify order: upload-url -> PUT upload -> POST confirm -> lock -> PUT article
+    expect(requestLog).toContain('POST /_emdash/api/media/upload-url');
+    expect(requestLog).toContain(`PUT /_emdash/api/media/${mediaRecordId}/upload`);
+    expect(requestLog).toContain(`POST /_emdash/api/media/${mediaRecordId}/confirm`);
+    expect(requestLog).toContain(`PUT /_emdash/api/content/posts/${articleId}`);
+    expect(requestLog.indexOf(`POST /_emdash/api/media/${mediaRecordId}/confirm`)).toBeLessThan(
+      requestLog.indexOf(`PUT /_emdash/api/content/posts/${articleId}`),
+    );
+
+    // CRITICAL P0-1 CHECK: Portable Text image block uses storageKey URL, NEVER mediaRecordId!
+    const contentBlocks = (capturedPutPayload!.data as { content: Array<Record<string, unknown>> })
+      .content;
+    const imageBlock = contentBlocks.find((b) => b._type === 'image') as {
+      alt: string;
+      asset: { url: string };
+    };
+    expect(imageBlock).toBeDefined();
+    expect(imageBlock.alt).toBe('Sunset from window');
+    expect(imageBlock.asset.url).toBe(confirmedUrl);
+    expect(imageBlock.asset.url).not.toContain(mediaRecordId);
+
+    // Verify local Markdown on disk was rewritten with confirmedUrl (code fence preserved)
+    const diskMd = fs.readFileSync(path.join(tempDir, res1.filePath), 'utf8');
+    expect(diskMd).toContain(`![Sunset from window](${confirmedUrl})`);
+    expect(diskMd).toContain('![Example in code fence](../../media/drafts/flight-sunset.png)');
+
+    // Verify cache.db sync_state hash matches the rewritten Markdown on disk
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.localHash).toBe(calculateHash(diskMd));
+
+    // Verify draft file was moved out of media/drafts/ and promoted into media/ with companion YAML
+    expect(fs.existsSync(draftImgPath)).toBe(false);
+    const promotedFile = path.join(tempDir, 'media', `20261107_${mediaRecordId}-flight-sunset.png`);
+    const promotedYaml = path.join(
+      tempDir,
+      'media',
+      `20261107_${mediaRecordId}-flight-sunset.yaml`,
+    );
+    expect(fs.existsSync(promotedFile)).toBe(true);
+    expect(fs.existsSync(promotedYaml)).toBe(true);
+
+    // Verify media_state is committed as 'ready'
+    const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
+    const mediaState = cache.getMediaState(localHash);
+    expect(mediaState?.status).toBe('ready');
+    expect(mediaState?.mediaId).toBe(mediaRecordId);
+    expect(mediaState?.storageKey).toBe(confirmedStorageKey);
+
+    // Second push: body no longer contains draft paths, so media upload endpoints are never called
+    requestLog.length = 0;
+    const res2 = await pushArticle(res1.filePath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn,
+    });
+    expect(res2.success).toBe(true);
+    expect(requestLog.some((r) => r.includes('/_emdash/api/media'))).toBe(false);
+  });
+
+  it('aborts push, deletes orphan pending record on server, and leaves local .md and media/drafts/ completely untouched when upload fails', async () => {
+    const draftImgPath = path.join(tempDir, 'media', 'drafts', 'broken-upload.png');
+    fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
+
+    const originalBody = 'Paragraph.\n\n![Broken](../../media/drafts/broken-upload.png)';
+    const relPath = seedTrackedArticle('abort-on-upload-fail', originalBody);
+    const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
+
+    const deletedMediaIds: string[] = [];
+    let articlePutCalled = false;
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              uploadUrl: `/_emdash/api/media/${mediaRecordId}/upload`,
+              method: 'PUT',
+              headers: { 'Content-Type': 'image/png' },
+              mediaId: mediaRecordId,
+              storageKey: pendingStorageKey,
+              expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/upload`)) {
+        return new Response('R2 Failure', { status: 500, statusText: 'Internal Server Error' });
+      }
+
+      if (method === 'GET' && url.endsWith(`/_emdash/api/media/${mediaRecordId}`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: { item: { id: mediaRecordId, status: 'pending' } },
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (method === 'DELETE' && url.endsWith(`/_emdash/api/media/${mediaRecordId}`)) {
+        deletedMediaIds.push(mediaRecordId);
+        return new Response(JSON.stringify({ success: true, data: { deleted: true } }), {
+          status: 200,
+        });
+      }
+
+      if (url.includes('/_emdash/api/content/')) {
+        articlePutCalled = true;
+      }
+
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    await expect(
+      pushArticle(relPath, {
+        ...baseOptions,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn,
+      }),
+    ).rejects.toThrow(/Failed to upload binary/);
+
+    expect(deletedMediaIds).toEqual([mediaRecordId]);
+    expect(articlePutCalled).toBe(false);
+    // Local file and draft image remain 100% untouched
+    expect(fs.readFileSync(path.join(tempDir, relPath), 'utf8')).toBe(originalDiskMd);
+    expect(fs.existsSync(draftImgPath)).toBe(true);
+  });
+
+  it('recovers cleanly from the "upload succeeded -> article PUT failed" window on the next push without re-uploading media', async () => {
+    const draftImgPath = path.join(tempDir, 'media', 'drafts', 'window-test.png');
+    fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
+
+    const relPath = seedTrackedArticle(
+      'window-recovery',
+      'Testing window.\n\n![Window](../../media/drafts/window-test.png)',
+    );
+    const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
+
+    let shouldFailArticlePut = true;
+    let mediaApiCalls = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
+      }
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (url.includes('/_emdash/api/media')) {
+        mediaApiCalls++;
+        if (method === 'POST' && url.endsWith('/upload-url')) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                uploadUrl: `/_emdash/api/media/${mediaRecordId}/upload`,
+                method: 'PUT',
+                headers: { 'Content-Type': 'image/png' },
+                mediaId: mediaRecordId,
+                storageKey: pendingStorageKey,
+                expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (method === 'PUT' && url.endsWith('/upload')) {
+          return new Response(JSON.stringify({ success: true, data: { uploaded: true } }), {
+            status: 200,
+          });
+        }
+        if (method === 'POST' && url.endsWith('/confirm')) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                item: {
+                  id: mediaRecordId,
+                  filename: 'window-test.png',
+                  mimeType: 'image/png',
+                  size: TINY_PNG_BUFFER.length,
+                  storageKey: confirmedStorageKey,
+                  status: 'ready',
+                  createdAt: '2026-11-07T07:37:33.355Z',
+                  url: confirmedUrl,
+                },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+      }
+
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/content/posts/${articleId}`)) {
+        if (shouldFailArticlePut) {
+          return new Response('Service Unavailable', {
+            status: 503,
+            statusText: 'Service Unavailable',
+          });
+        }
+        return new Response(JSON.stringify({ item: { id: articleId }, _rev: '2' }), {
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    // 1st push: media upload succeeds (3 calls), but article PUT fails with 503
+    await expect(
+      pushArticle(relPath, {
+        ...baseOptions,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn,
+      }),
+    ).rejects.toThrow(/Push failed: Service Unavailable/);
+
+    expect(mediaApiCalls).toBe(3);
+    // Draft file and local .md are still in their original state
+    expect(fs.existsSync(draftImgPath)).toBe(true);
+    expect(fs.readFileSync(path.join(tempDir, relPath), 'utf8')).toBe(originalDiskMd);
+
+    // media_state holds status='uploaded' with the confirmed storageKey and URL
+    const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
+    expect(cache.getMediaState(localHash)?.status).toBe('uploaded');
+
+    // 2nd push: article PUT succeeds; media API is NOT called at all (0 additional media calls)
+    shouldFailArticlePut = false;
+    mediaApiCalls = 0;
+
+    const res2 = await pushArticle(relPath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn,
+    });
+
+    expect(res2.success).toBe(true);
+    expect(mediaApiCalls).toBe(0);
+    expect(fs.existsSync(draftImgPath)).toBe(false);
+    expect(cache.getMediaState(localHash)?.status).toBe('ready');
+    expect(fs.readFileSync(path.join(tempDir, res2.filePath), 'utf8')).toContain(
+      `![Window](${confirmedUrl})`,
+    );
+  });
+});

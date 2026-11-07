@@ -128,4 +128,42 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     cache.deleteSyncState(state.id);
     expect(cache.getSyncState(state.id)).toBeNull();
   });
+
+  it('tracks media_state records for local draft upload idempotency and orphan recovery', () => {
+    const localHash = 'a'.repeat(64);
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.png',
+      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.png',
+      status: 'pending',
+      uploadedAt: 1730550300,
+    });
+
+    const pending = cache.getMediaState(localHash);
+    expect(pending?.status).toBe('pending');
+    expect(pending?.mediaId).toBe('01M6TF1XXBS2KC9EVYG6RBT0J0');
+
+    // Upsert on confirm (storageKey rewritten to double-ULID, status -> ready)
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
+      status: 'ready',
+      uploadedAt: 1730550310,
+    });
+
+    const ready = cache.getMediaStateByMediaId('01M6TF1XXBS2KC9EVYG6RBT0J0');
+    expect(ready?.status).toBe('ready');
+    expect(ready?.storageKey).toBe('01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png');
+    expect(ready?.workspacePath).toBe('media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png');
+
+    expect(cache.listMediaStates('ready')).toHaveLength(1);
+    expect(cache.listMediaStates('pending')).toHaveLength(0);
+
+    cache.deleteMediaState(localHash);
+    expect(cache.getMediaState(localHash)).toBeNull();
+  });
 });

@@ -29,7 +29,7 @@ import { pushArticle, PushValidationError } from '../../sync/push.js';
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_push',
-    'Push local Markdown article modifications or new articles to remote EmDash CMS. Performs 3-way merge to protect remote edits. Requires allowPublish=true when transitioning status from draft to published. If conflict markers are inserted, resolve them locally before re-pushing.',
+    'Push local Markdown article modifications or new articles to remote EmDash CMS. Automatically uploads standalone draft images in media/drafts/<file>, rewrites body URLs to /_emdash/api/media/file/<storageKey>, and promotes files to media/. Performs 3-way merge to protect remote edits. Requires allowPublish=true when transitioning status from draft to published. If conflict markers are inserted, resolve them locally before re-pushing.',
     {
       filePath: z
         .string()

@@ -20,11 +20,14 @@
  * SOFTWARE.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runPreflightChecks } from '../src/sync/preflight.js';
 import type { ParsedMarkdown } from '../src/utils/frontmatter.js';
 
-describe('AI Misbehavior Preflight Guards (G2 - G10)', () => {
+describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
   const validUlid = '01M67MP2W0VKCK2DFWM166CR24';
   const filePath = `posts/draft/${validUlid}-test-article.md`;
 
@@ -243,5 +246,83 @@ describe('AI Misbehavior Preflight Guards (G2 - G10)', () => {
     const resInvalidChar = runPreflightChecks(filePath, invalidCharFiParsed);
     expect(resInvalidChar.valid).toBe(false);
     expect(resInvalidChar.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+  });
+
+  it('G11: accepts standalone images under media/drafts/ for auto-upload, rejects missing files, inline images, and ignores opaque fences', () => {
+    const tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-g11-'));
+    try {
+      const draftsDir = path.join(tempWorkspace, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      const sunsetPath = path.join(draftsDir, 'sunset.jpg');
+      fs.writeFileSync(sunsetPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+      // 1. Standalone draft image on its own line + opaque fence containing image-like string + canonical double-ULID remote URL
+      const draftMd: ParsedMarkdown = {
+        ...validParsed,
+        body: [
+          'Intro paragraph.',
+          '',
+          '![Flight Sunset](../../media/drafts/sunset.jpg)',
+          '',
+          '<!--ec:block {"_type":"core:custom","raw":"![ignored](../../media/drafts/nonexistent.jpg)"} -->',
+          '',
+          '![Already Remote](/_emdash/api/media/file/01M6QM290DBY13GFC29W2WSAEP.01M6QM29S8H8DZX6VZMYP32H5E.jpeg)',
+        ].join('\n'),
+      };
+
+      const resOk = runPreflightChecks(filePath, draftMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resOk.valid).toBe(true);
+      expect(resOk.errors).toHaveLength(0);
+      expect(resOk.draftImages).toHaveLength(1);
+      expect(resOk.draftImages[0]).toEqual({
+        line: '![Flight Sunset](../../media/drafts/sunset.jpg)',
+        alt: 'Flight Sunset',
+        rawPath: '../../media/drafts/sunset.jpg',
+        filename: 'sunset.jpg',
+        resolvedAbsPath: sunsetPath,
+      });
+
+      // 2. Missing file under media/drafts/ -> MISSING_LOCAL_IMAGE_FILE
+      const missingMd: ParsedMarkdown = {
+        ...validParsed,
+        body: '![Missing](../../media/drafts/does-not-exist.png)',
+      };
+      const resMissing = runPreflightChecks(filePath, missingMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resMissing.valid).toBe(false);
+      expect(resMissing.errors.some((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE')).toBe(true);
+
+      // 3. Inline paragraph image referencing media/drafts/ or media/ -> INLINE_LOCAL_IMAGE_NOT_SUPPORTED
+      const inlineMd: ParsedMarkdown = {
+        ...validParsed,
+        body: 'Here is an inline image ![Sunset](../../media/drafts/sunset.jpg) inside a sentence.',
+      };
+      const resInline = runPreflightChecks(filePath, inlineMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resInline.valid).toBe(false);
+      expect(resInline.errors.some((e) => e.code === 'INLINE_LOCAL_IMAGE_NOT_SUPPORTED')).toBe(
+        true,
+      );
+      expect(resInline.errors[0].suggestion).toContain('standalone line');
+
+      // 4. Unsupported extension under media/drafts/ -> INVALID_LOCAL_IMAGE_TYPE
+      const badExtPath = path.join(draftsDir, 'archive.zip');
+      fs.writeFileSync(badExtPath, 'pk-zip');
+      const badExtMd: ParsedMarkdown = {
+        ...validParsed,
+        body: '![Zip](../../media/drafts/archive.zip)',
+      };
+      const resBadExt = runPreflightChecks(filePath, badExtMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resBadExt.valid).toBe(false);
+      expect(resBadExt.errors.some((e) => e.code === 'INVALID_LOCAL_IMAGE_TYPE')).toBe(true);
+    } finally {
+      fs.rmSync(tempWorkspace, { recursive: true, force: true });
+    }
   });
 });

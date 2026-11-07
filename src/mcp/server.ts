@@ -52,6 +52,12 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - categories/<id>-<name>.yaml : Category definitions
 - tags/<id>-<name>.yaml : Tag definitions
 - media/<yyyyMMdd>_<id>-<name>.<ext> & .yaml : Media assets & companion metadata
+- media/drafts/<filename> : Staging folder for offline draft images (auto-uploaded on sync_push)
+
+## Media & Image Rules (Two Distinct ID Spaces)
+- Frontmatter featuredImage uses the 26-character media record id (e.g. "01M67P0MBMJQQXH2K95HHCYRYB") or null.
+- Markdown body images use the storageKey-based URL: ![alt](/_emdash/api/media/file/<storageKey>). Never put a media record id in /_emdash/api/media/file/.
+- For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media/.
 
 ## AI Workflow (The Golden Path)
 1. [CHECK]: Use sync_status to list locally tracked articles and their file paths (returned newest-first, descending by date). If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).

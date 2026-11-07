@@ -77,8 +77,10 @@ export function registerStatusInitCommands(
   2. Write & Edit:  Freely edit posts/draft/*.md with editor or AI.
                     --> No need to write a redundant # Title header in the body.
                     --> Reference frontmatter taxonomies for categories and tags.
+                    --> Place offline images in media/drafts/<file> and reference them on a
+                        standalone line: ![alt](../../media/drafts/<file>)
   3. Push Draft:    emit push <file>
-                    --> Safely syncs to EmDash remote as staged draft.
+                    --> Auto-uploads media/drafts/* images, rewrites URLs, and syncs draft.
   4. Publish Live:  Update frontmatter status to "published", then run:
                     emit push <file> --allow-publish
 

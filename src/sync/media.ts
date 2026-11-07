@@ -36,7 +36,76 @@ export interface EmDashMediaItem {
   caption?: string | null;
   url?: string;
   storageKey?: string;
+  contentHash?: string | null;
+  status?: 'pending' | 'ready' | 'failed';
   createdAt?: string;
+}
+
+export function buildMediaMetaDoc(item: EmDashMediaItem, origin: string): Record<string, unknown> {
+  const canonicalUrl =
+    item.url || (item.storageKey ? `/_emdash/api/media/file/${item.storageKey}` : '');
+  return {
+    id: item.id,
+    filename: item.filename,
+    mimeType: item.mimeType,
+    size: item.size,
+    width: item.width ?? null,
+    height: item.height ?? null,
+    alt: item.alt ?? '',
+    caption: item.caption ?? '',
+    storageKey: item.storageKey ?? '',
+    contentHash: item.contentHash ?? null,
+    status: item.status ?? 'ready',
+    url: canonicalUrl ? new URL(canonicalUrl, origin).toString() : '',
+    createdAt: item.createdAt || '',
+  };
+}
+
+export interface PromoteDraftMediaOptions {
+  workspaceRoot: string;
+  origin: string;
+  draftAbsPath: string;
+  item: EmDashMediaItem;
+  removeDraft?: boolean;
+}
+
+/**
+ * Promotes a local draft image from media/drafts/<name> into the canonical
+ * media/<yyyyMMdd>_<mediaId>-<sanitizedName>.<ext> location alongside its .yaml metadata.
+ * Returns the workspace-relative path of the promoted binary file.
+ */
+export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string {
+  const { workspaceRoot, origin, draftAbsPath, item, removeDraft = true } = options;
+  const mediaDir = path.join(workspaceRoot, 'media');
+  fs.mkdirSync(mediaDir, { recursive: true });
+
+  const ext =
+    path.extname(item.filename) ||
+    path.extname(draftAbsPath) ||
+    (item.mimeType.includes('png') ? '.png' : '.jpg');
+  const baseWithoutExt = path.basename(item.filename, path.extname(item.filename));
+  const sanitizedBase = sanitizeTitleForFilename(baseWithoutExt);
+  const datePrefix = formatDatePrefix(item.createdAt || new Date().toISOString());
+  const baseName = `${datePrefix}${item.id}-${sanitizedBase}`;
+
+  const yamlPath = path.join(mediaDir, `${baseName}.yaml`);
+  const metaDoc = buildMediaMetaDoc(item, origin);
+  fs.writeFileSync(
+    yamlPath,
+    yaml.dump(metaDoc, { indent: 2, quotingType: '"', forceQuotes: false, lineWidth: -1 }),
+    'utf8',
+  );
+
+  const targetFilePath = path.join(mediaDir, `${baseName}${ext}`);
+  if (fs.existsSync(draftAbsPath)) {
+    if (removeDraft) {
+      fs.renameSync(draftAbsPath, targetFilePath);
+    } else {
+      fs.copyFileSync(draftAbsPath, targetFilePath);
+    }
+  }
+
+  return path.posix.join('media', `${baseName}${ext}`);
 }
 
 import { ApiError } from '../client/error.js';
@@ -143,21 +212,10 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       }
 
       // 1. Write YAML metadata
-      const metaDoc = {
-        id: item.id,
-        filename: item.filename,
-        mimeType: item.mimeType,
-        size: item.size,
-        width: item.width ?? null,
-        height: item.height ?? null,
-        alt: item.alt ?? '',
-        caption: item.caption ?? '',
-        url: item.url ? new URL(item.url, options.origin).toString() : '',
-        createdAt: item.createdAt || '',
-      };
+      const metaDoc = buildMediaMetaDoc(item, options.origin);
       fs.writeFileSync(
         yamlPath,
-        yaml.dump(metaDoc, { indent: 2, quotingType: '"', forceQuotes: false }),
+        yaml.dump(metaDoc, { indent: 2, quotingType: '"', forceQuotes: false, lineWidth: -1 }),
         'utf8',
       );
 

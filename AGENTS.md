@@ -29,6 +29,7 @@ This document defines the **official workflow rules (The Golden Path) and coding
 ├── categories/                     <-- Category definitions (<id>-<label>.yaml)
 ├── tags/                           <-- Tag definitions (<id>-<label>.yaml)
 ├── media/                          <-- Media files & companion YAML (<yyyyMMdd>_<id>-<name>.<ext>)
+│   └── drafts/                     <-- Staging folder for offline draft images (auto-uploaded on push)
 └── posts/                          <-- [Local Markdown Files for Humans & AI]
     ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
     └── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
@@ -61,7 +62,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 
 ## 4. Strict Safety Guardrails for AI Agents
 
-These rules are enforced at the code level via Preflight Guards (G1–G10):
+These rules are enforced at the code level via Preflight Guards (G1–G11):
 
 ### 1. Prohibition of Throwaway Temporary Files
 - **Never create disposable files** such as `temp.md`, `draft.md`, or `scratch.md` in the workspace.
@@ -83,12 +84,17 @@ These rules are enforced at the code level via Preflight Guards (G1–G10):
 - Valid category and tag slugs are automatically provided as hints in the output of `sync_new`, `sync_pull` (batch mode, even with `postsOnly: true`), and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first). Hint lists are capped per command, so the complete authoritative list is always the `categories/` and `tags/` YAML files themselves.
 - Canonical term ULIDs in frontmatter are transparently accepted and verified against local definitions; unknown or obsolete ULIDs not found locally are rejected as stale.
 
-### 6. Featured Image References (Never Invent Media IDs)
-- `featuredImage` in frontmatter must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard G10 rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
-- Upload media first (EmDash Admin `/admin/media` or the official EmDash MCP `media_upload`), then use the ULID it returns. Run `emit pull-media` to mirror media and companion metadata locally — this is optional convenience for cross-checking, not a requirement for pushing.
-- **Confirmed contract (live EmDash):** pushing `featured_image: { "id": "<ULID>" }` alone is accepted (HTTP 200); the server stores the media id and normalizes `"provider": "local"` itself. Never fabricate `provider`, `src`, `storageKey`, dimensions, or MIME type in a push payload.
+### 6. Media References, Two ID Spaces & Offline Draft Images
+- **Two distinct ID spaces (Critical):** EmDash separates **media record IDs** (`id`) from **storage keys** (`storageKey`). Never interchange them:
+  - **Frontmatter `featuredImage`** uses the **26-character media record `id`** (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard **G10** rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
+  - **Markdown body images `![alt](...)`** use the **`storageKey`-based public route** `/_emdash/api/media/file/<storageKey>` (where `<storageKey>` is `<ulid>.<ext>` or `<ulid1>.<ulid2>.<ext>`). Passing a media record `id` into `/_emdash/api/media/file/<id>.<ext>` returns **HTTP 404**.
+- **Offline draft image auto-upload (G5 / G11):**
+  - Place new local images in `media/drafts/<filename>` and reference them on a **standalone line** in the Markdown body: `![alt text](../../media/drafts/<filename>)` (or `media/drafts/<filename>`).
+  - Preflight Guard **G11 (`LOCAL_IMAGE_AUTO_UPLOAD`)** validates that the file exists under `media/drafts/`, has a supported image extension (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.avif`, `.svg`), and is within the 50 MiB limit. During `emit push` / `sync_push`, Emit automatically uploads the image via the 4-stage media flow (`upload-url` → `PUT` → `confirm`), rewrites the Markdown line to the canonical root-relative `/_emdash/api/media/file/<storageKey>` URL, pushes the article, and promotes the file from `media/drafts/<filename>` to `media/<yyyyMMdd>_<mediaId>-<filename>` with its companion `.yaml`.
+  - **Standalone line requirement:** Because EmDash's Portable Text AST treats images as top-level blocks (`/^!\[([^\]]*)\]\(([^)]+)\)$/`), inline local images inside a text paragraph (e.g. `Text ![alt](../../media/drafts/a.png) more text`) are rejected with `INLINE_LOCAL_IMAGE_NOT_SUPPORTED`. Images inside `<!--ec:block ... -->` opaque fences are ignored by G5/G11 so Guard **G9** is preserved. Any local image path outside `media/drafts/` is rejected by Guard **G5 (`LOCAL_IMAGE_DETECTED`)**.
+- **Confirmed `featuredImage` contract (live EmDash):** pushing `featured_image: { "id": "<ULID>" }` alone is accepted (HTTP 200); the server stores the media id and normalizes `"provider": "local"` itself. Never fabricate `provider`, `src`, `storageKey`, dimensions, or MIME type in a push payload.
 - When the cached remote entry already points at the same ULID, Emit resends that remote object verbatim so its original provider shape (`external` with `src`, or `local` with `meta.storageKey`) is preserved instead of being re-resolved from a bare id.
-- Emit canonicalizes the value to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
+- Emit canonicalizes `featuredImage` to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
 - `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
 - Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.
 

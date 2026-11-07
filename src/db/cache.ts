@@ -64,6 +64,18 @@ export interface BylineRecord {
   updatedAt?: number;
 }
 
+export type MediaStateStatus = 'pending' | 'ready' | 'failed' | 'uploaded';
+
+export interface MediaStateRecord {
+  localHash: string;
+  mediaId: string;
+  storageKey: string;
+  url: string;
+  workspacePath?: string | null;
+  status: MediaStateStatus;
+  uploadedAt?: number | null;
+}
+
 export class CacheDatabase {
   private db: DatabaseSync;
 
@@ -134,6 +146,21 @@ export class CacheDatabase {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_bylines_slug ON bylines (slug);
+    `);
+
+    // 5. media_state table: local draft media upload tracking & idempotency
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS media_state (
+        local_hash TEXT PRIMARY KEY,
+        media_id TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        url TEXT NOT NULL,
+        workspace_path TEXT,
+        status TEXT NOT NULL,
+        uploaded_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_media_state_media_id ON media_state (media_id);
+      CREATE INDEX IF NOT EXISTS idx_media_state_status ON media_state (status);
     `);
   }
 
@@ -388,6 +415,76 @@ export class CacheDatabase {
       }
     }
     return { slugToId, idToSlug };
+  }
+
+  // --- media_state operations ---
+
+  public saveMediaState(record: MediaStateRecord): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO media_state (local_hash, media_id, storage_key, url, workspace_path, status, uploaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(local_hash) DO UPDATE SET
+        media_id = excluded.media_id,
+        storage_key = excluded.storage_key,
+        url = excluded.url,
+        workspace_path = excluded.workspace_path,
+        status = excluded.status,
+        uploaded_at = excluded.uploaded_at
+    `);
+    stmt.run(
+      record.localHash,
+      record.mediaId,
+      record.storageKey,
+      record.url,
+      record.workspacePath ?? null,
+      record.status,
+      record.uploadedAt ?? Math.floor(Date.now() / 1000),
+    );
+  }
+
+  public getMediaState(localHash: string): MediaStateRecord | null {
+    const stmt = this.db.prepare('SELECT * FROM media_state WHERE local_hash = ?');
+    const row = stmt.get(localHash) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapMediaStateRow(row);
+  }
+
+  public getMediaStateByMediaId(mediaId: string): MediaStateRecord | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM media_state WHERE media_id = ? ORDER BY uploaded_at DESC LIMIT 1',
+    );
+    const row = stmt.get(mediaId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapMediaStateRow(row);
+  }
+
+  public deleteMediaState(localHash: string): void {
+    const stmt = this.db.prepare('DELETE FROM media_state WHERE local_hash = ?');
+    stmt.run(localHash);
+  }
+
+  public listMediaStates(status?: MediaStateStatus): MediaStateRecord[] {
+    const stmt = status
+      ? this.db.prepare('SELECT * FROM media_state WHERE status = ? ORDER BY uploaded_at DESC')
+      : this.db.prepare('SELECT * FROM media_state ORDER BY uploaded_at DESC');
+    const rows = (status ? stmt.all(status) : stmt.all()) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapMediaStateRow(r));
+  }
+
+  private mapMediaStateRow(row: Record<string, unknown>): MediaStateRecord {
+    return {
+      localHash: String(row.local_hash),
+      mediaId: String(row.media_id),
+      storageKey: String(row.storage_key),
+      url: String(row.url),
+      workspacePath:
+        row.workspace_path !== null && row.workspace_path !== undefined
+          ? String(row.workspace_path)
+          : null,
+      status: String(row.status) as MediaStateStatus,
+      uploadedAt:
+        row.uploaded_at !== null && row.uploaded_at !== undefined ? Number(row.uploaded_at) : null,
+    };
   }
 
   public close(): void {
