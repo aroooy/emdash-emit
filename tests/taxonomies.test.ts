@@ -24,7 +24,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { pullTaxonomies, loadLocalTaxonomyCandidates } from '../src/sync/taxonomies.js';
+import {
+  pullTaxonomies,
+  loadLocalTaxonomyCandidates,
+  getLocalTaxonomiesSummary,
+  formatTaxonomiesHint,
+} from '../src/sync/taxonomies.js';
 
 describe('Taxonomies Sync Engine', () => {
   let tempDir: string;
@@ -88,5 +93,88 @@ describe('Taxonomies Sync Engine', () => {
     expect(candidates.categories).toContain('development');
     expect(candidates.tags).toContain('webdev');
     expect(candidates.tags).toContain('dji');
+  });
+
+  it('getLocalTaxonomiesSummary sorts categories alphabetically and tags by count desc then ULID desc', () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    // Categories: beta, alpha
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Beta.yaml'),
+      'id: 01M6CAT1\nname: Beta\nslug: beta\n',
+    );
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT2-Alpha.yaml'),
+      'id: 01M6CAT2\nname: アルファ\nslug: alpha\n',
+    );
+
+    // Tags:
+    // tag-popular: count 20, older ULID (01M60000000000000000000001)
+    // tag-trending: count 10, newest ULID (01M6ZZZZZZZZZZZZZZZZZZZZZZ)
+    // tag-legacy: count 10, middle ULID (01M6MMMMMMMMMMMMMMMMMMMMMM)
+    fs.writeFileSync(
+      path.join(tagDir, '01M60000000000000000000001-Popular.yaml'),
+      'id: 01M60000000000000000000001\nname: Popular\nslug: popular\ncount: 20\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6ZZZZZZZZZZZZZZZZZZZZZZ-Trending.yaml'),
+      'id: 01M6ZZZZZZZZZZZZZZZZZZZZZZ\nname: トレンド\nslug: trending\ncount: 10\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6MMMMMMMMMMMMMMMMMMMMMM-Legacy.yaml'),
+      'id: 01M6MMMMMMMMMMMMMMMMMMMMMM\nname: Legacy\nslug: legacy\ncount: 10\n',
+    );
+
+    const summary = getLocalTaxonomiesSummary(tempDir);
+
+    // Categories: alpha, beta (ordinal slug asc)
+    expect(summary.categories.map((c) => c.slug)).toEqual(['alpha', 'beta']);
+
+    // Tags: popular (count 20), trending (count 10, ULID 'Z'), legacy (count 10, ULID 'M')
+    expect(summary.tags.map((t) => t.slug)).toEqual(['popular', 'trending', 'legacy']);
+
+    // Test formatTaxonomiesHint
+    const hint = formatTaxonomiesHint(summary, { maxTags: 10 });
+    expect(hint).toContain('- alpha (アルファ)');
+    expect(hint).toContain('- beta'); // slug.toLowerCase() === name.toLowerCase()
+    expect(hint).toContain('Available Tags:');
+    expect(hint).toContain('popular, trending (トレンド), legacy');
+
+    // Test truncation when maxTags exceeded
+    const truncatedHint = formatTaxonomiesHint(summary, { maxTags: 2 });
+    expect(truncatedHint).toContain('popular, trending (トレンド)');
+    expect(truncatedHint).toContain('(and 1 more in tags/)');
+  });
+
+  it('formatTaxonomiesHint cleanly omits sections when maxTags or maxCategories is 0', () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    fs.writeFileSync(path.join(catDir, '01M6C1.yaml'), 'id: 01M6C1\nname: Cat\nslug: cat\n');
+    fs.writeFileSync(path.join(tagDir, '01M6T1.yaml'), 'id: 01M6T1\nname: Tag\nslug: tag\n');
+
+    const summary = getLocalTaxonomiesSummary(tempDir);
+
+    const noTags = formatTaxonomiesHint(summary, { maxTags: 0 });
+    expect(noTags).toContain('Available Categories:');
+    expect(noTags).not.toContain('Available Tags:');
+
+    const noCats = formatTaxonomiesHint(summary, { maxCategories: 0 });
+    expect(noCats).not.toContain('Available Categories:');
+    expect(noCats).toContain('Available Tags:');
+  });
+
+  it('handles empty or missing taxonomy directories gracefully', () => {
+    const summary = getLocalTaxonomiesSummary(tempDir);
+    expect(summary.categories).toEqual([]);
+    expect(summary.tags).toEqual([]);
+
+    const hint = formatTaxonomiesHint(summary);
+    expect(hint).toBe('');
   });
 });

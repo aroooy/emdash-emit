@@ -23,7 +23,11 @@
 import type { Command } from 'commander';
 import { pullArticle } from '../../sync/pull.js';
 import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
-import { pullTaxonomies } from '../../sync/taxonomies.js';
+import {
+  pullTaxonomies,
+  getLocalTaxonomiesSummary,
+  formatTaxonomiesHint,
+} from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -77,6 +81,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             console.log(
               `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
             );
+            const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+            const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+            if (taxHint) {
+              console.log(`\n${taxHint}\n`);
+            }
           }
 
           // 2. Pull articles (batch)
@@ -191,6 +200,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       console.log(
         `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
       );
+      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+      if (taxHint) {
+        console.log(`\n${taxHint}`);
+      }
     });
 
   // emit pull-media

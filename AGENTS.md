@@ -50,7 +50,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 ```
 
 1. **PULL / STATUS (`sync_pull` / `sync_status`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. `sync_status` returns tracked articles sorted newest-first (descending by date prefix and ULID; date reflects publication/creation date, not last modified). To locate active edits, filter by `syncStatus: 'modified'`. Batch mode `sync_pull` automatically syncs taxonomies (categories/tags) alongside articles. Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to also pull media assets.
-2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files.
+2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files. Valid categories and tags (sorted by usage count) are returned automatically in the response hint.
 3. **DIRECT EDIT**: Edit the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly (frontmatter and body).
 4. **PUSH (`sync_push`)**: When editing is complete, push the specific file or ID to remote EmDash.
 
@@ -76,7 +76,8 @@ These rules are enforced at the code level via Preflight Guards (G1–G9):
 - Promoting to `status: published` requires explicit `allowPublish: true` confirmation.
 
 ### 5. Taxonomy Validation
-- Do not invent nonexistent taxonomy slugs. Reference local `categories/` and `tags/` definitions.
+- Do not invent nonexistent taxonomy slugs. Preflight Guard G4 strictly enforces this on `sync_push`.
+- Valid category and tag slugs are automatically provided in the output of `sync_new`, `sync_pull`, and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first).
 
 ---
 

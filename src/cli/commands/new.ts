@@ -22,6 +22,7 @@
 
 import type { Command } from 'commander';
 import { createArticleScaffold } from '../../sync/new.js';
+import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerNewCommand(program: Command, resolveContext: CliContextResolver): void {
@@ -48,6 +49,13 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
 
       console.log(`✅ Created new article scaffold (ID: ${res.id})`);
       console.log(`   Path: ${res.filePath}`);
+
+      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+      if (taxHint) {
+        console.log(`\n${taxHint}`);
+      }
+
       console.log(`\nNext: Write your content in Markdown, then run:`);
       console.log(`   emit push ${res.filePath}`);
     });

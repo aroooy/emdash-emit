@@ -148,10 +148,24 @@ export async function pushArticle(
   const syncState = options.cache.getSyncState(id);
   const baseSnapshot = options.cache.getBaseSnapshot(id);
 
+  // If knownTaxonomies is not explicitly passed, populate from local categories/ and tags/ (if present)
+  let knownTaxonomies = options.knownTaxonomies;
+  if (!knownTaxonomies) {
+    const taxMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
+    const knownCats = Object.keys(taxMaps.slugToId.category);
+    const knownTags = Object.keys(taxMaps.slugToId.tag);
+    if (knownCats.length > 0 || knownTags.length > 0) {
+      knownTaxonomies = {
+        ...(knownCats.length > 0 ? { categories: knownCats } : {}),
+        ...(knownTags.length > 0 ? { tags: knownTags } : {}),
+      };
+    }
+  }
+
   // 1. Run Preflight Guards G2 - G9
   const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
-    knownTaxonomies: options.knownTaxonomies,
+    knownTaxonomies,
     baseMarkdown: baseSnapshot?.bodyMarkdown,
     previousStatus: (syncState?.status as 'draft' | 'published') || 'draft',
   });

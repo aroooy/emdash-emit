@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
 import { createArticleScaffold } from '../../sync/new.js';
+import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 
 export function registerSyncNewTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -50,11 +51,15 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         locale: args.locale || ctx.config.defaultLocale,
       });
 
+      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+      const hintBlock = taxHint ? `\n\n${taxHint}` : '';
+
       return {
         content: [
           {
             type: 'text',
-            text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.\nYou can now edit the file and sync it with sync_push.`,
+            text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.`,
           },
         ],
       };

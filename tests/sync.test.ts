@@ -130,6 +130,39 @@ describe('Pull & Push Synchronization Engine', () => {
     ).rejects.toThrowError(PushValidationError);
   });
 
+  it('pushArticle runs G4 guard and blocks when frontmatter contains invalid taxonomy slug', async () => {
+    // Pre-create local category 'tech'
+    const catDir = path.join(tempDir, 'categories');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Tech.yaml'),
+      'id: 01M6CAT1\nname: Tech\nslug: tech\n',
+    );
+
+    const invalidFm: Frontmatter = {
+      id: validUlid,
+      slug: 'invalid-tax-post',
+      title: 'Invalid Taxonomy Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: { categories: ['nonexistent-category'] },
+      bylines: [],
+    };
+    const invalidMd = serializeMarkdown(invalidFm, 'Valid body content');
+    const targetFile = path.join(tempDir, 'posts', 'draft', `${validUlid}-tax-post.md`);
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+    fs.writeFileSync(targetFile, invalidMd, 'utf8');
+
+    await expect(
+      pushArticle(targetFile, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+      }),
+    ).rejects.toThrowError(/Push blocked by Preflight Guards/);
+  });
+
   it('pushArticle acquires lock, sends PUT, and moves file when status changes (Path Tracking)', async () => {
     const draftFm: Frontmatter = {
       id: validUlid,

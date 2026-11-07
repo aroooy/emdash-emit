@@ -27,7 +27,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
 import { pullArticle } from '../../sync/pull.js';
 import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
-import { pullTaxonomies } from '../../sync/taxonomies.js';
+import {
+  pullTaxonomies,
+  getLocalTaxonomiesSummary,
+  formatTaxonomiesHint,
+} from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
 import { extractUlidFromFilename, compareArticleFilenameDesc } from '../../utils/naming.js';
 
@@ -130,7 +134,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
           });
-          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
+          const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+          const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+          const taxHintBlock = taxHint ? `\n\n${taxHint}` : '';
+          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.${taxHintBlock}`;
         }
 
         // 2. Pull articles
@@ -218,11 +225,15 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         refreshToken: ctx.auth.refreshToken,
       });
 
+      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 200 });
+      const hintBlock = taxHint ? `\n\n${taxHint}` : '';
+
       return {
         content: [
           {
             type: 'text',
-            text: `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`,
+            text: `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.${hintBlock}`,
           },
         ],
       };

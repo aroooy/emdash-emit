@@ -189,6 +189,57 @@ export async function pullTaxonomies(
   };
 }
 
+export interface LocalTaxonomyItem {
+  id: string;
+  slug: string;
+  name: string;
+  count?: number;
+}
+
+export interface LocalTaxonomiesSummary {
+  categories: LocalTaxonomyItem[];
+  tags: LocalTaxonomyItem[];
+}
+
+export interface FormatTaxonomiesHintOptions {
+  maxTags?: number;
+  maxCategories?: number;
+}
+
+export const DEFAULT_MAX_TAGS = 60;
+export const DEFAULT_MAX_CATEGORIES = 50;
+
+/**
+ * Reads all taxonomy YAML files from a directory and returns typed items.
+ * Single source of truth for reading local category and tag YAML files.
+ */
+export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
+  if (!fs.existsSync(dir)) return [];
+  try {
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'));
+    const items: LocalTaxonomyItem[] = [];
+    for (const file of files) {
+      try {
+        const content = fs.readFileSync(path.join(dir, file), 'utf8');
+        const data = yaml.load(content) as Record<string, unknown>;
+        if (data && typeof data.id === 'string' && typeof data.slug === 'string') {
+          items.push({
+            id: data.id,
+            slug: data.slug,
+            name: typeof data.name === 'string' ? data.name : data.slug,
+            count: typeof data.count === 'number' ? data.count : undefined,
+          });
+        }
+      } catch {
+        // Ignore malformed files
+      }
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Loads local taxonomy mapping between term ULID and slug from categories/ and tags/ directories.
  */
@@ -196,36 +247,21 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
   slugToId: { category: Record<string, string>; tag: Record<string, string> };
   idToSlug: { category: Record<string, string>; tag: Record<string, string> };
 } {
-  const categoriesDir = path.join(workspaceRoot, 'categories');
-  const tagsDir = path.join(workspaceRoot, 'tags');
+  const catItems = readTaxonomyDir(path.join(workspaceRoot, 'categories'));
+  const tagItems = readTaxonomyDir(path.join(workspaceRoot, 'tags'));
 
-  const readDirMap = (dir: string) => {
+  const toMaps = (items: LocalTaxonomyItem[]) => {
     const slugToId: Record<string, string> = {};
     const idToSlug: Record<string, string> = {};
-    if (!fs.existsSync(dir)) return { slugToId, idToSlug };
-
-    try {
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'));
-      for (const file of files) {
-        try {
-          const content = fs.readFileSync(path.join(dir, file), 'utf8');
-          const data = yaml.load(content) as Record<string, unknown>;
-          if (data && typeof data.id === 'string' && typeof data.slug === 'string') {
-            slugToId[data.slug] = data.id;
-            idToSlug[data.id] = data.slug;
-          }
-        } catch {
-          // Ignore malformed files
-        }
-      }
-    } catch {
-      // Ignore directory read errors
+    for (const item of items) {
+      slugToId[item.slug] = item.id;
+      idToSlug[item.id] = item.slug;
     }
     return { slugToId, idToSlug };
   };
 
-  const catMap = readDirMap(categoriesDir);
-  const tagMap = readDirMap(tagsDir);
+  const catMap = toMaps(catItems);
+  const tagMap = toMaps(tagItems);
 
   return {
     slugToId: {
@@ -240,39 +276,76 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
 }
 
 /**
- * Loads local taxonomy candidate names (slugs or labels) from categories/ and tags/ directories.
+ * Loads local taxonomy candidate names (slugs) from categories/ and tags/ directories.
  */
 export function loadLocalTaxonomyCandidates(workspaceRoot: string): {
   categories: string[];
   tags: string[];
 } {
+  return {
+    categories: readTaxonomyDir(path.join(workspaceRoot, 'categories')).map((c) => c.slug),
+    tags: readTaxonomyDir(path.join(workspaceRoot, 'tags')).map((t) => t.slug),
+  };
+}
+
+/**
+ * Reads local categories/ and tags/ YAML definitions and returns structured summary.
+ * Tags are sorted by count descending (most used first), then by ULID descending (newest first).
+ * Categories are sorted alphabetically by slug using deterministic ordinal comparison.
+ */
+export function getLocalTaxonomiesSummary(workspaceRoot: string): LocalTaxonomiesSummary {
   const categoriesDir = path.join(workspaceRoot, 'categories');
   const tagsDir = path.join(workspaceRoot, 'tags');
 
-  const readDirCandidates = (dir: string): string[] => {
-    if (!fs.existsSync(dir)) return [];
-    try {
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'));
-      const candidates: string[] = [];
-      for (const file of files) {
-        try {
-          const content = fs.readFileSync(path.join(dir, file), 'utf8');
-          const data = yaml.load(content) as Record<string, unknown>;
-          if (data && typeof data.slug === 'string') {
-            candidates.push(data.slug);
-          }
-        } catch {
-          // Ignore malformed files
-        }
-      }
-      return candidates;
-    } catch {
-      return [];
-    }
+  const categories = readTaxonomyDir(categoriesDir).sort((a, b) =>
+    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0,
+  );
+  // Sort tags: highest count (usage frequency) first; ties broken by newest ULID (descending)
+  const tags = readTaxonomyDir(tagsDir).sort((a, b) => {
+    const countDiff = (b.count ?? 0) - (a.count ?? 0);
+    if (countDiff !== 0) return countDiff;
+    return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+  });
+
+  return { categories, tags };
+}
+
+/**
+ * Formats local categories and tags into a concise hint text for AI prompts and CLI outputs.
+ * Omits redundant name in parenthesis if slug and name are identical (case-insensitive).
+ */
+export function formatTaxonomiesHint(
+  summary: LocalTaxonomiesSummary,
+  options?: FormatTaxonomiesHintOptions,
+): string {
+  const maxCategories = options?.maxCategories ?? DEFAULT_MAX_CATEGORIES;
+  const maxTags = options?.maxTags ?? DEFAULT_MAX_TAGS;
+
+  const formatItem = (item: LocalTaxonomyItem): string => {
+    return item.slug.toLowerCase() === item.name.toLowerCase()
+      ? item.slug
+      : `${item.slug} (${item.name})`;
   };
 
-  return {
-    categories: readDirCandidates(categoriesDir),
-    tags: readDirCandidates(tagsDir),
-  };
+  const sections: string[] = [];
+
+  if (summary.categories.length > 0 && maxCategories > 0) {
+    const visibleCats = summary.categories.slice(0, maxCategories);
+    const catLines = visibleCats.map((c) => `  - ${formatItem(c)}`);
+    const moreCats =
+      summary.categories.length > maxCategories
+        ? `\n  ...and ${summary.categories.length - maxCategories} more in categories/`
+        : '';
+    sections.push(`Available Categories:\n${catLines.join('\n')}${moreCats}`);
+  }
+
+  if (summary.tags.length > 0 && maxTags > 0) {
+    const visibleTags = summary.tags.slice(0, maxTags);
+    const tagStrings = visibleTags.map((t) => formatItem(t));
+    const moreTags =
+      summary.tags.length > maxTags ? ` (and ${summary.tags.length - maxTags} more in tags/)` : '';
+    sections.push(`Available Tags:\n  - ${tagStrings.join(', ')}${moreTags}`);
+  }
+
+  return sections.join('\n\n');
 }

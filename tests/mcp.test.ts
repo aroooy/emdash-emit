@@ -129,4 +129,45 @@ describe('Emit MCP Server', () => {
     const server = createMcpServer({ workspaceRoot: tempDir, cache });
     expect(server).toBeDefined();
   });
+
+  it('sync_new includes available categories and tags hint in response', async () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Tech.yaml'),
+      'id: 01M6CAT1\nname: 技術\nslug: tech\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6TAG1-Node.yaml'),
+      'id: 01M6TAG1\nname: nodejs\nslug: nodejs\n',
+    );
+
+    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const res = await registered['sync_new'].handler({
+      slug: 'my-new-post',
+      title: 'My New Post',
+    });
+    expect(res.content[0].text).toContain('Created new draft article');
+    expect(res.content[0].text).toContain('Available Categories:');
+    expect(res.content[0].text).toContain('- tech (技術)');
+    expect(res.content[0].text).toContain('Available Tags:');
+    expect(res.content[0].text).toContain('nodejs');
+    expect(res.content[0].text).not.toContain('nodejs (nodejs)');
+  });
 });

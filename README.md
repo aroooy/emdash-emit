@@ -326,7 +326,7 @@ Markdown body begins here...
    - **Do not** add `# Article Title` as the first heading in the Markdown body. Doing so causes duplicate title displays on the site frontend. (Emit's preflight guard G7 will detect and automatically trim redundant top headings).
 2. **Taxonomy Slugs**:
    - Items under `categories:` and `tags:` must match existing slug names from `categories/` and `tags/`.
-   - Never invent arbitrary IDs or invalid names; taxonomies are synced automatically with `emit pull`, or use `emit pull-taxonomies` standalone to see available options.
+   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit new`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy slugs before pushing.
 3. **Status Transitions**:
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
@@ -479,6 +479,13 @@ emit new ai-workflow-guide --title "AI Workflow Guide"
 ```text
 ✅ Created new article scaffold (ID: 01M6ABCDEF1234567890123456)
    Path: posts/draft/20261104_01M6ABCDEF1234567890123456-ai-workflow-guide.md
+
+Available Categories:
+  - tech (技術)
+  - column (コラム)
+
+Available Tags:
+  - ai, cloudflare, emit, typescript
 
 Next: Write your content in Markdown, then run:
    emit push posts/draft/20261104_01M6ABCDEF1234567890123456-ai-workflow-guide.md
