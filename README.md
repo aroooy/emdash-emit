@@ -593,13 +593,10 @@ emit status [-c, --collection <collection>] [-p, --profile <name>]
   🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-getting-started.md (Getting Started)
 
 Summary: 3 total (1 synced, 1 modified, 1 untracked)
-
 ```
 
 > [!NOTE]
 > Articles are sorted newest-first by date prefix and ULID. The date prefix reflects the article's publication or creation date, not the last-modified time. To locate currently active edits, look for files marked `[modified]`.
-
-```
 
 ---
 
