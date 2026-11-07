@@ -177,4 +177,31 @@ describe('Taxonomies Sync Engine', () => {
     const hint = formatTaxonomiesHint(summary);
     expect(hint).toBe('');
   });
+
+  it('preserves existing local YAMLs and skips pruning when remote fetch fails (500)', async () => {
+    const catDir = path.join(tempDir, 'categories');
+    fs.mkdirSync(catDir, { recursive: true });
+    const localCatFile = path.join(catDir, '01M6CAT1-Local.yaml');
+    fs.writeFileSync(localCatFile, 'id: 01M6CAT1\nname: Local\nslug: local\n', 'utf8');
+
+    // Simulate 500 error from remote
+    const mockFailingFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+      }),
+    );
+
+    const res = await pullTaxonomies({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: mockFailingFetch as unknown as typeof fetch,
+    });
+
+    expect(res.deletedCategoriesCount).toBe(0);
+    // Local YAML must NOT be pruned or deleted on fetch error
+    expect(fs.existsSync(localCatFile)).toBe(true);
+  });
 });

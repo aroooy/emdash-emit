@@ -148,12 +148,31 @@ export async function pushArticle(
   const syncState = options.cache.getSyncState(id);
   const baseSnapshot = options.cache.getBaseSnapshot(id);
 
+  // Pre-load local taxonomy maps once for canonicalization, G4 guard, and remote sync
+  const taxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
+
+  // Canonicalize term ULIDs in frontmatter to slugs before running G4 guard
+  // (Prevents G4 false positives when pull.ts populated term-as-ULID or user wrote ULID)
+  if (parsed.frontmatter.taxonomies) {
+    const canon = (name: 'category' | 'tag', terms: string[]): string[] =>
+      terms.map((t) => taxonomyMaps.idToSlug[name][t] || t);
+
+    if (parsed.frontmatter.taxonomies.categories) {
+      parsed.frontmatter.taxonomies.categories = canon(
+        'category',
+        parsed.frontmatter.taxonomies.categories,
+      );
+    }
+    if (parsed.frontmatter.taxonomies.tags) {
+      parsed.frontmatter.taxonomies.tags = canon('tag', parsed.frontmatter.taxonomies.tags);
+    }
+  }
+
   // If knownTaxonomies is not explicitly passed, populate from local categories/ and tags/ (if present)
   let knownTaxonomies = options.knownTaxonomies;
   if (!knownTaxonomies) {
-    const taxMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
-    const knownCats = Object.keys(taxMaps.slugToId.category);
-    const knownTags = Object.keys(taxMaps.slugToId.tag);
+    const knownCats = Object.keys(taxonomyMaps.slugToId.category);
+    const knownTags = Object.keys(taxonomyMaps.slugToId.tag);
     if (knownCats.length > 0 || knownTags.length > 0) {
       knownTaxonomies = {
         ...(knownCats.length > 0 ? { categories: knownCats } : {}),
@@ -212,7 +231,7 @@ export async function pushArticle(
   // Helper to synchronize taxonomy assignments
   const syncArticleTaxonomies = async (articleId: string) => {
     if (!parsed.frontmatter.taxonomies) return;
-    const taxMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
+    const taxMaps = taxonomyMaps;
 
     const updateTaxonomy = async (taxonomyName: 'category' | 'tag', termSlugsOrIds: string[]) => {
       const slugMap = taxMaps.slugToId[taxonomyName] || {};

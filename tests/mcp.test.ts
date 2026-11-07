@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { initWorkspace } from '../src/utils/config.js';
@@ -54,6 +54,7 @@ describe('Emit MCP Server', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     cache.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -169,5 +170,81 @@ describe('Emit MCP Server', () => {
     expect(res.content[0].text).toContain('Available Tags:');
     expect(res.content[0].text).toContain('nodejs');
     expect(res.content[0].text).not.toContain('nodejs (nodejs)');
+  });
+
+  it('sync_pull batch mode includes taxonomies hint in response', async () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Tech.yaml'),
+      'id: 01M6CAT1\nname: 技術\nslug: tech\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6TAG1-Node.yaml'),
+      'id: 01M6TAG1\nname: nodejs\nslug: nodejs\n',
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/taxonomies/category/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { terms: [{ id: '01M6CAT1', slug: 'tech', label: '技術' }] },
+          }),
+        });
+      }
+      if (url.includes('/taxonomies/tag/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { terms: [{ id: '01M6TAG1', slug: 'nodejs', label: 'nodejs' }] },
+          }),
+        });
+      }
+      if (url.includes('/bylines')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { bylines: [] } }),
+        });
+      }
+      if (url.includes('/content/posts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { items: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected url: ${url}`));
+    });
+
+    vi.stubGlobal('fetch', mockFetch);
+
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const res = await registered['sync_pull'].handler({});
+    expect(res.content[0].text).toContain('Synced 0 articles');
+    expect(res.content[0].text).toContain('Available Categories:');
+    expect(res.content[0].text).toContain('- tech (技術)');
+    expect(res.content[0].text).toContain('Available Tags:');
+    expect(res.content[0].text).toContain('nodejs');
   });
 });

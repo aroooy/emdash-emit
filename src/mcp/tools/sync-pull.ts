@@ -134,10 +134,13 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
           });
-          const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-          const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
-          const taxHintBlock = taxHint ? `\n\n${taxHint}` : '';
-          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.${taxHintBlock}`;
+          taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
+        }
+
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+        if (taxHint) {
+          taxonomiesMsg += `\n\n${taxHint}`;
         }
 
         // 2. Pull articles

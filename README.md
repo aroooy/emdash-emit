@@ -326,7 +326,7 @@ Markdown body begins here...
    - **Do not** add `# Article Title` as the first heading in the Markdown body. Doing so causes duplicate title displays on the site frontend. (Emit's preflight guard G7 will detect and automatically trim redundant top headings).
 2. **Taxonomy Slugs**:
    - Items under `categories:` and `tags:` must match existing slug names from `categories/` and `tags/`.
-   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit new`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy slugs before pushing.
+   - Never invent arbitrary IDs or invalid names; valid options are automatically displayed during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Preflight Guard G4 strictly validates taxonomy slugs before pushing.
 3. **Status Transitions**:
    - To publish a draft, update `status: published` in the frontmatter and execute `emit push <filePath> --allow-publish`.
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
@@ -798,9 +798,9 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 
 ### Q: Taxonomies not recognized during push
 
-**Cause**: Categories or tags in frontmatter do not exist in the remote database.
+**Cause**: Categories or tags in frontmatter do not exist in local definitions or remote database (or local cache is stale).
 
-**Solution**: Run `emit pull` (taxonomies are synced automatically), or use `emit pull-taxonomies` standalone to refresh your local category and tag list. Ensure frontmatter values match existing slugs.
+**Solution**: Run `emit pull` or `sync_pull` (taxonomies are synced automatically), or use `emit pull-taxonomies` standalone to refresh your local category and tag list. Preflight Guard G4 will guide you with valid options.
 
 ---
 

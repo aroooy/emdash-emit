@@ -163,6 +163,61 @@ describe('Pull & Push Synchronization Engine', () => {
     ).rejects.toThrowError(/Push blocked by Preflight Guards/);
   });
 
+  it('pushArticle canonicalizes term ULIDs to slugs and passes G4 guard for valid taxonomies', async () => {
+    // Pre-create local category 'tech' (id: 01M6CAT1) and tag 'nodejs' (id: 01M6TAG1)
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Tech.yaml'),
+      'id: 01M6CAT1\nname: Tech\nslug: tech\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6TAG1-Nodejs.yaml'),
+      'id: 01M6TAG1\nname: Nodejs\nslug: nodejs\n',
+    );
+
+    // Frontmatter uses ULID for category ('01M6CAT1') and slug for tag ('nodejs')
+    const validFm: Frontmatter = {
+      id: validUlid,
+      slug: 'valid-tax-post',
+      title: 'Valid Taxonomy Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {
+        categories: ['01M6CAT1'], // ULID: will be canonicalized to 'tech'
+        tags: ['nodejs'], // Valid slug
+      },
+      bylines: [],
+    };
+    const validMd = serializeMarkdown(validFm, 'Valid body content');
+    const targetFile = path.join(tempDir, 'posts', 'draft', `${validUlid}-valid-tax-post.md`);
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+    fs.writeFileSync(targetFile, validMd, 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((url, init) => {
+      if (init.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ id: validUlid, _rev: 'rev_v1' }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch call: ${url}`));
+    });
+
+    const res = await pushArticle(targetFile, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.errors).toBeUndefined();
+  });
+
   it('pushArticle acquires lock, sends PUT, and moves file when status changes (Path Tracking)', async () => {
     const draftFm: Frontmatter = {
       id: validUlid,

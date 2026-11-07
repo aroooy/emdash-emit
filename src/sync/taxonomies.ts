@@ -93,97 +93,106 @@ export async function pullTaxonomies(
   };
 
   const [categories, tags] = await Promise.all([
-    fetchTerms('category').catch(() => [] as TaxonomyTerm[]),
-    fetchTerms('tag').catch(() => [] as TaxonomyTerm[]),
+    fetchTerms('category').catch(() => null),
+    fetchTerms('tag').catch(() => null),
   ]);
 
   const categoriesDir = path.join(options.workspaceRoot, 'categories');
   const tagsDir = path.join(options.workspaceRoot, 'tags');
 
-  fs.mkdirSync(categoriesDir, { recursive: true });
-  fs.mkdirSync(tagsDir, { recursive: true });
-
-  // Save categories and prune deleted ones
-  const activeCategoryFileNames = new Set<string>();
-  for (const cat of categories) {
-    const label = cat.label || cat.slug;
-    const sanitized = sanitizeTitleForFilename(label);
-    const fileName = `${cat.id}-${sanitized}.yaml`;
-    activeCategoryFileNames.add(fileName);
-    const filePath = path.join(categoriesDir, fileName);
-
-    const doc = {
-      id: cat.id,
-      name: label,
-      slug: cat.slug,
-      taxonomy: 'category',
-      parentId: cat.parentId || null,
-      count: cat.count ?? 0,
-    };
-    fs.writeFileSync(
-      filePath,
-      yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
-      'utf8',
-    );
-  }
-
-  // Prune local category YAMLs not present on remote
+  let categoriesCount = 0;
   let deletedCategoriesCount = 0;
-  if (fs.existsSync(categoriesDir)) {
-    for (const file of fs.readdirSync(categoriesDir)) {
-      if (file.endsWith('.yaml') && !activeCategoryFileNames.has(file)) {
-        try {
-          fs.unlinkSync(path.join(categoriesDir, file));
-          deletedCategoriesCount++;
-        } catch {
-          // Ignore unlink errors
+
+  // Save categories and prune deleted ones (only if fetch succeeded; preserve on failure)
+  if (categories !== null) {
+    fs.mkdirSync(categoriesDir, { recursive: true });
+    categoriesCount = categories.length;
+    const activeCategoryFileNames = new Set<string>();
+    for (const cat of categories) {
+      const label = cat.label || cat.slug;
+      const sanitized = sanitizeTitleForFilename(label);
+      const fileName = `${cat.id}-${sanitized}.yaml`;
+      activeCategoryFileNames.add(fileName);
+      const filePath = path.join(categoriesDir, fileName);
+
+      const doc = {
+        id: cat.id,
+        name: label,
+        slug: cat.slug,
+        taxonomy: 'category',
+        parentId: cat.parentId || null,
+        count: cat.count ?? 0,
+      };
+      fs.writeFileSync(
+        filePath,
+        yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
+        'utf8',
+      );
+    }
+
+    // Prune local category YAMLs not present on remote
+    if (fs.existsSync(categoriesDir)) {
+      for (const file of fs.readdirSync(categoriesDir)) {
+        if (file.endsWith('.yaml') && !activeCategoryFileNames.has(file)) {
+          try {
+            fs.unlinkSync(path.join(categoriesDir, file));
+            deletedCategoriesCount++;
+          } catch {
+            // Ignore unlink errors
+          }
         }
       }
     }
   }
 
-  // Save tags and prune deleted ones
-  const activeTagFileNames = new Set<string>();
-  for (const tag of tags) {
-    const label = tag.label || tag.slug;
-    const sanitized = sanitizeTitleForFilename(label);
-    const fileName = `${tag.id}-${sanitized}.yaml`;
-    activeTagFileNames.add(fileName);
-    const filePath = path.join(tagsDir, fileName);
-
-    const doc = {
-      id: tag.id,
-      name: label,
-      slug: tag.slug,
-      taxonomy: 'tag',
-      parentId: tag.parentId || null,
-      count: tag.count ?? 0,
-    };
-    fs.writeFileSync(
-      filePath,
-      yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
-      'utf8',
-    );
-  }
-
-  // Prune local tag YAMLs not present on remote
+  let tagsCount = 0;
   let deletedTagsCount = 0;
-  if (fs.existsSync(tagsDir)) {
-    for (const file of fs.readdirSync(tagsDir)) {
-      if (file.endsWith('.yaml') && !activeTagFileNames.has(file)) {
-        try {
-          fs.unlinkSync(path.join(tagsDir, file));
-          deletedTagsCount++;
-        } catch {
-          // Ignore unlink errors
+
+  // Save tags and prune deleted ones (only if fetch succeeded; preserve on failure)
+  if (tags !== null) {
+    fs.mkdirSync(tagsDir, { recursive: true });
+    tagsCount = tags.length;
+    const activeTagFileNames = new Set<string>();
+    for (const tag of tags) {
+      const label = tag.label || tag.slug;
+      const sanitized = sanitizeTitleForFilename(label);
+      const fileName = `${tag.id}-${sanitized}.yaml`;
+      activeTagFileNames.add(fileName);
+      const filePath = path.join(tagsDir, fileName);
+
+      const doc = {
+        id: tag.id,
+        name: label,
+        slug: tag.slug,
+        taxonomy: 'tag',
+        parentId: tag.parentId || null,
+        count: tag.count ?? 0,
+      };
+      fs.writeFileSync(
+        filePath,
+        yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
+        'utf8',
+      );
+    }
+
+    // Prune local tag YAMLs not present on remote
+    if (fs.existsSync(tagsDir)) {
+      for (const file of fs.readdirSync(tagsDir)) {
+        if (file.endsWith('.yaml') && !activeTagFileNames.has(file)) {
+          try {
+            fs.unlinkSync(path.join(tagsDir, file));
+            deletedTagsCount++;
+          } catch {
+            // Ignore unlink errors
+          }
         }
       }
     }
   }
 
   return {
-    categoriesCount: categories.length,
-    tagsCount: tags.length,
+    categoriesCount,
+    tagsCount,
     deletedCategoriesCount,
     deletedTagsCount,
   };
@@ -297,15 +306,29 @@ export function getLocalTaxonomiesSummary(workspaceRoot: string): LocalTaxonomie
   const categoriesDir = path.join(workspaceRoot, 'categories');
   const tagsDir = path.join(workspaceRoot, 'tags');
 
-  const categories = readTaxonomyDir(categoriesDir).sort((a, b) =>
-    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0,
+  const dedupeBySlug = (items: LocalTaxonomyItem[]): LocalTaxonomyItem[] => {
+    const seen = new Set<string>();
+    const result: LocalTaxonomyItem[] = [];
+    for (const item of items) {
+      if (!seen.has(item.slug)) {
+        seen.add(item.slug);
+        result.push(item);
+      }
+    }
+    return result;
+  };
+
+  const categories = dedupeBySlug(
+    readTaxonomyDir(categoriesDir).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)),
   );
   // Sort tags: highest count (usage frequency) first; ties broken by newest ULID (descending)
-  const tags = readTaxonomyDir(tagsDir).sort((a, b) => {
-    const countDiff = (b.count ?? 0) - (a.count ?? 0);
-    if (countDiff !== 0) return countDiff;
-    return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
-  });
+  const tags = dedupeBySlug(
+    readTaxonomyDir(tagsDir).sort((a, b) => {
+      const countDiff = (b.count ?? 0) - (a.count ?? 0);
+      if (countDiff !== 0) return countDiff;
+      return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+    }),
+  );
 
   return { categories, tags };
 }

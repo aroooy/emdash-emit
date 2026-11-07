@@ -100,10 +100,12 @@ export function runPreflightChecks(
       if (allowed && Array.isArray(terms)) {
         for (const term of terms) {
           if (!allowed.includes(term)) {
+            const allowedPreview = allowed.slice(0, 20).join(', ');
+            const moreSuffix = allowed.length > 20 ? ' ...' : '';
             errors.push({
               code: 'INVALID_TAXONOMY_ERROR',
               message: `Unknown ${taxName} term: '${term}'.`,
-              suggestion: `Use one of the allowed ${taxName}: [${allowed.join(', ')}], or create it via official MCP first.`,
+              suggestion: `Use one of the allowed ${taxName}: [${allowedPreview}${moreSuffix}], run sync_pull_taxonomies to refresh, or create it via official MCP first.`,
             });
           }
         }

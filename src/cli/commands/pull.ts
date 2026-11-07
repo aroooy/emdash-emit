@@ -81,11 +81,12 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             console.log(
               `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
             );
-            const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-            const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
-            if (taxHint) {
-              console.log(`\n${taxHint}\n`);
-            }
+          }
+
+          const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+          const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+          if (taxHint) {
+            console.log(`\n${taxHint}\n`);
           }
 
           // 2. Pull articles (batch)
