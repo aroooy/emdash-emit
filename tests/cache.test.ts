@@ -166,4 +166,50 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     cache.deleteMediaState(localHash);
     expect(cache.getMediaState(localHash)).toBeNull();
   });
+
+  it('keeps workspace_path when a later media_state upsert omits it (R-5)', () => {
+    const localHash = 'b'.repeat(64);
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
+      status: 'ready',
+      uploadedAt: 1730550310,
+    });
+
+    // A subsequent upsert (e.g. a deduplicated upload) provides no promoted path:
+    // the previously promoted location must survive so findAlreadyPromotedMedia()
+    // can still resolve the asset from media_state.
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      status: 'uploaded',
+      uploadedAt: 1730550400,
+    });
+
+    const row = cache.getMediaState(localHash);
+    expect(row?.status).toBe('uploaded');
+    expect(row?.workspacePath).toBe('media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png');
+
+    // An explicit null does not wipe the promoted path either (COALESCE semantics):
+    // clearing a media_state row is always done via deleteMediaState(), never via upsert.
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      workspacePath: null,
+      status: 'uploaded',
+    });
+    expect(cache.getMediaState(localHash)?.workspacePath).toBe(
+      'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
+    );
+
+    cache.deleteMediaState(localHash);
+    expect(cache.getMediaState(localHash)).toBeNull();
+  });
 });

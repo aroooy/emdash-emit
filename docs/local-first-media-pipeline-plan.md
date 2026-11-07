@@ -170,8 +170,7 @@ https://aroooy.net/_emdash/api/media/file/  : 0 件
 EmDash 公式（Storage Options）: *the admin, the REST API, and URLs stored in content keep
 the `/_emdash/api/media/file/` route.*
 
-ただし現行 `src/sync/media.ts` は YAML へ絶対 URL を書き込む（`new URL(item.url, origin)`）。
-本文（ルート相対）と `media/*.yaml`（絶対 URL）は**別表現**であり、混同しないこと。
+伴侶 YAML（`media/*.yaml`）の `url` フィールドおよび `media_state.url` も、プロファイル切り替えや独自ドメイン移行で失効しないよう、本文と同じ **ルート相対 `/_emdash/api/media/file/<storageKey>`** に統一する（`pullMedia` ダウンロード時のみ `new URL(canonicalDownloadPath, origin)` で解決）。
 
 ---
 
@@ -297,6 +296,11 @@ CREATE TABLE IF NOT EXISTS media_state (
 変更が必須（現行 YAML は `id, filename, mimeType, size, width, height, alt, caption, url, createdAt`
 のみで、これらを破棄している）。これが無いと「同一画像の再アップロード防止」が成立しない。
 
+`saveMediaState()` の upsert は `ON CONFLICT(local_hash) DO UPDATE` を使い、`workspace_path` は
+`COALESCE(excluded.workspace_path, media_state.workspace_path)` で更新する（R-5）。
+すなわち **昇格済みパスは upsert では決して消えない**（dedup 検知時の再 upsert がパスを持たない場合でも保持）。
+パスやレコードの除去は `deleteMediaState(local_hash)` でのみ行う（リモート 404 検知時の stale purge もこれを用いる）。
+
 ---
 
 ## 4. 補償トランザクション（サーバー側の不可逆操作に対する安全原則）
@@ -307,24 +311,29 @@ CREATE TABLE IF NOT EXISTS media_state (
 ### 4.1 失敗経路と処理
 
 ```text
-Phase A 失敗                     → 作成済み資源なし。記事 PUT しない。ローカル無変更。
+記事排他ロック（withEntryLock）取得失敗 → 画像アップロード（P2/P3）より前にロックを取得するため、メディア資源は一切作成されず安全に中断（B-3）
+Phase A 失敗                             → 作成済み資源なし。記事 PUT しない。ローカル無変更。
 Phase A 成功（mediaId 確保）以降の全失敗経路:
   1. GET /_emdash/api/media/{mediaId} で status を読む
-  2. status が pending / failed  → DELETE /_emdash/api/media/{mediaId}
-  3. DELETE 失敗               → media_state に status='failed' + mediaId を保持し、
-                                 CLI 出力で手動対応（admin 削除）を提示
-  4. status が ready（アップロードは成功していた）→ §4.2 の窓処理
+  2. status が pending / failed          → DELETE /_emdash/api/media/{mediaId}
+  3. DELETE 失敗                         → media_state に status='failed' + mediaId を保持し、
+                                           CLI 出力で手動対応（admin 削除）を提示
+  4. status が ready（アップロード成功後、記事 PUT 失敗または 3-Way Merge 競合中断）→ §4.2 の窓処理
+  5. 記事 PUT 成功後のローカル昇格（P6）失敗 → try/catch で捕捉し warnings に降格（C-2）。
+                                           記事の saveBaseSnapshot / saveSyncState は必ず完遂し、
+                                           media_state は status='uploaded' を維持
 ```
 
-### 4.2 「アップロード成功 → 記事 PUT 失敗」の窓
+### 4.2 「アップロード成功 → 記事 PUT 失敗 / 3-Way Merge 競合中断」の窓
 
 ```text
-状態: media は ready、本文は P4 でリモート URL へ置換済み（P4 済み / P5 失敗）
+状態: media は ready、本文は P4 でリモート URL へ置換済み（P4 済み / P5 失敗または競合中断）
 処理: media_state に status='uploaded' + local_hash → mediaId / storage_key / url を保持
-      Markdown は P4 の置換結果をそのまま保持（破棄しない）
-      次 push: 本文が既にリモート URL の場合はアップロード不要で記事 PUT のみ実行。
-               万一ユーザーが Markdown を draft path に戻した場合も local_hash が media_state に存在するため、
-               再アップロードせず Phase B/C をスキップし、本文 URL 再構築 → 記事 PUT のみ実行
+      3-Way Merge 競合中断時は競合マーカー付き Markdown 内に置換済み URL が保存され、
+      次 push 時は GET /_emdash/api/media/{mediaId} でリモート存在性（status=='ready'）を 1 回検証した上で（B-4）、
+      再アップロードせず記事 PUT のみ実行する。
+      また、1 記事目で昇格済みの draft 画像を 2 記事目が同じ media/drafts/<name> パスで参照した場合は、
+      media_state / media/*.yaml から昇格済みレコードを解決して再利用する（P1）。
 ```
 
 ### 4.3 ロールバック順序
@@ -337,6 +346,22 @@ Phase A 成功（mediaId 確保）以降の全失敗経路:
 - 昇格（P6）は記事 PUT/POST（P5）成功後に行う。P5 失敗時は `media/drafts/` に画像が残る。
   → 「画像が無いのに本文が指す」状態も「本文が指さないのに画像が消える」状態も発生しない。
 - **ローカル画像を絶対に削除しない**。昇格は move であり、失敗時は原位置に残す。
+
+### 4.4 昇格済み資産の再利用とリモート存在性検証（R-1 / R-2）
+
+```text
+再利用経路（P1 の記事横断再利用、および media_state 短絡 B-4）は必ず GET /_emdash/api/media/{mediaId} を 1 回通す
+  exists: true    → 検証済み。remote が返す storageKey / url があればそれを優先して本文に焼き付ける
+  exists: false   → PROMOTED_MEDIA_NOT_FOUND_REMOTE で push を中止し、stale な media_state を purge
+                    （無断で再アップロードしない。admin 側で復元 → emit pull-media、
+                     もしくは media/drafts/ へ再配置して再 push するのが復旧手順）
+  exists: unknown → 再利用は継続するが [MEDIA_EXISTENCE_UNVERIFIED] を warnings に出力
+                    （GET 非実装 / 5xx のサーバーでは存在性検証が働かないことをユーザーに明示）
+```
+
+**昇格ファイル名の暫定性（R-4）**: 通常アップロードの confirm 応答に `createdAt` が含まれない場合、Emit はローカル日時で `media/<yyyyMMdd>_<mediaId>-<name>` に昇格する。以降の push で dedup 検知時に GET が実 `createdAt` を取得すれば canonical 名へ寄せられ、`emit pull-media` が remote の `createdAt` を権威として最終 canonical 化し、`cleanupDuplicateMediaFilesForId` が同一 mediaId の日付違い重複を掃除する。これは自己修復的な rename でありデータ消失ではなく、掃除対象は `mediaId` 厳密一致のファイルのみで `media/drafts/` には一切触れない。
+
+
 
 ---
 

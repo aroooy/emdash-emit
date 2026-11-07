@@ -378,7 +378,8 @@ You can author articles completely offline using local images and let `emit push
    - Uploads the image via EmDash's 4-stage flow (`POST /_emdash/api/media/upload-url` with `sha1:<hex>` deduplication → `PUT` upload → `POST /_emdash/api/media/{id}/confirm`), cleaning up any orphan `pending` record if an upload fails midway.
    - Rewrites the Markdown line in place to the canonical root-relative `/_emdash/api/media/file/<storageKey>` URL.
    - Pushes the article to EmDash.
-   - Promotes the local file from `media/drafts/<filename>` to `media/<yyyyMMdd>_<mediaId>-<filename>` alongside a companion `.yaml` metadata file (`storageKey`, `contentHash`, `status`).
+   - Promotes the local file from `media/drafts/<filename>` to `media/<yyyyMMdd>_<mediaId>-<filename>` alongside a companion `.yaml` metadata file (`storageKey`, `contentHash`, `status`). The `<yyyyMMdd>` prefix reflects the media record's remote `createdAt` when available; if Emit only had a provisional local date, the next `emit pull-media` canonicalizes the filename.
+4. **Reuse Across Articles (no re-upload):** The same `media/drafts/<filename>` line can be used in several articles. After the first push promotes the asset, every later push resolves that reference through `media_state` / `media/*.yaml` and rewrites it to the already-confirmed `/_emdash/api/media/file/<storageKey>` URL instead of uploading again (reported as `[LOCAL_IMAGE_AUTO_UPLOAD] Reused N already-promoted media asset(s)`). A direct reference to the promoted path works as well. Emit verifies each reused record with `GET /_emdash/api/media/{id}`: if the record was deleted on the EmDash side the push aborts with `PROMOTED_MEDIA_NOT_FOUND_REMOTE` (run `emit pull-media` or re-stage the image in `media/drafts/`), and servers without that endpoint push successfully but warn with `[MEDIA_EXISTENCE_UNVERIFIED]`.
 
 #### Workflow B: Pre-Uploaded Media & Featured Hero Images
 
@@ -390,8 +391,10 @@ You can author articles completely offline using local images and let `emit push
 
 > [!WARNING]
 > **Local Image Guardrails (G5 & G11)**:
-> - Arbitrary local paths outside `media/drafts/` (e.g. `![pic](./my-image.png)`) are blocked by Preflight Guard **G5 (`LOCAL_IMAGE_DETECTED`)**.
+> - Arbitrary local paths (e.g. `![pic](./my-image.png)`, absolute filesystem paths, or a `media/` path that does not resolve to a promoted media record) are blocked by Preflight Guard **G5 (`LOCAL_IMAGE_DETECTED`)**. Paths under `media/drafts/` and already-promoted `media/<yyyyMMdd>_<id>-<name>.<ext>` paths are the only accepted local forms.
 > - Local images placed inline inside a paragraph (e.g. `Text ![pic](../../media/drafts/a.png) more text`) are blocked with `INLINE_LOCAL_IMAGE_NOT_SUPPORTED` because EmDash Portable Text requires images to be standalone top-level blocks.
+> - A `media/drafts/` reference whose file no longer exists and which has no promoted match is blocked with `MISSING_LOCAL_IMAGE_FILE` (the promoted location is reported in the error).
+> - Only **backtick** fences (```` ``` ````) are exempt from image scanning. Tilde fences (`~~~`) are not recognized as code by the Portable Text mapper, so they are scanned like normal prose (and emit a `G8` warning because they degrade to plain paragraphs). Write code examples with backticks.
 
 ---
 
@@ -432,13 +435,13 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G2** | `ID_MISMATCH_ERROR` | Verifies that frontmatter `id` exactly matches the filename ULID; forbids manual `mv` renames | Error |
 | **G3** | `UNINTENDED_PUBLISH_GUARD` | Rejects promoting `draft` to `published` unless `--allow-publish` (`allowPublish: true`) is explicitly given | Error |
 | **G4** | `INVALID_TAXONOMY_ERROR` | Validates taxonomy terms against local definitions (transparently resolves valid term ULIDs) to stop AI taxonomy hallucination | Error |
-| **G5** | `LOCAL_IMAGE_DETECTED` / `INLINE_LOCAL_IMAGE_NOT_SUPPORTED` | Rejects arbitrary local image paths outside `media/drafts/` and rejects inline paragraph local images (must be a standalone line in `media/drafts/`) | Error |
+| **G5** | `LOCAL_IMAGE_DETECTED` / `INLINE_LOCAL_IMAGE_NOT_SUPPORTED` / `MISSING_LOCAL_IMAGE_FILE` | Rejects local image paths other than `media/drafts/<file>` (or an already-promoted `media/<yyyyMMdd>_<id>-<name>.<ext>` asset) and rejects inline paragraph local images (must be a standalone line) | Error |
 | **G6** | `UNRESOLVED_CONFLICT_MARKERS` | Scans for Git 3-way merge conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) and blocks push | Error |
 | **G7** | `TITLE_DUPLICATION_AUTOTRIM` | Detects redundant `# Title` headings at the top of the body and automatically trims them safely | Warning |
 | **G8** | `UNSUPPORTED_SYNTAX_WARNING` | Warns if unsupported block HTML or incompatible constructs are detected in Markdown | Warning |
 | **G9** | `MODIFIED_OPAQUE_BLOCK` | Verifies that `<!--ec:block ... -->` opaque fences have not been tampered with or corrupted | Error |
 | **G10** | `INVALID_FEATURED_IMAGE` | Verifies that `featuredImage` is a 26-character canonical media ULID (normalized to uppercase) or `null`. A remote media URL that contains a ULID is resolved with a warning; local file paths and malformed values are rejected | Error |
-| **G11** | `LOCAL_IMAGE_AUTO_UPLOAD` | Detects standalone `media/drafts/<file>` image lines, validates file existence, extension, and size (≤ 50 MiB), and queues them for automatic upload, URL rewrite, and `media/` promotion during `push` | Info / Error |
+| **G11** | `LOCAL_IMAGE_AUTO_UPLOAD` (`MISSING_LOCAL_IMAGE_FILE` / `INVALID_LOCAL_IMAGE_TYPE` / `LOCAL_IMAGE_SIZE_EXCEEDED` / `PROMOTED_MEDIA_NOT_FOUND_REMOTE` / `[MEDIA_EXISTENCE_UNVERIFIED]`) | Detects standalone `media/drafts/<file>` image lines (or reuses an already-promoted `media/` asset across articles), validates file existence, extension, and size (≤ 50 MiB), queues them for automatic upload, URL rewrite, and `media/` promotion during `push`, and verifies every reused asset against `GET /_emdash/api/media/{id}` before its URL is baked into the body | Info / Warning / Error |
 
 ---
 

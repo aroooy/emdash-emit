@@ -427,7 +427,7 @@ export class CacheDatabase {
         media_id = excluded.media_id,
         storage_key = excluded.storage_key,
         url = excluded.url,
-        workspace_path = excluded.workspace_path,
+        workspace_path = COALESCE(excluded.workspace_path, media_state.workspace_path),
         status = excluded.status,
         uploaded_at = excluded.uploaded_at
     `);

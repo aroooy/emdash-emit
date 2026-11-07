@@ -496,10 +496,119 @@ export function convertDataForWrite(
 // ---------------------------------------------------------------------------
 
 /**
- * Strips code fences (```...```) from markdown to prevent false positives in regex checks.
+ * Fence marker parsed from a Markdown line: at most 3 leading spaces of indentation
+ * followed by a run of 3 or more backticks.
+ *
+ * Tilde fences are deliberately NOT recognized. EmDash's Portable Text mapper
+ * (`markdownToPortableText`) only treats backtick fences as code blocks, and the guard
+ * exemption scope must stay a subset of what the mapper actually treats as code: if a
+ * `~~~` block were exempted here, an `![alt](media/drafts/x.png)` line inside it would
+ * skip validation and still be converted into a real image block, pushing a broken
+ * local path to the remote AST. A tilde-fenced body is therefore reported by G5 / G11
+ * exactly like any other paragraph.
+ */
+interface FenceMarker {
+  char: string;
+  length: number;
+}
+
+/**
+ * Sentinel substituted for fenced code block content when a body is prepared for
+ * regex-based inspection (G5 / G8 / G11). Chosen so that it can never match an image
+ * or Markdown syntax pattern, and so that a fenced block collapses to a single line.
+ */
+const CODE_BLOCK_SCAN_PLACEHOLDER = '\u0000__EMIT_CODE_BLOCK__\u0000';
+
+function parseFenceMarker(line: string): FenceMarker | null {
+  const match = line.match(/^(`{3,})/);
+  if (!match) return null;
+  return { char: '`', length: match[1].length };
+}
+
+/**
+ * A closing fence must use backticks, be at least as long as the opening fence, and
+ * carry no info string. Fences written with a longer run therefore cannot be closed by
+ * a shorter one, and a longer opening fence that is never closed keeps the remainder of
+ * the body fenced instead of leaking a violation from inside it.
+ */
+function closingFenceMatches(line: string, fence: FenceMarker): boolean {
+  const fenceRun = (line.match(/^`+/) ?? [''])[0]!;
+  if (fenceRun.length < fence.length) return false;
+  return line.slice(fenceRun.length).trim() === '';
+}
+
+export interface CodeFenceState {
+  /** The line is a code fence delimiter (opening or closing) line. */
+  isFenceDelimiter: boolean;
+  /** The line is body content located inside an open code fence. */
+  insideCodeFence: boolean;
+}
+
+/**
+ * Classifies every line of a Markdown body with respect to backtick code fences.
+ *
+ * Fences of any length are recognized and matched against a closing fence of equal or
+ * greater length, so a body that documents Markdown syntax itself (a ```` ```md ````
+ * block quoting `![alt](path)` examples) is never inspected as real markup. Lines that
+ * merely *contain* three backticks are not delimiters, and an unterminated fence keeps
+ * the rest of the body fenced.
+ */
+export function classifyCodeFenceLines(body: string): CodeFenceState[] {
+  const lines = body.split('\n');
+  const states: CodeFenceState[] = [];
+  let openFence: FenceMarker | null = null;
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.replace(/\r$/, '').trim();
+
+    if (openFence) {
+      if (closingFenceMatches(trimmed, openFence)) {
+        states.push({ isFenceDelimiter: true, insideCodeFence: false });
+        openFence = null;
+      } else {
+        states.push({ isFenceDelimiter: false, insideCodeFence: true });
+      }
+      continue;
+    }
+
+    const marker = parseFenceMarker(trimmed);
+    if (marker) {
+      states.push({ isFenceDelimiter: true, insideCodeFence: false });
+      openFence = marker;
+      continue;
+    }
+
+    states.push({ isFenceDelimiter: false, insideCodeFence: false });
+  }
+
+  return states;
+}
+
+/**
+ * Removes fenced code block content from a Markdown body so that regex-based guards
+ * (image paths, unsupported syntax, draft images) never inspect quoted Markdown or HTML.
+ * Fence delimiters and their content collapse into a single sentinel line.
+ *
+ * Note: this function is for *inspection* only. It is never used to produce stored or
+ * pushed Markdown, which keeps fenced content intact.
  */
 export function stripCodeBlocks(markdown: string): string {
-  return markdown.replace(/```[\s\S]*?```/g, '');
+  const lines = markdown.split('\n');
+  const states = classifyCodeFenceLines(markdown);
+  const output: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const state = states[i]!;
+    if (state.isFenceDelimiter || state.insideCodeFence) {
+      if (output[output.length - 1] !== CODE_BLOCK_SCAN_PLACEHOLDER) {
+        output.push(CODE_BLOCK_SCAN_PLACEHOLDER);
+      }
+      continue;
+    }
+    output.push(lines[i]!);
+  }
+
+  return output.join('\n');
 }
 
 /**
@@ -521,6 +630,15 @@ export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
   if (/<(?:div|section|article|table|form|iframe|script)[\s>]/i.test(cleaned)) {
     warnings.push(
       'Raw HTML block tags are not supported and will be treated as plain text paragraphs.',
+    );
+  }
+
+  // Tilde code fences: the line-based mapper only recognizes backtick fences as code blocks,
+  // so a ~~~ block degrades to plain paragraphs and any image line inside it becomes a real
+  // image block. Warn instead of letting that happen silently.
+  if (/^ {0,3}~~~/m.test(cleaned)) {
+    warnings.push(
+      'Tilde code fences (~~~) are not recognized as code blocks by the line-based parser and will degrade to plain text paragraphs; any image line inside them is converted into a real image block. Use backtick fences (```) for code examples.',
     );
   }
 

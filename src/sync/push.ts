@@ -34,6 +34,7 @@ import {
 import { ApiError } from '../client/error.js';
 import { createAuthedFetch } from '../client/http.js';
 import { unwrapItem, extractRev } from '../client/api.js';
+import { classifyCodeFenceLines } from '../client/portable-text.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
@@ -47,7 +48,13 @@ import { runPreflightChecks, type DraftImageReference, type PreflightError } fro
 import { calculateHash } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
-import { uploadMediaFile, type UploadMediaResult } from '../client/media.js';
+import {
+  fetchRemoteMediaDetail,
+  resolveImageMimeType,
+  toRootRelativeMediaUrl,
+  uploadMediaFile,
+  type UploadMediaResult,
+} from '../client/media.js';
 import { promoteDraftMediaFile } from './media.js';
 
 export interface PushOptions extends MapperOptions {
@@ -258,20 +265,24 @@ function rewriteDraftImagesInBody(
   }
 
   const lines = body.split('\n');
-  let inCodeFence = false;
+  // Same CommonMark-aware fence walker that G5 / G11 use, so a line can never be
+  // rewritten here while being skipped there (or vice versa).
+  const fenceStates = classifyCodeFenceLines(body);
   const standaloneRegex = /^!\[([^\]]*)\]\(([^)]+)\)$/;
 
   return lines
-    .map((line) => {
+    .map((line, index) => {
+      const state = fenceStates[index]!;
+      if (state.isFenceDelimiter || state.insideCodeFence) {
+        return line;
+      }
+
       const hasCr = line.endsWith('\r');
       const cleanLine = hasCr ? line.slice(0, -1) : line;
       const trimmed = cleanLine.trim();
 
-      if (trimmed.startsWith('```')) {
-        inCodeFence = !inCodeFence;
-        return line;
-      }
-      if (inCodeFence || /^<!--ec:block .+ -->$/.test(trimmed)) {
+      // Opaque EmDash block fences are managed by G9 and must stay untouched
+      if (/^<!--ec:block .+ -->$/.test(trimmed)) {
         return line;
       }
 
@@ -293,53 +304,192 @@ function rewriteDraftImagesInBody(
  * Promotes uploaded draft images from `media/drafts/<filename>` into
  * `media/<yyyyMMdd>_<mediaId>-<name>.<ext>` along with companion `.yaml` metadata,
  * and commits `status = 'ready'` in `media_state`.
+ *
+ * Protected by try/catch per asset (C-2) so that any local filesystem failure
+ * after a successful remote article PUT/POST is downgraded to a warning rather than
+ * aborting `saveBaseSnapshot` / `saveSyncState`.
  */
 function finalizePromotedDraftImages(
   draftImages: DraftImageReference[],
   uploadedByAbsPath: Map<string, UploadMediaResult>,
   options: PushOptions,
+  warnings: string[],
 ): void {
   if (draftImages.length === 0) return;
 
   const processedAbsPaths = new Set<string>();
+  const promotedRelPaths: string[] = [];
+  const reusedRelPaths: string[] = [];
+  const unverifiedAssets: string[] = [];
+
   for (const ref of draftImages) {
     if (processedAbsPaths.has(ref.resolvedAbsPath)) continue;
     processedAbsPaths.add(ref.resolvedAbsPath);
 
     const uploaded = uploadedByAbsPath.get(ref.resolvedAbsPath);
+
+    if (ref.alreadyPromoted) {
+      reusedRelPaths.push(ref.alreadyPromoted.promotedRelPath);
+      if (uploaded?.remoteVerification === 'unknown') {
+        unverifiedAssets.push(
+          `${ref.alreadyPromoted.promotedRelPath} (${ref.alreadyPromoted.mediaId})${
+            uploaded.remoteVerificationNote ? `: ${uploaded.remoteVerificationNote}` : ''
+          }`,
+        );
+      }
+      continue;
+    }
+
     if (!uploaded) continue;
 
-    const promotedRelPath = promoteDraftMediaFile({
-      workspaceRoot: options.workspaceRoot,
-      origin: options.origin,
-      draftAbsPath: ref.resolvedAbsPath,
-      item: {
-        id: uploaded.mediaId,
-        filename: uploaded.filename,
-        mimeType: uploaded.mimeType,
-        size: uploaded.size,
-        width: uploaded.width ?? null,
-        height: uploaded.height ?? null,
-        alt: ref.alt || '',
-        caption: '',
-        storageKey: uploaded.storageKey,
-        contentHash: uploaded.contentHash,
-        status: 'ready',
-        url: uploaded.url,
-        createdAt: uploaded.createdAt || new Date().toISOString(),
-      },
-      removeDraft: true,
-    });
+    if (uploaded.remoteVerification === 'unknown') {
+      unverifiedAssets.push(
+        `${uploaded.filename} (${uploaded.mediaId})${
+          uploaded.remoteVerificationNote ? `: ${uploaded.remoteVerificationNote}` : ''
+        }`,
+      );
+    }
 
-    options.cache.saveMediaState({
-      localHash: uploaded.localHash,
-      mediaId: uploaded.mediaId,
-      storageKey: uploaded.storageKey,
-      url: uploaded.url,
-      workspacePath: promotedRelPath,
-      status: 'ready',
-    });
+    try {
+      const promotedRelPath = promoteDraftMediaFile({
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        draftAbsPath: ref.resolvedAbsPath,
+        item: {
+          id: uploaded.mediaId,
+          filename: uploaded.filename,
+          mimeType: uploaded.mimeType,
+          size: uploaded.size,
+          width: uploaded.width ?? null,
+          height: uploaded.height ?? null,
+          alt: ref.alt || '',
+          caption: '',
+          storageKey: uploaded.storageKey,
+          contentHash: uploaded.contentHash,
+          status: 'ready',
+          url: uploaded.url,
+          createdAt: uploaded.createdAt || new Date().toISOString(),
+        },
+        removeDraft: true,
+      });
+
+      options.cache.saveMediaState({
+        localHash: uploaded.localHash,
+        mediaId: uploaded.mediaId,
+        storageKey: uploaded.storageKey,
+        url: uploaded.url,
+        workspacePath: promotedRelPath,
+        status: 'ready',
+      });
+      promotedRelPaths.push(promotedRelPath);
+    } catch (err: unknown) {
+      // Keep status='uploaded' in media_state so subsequent runs know the remote upload succeeded
+      warnings.push(
+        `[LOCAL_IMAGE_AUTO_UPLOAD] Uploaded '${ref.filename}' (${uploaded.mediaId}) to remote, but failed to promote local file to media/: ${(err as Error).message}`,
+      );
+    }
   }
+
+  if (promotedRelPaths.length > 0) {
+    warnings.push(
+      `[LOCAL_IMAGE_AUTO_UPLOAD] Auto-uploaded ${promotedRelPaths.length} draft image(s) and promoted to: ${promotedRelPaths.join(', ')}`,
+    );
+  }
+  if (reusedRelPaths.length > 0) {
+    warnings.push(
+      `[LOCAL_IMAGE_AUTO_UPLOAD] Reused ${reusedRelPaths.length} already-promoted media asset(s): ${reusedRelPaths.join(', ')}`,
+    );
+  }
+  if (unverifiedAssets.length > 0) {
+    warnings.push(
+      `[MEDIA_EXISTENCE_UNVERIFIED] The remote server did not confirm these reused media records (GET /_emdash/api/media/{id} unsupported or failed): ${unverifiedAssets.join(', ')}. The cached /_emdash/api/media/file/<storageKey> URL was reused as-is; run "emit pull-media" to re-verify or re-upload if the images 404.`,
+    );
+  }
+}
+
+/**
+ * Executes P2–P4 (upload/resolve draft images and rewrite Markdown body in-memory).
+ * Already-promoted assets are verified against the remote before their canonical URL is
+ * baked into the body, so a media record deleted on the EmDash side can never produce an
+ * article that renders HTTP 404 images in production.
+ */
+async function uploadAndRewriteDraftImages(
+  body: string,
+  draftImages: DraftImageReference[],
+  options: PushOptions,
+  fetchFn: typeof fetch,
+): Promise<{ body: string; uploadedByAbsPath: Map<string, UploadMediaResult> }> {
+  const uploadedByAbsPath = new Map<string, UploadMediaResult>();
+  if (draftImages.length === 0) {
+    return { body, uploadedByAbsPath };
+  }
+
+  for (const draftRef of draftImages) {
+    if (uploadedByAbsPath.has(draftRef.resolvedAbsPath)) {
+      continue;
+    }
+
+    if (draftRef.alreadyPromoted) {
+      const promoted = draftRef.alreadyPromoted;
+      const remoteCheck = await fetchRemoteMediaDetail(promoted.mediaId, {
+        origin: options.origin,
+        token: options.token,
+        fetchFn,
+      });
+
+      if (remoteCheck.exists === false) {
+        // Purge the stale local record so the next run does not keep reusing a dead URL
+        const staleState = options.cache.getMediaStateByMediaId(promoted.mediaId);
+        if (staleState) {
+          options.cache.deleteMediaState(staleState.localHash);
+        }
+        throw new ApiError({
+          message: `Image '${draftRef.filename}' was already promoted to '${promoted.promotedRelPath}' (media id ${promoted.mediaId}), but that media record no longer exists on remote.`,
+          code: 'PROMOTED_MEDIA_NOT_FOUND_REMOTE',
+          status: 404,
+          endpoint: `/_emdash/api/media/${promoted.mediaId}`,
+          suggestion:
+            'Restore the media on the EmDash side (then run "emit pull-media"), or place the image back under media/drafts/ and push again so Emit uploads a fresh record.',
+        });
+      }
+
+      const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+      const promotedStorageKey = detail?.storageKey || promoted.storageKey;
+      uploadedByAbsPath.set(draftRef.resolvedAbsPath, {
+        mediaId: promoted.mediaId,
+        storageKey: promotedStorageKey,
+        url: toRootRelativeMediaUrl(
+          detail?.url || promoted.url,
+          promotedStorageKey,
+          options.origin,
+        ),
+        localHash: '',
+        contentHash: '',
+        size: 0,
+        mimeType: resolveImageMimeType(draftRef.filename) || 'image/png',
+        filename: draftRef.filename,
+        deduplicated: true,
+        remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+        remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
+      });
+      continue;
+    }
+
+    const uploadRes = await uploadMediaFile({
+      filePath: draftRef.resolvedAbsPath,
+      filename: draftRef.filename,
+      alt: draftRef.alt || undefined,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      cache: options.cache,
+      fetchFn: options.fetchFn,
+    });
+    uploadedByAbsPath.set(draftRef.resolvedAbsPath, uploadRes);
+  }
+
+  const rewrittenBody = rewriteDraftImagesInBody(body, draftImages, uploadedByAbsPath);
+  return { body: rewrittenBody, uploadedByAbsPath };
 }
 
 /**
@@ -417,6 +567,7 @@ export async function pushArticle(
     baseMarkdown: baseSnapshot?.bodyMarkdown,
     previousStatus: (syncState?.status as 'draft' | 'published') || 'draft',
     workspaceRoot: options.workspaceRoot,
+    cache: options.cache,
   });
 
   if (!preflight.valid) {
@@ -431,30 +582,6 @@ export async function pushArticle(
 
   const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
   const warnings = [...preflight.warnings];
-
-  // [P2 & P3] Upload and confirm any standalone local draft images (`media/drafts/*`)
-  const uploadedByAbsPath = new Map<string, UploadMediaResult>();
-  if (preflight.draftImages.length > 0) {
-    for (const draftRef of preflight.draftImages) {
-      if (uploadedByAbsPath.has(draftRef.resolvedAbsPath)) {
-        continue;
-      }
-      const uploadRes = await uploadMediaFile({
-        filePath: draftRef.resolvedAbsPath,
-        filename: draftRef.filename,
-        alt: draftRef.alt || undefined,
-        origin: options.origin,
-        token: options.token,
-        refreshToken: options.refreshToken,
-        cache: options.cache,
-        fetchFn: options.fetchFn,
-      });
-      uploadedByAbsPath.set(draftRef.resolvedAbsPath, uploadRes);
-    }
-
-    // [P4] Rewrite Markdown body in-memory with confirmed root-relative URLs
-    parsed.body = rewriteDraftImagesInBody(parsed.body, preflight.draftImages, uploadedByAbsPath);
-  }
 
   // Load local bylines map for converting frontmatter byline slugs to ULIDs
   let bylineSlugToId = options.bylineSlugToId;
@@ -531,6 +658,15 @@ export async function pushArticle(
   };
 
   if (isNewArticle) {
+    // [P2-P4] Upload/resolve standalone draft images and rewrite body
+    const { body: rewrittenBody, uploadedByAbsPath } = await uploadAndRewriteDraftImages(
+      parsed.body,
+      preflight.draftImages,
+      options,
+      fetchFn,
+    );
+    parsed.body = rewrittenBody;
+
     let payload = localToApiPayload(parsed, '', effectiveOptions);
     warnings.push(
       ...preserveOrResolveFeaturedImage(
@@ -624,7 +760,7 @@ export async function pushArticle(
     }
 
     // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
-    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options);
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
     // Update Base snapshot and Sync state
     options.cache.saveBaseSnapshot({
@@ -656,8 +792,17 @@ export async function pushArticle(
     };
   }
 
-  // Existing article: execute within full 7-minute entry lock lease
+  // Existing article: execute within full 7-minute entry lock lease (B-3: acquire lock BEFORE uploading media)
   return await withEntryLock(collection, id, options, async () => {
+    // [P2-P4] Upload/resolve standalone draft images and rewrite body after entry lock is acquired
+    const { body: rewrittenBody, uploadedByAbsPath } = await uploadAndRewriteDraftImages(
+      parsed.body,
+      preflight.draftImages,
+      options,
+      fetchFn,
+    );
+    parsed.body = rewrittenBody;
+
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
     warnings.push(
       ...preserveOrResolveFeaturedImage(
@@ -895,7 +1040,7 @@ export async function pushArticle(
     }
 
     // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
-    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options);
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
     // Update Base snapshot
     options.cache.saveBaseSnapshot({

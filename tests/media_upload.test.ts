@@ -244,7 +244,7 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(res.url).toBe(confirmedUrl);
   });
 
-  it('short-circuits Phase B and C when upload-url returns existing: true (Response B)', async () => {
+  it('short-circuits Phase B and C when upload-url returns existing: true (Response B) and fetches authoritative createdAt via GET (B-1)', async () => {
     const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       const method = (init?.method || 'GET').toUpperCase();
@@ -257,6 +257,28 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
               mediaId,
               storageKey: confirmedStorageKey,
               url: confirmedUrl,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'GET' && url.endsWith(`/_emdash/api/media/${mediaId}`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaId,
+                filename: 'original-hero.png',
+                mimeType: 'image/png',
+                size: 70,
+                width: 1,
+                height: 1,
+                storageKey: confirmedStorageKey,
+                contentHash: 'sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be',
+                status: 'ready',
+                createdAt: '2020-03-04T21:40:00.000Z',
+              },
             },
           }),
           { status: 200 },
@@ -278,7 +300,84 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(res.mediaId).toBe(mediaId);
     expect(res.storageKey).toBe(confirmedStorageKey);
     expect(res.url).toBe(confirmedUrl);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(res.createdAt).toBe('2020-03-04T21:40:00.000Z');
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-uploads when local media_state references a mediaId that was deleted on remote (GET returns 404, B-4)', async () => {
+    const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
+    const staleMediaId = '01M6DELETED000000000000000';
+    cache.saveMediaState({
+      localHash,
+      mediaId: staleMediaId,
+      storageKey: '01M6DELETED000000000000000.png',
+      url: '/_emdash/api/media/file/01M6DELETED000000000000000.png',
+      status: 'ready',
+    });
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'GET' && url.endsWith(`/_emdash/api/media/${staleMediaId}`)) {
+        return new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 });
+      }
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              uploadUrl: `/_emdash/api/media/${mediaId}/upload`,
+              method: 'PUT',
+              headers: { 'Content-Type': 'image/png' },
+              mediaId,
+              storageKey: pendingStorageKey,
+              expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaId}/upload`)) {
+        return new Response(JSON.stringify({ success: true, data: { uploaded: true } }), {
+          status: 200,
+        });
+      }
+      if (method === 'POST' && url.endsWith(`/_emdash/api/media/${mediaId}/confirm`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaId,
+                filename: 'recreated.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                storageKey: confirmedStorageKey,
+                status: 'ready',
+                url: confirmedUrl,
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    const res = await uploadMediaFile({
+      buffer: TINY_PNG_BUFFER,
+      filename: 'recreated.png',
+      origin,
+      token,
+      cache,
+      fetchFn,
+    });
+
+    expect(res.deduplicated).toBe(false);
+    expect(res.mediaId).toBe(mediaId);
+    expect(res.storageKey).toBe(confirmedStorageKey);
+    expect(cache.getMediaState(localHash)?.mediaId).toBe(mediaId);
   });
 
   it('cleans up expired upload-url target and re-requests a fresh one', async () => {

@@ -22,15 +22,25 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { extractMediaUlid } from '../client/mapper.js';
-import { MAX_MEDIA_UPLOAD_BYTES, resolveImageMimeType } from '../client/media.js';
+import {
+  MAX_MEDIA_UPLOAD_BYTES,
+  resolveImageMimeType,
+  toRootRelativeMediaUrl,
+} from '../client/media.js';
 import {
   stripCodeBlocks,
   verifyOpaqueBlocksUntampered,
   detectUnsupportedMarkdownSyntax,
 } from '../client/portable-text.js';
-import type { Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
+import {
+  sanitizeTitleForFilename,
+  type Frontmatter,
+  type ParsedMarkdown,
+} from '../utils/frontmatter.js';
+import type { CacheDatabase } from '../db/cache.js';
 
 export interface PreflightOptions {
   allowPublish?: boolean;
@@ -38,6 +48,14 @@ export interface PreflightOptions {
   baseMarkdown?: string;
   previousStatus?: 'draft' | 'published';
   workspaceRoot?: string;
+  cache?: CacheDatabase;
+}
+
+export interface PromotedMediaMatch {
+  mediaId: string;
+  storageKey: string;
+  url: string;
+  promotedRelPath: string;
 }
 
 export interface DraftImageReference {
@@ -51,6 +69,11 @@ export interface DraftImageReference {
   filename: string;
   /** Resolved absolute path on disk (when `workspaceRoot` is known) */
   resolvedAbsPath: string;
+  /**
+   * Present when `media/drafts/<filename>` was already promoted to `media/<yyyyMMdd>_<id>-<name>`
+   * by an earlier article push (P1 shared draft image reuse across articles).
+   */
+  alreadyPromoted?: PromotedMediaMatch;
 }
 
 export interface PreflightResult {
@@ -126,6 +149,105 @@ function resolveDraftImagePath(
     candidateAbs,
     filename: path.basename(candidateAbs),
   };
+}
+
+/**
+ * Searches `media_state` and `media/*.yaml` to see whether a draft image filename
+ * (or a direct `media/<yyyyMMdd>_<id>-<name>.<ext>` reference) has already been promoted
+ * into `media/` by a previous push (P1 shared draft image reuse across multiple articles).
+ */
+function findAlreadyPromotedMedia(
+  filename: string,
+  workspaceRoot: string,
+  cache?: CacheDatabase,
+): PromotedMediaMatch | null {
+  const ext = path.extname(filename);
+  const baseWithoutExt = path.basename(filename, ext);
+  const sanitizedTarget = `${sanitizeTitleForFilename(baseWithoutExt)}${ext}`.toLowerCase();
+  const directUlidMatch = filename.replace(/^\d{8}_/, '').match(/^([0-9A-HJ-NP-Z]{26})-/i);
+  const directUlid = directUlidMatch ? directUlidMatch[1].toUpperCase() : null;
+
+  // 1. Check media_state records first
+  if (cache) {
+    const states = cache.listMediaStates();
+    for (const st of states) {
+      if (st.status !== 'ready' && st.status !== 'uploaded') continue;
+      if (!st.mediaId || !st.storageKey || !st.url) continue;
+
+      if (directUlid && st.mediaId.toUpperCase() === directUlid) {
+        return {
+          mediaId: st.mediaId,
+          storageKey: st.storageKey,
+          url: st.url,
+          promotedRelPath: st.workspacePath || `media/${filename}`,
+        };
+      }
+
+      if (st.workspacePath) {
+        const promotedBase = path.basename(st.workspacePath);
+        const suffix = promotedBase.replace(/^(?:\d{8}_)?[0-9A-HJ-NP-Z]{26}-/i, '').toLowerCase();
+        if (suffix === sanitizedTarget || suffix === filename.toLowerCase()) {
+          return {
+            mediaId: st.mediaId,
+            storageKey: st.storageKey,
+            url: st.url,
+            promotedRelPath: st.workspacePath,
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Scan companion YAML files in media/
+  const mediaDir = path.join(workspaceRoot, 'media');
+  if (!fs.existsSync(mediaDir)) return null;
+
+  const files = fs.readdirSync(mediaDir);
+  for (const file of files) {
+    if (!file.endsWith('.yaml')) continue;
+    if (directUlid && !file.toUpperCase().includes(directUlid)) continue;
+
+    try {
+      const meta = yaml.load(fs.readFileSync(path.join(mediaDir, file), 'utf8')) as Record<
+        string,
+        unknown
+      > | null;
+      if (!meta || typeof meta.id !== 'string') continue;
+      const metaFilename = typeof meta.filename === 'string' ? meta.filename : '';
+      const fileSuffix = file
+        .replace(/\.yaml$/, '')
+        .replace(/^(?:\d{8}_)?[0-9A-HJ-NP-Z]{26}-/i, '')
+        .toLowerCase();
+      const matchesFilename =
+        (directUlid !== null && meta.id.toUpperCase() === directUlid) ||
+        metaFilename === filename ||
+        metaFilename.toLowerCase() === filename.toLowerCase() ||
+        `${fileSuffix}${ext.toLowerCase()}` === sanitizedTarget;
+
+      if (!matchesFilename) continue;
+
+      const storageKey = typeof meta.storageKey === 'string' ? meta.storageKey : '';
+      const rawUrl = typeof meta.url === 'string' ? meta.url : '';
+      const canonicalUrl = rawUrl
+        ? toRootRelativeMediaUrl(rawUrl, storageKey, 'https://example.com')
+        : storageKey
+          ? `/_emdash/api/media/file/${storageKey}`
+          : '';
+      if (!canonicalUrl) continue;
+
+      const binaryName = `${file.replace(/\.yaml$/, '')}${ext || path.extname(metaFilename) || '.jpg'}`;
+      return {
+        mediaId: meta.id,
+        storageKey: storageKey || path.basename(canonicalUrl),
+        url: canonicalUrl,
+        promotedRelPath: path.posix.join('media', binaryName),
+      };
+    } catch {
+      // Ignore unreadable YAML
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -219,6 +341,26 @@ export function runPreflightChecks(
 
       const resolved = resolveDraftImagePath(filePath, rawPath, options?.workspaceRoot);
       if (!resolved.isInsideDraftsDir) {
+        // Also allow reusing an already-promoted file directly under media/<yyyyMMdd>_<id>-<name>
+        if (resolved.isInsideMediaDir && options?.workspaceRoot) {
+          const promotedMatch = findAlreadyPromotedMedia(
+            resolved.filename,
+            options.workspaceRoot,
+            options.cache,
+          );
+          if (promotedMatch) {
+            draftImages.push({
+              line: trimmedLine,
+              alt,
+              rawPath: standaloneMatch[2],
+              filename: resolved.filename,
+              resolvedAbsPath: resolved.candidateAbs,
+              alreadyPromoted: promotedMatch,
+            });
+            continue;
+          }
+        }
+
         errors.push({
           code: 'LOCAL_IMAGE_DETECTED',
           message: `Local image path detected in markdown body: '${trimmedLine}'. Only images placed directly under "media/drafts/" can be automatically uploaded.`,
@@ -231,10 +373,28 @@ export function runPreflightChecks(
       // G11: Standalone image referencing media/drafts/<filename>
       if (options?.workspaceRoot) {
         if (!fs.existsSync(resolved.candidateAbs)) {
+          // P1: Check whether an earlier article push already promoted this draft image into media/
+          const promotedMatch = findAlreadyPromotedMedia(
+            resolved.filename,
+            options.workspaceRoot,
+            options.cache,
+          );
+          if (promotedMatch) {
+            draftImages.push({
+              line: trimmedLine,
+              alt,
+              rawPath: standaloneMatch[2],
+              filename: resolved.filename,
+              resolvedAbsPath: resolved.candidateAbs,
+              alreadyPromoted: promotedMatch,
+            });
+            continue;
+          }
+
           errors.push({
             code: 'MISSING_LOCAL_IMAGE_FILE',
-            message: `Draft image file not found on disk: '${rawPath}' (resolved to '${resolved.candidateAbs}').`,
-            suggestion: `Verify that "${resolved.filename}" exists inside the "media/drafts/" directory before pushing.`,
+            message: `Draft image file not found on disk: '${rawPath}' (resolved to '${resolved.candidateAbs}', and no promoted asset matching '${resolved.filename}' was found in media/).`,
+            suggestion: `Place "${resolved.filename}" inside "media/drafts/", or if it was already promoted, check "media/<yyyyMMdd>_<id>-${resolved.filename}".`,
           });
           continue;
         }

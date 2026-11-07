@@ -196,7 +196,76 @@ describe('Media Sync Engine', () => {
       'storageKey: 01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
     );
     expect(yamlText).toContain(
-      "url: 'https://aroooy.net/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png'",
+      'url: /_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
     );
+  });
+
+  it('preserves local alt and contentHash when pullMedia refreshes YAML, and cleans up duplicate date-prefixed files for the same media ID (B-1 / B-2)', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    // Simulate a locally promoted file with a fabricated date prefix (20261107) and local alt/contentHash
+    const oldYaml = path.join(mediaDir, '20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.yaml');
+    const oldPng = path.join(mediaDir, '20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.png');
+    fs.writeFileSync(
+      oldYaml,
+      [
+        'id: 01M6TF1XXBS2KC9EVYG6RBT0J0',
+        'filename: hero.png',
+        'mimeType: image/png',
+        'size: 4',
+        'alt: LOCAL ALT TEXT',
+        'storageKey: 01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+        'contentHash: sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be',
+        'status: ready',
+        'url: /_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+        'createdAt: "2026-11-07T08:00:00.000Z"',
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(oldPng, Buffer.from([1, 2, 3, 4]));
+
+    // Remote list returns authoritative createdAt (2020-03-04) and empty alt/contentHash
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          items: [
+            {
+              id: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+              filename: 'hero.png',
+              mimeType: 'image/png',
+              size: 4,
+              alt: null,
+              contentHash: null,
+              storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+              url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+              createdAt: '2020-03-04T21:40:00.000Z',
+            },
+          ],
+        },
+      }),
+    });
+
+    await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://aroooy.net',
+      token: 'fake-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    const filesAfter = fs.readdirSync(mediaDir).sort();
+    expect(filesAfter).toEqual([
+      '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.png',
+      '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.yaml',
+    ]);
+
+    const mergedYaml = fs.readFileSync(
+      path.join(mediaDir, '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.yaml'),
+      'utf8',
+    );
+    expect(mergedYaml).toContain('alt: LOCAL ALT TEXT');
+    expect(mergedYaml).toContain('sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be');
   });
 });

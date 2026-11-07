@@ -165,5 +165,33 @@ describe('Portable Text <-> Markdown Conversion', () => {
       const warnings = detectUnsupportedMarkdownSyntax(validCodeSample);
       expect(warnings).toHaveLength(0);
     });
+
+    it('warns that tilde code fences degrade to plain paragraphs', () => {
+      const tildeMd = [
+        '# Guide',
+        '',
+        'Some prose.',
+        '',
+        '~~~json',
+        '{ "enabled": true }',
+        '~~~',
+      ].join('\n');
+
+      const warnings = detectUnsupportedMarkdownSyntax(tildeMd);
+      expect(warnings.some((w) => /Tilde code fences/i.test(w))).toBe(true);
+
+      // An indented tilde fence is detected too, and a tilde fence quoted inside a
+      // backtick code fence is documentation, not markup, so it must stay silent.
+      const indented = detectUnsupportedMarkdownSyntax('prose\n\n   ~~~json\n   {}\n   ~~~');
+      expect(indented.some((w) => /Tilde code fences/i.test(w))).toBe(true);
+
+      const quotedTilde = detectUnsupportedMarkdownSyntax(
+        ['Real docs:', '', '````md', '~~~json', '{ "enabled": true }', '~~~', '````'].join('\n'),
+      );
+      expect(quotedTilde).toHaveLength(0);
+
+      // Backtick code fences must never trigger the tilde warning
+      expect(detectUnsupportedMarkdownSyntax('```json\n{ "a": 1 }\n```')).toHaveLength(0);
+    });
   });
 });

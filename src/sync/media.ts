@@ -23,6 +23,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { unwrapEnvelope } from '../client/api.js';
+import { ApiError } from '../client/error.js';
+import { createAuthedFetch } from '../client/http.js';
+import { toRootRelativeMediaUrl } from '../client/media.js';
 import { formatDatePrefix, sanitizeTitleForFilename } from '../utils/frontmatter.js';
 
 export interface EmDashMediaItem {
@@ -41,23 +45,61 @@ export interface EmDashMediaItem {
   createdAt?: string;
 }
 
-export function buildMediaMetaDoc(item: EmDashMediaItem, origin: string): Record<string, unknown> {
+export function buildMediaMetaDoc(
+  item: EmDashMediaItem,
+  origin: string,
+  existingMeta?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const storageKey =
+    (typeof item.storageKey === 'string' && item.storageKey ? item.storageKey : undefined) ??
+    (typeof existingMeta?.storageKey === 'string' && existingMeta.storageKey
+      ? existingMeta.storageKey
+      : '');
   const canonicalUrl =
-    item.url || (item.storageKey ? `/_emdash/api/media/file/${item.storageKey}` : '');
+    item.url ||
+    (storageKey
+      ? `/_emdash/api/media/file/${storageKey}`
+      : typeof existingMeta?.url === 'string'
+        ? existingMeta.url
+        : '');
+  const rootRelativeUrl = canonicalUrl
+    ? toRootRelativeMediaUrl(canonicalUrl, storageKey, origin)
+    : '';
+  const resolvedAlt =
+    item.alt !== undefined && item.alt !== null && item.alt !== ''
+      ? item.alt
+      : typeof existingMeta?.alt === 'string'
+        ? existingMeta.alt
+        : '';
+  const resolvedCaption =
+    item.caption !== undefined && item.caption !== null && item.caption !== ''
+      ? item.caption
+      : typeof existingMeta?.caption === 'string'
+        ? existingMeta.caption
+        : '';
+  const resolvedContentHash =
+    typeof item.contentHash === 'string' && item.contentHash
+      ? item.contentHash
+      : typeof existingMeta?.contentHash === 'string' && existingMeta.contentHash
+        ? existingMeta.contentHash
+        : null;
+
   return {
     id: item.id,
     filename: item.filename,
     mimeType: item.mimeType,
     size: item.size,
-    width: item.width ?? null,
-    height: item.height ?? null,
-    alt: item.alt ?? '',
-    caption: item.caption ?? '',
-    storageKey: item.storageKey ?? '',
-    contentHash: item.contentHash ?? null,
-    status: item.status ?? 'ready',
-    url: canonicalUrl ? new URL(canonicalUrl, origin).toString() : '',
-    createdAt: item.createdAt || '',
+    width: item.width ?? (typeof existingMeta?.width === 'number' ? existingMeta.width : null),
+    height: item.height ?? (typeof existingMeta?.height === 'number' ? existingMeta.height : null),
+    alt: resolvedAlt,
+    caption: resolvedCaption,
+    storageKey,
+    contentHash: resolvedContentHash,
+    status:
+      item.status ?? (typeof existingMeta?.status === 'string' ? existingMeta.status : 'ready'),
+    url: rootRelativeUrl,
+    createdAt:
+      item.createdAt || (typeof existingMeta?.createdAt === 'string' ? existingMeta.createdAt : ''),
   };
 }
 
@@ -67,6 +109,48 @@ export interface PromoteDraftMediaOptions {
   draftAbsPath: string;
   item: EmDashMediaItem;
   removeDraft?: boolean;
+}
+
+/**
+ * Moves a file from src to dest, falling back to copy + unlink when src and dest
+ * reside on different filesystems (`EXDEV`).
+ */
+function moveFileSafe(src: string, dest: string): void {
+  try {
+    fs.renameSync(src, dest);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === 'EXDEV') {
+      fs.copyFileSync(src, dest);
+      fs.unlinkSync(src);
+    } else {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Removes any stale duplicate files in `media/` that share the same 26-char `mediaId`
+ * but have a different baseName (e.g. a fabricated date prefix from an earlier local promotion).
+ */
+function cleanupDuplicateMediaFilesForId(
+  mediaDir: string,
+  mediaId: string,
+  canonicalBaseName: string,
+): void {
+  if (!fs.existsSync(mediaDir)) return;
+  const entries = fs.readdirSync(mediaDir);
+  for (const entry of entries) {
+    const match = entry.replace(/^\d{8}_/, '').match(/^([0-9A-Z]{26})-/);
+    if (!match || match[1] !== mediaId) continue;
+    const entryBase = entry.replace(/\.[^.]+$/, '');
+    if (entryBase !== canonicalBaseName) {
+      try {
+        fs.unlinkSync(path.join(mediaDir, entry));
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
 }
 
 /**
@@ -89,7 +173,15 @@ export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string
   const baseName = `${datePrefix}${item.id}-${sanitizedBase}`;
 
   const yamlPath = path.join(mediaDir, `${baseName}.yaml`);
-  const metaDoc = buildMediaMetaDoc(item, origin);
+  let existingMeta: Record<string, unknown> | null = null;
+  if (fs.existsSync(yamlPath)) {
+    try {
+      existingMeta = yaml.load(fs.readFileSync(yamlPath, 'utf8')) as Record<string, unknown> | null;
+    } catch {
+      existingMeta = null;
+    }
+  }
+  const metaDoc = buildMediaMetaDoc(item, origin, existingMeta);
   fs.writeFileSync(
     yamlPath,
     yaml.dump(metaDoc, { indent: 2, quotingType: '"', forceQuotes: false, lineWidth: -1 }),
@@ -99,18 +191,16 @@ export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string
   const targetFilePath = path.join(mediaDir, `${baseName}${ext}`);
   if (fs.existsSync(draftAbsPath)) {
     if (removeDraft) {
-      fs.renameSync(draftAbsPath, targetFilePath);
+      moveFileSafe(draftAbsPath, targetFilePath);
     } else {
       fs.copyFileSync(draftAbsPath, targetFilePath);
     }
   }
 
+  cleanupDuplicateMediaFilesForId(mediaDir, item.id, baseName);
+
   return path.posix.join('media', `${baseName}${ext}`);
 }
-
-import { ApiError } from '../client/error.js';
-import { createAuthedFetch } from '../client/http.js';
-import { unwrapEnvelope } from '../client/api.js';
 
 export interface PullMediaOptions {
   workspaceRoot: string;
@@ -202,17 +292,43 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       activeMediaBaseNames.add(oldBaseName);
       activeMediaIds.add(item.id);
 
-      // Clean up old un-prefixed YAML if migrating
+      // Clean up old un-prefixed YAML if migrating, and load any existing metadata for this media ID
       const oldYamlPath = path.join(mediaDir, `${oldBaseName}.yaml`);
       const yamlPath = path.join(mediaDir, `${baseName}.yaml`);
+      let existingMeta: Record<string, unknown> | null = null;
+      if (fs.existsSync(yamlPath)) {
+        try {
+          existingMeta = yaml.load(fs.readFileSync(yamlPath, 'utf8')) as Record<
+            string,
+            unknown
+          > | null;
+        } catch {
+          existingMeta = null;
+        }
+      } else {
+        // Check if an older or differently-dated YAML for the same item.id exists
+        const existingFiles = fs.readdirSync(mediaDir);
+        const matchingYaml = existingFiles.find(
+          (f) => f.endsWith('.yaml') && (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
+        );
+        if (matchingYaml) {
+          try {
+            existingMeta = yaml.load(
+              fs.readFileSync(path.join(mediaDir, matchingYaml), 'utf8'),
+            ) as Record<string, unknown> | null;
+          } catch {
+            existingMeta = null;
+          }
+        }
+      }
       if (oldYamlPath !== yamlPath && fs.existsSync(oldYamlPath)) {
         try {
           fs.unlinkSync(oldYamlPath);
         } catch {}
       }
 
-      // 1. Write YAML metadata
-      const metaDoc = buildMediaMetaDoc(item, options.origin);
+      // 1. Write YAML metadata (preserving local alt/contentHash if omitted by list endpoint)
+      const metaDoc = buildMediaMetaDoc(item, options.origin, existingMeta);
       fs.writeFileSync(
         yamlPath,
         yaml.dump(metaDoc, { indent: 2, quotingType: '"', forceQuotes: false, lineWidth: -1 }),
@@ -220,19 +336,37 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       );
 
       // 2. Download binary file if enabled and url is present
-      if (downloadFiles && item.url) {
+      const canonicalDownloadPath =
+        item.url || (item.storageKey ? `/_emdash/api/media/file/${item.storageKey}` : '');
+      if (downloadFiles && canonicalDownloadPath) {
         const fileExt = ext || (item.mimeType.includes('png') ? '.png' : '.jpg');
         const oldFilePath = path.join(mediaDir, `${oldBaseName}${fileExt}`);
         const targetFilePath = path.join(mediaDir, `${baseName}${fileExt}`);
 
-        // Migrate/rename old file to new name if already downloaded
-        if (oldFilePath !== targetFilePath && fs.existsSync(oldFilePath)) {
-          try {
-            const stat = fs.statSync(oldFilePath);
-            if (stat.size === item.size) {
-              fs.renameSync(oldFilePath, targetFilePath);
+        // Migrate/rename old or differently-dated file for the same media ID if already present
+        if (!fs.existsSync(targetFilePath)) {
+          const candidates = [
+            oldFilePath,
+            ...fs
+              .readdirSync(mediaDir)
+              .filter(
+                (f) =>
+                  !f.endsWith('.yaml') &&
+                  (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
+              )
+              .map((f) => path.join(mediaDir, f)),
+          ];
+          for (const candidate of candidates) {
+            if (candidate !== targetFilePath && fs.existsSync(candidate)) {
+              try {
+                const stat = fs.statSync(candidate);
+                if (stat.size === item.size) {
+                  moveFileSafe(candidate, targetFilePath);
+                  break;
+                }
+              } catch {}
             }
-          } catch {}
+          }
         }
 
         // Avoid re-downloading if already present and matches size
@@ -247,7 +381,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
 
         if (shouldDownload) {
           try {
-            const downloadUrl = new URL(item.url, options.origin).toString();
+            const downloadUrl = new URL(canonicalDownloadPath, options.origin).toString();
             const fileRes = await fetchFn(downloadUrl, {
               headers: {
                 Authorization: `Bearer ${options.token}`,
@@ -263,6 +397,9 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
           }
         }
       }
+
+      // Clean up any duplicate files with the same media ID but a different datePrefix/baseName
+      cleanupDuplicateMediaFilesForId(mediaDir, item.id, baseName);
 
       totalProcessed++;
       if (totalProcessed >= targetTotal) {

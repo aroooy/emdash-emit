@@ -325,4 +325,68 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       fs.rmSync(tempWorkspace, { recursive: true, force: true });
     }
   });
+
+  it('G9b: exempts local media references inside backtick code fences while still blocking identical lines outside them (tilde fences are not code to the mapper)', () => {
+    const tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fence-'));
+    try {
+      fs.mkdirSync(path.join(tempWorkspace, 'media', 'drafts'), { recursive: true });
+
+      // Real-world documentation bodies: an article that quotes Emit's own image rules.
+      const quotedLines = [
+        '![Broken example](media/drafts/ghost.png)',
+        '![Promoted example](media/20260101_01M6GHOST0000000000000000-ghost.png)',
+        'Inline text with ![Inline ghost](media/drafts/ghost.png) embedded.',
+      ];
+
+      // 1. Inside a fenced example block: never inspected, nothing queued for upload
+      const fencedMd: ParsedMarkdown = {
+        ...validParsed,
+        body: ['Documenting the offline workflow:', '', '```md', ...quotedLines, '```'].join('\n'),
+      };
+      const resFenced = runPreflightChecks(filePath, fencedMd, { workspaceRoot: tempWorkspace });
+      expect(resFenced.valid).toBe(true);
+      expect(resFenced.errors).toHaveLength(0);
+      expect(resFenced.draftImages).toHaveLength(0);
+      // The fence content itself must be handed over untouched
+      expect(resFenced.cleanedBody).toContain('![Broken example](media/drafts/ghost.png)');
+
+      // 2. Tilde fences are deliberately NOT exempted, because the Portable Text mapper
+      //    (markdownToPortableText) only recognizes backtick fences as code blocks. Exempting
+      //    a `~~~` block here would let a local image path skip validation and still be converted
+      //    into a real remote image block, producing a broken URL in production. The guard's
+      //    exemption scope must stay a strict subset of what the mapper treats as code.
+      const tildeFencedMd: ParsedMarkdown = {
+        ...validParsed,
+        body: ['~~~~~~~~~~~~~~~~~~~~', ...quotedLines, '~~~~~~~~~~~~~~~~~~~~'].join('\n'),
+      };
+      const resTilde = runPreflightChecks(filePath, tildeFencedMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resTilde.valid).toBe(false);
+      expect(resTilde.errors.some((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE')).toBe(true);
+      expect(resTilde.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
+      expect(resTilde.errors.some((e) => e.code === 'INLINE_LOCAL_IMAGE_NOT_SUPPORTED')).toBe(true);
+
+      // 3. The exact same lines outside a fence are still reported by G5 / G11
+      const bareMd: ParsedMarkdown = { ...validParsed, body: quotedLines.join('\n') };
+      const resBare = runPreflightChecks(filePath, bareMd, { workspaceRoot: tempWorkspace });
+      expect(resBare.valid).toBe(false);
+      expect(resBare.errors.some((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE')).toBe(true);
+      expect(resBare.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
+      expect(resBare.errors.some((e) => e.code === 'INLINE_LOCAL_IMAGE_NOT_SUPPORTED')).toBe(true);
+
+      // 4. An unterminated fence must NOT suppress real violations in the rest of the body
+      const unterminatedMd: ParsedMarkdown = {
+        ...validParsed,
+        body: ['![Missing](media/drafts/gone.png)', '', '```md', '```markdown'].join('\n'),
+      };
+      const resUnterminated = runPreflightChecks(filePath, unterminatedMd, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resUnterminated.valid).toBe(false);
+      expect(resUnterminated.errors.some((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE')).toBe(true);
+    } finally {
+      fs.rmSync(tempWorkspace, { recursive: true, force: true });
+    }
+  });
 });

@@ -140,11 +140,141 @@ export interface UploadMediaResult {
   height?: number | null;
   createdAt?: string;
   deduplicated: boolean;
+  /**
+   * Whether the returned record was confirmed against `GET /_emdash/api/media/{mediaId}`.
+   * - `'verified'`: the remote record was confirmed to exist and be `ready`
+   * - `'unknown'`: the server did not answer the existence check (no GET support / 5xx / network error)
+   * Absent for a fresh upload confirmed via `POST .../confirm`.
+   */
+  remoteVerification?: 'verified' | 'unknown';
+  /** Reason attached when `remoteVerification` is `'unknown'` */
+  remoteVerificationNote?: string;
 }
 
 export interface CompensationResult {
   compensated: boolean;
   alreadyReadyItem?: Record<string, unknown>;
+}
+
+export interface RemoteMediaDetail {
+  id: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  width?: number | null;
+  height?: number | null;
+  alt?: string | null;
+  caption?: string | null;
+  storageKey?: string;
+  contentHash?: string | null;
+  status?: string;
+  createdAt?: string;
+  url?: string;
+}
+
+/**
+ * Result of a remote media existence check. `'unknown'` always carries a human-readable
+ * `reason` so callers can surface it as a warning instead of silently treating the record
+ * as verified.
+ */
+export type RemoteMediaExistence =
+  | { exists: true; item: RemoteMediaDetail }
+  | { exists: false }
+  | { exists: 'unknown'; reason: string };
+
+/**
+ * Fetches authoritative metadata for a single media record via `GET /_emdash/api/media/{mediaId}`.
+ * Returns:
+ * - `{ exists: true, item }` when the server returns 200 OK
+ * - `{ exists: false }` when the server returns 404 Not Found (deleted on remote)
+ * - `{ exists: 'unknown', reason }` on transient errors or when the server does not implement GET
+ */
+export async function fetchRemoteMediaDetail(
+  mediaId: string,
+  options: { origin: string; token: string; fetchFn: typeof fetch },
+): Promise<RemoteMediaExistence> {
+  const itemUrl = new URL(`/_emdash/api/media/${mediaId}`, options.origin).toString();
+  try {
+    const res = await options.fetchFn(itemUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        Accept: 'application/json',
+      },
+    });
+    if (res.status === 404) {
+      return { exists: false };
+    }
+    if (!res.ok) {
+      return {
+        exists: 'unknown',
+        reason: `GET /_emdash/api/media/${mediaId} returned HTTP ${res.status} ${res.statusText}`,
+      };
+    }
+    const json = await res.json();
+    const data = unwrapEnvelope<Record<string, unknown>>(json);
+    const raw = ((data.item && typeof data.item === 'object' ? data.item : data) ?? {}) as Record<
+      string,
+      unknown
+    >;
+    return {
+      exists: true,
+      item: {
+        id: typeof raw.id === 'string' && raw.id ? raw.id : mediaId,
+        filename: typeof raw.filename === 'string' ? raw.filename : undefined,
+        mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
+        size: typeof raw.size === 'number' ? raw.size : undefined,
+        width: typeof raw.width === 'number' ? raw.width : null,
+        height: typeof raw.height === 'number' ? raw.height : null,
+        alt: typeof raw.alt === 'string' ? raw.alt : null,
+        caption: typeof raw.caption === 'string' ? raw.caption : null,
+        storageKey: typeof raw.storageKey === 'string' ? raw.storageKey : undefined,
+        contentHash: typeof raw.contentHash === 'string' ? raw.contentHash : null,
+        status: typeof raw.status === 'string' ? raw.status : undefined,
+        createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : undefined,
+        url: typeof raw.url === 'string' ? raw.url : undefined,
+      },
+    };
+  } catch (err: unknown) {
+    return {
+      exists: 'unknown',
+      reason:
+        `GET /_emdash/api/media/${mediaId} failed: ` + ((err as Error)?.message || 'network error'),
+    };
+  }
+}
+
+/**
+ * Best-effort update of `alt` / `caption` on the remote media record via `PUT /_emdash/api/media/{mediaId}`.
+ */
+async function syncRemoteMediaMetadata(
+  mediaId: string,
+  metadata: { alt?: string; caption?: string },
+  options: { origin: string; token: string; fetchFn: typeof fetch },
+): Promise<void> {
+  const body: Record<string, string> = {};
+  if (metadata.alt && metadata.alt.trim().length > 0) {
+    body.alt = metadata.alt.trim();
+  }
+  if (metadata.caption && metadata.caption.trim().length > 0) {
+    body.caption = metadata.caption.trim();
+  }
+  if (Object.keys(body).length === 0) return;
+
+  const itemUrl = new URL(`/_emdash/api/media/${mediaId}`, options.origin).toString();
+  try {
+    await options.fetchFn(itemUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // Non-fatal: alt text is already embedded in the Portable Text image block
+  }
 }
 
 /**
@@ -294,7 +424,8 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
   const { localHash, serverContentHash } = computeMediaHashes(buffer);
 
-  // Check local media_state for recovery from the "upload succeeded -> article PUT failed" window
+  // Check local media_state for recovery from the "upload succeeded -> article PUT failed" window,
+  // verifying against GET /_emdash/api/media/{mediaId} that the record has not been deleted on remote (B-4).
   if (options.cache) {
     const existingLocal = options.cache.getMediaState(localHash);
     if (
@@ -304,17 +435,45 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
       existingLocal.storageKey &&
       existingLocal.url
     ) {
-      return {
-        mediaId: existingLocal.mediaId,
-        storageKey: existingLocal.storageKey,
-        url: existingLocal.url,
-        localHash,
-        contentHash: serverContentHash,
-        size: buffer.length,
-        mimeType,
-        filename: options.filename,
-        deduplicated: true,
-      };
+      const remoteCheck = await fetchRemoteMediaDetail(existingLocal.mediaId, {
+        origin: options.origin,
+        token: options.token,
+        fetchFn,
+      });
+
+      if (
+        remoteCheck.exists === false ||
+        (remoteCheck.exists === true &&
+          remoteCheck.item.status &&
+          remoteCheck.item.status !== 'ready')
+      ) {
+        // Remote record was deleted or invalidated; purge stale local state and proceed to Phase A
+        options.cache.deleteMediaState(localHash);
+      } else {
+        const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+        const confirmedStorageKey = detail?.storageKey || existingLocal.storageKey;
+        const confirmedUrl = toRootRelativeMediaUrl(
+          detail?.url || existingLocal.url,
+          confirmedStorageKey,
+          options.origin,
+        );
+        return {
+          mediaId: existingLocal.mediaId,
+          storageKey: confirmedStorageKey,
+          url: confirmedUrl,
+          localHash,
+          contentHash: detail?.contentHash || serverContentHash,
+          size: detail?.size ?? buffer.length,
+          mimeType: detail?.mimeType || mimeType,
+          filename: detail?.filename || options.filename,
+          width: detail?.width ?? null,
+          height: detail?.height ?? null,
+          createdAt: detail?.createdAt,
+          deduplicated: true,
+          remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+          remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
+        };
+      }
     }
   }
 
@@ -329,30 +488,42 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
     { origin: options.origin, token: options.token, fetchFn },
   );
 
-  // Handle server-side deduplication hit
+  // Handle server-side deduplication hit (B-1: fetch authoritative createdAt/dimensions via GET)
   if ('existing' in initialTarget) {
+    const remoteCheck = await fetchRemoteMediaDetail(initialTarget.mediaId, {
+      origin: options.origin,
+      token: options.token,
+      fetchFn,
+    });
+    const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+    const confirmedStorageKey = detail?.storageKey || initialTarget.storageKey;
     const canonicalUrl = toRootRelativeMediaUrl(
-      initialTarget.url,
-      initialTarget.storageKey,
+      detail?.url || initialTarget.url,
+      confirmedStorageKey,
       options.origin,
     );
     options.cache?.saveMediaState({
       localHash,
       mediaId: initialTarget.mediaId,
-      storageKey: initialTarget.storageKey,
+      storageKey: confirmedStorageKey,
       url: canonicalUrl,
       status: 'uploaded',
     });
     return {
       mediaId: initialTarget.mediaId,
-      storageKey: initialTarget.storageKey,
+      storageKey: confirmedStorageKey,
       url: canonicalUrl,
       localHash,
-      contentHash: serverContentHash,
-      size: buffer.length,
-      mimeType,
-      filename: options.filename,
+      contentHash: detail?.contentHash || serverContentHash,
+      size: detail?.size ?? buffer.length,
+      mimeType: detail?.mimeType || mimeType,
+      filename: detail?.filename || options.filename,
+      width: detail?.width ?? null,
+      height: detail?.height ?? null,
+      createdAt: detail?.createdAt,
       deduplicated: true,
+      remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+      remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
     };
   }
 
@@ -377,28 +548,40 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
         { origin: options.origin, token: options.token, fetchFn },
       );
       if ('existing' in retriedTarget) {
+        const remoteCheck = await fetchRemoteMediaDetail(retriedTarget.mediaId, {
+          origin: options.origin,
+          token: options.token,
+          fetchFn,
+        });
+        const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+        const confirmedStorageKey = detail?.storageKey || retriedTarget.storageKey;
         const canonicalUrl = toRootRelativeMediaUrl(
-          retriedTarget.url,
-          retriedTarget.storageKey,
+          detail?.url || retriedTarget.url,
+          confirmedStorageKey,
           options.origin,
         );
         options.cache?.saveMediaState({
           localHash,
           mediaId: retriedTarget.mediaId,
-          storageKey: retriedTarget.storageKey,
+          storageKey: confirmedStorageKey,
           url: canonicalUrl,
           status: 'uploaded',
         });
         return {
           mediaId: retriedTarget.mediaId,
-          storageKey: retriedTarget.storageKey,
+          storageKey: confirmedStorageKey,
           url: canonicalUrl,
           localHash,
-          contentHash: serverContentHash,
-          size: buffer.length,
-          mimeType,
-          filename: options.filename,
+          contentHash: detail?.contentHash || serverContentHash,
+          size: detail?.size ?? buffer.length,
+          mimeType: detail?.mimeType || mimeType,
+          filename: detail?.filename || options.filename,
+          width: detail?.width ?? null,
+          height: detail?.height ?? null,
+          createdAt: detail?.createdAt,
           deduplicated: true,
+          remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+          remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
         };
       }
       target = retriedTarget;
@@ -509,6 +692,13 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
       url: confirmedUrl,
       status: 'uploaded',
     });
+
+    // Best-effort sync of alt / caption to the media record itself (B-2)
+    await syncRemoteMediaMetadata(
+      confirmedMediaId,
+      { alt: options.alt, caption: options.caption },
+      { origin: options.origin, token: options.token, fetchFn },
+    );
 
     return {
       mediaId: confirmedMediaId,
