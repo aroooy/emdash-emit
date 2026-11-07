@@ -148,11 +148,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
-        const updatedItems = batchResult.items.filter((i) => i.updated);
-        const sampleItems = (updatedItems.length > 0 ? updatedItems : batchResult.items).slice(
-          0,
-          10,
+        // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first
+        const sortedItems = [...batchResult.items].sort((a, b) =>
+          path.basename(b.filePath).localeCompare(path.basename(a.filePath)),
         );
+        const updatedItems = sortedItems.filter((i) => i.updated);
+        const sampleItems = (updatedItems.length > 0 ? updatedItems : sortedItems).slice(0, 10);
         const listLines = sampleItems.map(
           (item) => `  - [${item.status}] ${item.filePath}${item.title ? ` (${item.title})` : ''}`,
         );

@@ -105,6 +105,9 @@ export function getWorkspaceStatus(
     }
   }
 
+  // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first
+  items.sort((a, b) => path.basename(b.filePath).localeCompare(path.basename(a.filePath)));
+
   const summary = {
     total: items.length,
     synced: items.filter((i) => i.syncStatus === 'synced').length,

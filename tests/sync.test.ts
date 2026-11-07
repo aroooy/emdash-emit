@@ -547,4 +547,69 @@ describe('Pull & Push Synchronization Engine', () => {
     );
     expect(fs.existsSync(publishedPath)).toBe(false);
   });
+
+  it('getWorkspaceStatus sorts items descending by filename date across draft and published', () => {
+    const articles = [
+      {
+        sub: 'draft',
+        file: '20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old-Draft.md',
+        id: '01M67N19JPWNGFZ0M6KBQ8FS01',
+        title: 'Old Draft',
+        status: 'draft' as const,
+      },
+      {
+        sub: 'published',
+        file: '20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid-Published.md',
+        id: '01M67N19JPWNGFZ0M6KBQ8FS02',
+        title: 'Mid Published',
+        status: 'published' as const,
+      },
+      {
+        sub: 'published',
+        file: '20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest-Published.md',
+        id: '01M67N19JPWNGFZ0M6KBQ8FS03',
+        title: 'Newest Published',
+        status: 'published' as const,
+      },
+      {
+        sub: 'draft',
+        file: '20261106_01M67N19JPWNGFZ0M6KBQ8FS04-Newest-Draft.md',
+        id: '01M67N19JPWNGFZ0M6KBQ8FS04',
+        title: 'Newest Draft',
+        status: 'draft' as const,
+      },
+    ];
+
+    for (const a of articles) {
+      const fullPath = path.join(tempDir, 'posts', a.sub, a.file);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      const fm: Frontmatter = {
+        id: a.id,
+        slug: a.title.toLowerCase().replace(/\s+/g, '-'),
+        title: a.title,
+        collection: 'posts',
+        status: a.status,
+        locale: 'ja',
+        taxonomies: {},
+        bylines: [],
+      };
+      fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Body content'), 'utf8');
+    }
+
+    const res = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(res.items).toHaveLength(4);
+    // Verifies newest date first, regardless of draft vs published directory
+    expect(res.items[0].filePath).toBe(
+      'posts/draft/20261106_01M67N19JPWNGFZ0M6KBQ8FS04-Newest-Draft.md',
+    );
+    expect(res.items[1].filePath).toBe(
+      'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest-Published.md',
+    );
+    expect(res.items[2].filePath).toBe(
+      'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid-Published.md',
+    );
+    expect(res.items[3].filePath).toBe(
+      'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old-Draft.md',
+    );
+  });
 });
