@@ -131,6 +131,19 @@ export function runPreflightChecks(
     });
   }
 
+  // G10: featuredImage format guard (must be a valid 26-character Crockford ULID or null)
+  if (frontmatter.featuredImage !== undefined && frontmatter.featuredImage !== null) {
+    const trimmedFi = frontmatter.featuredImage.trim();
+    if (!/^[0-9A-HJ-NP-Z]{26}$/i.test(trimmedFi)) {
+      errors.push({
+        code: 'INVALID_FEATURED_IMAGE',
+        message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID or null.`,
+        suggestion:
+          'Upload the image first using EmDash Admin or MCP "media_upload", and specify the returned 26-character ULID (e.g. 01M67P0MBMJQQXH2K95HHCYRYB). To remove the featured image, set featuredImage: null.',
+      });
+    }
+  }
+
   // G6: Unresolved conflict markers check
   if (CONFLICT_MARKER_REGEX.test(cleanedBody)) {
     errors.push({

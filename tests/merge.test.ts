@@ -100,15 +100,15 @@ describe('Hybrid 3-Way Merge Engine', () => {
     it('correctly detects conflict on featuredImage field and warns', () => {
       const localFm: Frontmatter = {
         ...baseFm,
-        featuredImage: '01M6LOCAL11111111111111111',
+        featuredImage: '01M67NT31TW9WXJVC83ZRGK994',
       };
       const remoteFm: Frontmatter = {
         ...baseFm,
-        featuredImage: '01M6REMOTE2222222222222222',
+        featuredImage: '01M6A7SJ82SMPWKTJ7GSSDC6VZ',
       };
 
       const res = mergeFrontmatter(localFm, baseFm, remoteFm);
-      expect(res.merged.featuredImage).toBe('01M6REMOTE2222222222222222');
+      expect(res.merged.featuredImage).toBe('01M6A7SJ82SMPWKTJ7GSSDC6VZ');
       expect(res.warnings.length).toBe(1);
       expect(res.warnings[0]).toContain('featuredImage');
     });

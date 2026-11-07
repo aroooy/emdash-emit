@@ -108,20 +108,20 @@ describe('Frontmatter & Markdown Serialization', () => {
       'title: "Hero Post"',
       'collection: posts',
       'status: draft',
-      'featuredImage: "01M6MEDIA1234567890123456"',
+      'featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"',
       '---',
       '',
       'Body with featured hero image.',
     ].join('\n');
 
     const parsed = parseMarkdown(raw);
-    expect(parsed.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+    expect(parsed.frontmatter.featuredImage).toBe('01M67P0MBMJQQXH2K95HHCYRYB');
 
     const serialized = serializeMarkdown(parsed.frontmatter, parsed.body);
-    expect(serialized).toContain('featuredImage: "01M6MEDIA1234567890123456"');
+    expect(serialized).toContain('featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"');
 
     const reparsed = parseMarkdown(serialized);
-    expect(reparsed.frontmatter.featuredImage).toBe('01M6MEDIA1234567890123456');
+    expect(reparsed.frontmatter.featuredImage).toBe('01M67P0MBMJQQXH2K95HHCYRYB');
   });
 
   it('serializes full document cleanly', () => {

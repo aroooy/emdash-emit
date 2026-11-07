@@ -196,4 +196,52 @@ describe('AI Misbehavior Preflight Guards (G2 - G9)', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.code === 'MODIFIED_OPAQUE_BLOCK')).toBe(true);
   });
+
+  it('G10: validates featuredImage frontmatter format and blocks invalid values', () => {
+    // Valid 26-char ULID passes
+    const validFiParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB',
+      },
+    };
+    const resValid = runPreflightChecks(filePath, validFiParsed);
+    expect(resValid.valid).toBe(true);
+
+    // Null passes (explicit clear)
+    const nullFiParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        featuredImage: null,
+      },
+    };
+    const resNull = runPreflightChecks(filePath, nullFiParsed);
+    expect(resNull.valid).toBe(true);
+
+    // Invalid: local file path
+    const localPathFiParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        featuredImage: './my-photo.jpg',
+      },
+    };
+    const resLocalPath = runPreflightChecks(filePath, localPathFiParsed);
+    expect(resLocalPath.valid).toBe(false);
+    expect(resLocalPath.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+
+    // Invalid: wrong length / invalid Crockford characters
+    const invalidCharFiParsed: ParsedMarkdown = {
+      ...validParsed,
+      frontmatter: {
+        ...validParsed.frontmatter,
+        featuredImage: '01M6MEDIA123456',
+      },
+    };
+    const resInvalidChar = runPreflightChecks(filePath, invalidCharFiParsed);
+    expect(resInvalidChar.valid).toBe(false);
+    expect(resInvalidChar.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+  });
 });

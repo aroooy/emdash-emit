@@ -180,5 +180,35 @@ describe('Mapper (Local Frontend <-> EmDash API)', () => {
     };
     const localNull = apiResponseToLocal(apiItemNull);
     expect(localNull.frontmatter.featuredImage).toBeNull();
+
+    // Normalizes lowercase ULID to uppercase
+    const apiItemLowercase = {
+      id: validUlid,
+      title: 'Post with Lowercase ULID',
+      data: {
+        title: 'Post with Lowercase ULID',
+        featured_image: '01m67mp2w0vkck2dfwm166cr24',
+        content: [],
+      },
+    };
+    const localLowercase = apiResponseToLocal(apiItemLowercase);
+    expect(localLowercase.frontmatter.featuredImage).toBe('01M67MP2W0VKCK2DFWM166CR24');
+
+    // Extracts from extension-less remote URL
+    const apiItemNoExt = {
+      id: validUlid,
+      title: 'Post with Extension-less URL',
+      data: {
+        title: 'Post with Extension-less URL',
+        featured_image: {
+          provider: 'external',
+          id: '',
+          src: '/_emdash/api/media/file/01M67NT31TW9WXJVC83ZRGK994',
+        },
+        content: [],
+      },
+    };
+    const localNoExt = apiResponseToLocal(apiItemNoExt);
+    expect(localNoExt.frontmatter.featuredImage).toBe('01M67NT31TW9WXJVC83ZRGK994');
   });
 });

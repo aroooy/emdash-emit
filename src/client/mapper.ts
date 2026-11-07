@@ -57,10 +57,13 @@ export interface MapperOptions {
 /**
  * Derives a canonical 26-character media ULID from a featured_image representation.
  * Supports:
- * - Direct 26-char ULID string
+ * - Direct 26-char ULID string (normalized to uppercase)
  * - { provider: 'local', id: '<ULID>', ... }
- * - { provider: 'external', src: '/_emdash/api/media/file/<ULID>.<ext>', ... }
- * - URL strings containing /_emdash/api/media/file/<ULID>.<ext>
+ * - { provider: 'external', src: '/_emdash/api/media/file/<ULID>[.<ext>]', ... }
+ * - URL strings containing /_emdash/api/media/file/<ULID>[.<ext>]
+ *
+ * Note on charset: Uses [0-9A-HJ-NP-Z] (case-insensitive) which strictly excludes 'I' and 'O',
+ * while permissively accepting 'L' and 'U' to avoid false rejections on custom/legacy identifiers.
  */
 export function extractMediaUlid(val: unknown): string | null {
   if (val === null) return null;
@@ -69,10 +72,10 @@ export function extractMediaUlid(val: unknown): string | null {
   if (typeof val === 'string') {
     const trimmed = val.trim();
     if (/^[0-9A-HJ-NP-Z]{26}$/i.test(trimmed)) {
-      return trimmed;
+      return trimmed.toUpperCase();
     }
-    const match = trimmed.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
-    if (match) return match[1];
+    const match = trimmed.match(/\/([0-9A-HJ-NP-Z]{26})(?:\.[a-zA-Z0-9]+)?(?:$|\?)/i);
+    if (match) return match[1].toUpperCase();
     return null;
   }
 
@@ -80,17 +83,17 @@ export function extractMediaUlid(val: unknown): string | null {
     const obj = val as Record<string, unknown>;
     // 1. Direct ULID id field (provider: 'local')
     if (typeof obj.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(obj.id.trim())) {
-      return obj.id.trim();
+      return obj.id.trim().toUpperCase();
     }
     // 2. src URL in object (provider: 'external')
     if (typeof obj.src === 'string') {
-      const match = obj.src.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
-      if (match) return match[1];
+      const match = obj.src.match(/\/([0-9A-HJ-NP-Z]{26})(?:\.[a-zA-Z0-9]+)?(?:$|\?)/i);
+      if (match) return match[1].toUpperCase();
     }
     // 3. url field fallback
     if (typeof obj.url === 'string') {
-      const match = obj.url.match(/\/([0-9A-HJ-NP-Z]{26})\.[a-zA-Z0-9]+(?:$|\?)/i);
-      if (match) return match[1];
+      const match = obj.url.match(/\/([0-9A-HJ-NP-Z]{26})(?:\.[a-zA-Z0-9]+)?(?:$|\?)/i);
+      if (match) return match[1].toUpperCase();
     }
   }
 

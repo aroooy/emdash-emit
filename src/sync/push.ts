@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import type { CacheDatabase } from '../db/cache.js';
 import { withEntryLock } from '../client/lock.js';
 import {
@@ -127,30 +128,76 @@ async function transitionContentStatus(
   return extractRev(json, currentRev);
 }
 
+/**
+ * Preserves the exact remote featured_image object if unchanged from cache,
+ * or resolves local companion media YAML if available, defaulting to minimal { id }.
+ */
 function preserveOrResolveFeaturedImage(
   payload: ReturnType<typeof localToApiPayload>,
   featuredImage: string | null | undefined,
   cache: CacheDatabase | undefined,
   id: string,
+  workspaceRoot?: string,
 ): void {
   if (featuredImage === undefined) return;
   if (featuredImage === null) {
     payload.data.featured_image = null;
     return;
   }
-  if (!cache) return;
-  try {
-    const cachedEntry = cache.getEntry(id);
-    if (cachedEntry) {
-      const raw = JSON.parse(cachedEntry.rawJson);
-      const item = (raw.item || raw) as Record<string, unknown>;
-      const itemData = (item.data || {}) as Record<string, unknown>;
-      const remoteFi = itemData.featured_image;
-      if (remoteFi && extractMediaUlid(remoteFi) === featuredImage) {
-        payload.data.featured_image = remoteFi;
+
+  // 1. Try restoring from cache if ULID matches the existing remote entry
+  if (cache) {
+    try {
+      const cachedEntry = cache.getEntry(id);
+      if (cachedEntry) {
+        const raw = JSON.parse(cachedEntry.rawJson);
+        const item = (raw.item || raw) as Record<string, unknown>;
+        const itemData = (item.data || {}) as Record<string, unknown>;
+        const remoteFi = itemData.featured_image;
+        if (remoteFi && extractMediaUlid(remoteFi) === featuredImage) {
+          payload.data.featured_image = remoteFi;
+          return;
+        }
       }
+    } catch (err: unknown) {
+      // Non-fatal: if cache read fails, proceed to local media resolution / fallback
+      console.warn(
+        `[push] Unable to inspect cache for featured_image restoration: ${(err as Error).message}`,
+      );
     }
-  } catch {}
+  }
+
+  // 2. If new or changed, check if workspace media/ has a companion metadata YAML
+  if (workspaceRoot) {
+    try {
+      const mediaDir = path.join(workspaceRoot, 'media');
+      if (fs.existsSync(mediaDir)) {
+        const files = fs.readdirSync(mediaDir);
+        const yamlFile = files.find((f) => f.endsWith('.yaml') && f.includes(featuredImage));
+        if (yamlFile) {
+          const yamlContent = fs.readFileSync(path.join(mediaDir, yamlFile), 'utf8');
+          const meta = yaml.load(yamlContent) as Record<string, unknown>;
+          if (meta && typeof meta === 'object') {
+            payload.data.featured_image = {
+              id: featuredImage,
+              provider: 'local',
+              filename: meta.filename,
+              mimeType: meta.mimeType,
+              width: meta.width ?? null,
+              height: meta.height ?? null,
+              alt: meta.alt ?? '',
+            };
+            return;
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: fall back to minimal { id }
+    }
+  }
+
+  // 3. Fallback: minimal { id }
+  payload.data.featured_image = { id: featuredImage };
 }
 
 /**
@@ -318,6 +365,13 @@ export async function pushArticle(
 
   if (isNewArticle) {
     let payload = localToApiPayload(parsed, '', effectiveOptions);
+    preserveOrResolveFeaturedImage(
+      payload,
+      parsed.frontmatter.featuredImage,
+      options.cache,
+      id,
+      options.workspaceRoot,
+    );
     const postUrl = new URL(`/_emdash/api/content/${collection}`, options.origin).toString();
 
     const res = await fetchFn(postUrl, {
@@ -433,7 +487,13 @@ export async function pushArticle(
   // Existing article: execute within full 7-minute entry lock lease
   return await withEntryLock(collection, id, options, async () => {
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
-    preserveOrResolveFeaturedImage(payload, parsed.frontmatter.featuredImage, options.cache, id);
+    preserveOrResolveFeaturedImage(
+      payload,
+      parsed.frontmatter.featuredImage,
+      options.cache,
+      id,
+      options.workspaceRoot,
+    );
     const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
 
     let res = await fetchFn(putUrl, {
@@ -545,7 +605,13 @@ export async function pushArticle(
       parsed.frontmatter = mergeResult.frontmatter;
       parsed.body = mergeResult.body;
       payload = localToApiPayload(parsed, remoteParsed.rev, effectiveOptions);
-      preserveOrResolveFeaturedImage(payload, parsed.frontmatter.featuredImage, options.cache, id);
+      preserveOrResolveFeaturedImage(
+        payload,
+        parsed.frontmatter.featuredImage,
+        options.cache,
+        id,
+        options.workspaceRoot,
+      );
 
       res = await fetchFn(putUrl, {
         method: 'PUT',

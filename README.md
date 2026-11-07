@@ -305,7 +305,7 @@ status: draft                       # Status: "draft" or "published"
 publishedAt: null                   # ISO 8601 timestamp (null for drafts)
 updatedAt: "2026-11-04T12:00:00.000Z"
 excerpt: "A deep dive into building autonomous content workflows with EmDash and Emit."
-featuredImage: "01M6MEDIA123456"    # Media ULID or null
+featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"    # 26-character canonical media ULID or null
 categories:                         # Slugs (or canonical term ULIDs) matching categories/*.yaml
   - tech
 tags:                               # Slugs (or canonical term ULIDs) matching tags/*.yaml
@@ -355,7 +355,7 @@ EmDash stores media files (images, documents) in Cloudflare R2 via multipart upl
 1. **Upload New Images**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`). This generates a canonical ULID and uploads the asset to Cloudflare R2.
 2. **Sync Media Locally**: Run `emit pull-media` in your workspace. This downloads the images and companion `.yaml` metadata files into `media/`.
 3. **Embed in Articles**:
-   - For featured hero images: set `featuredImage: "01M6..."` in frontmatter.
+   - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media ULID) or `null` in frontmatter.
    - For inline images in body: use standard Markdown syntax with remote URLs: `![Alt text](/_emdash/api/media/file/<ULID>.<ext>)` (or absolute URL `https://your-blog.example.com/_emdash/api/media/file/<ULID>.<ext>`).
 
 > [!WARNING]
