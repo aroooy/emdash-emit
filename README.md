@@ -336,8 +336,8 @@ Markdown body begins here...
 4. **Featured Image References**:
    - `featuredImage` must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Emit normalizes the value to uppercase, so lowercase input is accepted and canonicalized on pull, merge, and push.
    - To remove the hero image, set `featuredImage: null`. Omitting the field leaves the remote value untouched.
-   - When the referenced ULID matches the cached remote entry, Emit resends the original remote `featured_image` object verbatim (provider, `src`, `meta.storageKey`, dimensions, MIME type) so nothing is lost. When it does not match, Emit sends the bare `{ id: <ULID> }` and lets EmDash resolve the media record.
-   - Emit never fabricates media metadata from local `media/*.yaml` files: companion files are used only to verify the reference. In a workspace that mirrors media (`media/` exists), a missing or mismatched companion file is reported as a push warning.
+   - When the referenced ULID matches the cached remote entry, Emit resends the original remote `featured_image` object verbatim (provider, `src`, `meta.storageKey`, dimensions, MIME type) so nothing is lost. When it does not match, Emit sends the bare `{ id: <ULID> }` and lets EmDash resolve the media record. **This contract is confirmed against a live EmDash instance:** `featured_image: { "id": "<ULID>" }` is accepted (HTTP 200) and the server stores the id and normalizes `"provider": "local"` itself.
+   - Emit never fabricates media metadata from local `media/*.yaml` files: companion files are used only to cross-check a reference. In a workspace that mirrors media (`media/` exists and is non-empty), a missing or mismatched companion file is reported as a push warning — it means Emit could not confirm the media ID exists, not that the payload is invalid. Workspaces that do not mirror media produce no such warning.
    - Preflight Guard **G10** rejects local file paths and malformed values before pushing.
 
 ### EmDash Custom Block Preservation
@@ -359,7 +359,7 @@ EmDash stores media files (images, documents) in Cloudflare R2 via multipart upl
 **How to add and use images in your articles:**
 
 1. **Upload New Images**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`). This generates a canonical ULID and uploads the asset to Cloudflare R2.
-2. **Sync Media Locally**: Run `emit pull-media` in your workspace. This downloads the images and companion `.yaml` metadata files into `media/`.
+2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace. This downloads the images and companion `.yaml` metadata files into `media/`. Mirroring media lets Emit cross-check `featuredImage` references during push; it is not required to push articles.
 3. **Embed in Articles**:
    - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media ULID) or `null` in frontmatter.
    - For inline images in body: use standard Markdown syntax with remote URLs: `![Alt text](/_emdash/api/media/file/<ULID>.<ext>)` (or absolute URL `https://your-blog.example.com/_emdash/api/media/file/<ULID>.<ext>`).

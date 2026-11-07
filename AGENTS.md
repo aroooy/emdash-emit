@@ -85,7 +85,9 @@ These rules are enforced at the code level via Preflight Guards (G1–G10):
 
 ### 6. Featured Image References (Never Invent Media IDs)
 - `featuredImage` in frontmatter must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard G10 rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
-- Upload media first (EmDash Admin `/admin/media` or the official EmDash MCP `media_upload`), then use the ULID it returns. Run `emit pull-media` to mirror media and companion metadata locally.
+- Upload media first (EmDash Admin `/admin/media` or the official EmDash MCP `media_upload`), then use the ULID it returns. Run `emit pull-media` to mirror media and companion metadata locally — this is optional convenience for cross-checking, not a requirement for pushing.
+- **Confirmed contract (live EmDash):** pushing `featured_image: { "id": "<ULID>" }` alone is accepted (HTTP 200); the server stores the media id and normalizes `"provider": "local"` itself. Never fabricate `provider`, `src`, `storageKey`, dimensions, or MIME type in a push payload.
+- When the cached remote entry already points at the same ULID, Emit resends that remote object verbatim so its original provider shape (`external` with `src`, or `local` with `meta.storageKey`) is preserved instead of being re-resolved from a bare id.
 - Emit canonicalizes the value to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
 - `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
 - Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.

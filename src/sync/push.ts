@@ -131,18 +131,22 @@ async function transitionContentStatus(
 /**
  * Determines the featured_image value to send to EmDash, returning any warnings.
  *
+ * Contract (confirmed against production EmDash): `featured_image: { id: <ULID> }` is
+ * accepted on its own and resolved server-side - the server stores the media id and
+ * normalizes `provider` itself for media held in the media library. Clients must never
+ * fabricate provider, src, storageKey or dimensions.
+ *
  * - undefined : leave the payload untouched (field omitted, remote value preserved).
  * - null      : send an explicit null to clear the hero image.
- * - otherwise : if the cached remote entry references the same media ULID, resend the
- *               remote object verbatim so provider, src, meta.storageKey, blurhash and
- *               dimensions survive the round-trip byte-for-byte. Otherwise send the
- *               canonical minimal { id: <ULID> }.
+ * - otherwise : if the cached remote entry references the same media ULID, resend the remote
+ *               object verbatim so its original shape (provider "external" with src, or
+ *               provider "local" with meta.storageKey, blurhash and dimensions) survives the
+ *               round-trip byte-for-byte rather than being re-resolved from a bare id.
+ *               Otherwise send the canonical minimal { id: <ULID> }.
  *
- * Emit never fabricates provider or media metadata from local companion YAML: EmDash owns
- * those fields (remote "local" records keep storageKey under meta.storageKey, which local
- * media/*.yaml never contains), and re-sending possibly stale companion metadata would
- * overwrite authoritative remote state. The companion file is therefore used only to verify
- * the reference, and an unverifiable reference is surfaced as a warning.
+ * Local media/*.yaml is never a payload source: it lacks meta.storageKey, and re-sending
+ * possibly stale companion metadata would overwrite authoritative remote state. The companion
+ * file is used only to cross-check that a referenced ULID is one this workspace knows about.
  */
 function preserveOrResolveFeaturedImage(
   payload: ReturnType<typeof localToApiPayload>,
@@ -184,19 +188,21 @@ function preserveOrResolveFeaturedImage(
     }
   }
 
-  // 2. Verify the reference against workspace companion metadata (verification only).
+  // 2. Cross-check the reference against the workspace media mirror (verification only).
+  //    A missing entry here is NOT a payload problem - { id: <ULID> } is a valid request that
+  //    EmDash resolves. It only means Emit cannot confirm the media exists, which is exactly
+  //    where a hallucinated or mistyped ULID would surface. A workspace that does not mirror
+  //    media (no media/, or an empty one) is not warned about.
   if (workspaceRoot) {
     const mediaDir = path.join(workspaceRoot, 'media');
-    if (fs.existsSync(mediaDir)) {
+    const mirrored = fs.existsSync(mediaDir) ? fs.readdirSync(mediaDir) : [];
+    if (mirrored.length > 0) {
       // Anchored on the id segment so a ULID appearing inside another media item's
       // filename can never be mistaken for its own metadata file.
-      const companion = fs
-        .readdirSync(mediaDir)
-        .find(
-          (f) =>
-            f.endsWith('.yaml') &&
-            (f.includes(`_${targetUlid}-`) || f.startsWith(`${targetUlid}-`)),
-        );
+      const companion = mirrored.find(
+        (f) =>
+          f.endsWith('.yaml') && (f.includes(`_${targetUlid}-`) || f.startsWith(`${targetUlid}-`)),
+      );
       if (companion) {
         try {
           const meta = yaml.load(fs.readFileSync(path.join(mediaDir, companion), 'utf8')) as Record<
@@ -217,7 +223,7 @@ function preserveOrResolveFeaturedImage(
         }
       } else {
         warnings.push(
-          `featuredImage ${targetUlid} has no companion metadata under media/. It is pushed as a bare media ID; run "emit pull-media" to mirror remote media locally or verify the ULID.`,
+          `featuredImage ${targetUlid} was not found in the mirrored media under media/, so Emit could not confirm this media ID exists. The ID is sent as-is and EmDash resolves it, but if the ID is wrong the hero image will be missing. Upload the image first (EmDash Admin or media_upload) and use the ULID it returns, or run "emit pull-media" to mirror remote media locally.`,
         );
       }
     }

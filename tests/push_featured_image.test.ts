@@ -198,15 +198,23 @@ describe('featuredImage Push Payload Shaping', () => {
 
   it('sends a canonical bare media id (never fabricated metadata) when the hero is swapped', async () => {
     seedTrackedArticle('featured-swap', remoteFeaturedExternal);
-    // A mirrored workspace (media/ exists) but with no entry for the new hero.
-    fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
+    // A mirrored workspace: media/ holds the previous hero but nothing for the new one.
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mediaDir, `${todayPrefix}_${mediaUlid}-hero.jpg.yaml`),
+      `id: ${mediaUlid}\nfilename: hero.jpg\nmimeType: image/jpeg\n`,
+      'utf8',
+    );
     const relPath = writeArticle('featured-swap', otherMediaUlid);
     const { fetchFn, payload } = pushMock();
 
     const res = await pushArticle(relPath, { ...options, workspaceRoot: tempDir, cache, fetchFn });
 
     expect(payload()!.data.featured_image).toEqual({ id: otherMediaUlid });
-    expect(res.warnings.some((w) => w.includes('no companion metadata'))).toBe(true);
+    expect(res.warnings.some((w) => w.includes('could not confirm this media ID exists'))).toBe(
+      true,
+    );
   });
 
   it('sends an explicit null when featuredImage is null', async () => {
@@ -285,7 +293,9 @@ describe('featuredImage Push Payload Shaping', () => {
     const res = await pushArticle(relPath, { ...options, workspaceRoot: tempDir, cache, fetchFn });
 
     expect(payload()!.data.featured_image).toEqual({ id: mediaUlid });
-    expect(res.warnings.some((w) => w.includes('no companion metadata'))).toBe(true);
+    expect(res.warnings.some((w) => w.includes('could not confirm this media ID exists'))).toBe(
+      true,
+    );
     expect(res.warnings.some((w) => w.includes('describes a different media ID'))).toBe(false);
   });
 
@@ -306,6 +316,21 @@ describe('featuredImage Push Payload Shaping', () => {
 
     expect(payload()!.data.featured_image).toEqual({ id: mediaUlid });
     expect(res.warnings.filter((w) => w.includes('companion metadata'))).toHaveLength(0);
+  });
+
+  it('stays silent when the workspace mirrors no media at all', async () => {
+    // Documented happy path: the media was uploaded via media_upload and its ULID was pasted
+    // into frontmatter without mirroring media/. { id: <ULID> } is a valid request on its own,
+    // so neither an absent nor an empty media/ directory should produce noise.
+    fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
+    seedTrackedArticle('featured-unmirrored', null);
+    const relPath = writeArticle('featured-unmirrored', mediaUlid);
+    const { fetchFn, payload } = pushMock();
+
+    const res = await pushArticle(relPath, { ...options, workspaceRoot: tempDir, cache, fetchFn });
+
+    expect(payload()!.data.featured_image).toEqual({ id: mediaUlid });
+    expect(res.warnings.filter((w) => w.includes('featuredImage'))).toHaveLength(0);
   });
 
   it('rewrites the local file with the canonical uppercase ULID after pushing lowercase input', async () => {
