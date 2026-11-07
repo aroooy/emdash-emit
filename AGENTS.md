@@ -50,13 +50,47 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
     │
 [3. DIRECT EDIT]    Edit canonical file        -->  posts/[status]/<yyyyMMdd>_<ulid>-<title>.md
     │
-[4. PUSH]           Explicit push to remote    -->  sync_push (filePath or id required)
+[4. PUSH]           Explicit push to remote    -->  sync_push (filePath required)
 ```
 
 1. **PULL / STATUS (`sync_pull` / `sync_status`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. `sync_status` returns tracked articles sorted newest-first (descending by date prefix and ULID; date reflects publication/creation date, not last modified). To locate active edits, filter by `syncStatus: 'modified'`. Batch mode `sync_pull` automatically syncs taxonomies (categories/tags) alongside articles. Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to also pull media assets.
 2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files. Valid categories and tags (sorted by usage count) are returned automatically in the response hint.
 3. **DIRECT EDIT**: Edit the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly (frontmatter and body).
-4. **PUSH (`sync_push`)**: When editing is complete, push the specific file or ID to remote EmDash.
+4. **PUSH (`sync_push`)**: When editing is complete, push the specific `filePath` to remote EmDash.
+
+### Canonical Frontmatter Schema (`src/utils/frontmatter.ts`)
+
+Every article file must adhere strictly to `FrontmatterSchema`:
+
+```yaml
+---
+id: 01M6ABCDEF1234567890123456     # 26-char canonical ULID (DO NOT EDIT)
+slug: article-slug
+title: "Article Title"
+collection: posts                  # Default: "posts"
+status: draft                      # "draft" or "published"
+publishedAt: null                  # ISO 8601 timestamp string or null
+locale: ja                         # Default: "ja"
+featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB" # Optional: 26-char media record ULID or null
+taxonomies:                        # Nested map of taxonomy key -> array of term slugs (or term ULIDs)
+  categories:
+    - tech
+  tags:
+    - typescript
+seo:                               # Optional SEO metadata block
+  title: null
+  description: null
+  canonical: null                  # Must be an absolute URL (https://...) or null
+  noIndex: false
+  image: null
+bylines:                           # Author byline slugs (defaults to first non-guest author by slug ASC)
+  - aroooy
+---
+```
+
+- **Never place `categories` or `tags` at the top level**: `parseMarkdown()` strips unknown top-level keys via Zod and `serializeMarkdown()` rewrites the frontmatter on every pull/push. Top-level `categories:` / `tags:` are silently discarded without triggering Guard G4. Always nest them under `taxonomies:`.
+- **`seo.canonical` requires an absolute URL**: Validated with `z.string().url().nullable().optional()`; relative paths fail parsing.
+- **No duplicate `# Title` in body**: Do not repeat the article title as a top-level `# Heading` at the start of the Markdown body (Guard G7).
 
 ---
 
@@ -73,7 +107,7 @@ These rules are enforced at the code level via Preflight Guards (G1–G11):
 - To update the title, `slug`, or `status`, simply modify the YAML frontmatter and run `sync_push`. Emit will automatically move and rename files while maintaining cache database integrity.
 
 ### 3. Single-Target Push Enforcement
-- `sync_push` requires a specific `filePath` or `id`. Bulk uncontrolled pushes without inspection are prohibited.
+- `sync_push` requires a specific `filePath` (relative to the workspace root). `sync_diff` and single-article `sync_pull` accept either `filePath` or `id`. Bulk uncontrolled pushes without inspection are prohibited.
 
 ### 4. Staging Protection (Do Not Publish Prematurely)
 - Unless explicitly requested by the user, keep the post status as `draft`.
@@ -108,3 +142,4 @@ These rules are enforced at the code level via Preflight Guards (G1–G11):
 - Run `npm run check` (`format:check`, `typecheck`, and `test`) before committing.
 - Ensure 100% clean exit (zero errors, all tests green).
 - `tsconfig.json` builds `src/` only (tests excluded). `tsconfig.test.json` type-checks `src/` **and** `tests/` and is wired into `npm run typecheck`, so test files are fully typed and editors resolve `node:*` imports correctly. Do not add `@types/node`; it is already configured via `"types": ["node"]`.
+- **Baseline serialization invariant**: `base_snapshots` stores the frontmatter as **JSON-encoded** `Frontmatter` (column `frontmatter_yaml`, despite the name) plus the Markdown body. `emit diff` / `sync_diff` rebuilds the baseline with `serializeMarkdown(JSON.parse(frontmatterYaml), bodyMarkdown)`, and that result must remain byte-identical to what `pull` / `push` write to disk, otherwise untouched articles report phantom diffs and the 3-way merge baseline drifts. Any change to `formatFrontmatterYaml` / `serializeMarkdown` output must be made together with that reconstruction. `saved_at` is stored in epoch **seconds** (multiply by `1000` when rendering JS dates).

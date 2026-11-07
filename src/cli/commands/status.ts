@@ -22,6 +22,7 @@
 
 import type { Command } from 'commander';
 import { getWorkspaceStatus } from '../../sync/status.js';
+import { inspectArticleDiff } from '../../sync/diff.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerStatusInitCommands(
@@ -59,6 +60,29 @@ export function registerStatusInitCommands(
       console.log(
         `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked)\n`,
       );
+    });
+
+  // emit diff [filePath]
+  program
+    .command('diff [filePath]')
+    .description('Display line-by-line differences between local edits and baseline snapshot')
+    .option('-i, --id <id>', 'Article ID (ULID) to inspect')
+    .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .action((filePath: string | undefined, options: { id?: string; profile?: string }) => {
+      const ctx = resolveContext(options.profile);
+      const inspection = inspectArticleDiff({
+        workspaceRoot: ctx.root,
+        cache: ctx.cache,
+        filePath,
+        id: options.id,
+      });
+
+      if (!inspection.ok) {
+        console.error(inspection.formattedOutput);
+        process.exit(1);
+      }
+
+      console.log(inspection.formattedOutput);
     });
 
   // emit guide

@@ -100,6 +100,32 @@ describe('Frontmatter & Markdown Serialization', () => {
     expect(yaml).toContain('- hiroaki-hayase');
   });
 
+  it('serializes identically with or without taxonomy candidates (base snapshot invariant)', () => {
+    // Base snapshot reconstruction in src/sync/diff.ts re-serializes the cached frontmatter
+    // without candidates. If candidates ever start affecting output, untouched articles would
+    // show phantom diffs and the 3-way merge baseline would drift. This test locks that in.
+    const data: Frontmatter = {
+      id: validUlid,
+      slug: 'cloudflare-guide',
+      title: 'Cloudflare Guide',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+      bylines: ['hiroaki-hayase'],
+    };
+
+    const withCandidates = serializeMarkdown(data, 'Body line.\n', {
+      categories: ['tech', 'travel'],
+      tags: ['cloudflare', 'workers'],
+      bylines: ['hiroaki-hayase', 'aroooy'],
+    });
+    const withoutCandidates = serializeMarkdown(data, 'Body line.\n');
+
+    expect(withCandidates).toBe(withoutCandidates);
+  });
+
   it('preserves featuredImage across parse and serialization round-trips', () => {
     const raw = [
       '---',

@@ -34,6 +34,10 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
     .option('-t, --title <title>', 'Article title')
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-l, --locale <locale>', 'Article locale (defaults to "ja")')
+    .option(
+      '-b, --byline <slug>',
+      'Author byline slug (defaults to first cached non-guest author by slug)',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action((slug, options) => {
       const ctx = resolveContext(options.profile);
@@ -45,6 +49,7 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
         title: options.title,
         collection,
         locale,
+        byline: options.byline,
         workspaceRoot: ctx.root,
         cache: ctx.cache,
       });

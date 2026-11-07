@@ -25,6 +25,7 @@ export * from './client/error.js';
 export * from './client/http.js';
 export * from './client/lock.js';
 export * from './client/mapper.js';
+export * from './client/media.js';
 export * from './client/portable-text.js';
 export {
   ContentItemSchema,

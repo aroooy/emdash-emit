@@ -137,7 +137,7 @@ emit --help
 ```bash
 # ワンライナー実行
 npx emdash-emit status
-npx emdash-emit pull --all
+npx emdash-emit pull
 ```
 
 ---
@@ -186,14 +186,15 @@ emit profile add <profile-name> \
   --origin https://your-site.com \
   --workspace /path/to/local/workspace
 
-# 2. 認証トークンの設定
-# ブラウザまたは EmDash CLI でログイン済みの場合、~/.config/emdash/auth.json から自動検出されます。
-# 手動で渡す場合はプロファイル作成時に --token を指定するか、環境変数 EMDASH_TOKEN を使用します。
+# 2. 認証トークンの設定（4段階の優先順位で解決されます）
+#   (1) 環境変数 EMDASH_TOKEN / EMDASH_API_TOKEN（最優先）
+#   (2) ~/.config/emit/profiles.yaml（上記 profile add 時に --token を指定した場合）
+#   (3) ~/.config/emdash/auth.json（プロファイルにトークン未登録で EmDash CLI ログイン済みの場合、refreshToken による自動更新対応）
+#   (4) ~/.config/emit/credentials.json
 
-# 3. ワークスペースの初期同期
+# 3. ワークスペースの初期同期（バッチモードの emit pull は記事＋カテゴリ・タグを同時同期）
 cd /path/to/local/workspace
-emit pull --all
-emit pull-taxonomies
+emit pull
 emit pull-media
 ```
 

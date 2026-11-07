@@ -38,6 +38,10 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         .optional()
         .describe('Target collection (defaults to "posts" or config)'),
       locale: z.string().optional().describe('Article locale (defaults to "ja")'),
+      byline: z
+        .string()
+        .optional()
+        .describe('Author byline slug (defaults to first cached non-guest author by slug)'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -49,6 +53,8 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         collection,
         title: args.title,
         locale: args.locale || ctx.config.defaultLocale,
+        byline: args.byline,
+        cache: ctx.cache,
       });
 
       const taxSummary = getLocalTaxonomiesSummary(ctx.root);

@@ -21,13 +21,9 @@
  */
 
 import { z } from 'zod';
-import path from 'node:path';
-import fs from 'node:fs';
-import crypto from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { computeContextDiff } from '../../sync/diff.js';
-import { extractUlidFromFilename } from '../../utils/naming.js';
+import { inspectArticleDiff } from '../../sync/diff.js';
 
 export function registerSyncDiffTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -45,85 +41,18 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
     },
     async (args) => {
       const ctx = resolveContext(args.profile);
-
-      let targetId = args.id;
-      let targetFile = args.filePath;
-
-      if (!targetId && targetFile) {
-        const full = path.join(ctx.root, targetFile);
-        if (fs.existsSync(full)) {
-          const ulid = extractUlidFromFilename(full);
-          if (ulid) targetId = ulid;
-        }
-      }
-
-      if (targetId && !targetFile) {
-        const syncState = ctx.cache.getSyncState(targetId);
-        if (syncState) targetFile = syncState.localFilePath;
-      }
-
-      if (!targetId || !targetFile) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: '❌ Please specify a valid "filePath" or "id" to compute diff.',
-            },
-          ],
-        };
-      }
-
-      const fullLocalPath = path.join(ctx.root, targetFile);
-      if (!fs.existsSync(fullLocalPath)) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `❌ Local file not found: ${targetFile}`,
-            },
-          ],
-        };
-      }
-
-      const localContent = fs.readFileSync(fullLocalPath, 'utf8');
-      const baseSnapshot = ctx.cache.getBaseSnapshot(targetId);
-
-      if (!baseSnapshot) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `ℹ️ No base snapshot found for ID "${targetId}". Article is untracked or newly created.`,
-            },
-          ],
-        };
-      }
-
-      const syncState = ctx.cache.getSyncState(targetId);
-      const currentHash = crypto.createHash('sha256').update(localContent, 'utf8').digest('hex');
-      const isModified = syncState ? syncState.localHash !== currentHash : true;
-      const baseFullMarkdown = `---\n${baseSnapshot.frontmatterYaml}---\n${baseSnapshot.bodyMarkdown}`;
-      const diffResult = computeContextDiff(baseFullMarkdown, localContent, {
-        baseLabel: `base [rev: ${baseSnapshot.rev}]`,
-        localLabel: `local [${targetFile}]`,
+      const inspection = inspectArticleDiff({
+        workspaceRoot: ctx.root,
+        cache: ctx.cache,
+        filePath: args.filePath,
+        id: args.id,
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: [
-              `--- Diff for ${targetFile} (${targetId}) ---`,
-              `Status: ${isModified ? '🟡 Modified' : '🟢 In Sync with base snapshot'}`,
-              `Base Rev: ${baseSnapshot.rev}`,
-              `Base Saved At: ${new Date(baseSnapshot.savedAt).toISOString()}`,
-              `Changes: +${diffResult.additions} / -${diffResult.deletions} lines`,
-              '',
-              'Unified Diff:',
-              '----------------------------------------',
-              diffResult.unifiedDiff,
-              '----------------------------------------',
-            ].join('\n'),
+            text: inspection.formattedOutput,
           },
         ],
       };

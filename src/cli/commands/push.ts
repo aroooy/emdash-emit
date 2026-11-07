@@ -29,7 +29,9 @@ import type { CliContextResolver } from '../context.js';
 export function registerPushCommand(program: Command, resolveContext: CliContextResolver): void {
   program
     .command('push [file]')
-    .description('Push local markdown article(s) to remote EmDash')
+    .description(
+      'Push local markdown article(s) to remote EmDash (auto-uploads media/drafts/* images)',
+    )
     .option('--allow-publish', 'Confirm publishing live to remote')
     .option('--all', 'Push all modified files in workspace')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')

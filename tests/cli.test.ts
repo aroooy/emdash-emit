@@ -45,10 +45,32 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('guide');
     expect(commandNames).toContain('new');
     expect(commandNames).toContain('status');
+    expect(commandNames).toContain('diff');
     expect(commandNames).toContain('pull');
     expect(commandNames).toContain('push');
     expect(commandNames).toContain('mcp');
     expect(commandNames).toContain('profile');
+  });
+
+  it('diff command exposes --id and --profile options', () => {
+    const diffCmd = program.commands.find((c) => c.name() === 'diff');
+    expect(diffCmd).toBeDefined();
+    const optionNames = diffCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--id');
+    expect(optionNames).toContain('--profile');
+  });
+
+  it('new command exposes --byline option', () => {
+    const newCmd = program.commands.find((c) => c.name() === 'new');
+    expect(newCmd).toBeDefined();
+    const optionNames = newCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--byline');
+  });
+
+  it('push command description mentions auto-uploading media/drafts/* images', () => {
+    const pushCmd = program.commands.find((c) => c.name() === 'push');
+    expect(pushCmd).toBeDefined();
+    expect(pushCmd?.description()).toContain('media/drafts/*');
   });
 
   it('pull command enforces window concept without --limit or --all options', () => {

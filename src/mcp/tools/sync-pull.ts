@@ -21,8 +21,6 @@
  */
 
 import { z } from 'zod';
-import path from 'node:path';
-import fs from 'node:fs';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
 import { pullArticle } from '../../sync/pull.js';
@@ -33,7 +31,8 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { extractUlidFromFilename, compareArticleFilenameDesc } from '../../utils/naming.js';
+import { resolveArticleTarget } from '../../sync/diff.js';
+import { compareArticleFilenameDesc } from '../../utils/naming.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
   // sync_pull: Pull remote article(s) and taxonomies
@@ -84,14 +83,11 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       const collection = args.collection || ctx.config.defaultCollection;
       const origin = ctx.origin;
 
-      let targetId = args.id;
-      if (!targetId && args.filePath) {
-        const full = path.join(ctx.root, args.filePath);
-        if (fs.existsSync(full)) {
-          const ulid = extractUlidFromFilename(full);
-          if (ulid) targetId = ulid;
-        }
-      }
+      const { id: targetId } = resolveArticleTarget({
+        workspaceRoot: ctx.root,
+        filePath: args.filePath,
+        id: args.id,
+      });
 
       if (targetId) {
         const res = await pullArticle(collection, targetId, {

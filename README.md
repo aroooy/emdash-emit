@@ -226,7 +226,43 @@ emit profile list
 2. **Explicit Profile Flag**: You can explicitly specify `--profile <name>` (or pass `profile: "<name>"` in MCP) from any directory to override automatic detection.
 3. **Ambiguity Safeguard**: If you run a command outside of any registered workspace and omit `--profile`, Emit aborts with an `AmbiguousProfileError` instead of guessing or silently pushing to the wrong site.
 
-### 4. Recommended `.gitignore`
+### 4. Authentication Resolution Order & Token Auto-Refresh
+
+Emit resolves authentication credentials using a strict 4-tier priority chain (`src/client/auth.ts`):
+
+1. **Environment Variables (`EMDASH_TOKEN` or `EMDASH_API_TOKEN`, plus optional `EMDASH_ORIGIN`)**: Highest priority; ideal for CI/CD pipelines and one-off overrides.
+2. **Site Profile Registry (`~/.config/emit/profiles.yaml`)**: Matched via `--profile <name>` (or MCP `profile`), current workspace directory auto-detection, or a single registered profile.
+3. **EmDash CLI Credentials (`~/.config/emdash/auth.json`)**: Fallback when no token is configured in the profile.
+4. **Emit Custom Credentials (`~/.config/emit/credentials.json`)**: Final fallback.
+
+**Automatic OAuth Token Refresh on HTTP 401 (`src/client/http.ts`)**:
+When credentials include a `refresh_token` (such as OAuth sessions in `~/.config/emdash/auth.json` or `~/.config/emit/credentials.json`) and a request returns `401 Unauthorized`, Emit automatically exchanges the `refresh_token` at `POST /_emdash/api/auth/token` (`grant_type: "refresh_token"`), persists the refreshed token back to `auth.json` when applicable, and transparently retries the request once.
+
+### 5. Workspace Configuration (`.emit/config.json`)
+
+Running `emit init` generates `.emit/config.json` with the following keys (`src/utils/config.ts`):
+
+```json
+{
+  "origin": "https://your-blog.example.com",
+  "defaultCollection": "posts",
+  "defaultLocale": "ja",
+  "postsSyncLimit": 100,
+  "mediaSyncLimit": 300,
+  "concurrency": 8
+}
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `origin` | `"https://example.com"` | Base URL of the target EmDash instance (overridden by `EMDASH_ORIGIN` or active profile) |
+| `defaultCollection` | `"posts"` | Default content collection when `--collection` is omitted |
+| `defaultLocale` | `"ja"` | Default locale used when scaffolding new drafts via `emit new` / `sync_new` |
+| `postsSyncLimit` | `100` | Sliding window size for batch article pulls (also supports legacy `syncLimit` fallback) |
+| `mediaSyncLimit` | `300` | Default maximum items fetched by `emit pull-media` / `sync_pull_media` |
+| `concurrency` | `8` | Parallel HTTP fetch concurrency during batch pulls |
+
+### 6. Recommended `.gitignore`
 
 When tracking your local blog repository with Git, use the following recommended `.gitignore` configuration:
 
@@ -289,36 +325,62 @@ your-blog/
 
 ```
 
+### Local SQLite Cache (`.emit/cache.db`)
+
+Emit maintains a local SQLite database via Node.js built-in `node:sqlite` (`src/db/cache.ts`) with 5 tables:
+
+| Table | Purpose |
+| --- | --- |
+| `entries` | Caches the latest remote JSON envelope and revision (`rev`) for each synced article |
+| `base_snapshots` | Stores the baseline Markdown body and baseline frontmatter at the last synced revision to power Hybrid 3-Way Merge (`frontmatter_yaml` holds a **JSON-encoded** `Frontmatter` object, not YAML text) |
+| `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified`) |
+| `bylines` | Caches remote author records (`id`, `slug`, `display_name`, `is_guest`) synced automatically via `/_emdash/api/mcp` (`byline_list`) on pull, enabling slug ⇔ ULID resolution and default author selection |
+| `media_state` | Tracks offline draft image uploads (`local_hash`, `media_id`, `storage_key`, `url`, `workspace_path`, `status`: `pending` \| `uploaded` \| `ready` \| `failed`) for idempotency, retry recovery, and cross-article asset reuse |
+
 ---
 
 ## 📝 Markdown & YAML Frontmatter Specification
 
-Each article is stored as a Markdown file with a standard YAML frontmatter header.
+Each article is stored as a Markdown file with a validated YAML frontmatter header (`FrontmatterSchema` in `src/utils/frontmatter.ts`).
 
 ### Frontmatter Schema
 
 ```yaml
 ---
-id: 01M6ABCDEF1234567890123456     # EmDash canonical ULID (auto-generated; DO NOT EDIT)
+id: 01M6ABCDEF1234567890123456     # 26-char canonical ULID (auto-generated; DO NOT EDIT)
+slug: building-ai-powered-cms-tools
 title: "Building AI-Powered CMS Tools"
-slug: "building-ai-powered-cms-tools"
-status: draft                       # Status: "draft" or "published"
-publishedAt: null                   # ISO 8601 timestamp (null for drafts)
-updatedAt: "2026-11-04T12:00:00.000Z"
-excerpt: "A deep dive into building autonomous content workflows with EmDash and Emit."
-featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"    # 26-character canonical media ULID or null
-categories:                         # Slugs (or canonical term ULIDs) matching categories/*.yaml
-  - tech
-tags:                               # Slugs (or canonical term ULIDs) matching tags/*.yaml
-  - typescript
-  - ai
-customFields:                       # Optional custom field definitions
-  canonicalUrl: ""
+collection: posts                  # Target collection (defaults to "posts")
+status: draft                      # "draft" or "published" (defaults to "draft")
+publishedAt: null                  # ISO 8601 timestamp string (e.g. "2026-11-04T12:00:00.000Z") or null
+locale: ja                         # Locale code (defaults to "ja")
+featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB" # Optional: 26-char media ULID (uppercase-normalized) or null
+taxonomies:                        # Map of taxonomy key -> array of term slugs (or canonical term ULIDs)
+  categories:
+    - tech
+  tags:
+    - typescript
+    - ai
+seo:                               # Optional SEO metadata block
+  title: null                      # Custom SEO title string or null
+  description: null                # Meta description string or null
+  canonical: null                  # Absolute URL (e.g. "https://example.com/posts/...") or null
+  noIndex: false                   # Boolean (optional)
+  image: null                      # SEO image string or null
+bylines:                           # Author byline slugs (resolved via cached bylines table)
+  - aroooy
 ---
 
 Markdown body begins here...
 
 ```
+
+> [!IMPORTANT]
+> **Schema Validation & Serialization Rules (`src/utils/frontmatter.ts`)**:
+> * **Always nest categories and tags under `taxonomies:`**: `parseMarkdown()` validates frontmatter with Zod (`FrontmatterSchema`), which strips unknown top-level keys, and `serializeMarkdown()` regenerates the YAML header on every pull and push. Writing `categories:` or `tags:` at the top level will silently discard them without triggering Preflight Guard G4. `taxonomies` accepts `categories`, `tags`, and any additional custom taxonomy keys defined in EmDash (`z.record(z.array(z.string()))`).
+> * **`seo.canonical` must be an absolute URL**: Validated via `z.string().url().nullable().optional()`. Relative paths such as `"/posts/my-slug"` will fail frontmatter parsing; always specify a full `https://...` URL or `null`.
+> * **Author `bylines` auto-selection**: When scaffolding with `emit new` / `sync_new` without `--byline` / `byline`, Emit populates `bylines` with the first cached non-guest author ordered by `slug ASC` from `.emit/cache.db`. On single-author sites this is always your author slug; on multi-author sites, pass `-b, --byline <slug>` (or `byline` in MCP) or edit `bylines:` in frontmatter explicitly.
+> * **`id` and `featuredImage` normalization**: `id` must be an exact 26-character ULID. `featuredImage` values matching a 26-character Crockford base32 ULID are normalized to uppercase automatically.
 
 ### Critical Content Rules
 
@@ -326,7 +388,7 @@ Markdown body begins here...
    - The article title is managed by the `title:` field in the frontmatter.
    - **Do not** add `# Article Title` as the first heading in the Markdown body. Doing so causes duplicate title displays on the site frontend. (Emit's preflight guard G7 will detect and automatically trim redundant top headings).
 2. **Taxonomy Slugs & Normalization**:
-   - Items under `categories:` and `tags:` should use existing slug names from `categories/` and `tags/` (e.g. `- tech`, `- nodejs`).
+   - Items under `taxonomies.categories` and `taxonomies.tags` should use existing slug names from `categories/*.yaml` and `tags/*.yaml` (e.g. `- tech`, `- nodejs`). Note that while taxonomy definition filenames include the ULID (`categories/<id>-<slug>.yaml`), the frontmatter entries use the **slug**.
    - If a valid term ULID is specified in the frontmatter, Emit automatically resolves it transparently to its corresponding slug for Preflight Guard G4 validation and maintains accurate term assignment on remote sync.
    - Do not duplicate the same term using both its slug and ULID within the same taxonomy (e.g. `[- tech, 01M6CAT1]`). Emit de-duplicates identical term assignments, but a slug and a ULID that resolve to **different** terms will both be assigned to the article.
    - Never invent arbitrary IDs or invalid names; valid options are automatically displayed as hints during `emit pull`, `emit pull-taxonomies`, `emit new`, `sync_pull`, `sync_pull_taxonomies`, and `sync_new`. Hint lists are capped per command (with an `...and N more` marker), so the authoritative full list is always the `categories/` and `tags/` YAML files. Preflight Guard G4 strictly validates taxonomy terms before pushing.
@@ -384,7 +446,7 @@ You can author articles completely offline using local images and let `emit push
 #### Workflow B: Pre-Uploaded Media & Featured Hero Images
 
 1. **Upload via Admin / EmDash MCP**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`).
-2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`.Note that `emit pull-media --prune` safely ignores `media/drafts/`.
+2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`. Note that `emit pull-media --prune` safely ignores `media/drafts/`.
 3. **Embed in Articles**:
    - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media record `id`) or `null` in frontmatter.
    - For body images: use `![Alt text](/_emdash/api/media/file/<storageKey>)`.
@@ -497,7 +559,7 @@ emit profile use <name>
 Scaffolds a new draft article with a canonical 26-character ULID timestamp.
 
 ```bash
-emit new <slug> [-t, --title <title>] [-c, --collection <collection>] [-l, --locale <locale>]
+emit new <slug> [-t, --title <title>] [-c, --collection <collection>] [-l, --locale <locale>] [-b, --byline <slug>] [-p, --profile <name>]
 
 ```
 
@@ -505,6 +567,8 @@ emit new <slug> [-t, --title <title>] [-c, --collection <collection>] [-l, --loc
 * `-t, --title <title>`: Human-readable article title.
 * `-c, --collection <name>`: Collection name (defaults to `posts`).
 * `-l, --locale <locale>`: Locale code (defaults to `ja` or config).
+* `-b, --byline <slug>`: Author byline slug (defaults to the first cached non-guest author ordered by `slug ASC`).
+* `-p, --profile <name>`: Explicitly target a specific connection profile.
 
 **Example:**
 
@@ -659,9 +723,13 @@ Summary: 3 total (1 synced, 1 modified, 1 untracked)
 Shows line-by-line differences between the working Markdown file and the baseline snapshot.
 
 ```bash
-emit diff [filePath]
+emit diff [filePath] [-i, --id <id>] [-p, --profile <name>]
 
 ```
+
+* `[filePath]`: Relative path to the local Markdown file (e.g., `posts/draft/20261104_01M6...-my-article.md`).
+* `-i, --id <id>`: Inspect by 26-character article ULID instead of file path.
+* `-p, --profile <name>`: Explicitly target a specific connection profile.
 
 ---
 
@@ -783,15 +851,15 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
-| `sync_status` | Inspect local sync state (articles returned newest-first) | `collection` |
-| `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints) | `id`, `force`, `status`, `noPrune`, `postsOnly`, `includeMedia`, `metadataOnly` |
-| `sync_new` | Scaffold new article with canonical ULID, frontmatter, and taxonomy hints | `slug`, `title`, `locale`, `collection` |
-| `sync_push` | Push local article changes to remote with preflight checks | `filePath`, `id`, `allowPublish` |
-| `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath` |
-| `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints) | (none) |
-| `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `prune`, `metadataOnly` |
+| `sync_status` | Inspect local sync state (articles returned newest-first) | `collection`, `profile` |
+| `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints) | `collection`, `id`, `filePath`, `status`, `force`, `noPrune`, `prune`, `postsOnly`, `includeMedia`, `metadataOnly`, `profile` |
+| `sync_new` | Scaffold new article with canonical ULID, frontmatter, default byline, and taxonomy hints | `slug` (required), `title`, `collection`, `locale`, `byline`, `profile` |
+| `sync_push` | Push local article changes to remote with preflight checks and `media/drafts/*` auto-upload | `filePath` (required), `allowPublish`, `profile` |
+| `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath`, `id`, `profile` |
+| `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints) | `profile` |
+| `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `downloadFiles`, `profile` |
 | `profile_list` | List all configured connection profiles | (none) |
-| `profile_switch` | Switch active profile for multi-site environments | `name` |
+| `profile_switch` | Switch active profile for multi-site environments | `name` (required), `persist` |
 
 ### Autonomous Agent Workflows
 
