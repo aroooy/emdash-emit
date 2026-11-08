@@ -21,6 +21,7 @@
  */
 
 import type { Command } from 'commander';
+import type { ProfileConfig } from '../../utils/profile.js';
 import {
   loadProfilesFile,
   setProfile,
@@ -85,16 +86,36 @@ export function registerProfileCommands(program: Command): void {
     .option('--active', 'Set this profile as active immediately')
     .action((name, options) => {
       try {
-        const profileConfig = {
+        /**
+         * `add` doubles as "update", so unspecified options must fall back to what is already
+         * stored. Re-running `emit profile add <name> --origin <new>` used to rebuild the entry
+         * from scratch, silently wiping a stored token and the workspace link that `emit init`
+         * created - the next command then failed with "No authentication found" and directory
+         * based profile resolution broke.
+         */
+        const existing = loadProfilesFile().profiles[name];
+        const token = options.token ?? existing?.token ?? '';
+        const workspace = options.workspace ?? existing?.workspace;
+        const profileConfig: ProfileConfig = {
           origin: options.origin,
-          token: options.token || '',
-          ...(options.workspace ? { workspace: options.workspace } : {}),
+          token,
+          ...(workspace ? { workspace } : {}),
+          ...(existing?.defaultCollection ? { defaultCollection: existing.defaultCollection } : {}),
+          ...(existing?.defaultLocale ? { defaultLocale: existing.defaultLocale } : {}),
         };
         setProfile(name, profileConfig);
         if (options.active) {
           setActiveProfile(name);
         }
-        console.log(`✅ Profile "${name}" configured successfully.`);
+        const kept: string[] = [];
+        if (!options.token && existing?.token) kept.push('token');
+        if (!options.workspace && workspace) kept.push('workspace link');
+        console.log(
+          `✅ Profile "${name}" ${existing ? 'updated' : 'configured'} successfully.` +
+            (kept.length
+              ? ` Kept the existing ${kept.join(' and ')}; pass --token/--workspace to replace them.`
+              : ''),
+        );
       } catch (error) {
         reportProfileFailure(error);
       }

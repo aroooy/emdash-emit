@@ -29,7 +29,7 @@ import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/com
 import { resolveInitPlan } from '../src/cli/commands/status.js';
 import { resolveOriginPriority } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
-import { setProfile } from '../src/utils/profile.js';
+import { loadProfilesFile, setProfile } from '../src/utils/profile.js';
 
 describe('Emit CLI (Commander)', () => {
   let tempDir: string;
@@ -152,6 +152,73 @@ describe('Emit CLI (Commander)', () => {
     } finally {
       console.error = originalError;
       process.exit = originalExit;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('profile add preserves an existing token and workspace link when those options are omitted', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-cli-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    const logLines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map(String).join(' '));
+    };
+
+    try {
+      const run = async (...args: string[]) => {
+        logLines.length = 0;
+        await program.parseAsync(['node', 'emit', 'profile', 'add', ...args]);
+      };
+
+      await run(
+        'demo',
+        '--origin',
+        'https://old.example.com',
+        '--token',
+        'tok-secret',
+        '--workspace',
+        '/tmp/emit-ws-1',
+      );
+      let profile = loadProfilesFile().profiles['demo'];
+      expect(profile.token).toBe('tok-secret');
+      expect(profile.workspace).toBe('/tmp/emit-ws-1');
+
+      // Re-running add to change only the origin must not silently wipe credentials or the
+      // workspace link that "emit init" established.
+      await run('demo', '--origin', 'https://new.example.com');
+      profile = loadProfilesFile().profiles['demo'];
+      expect(profile.origin).toBe('https://new.example.com');
+      expect(profile.token).toBe('tok-secret');
+      expect(profile.workspace).toBe('/tmp/emit-ws-1');
+      expect(logLines.join('\n')).toContain('updated');
+      expect(logLines.join('\n')).toContain('Kept the existing token and workspace link');
+
+      // Explicit flags always win.
+      await run(
+        'demo',
+        '--origin',
+        'https://new.example.com',
+        '--token',
+        'tok-rotated',
+        '--workspace',
+        '/tmp/emit-ws-2',
+      );
+      profile = loadProfilesFile().profiles['demo'];
+      expect(profile.token).toBe('tok-rotated');
+      expect(profile.workspace).toBe('/tmp/emit-ws-2');
+      expect(logLines.join('\n')).not.toContain('Kept the existing');
+
+      // An explicit empty --token is honored as an intentional clear.
+      await run('demo', '--origin', 'https://new.example.com', '--token', '');
+      profile = loadProfilesFile().profiles['demo'];
+      expect(profile.token).toBe('');
+    } finally {
+      console.log = originalLog;
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
       fs.rmSync(homeDir, { recursive: true, force: true });

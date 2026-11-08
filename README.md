@@ -193,6 +193,9 @@ emit profile add my-blog \
 > [!NOTE]
 > Profiles are securely stored with `0600` permissions at `~/.config/emit/profiles.yaml` (on macOS / Linux) or `%USERPROFILE%\.config\emit\profiles.yaml` (on Windows).
 
+> [!NOTE]
+> **`emit profile add` updates in place.** Re-running it with only `--origin` (for example after rotating a domain) keeps the stored `--token` and the `--workspace` link that `emit init` created, and reports `Kept the existing token and workspace link`. Pass `--token`/`--workspace` explicitly to replace them; an empty `--token ''` clears the credential on purpose.
+
 ### 2. Initialize a Workspace
 
 Navigate to your local repository directory and initialize it:
