@@ -632,7 +632,7 @@ emit pull [id] [options]
 * `--force`: Force overwrite local files and bypass differential hash checking.
 * `--concurrency <n>`: Parallel processing task limit (default: `8`).
 * `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
-* `--media`: Also pull media assets and companion metadata into `media/`.
+* `--media`: Also pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `300`). Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
 * `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
 
 > [!NOTE]
