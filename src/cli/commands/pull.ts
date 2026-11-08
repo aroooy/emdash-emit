@@ -142,6 +142,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
+              } else if (item.healed) {
+                console.log(
+                  `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved)`,
+                );
               } else if (item.localEditsPreserved) {
                 console.log(
                   `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath})`,
@@ -208,6 +212,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           });
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);
+          } else if (res.healed) {
+            console.log(
+              `🛠️ Repaired frontmatter syntax for ${res.slug} (${res.filePath}; unpushed local body was strictly preserved).`,
+            );
           } else if (res.localEditsPreserved) {
             console.log(
               `🛡️ Kept your local edits for ${res.slug} (${res.filePath}); remote changes were NOT applied.`,

@@ -1143,6 +1143,8 @@ describe('Pull & Push Synchronization Engine', () => {
     });
 
     expect(res.updated).toBe(true);
+    expect(res.healed).toBe(true);
+    expect(res.meaningChanged).toBe(false);
 
     // The file on disk now has valid frontmatter AND strictly preserves the local body
     const diskContentAfter = fs.readFileSync(fullPath, 'utf8');
@@ -1156,5 +1158,79 @@ describe('Pull & Push Synchronization Engine', () => {
     const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(statusAfter.summary.invalid).toBe(0);
     expect(statusAfter.summary.modified).toBe(1); // correctly identified as modified local edits!
+  });
+
+  it('pullArticle falls through to quarantine when frontmatter cannot be leniently healed without altering meaning (M-3)', async () => {
+    const unhealableId = '01M6UNHEALABLE00000000000';
+    const relPath = `posts/draft/20261108_${unhealableId}-Unhealable.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Severely corrupted frontmatter (mismatched brackets, invalid syntax) that lenient repair refuses
+    const unhealableContent = [
+      '---',
+      `id: ${unhealableId}`,
+      'slug: unhealable-post',
+      'title: "Unhealable Post"',
+      'status: draft',
+      'taxonomies: {[[[corrupted syntax that cannot be healed safely]]]}',
+      '---',
+      '',
+      'Valuable local content that must be rescued in conflicts/.',
+    ].join('\n');
+
+    fs.writeFileSync(fullPath, unhealableContent, 'utf8');
+
+    cache.saveSyncState({
+      id: unhealableId,
+      localFilePath: relPath,
+      localHash: 'baseline_hash_1',
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug: 'unhealable-post',
+      lastSyncedAt: Math.floor(Date.now() / 1000),
+    });
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (
+        url.includes(`/terms/category`) ||
+        url.includes(`/terms/tag`) ||
+        url.includes(`/bylines`)
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { terms: [], bylines: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    const res = await pullArticle('posts', unhealableId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      rawItem: {
+        id: unhealableId,
+        slug: 'unhealable-post',
+        status: 'draft',
+        _rev: 'rev_1',
+        data: { title: 'Unhealable Post' },
+      },
+    });
+
+    // Full pull executed with canonical write and quarantine preservation
+    expect(res.updated).toBe(true);
+    expect(res.quarantined).toBeDefined();
+    expect(res.quarantined!.length).toBe(1);
+    expect(res.quarantined![0].sourceFilePath).toBe(relPath);
+
+    // Verify rescue copy preserved under posts/conflicts/ with valuable unpushed content
+    const conflictRel = res.quarantined![0].quarantineFilePath;
+    const conflictFull = path.join(tempDir, conflictRel);
+    expect(fs.existsSync(conflictFull)).toBe(true);
+    expect(fs.readFileSync(conflictFull, 'utf8')).toContain(
+      'Valuable local content that must be rescued in conflicts/.',
+    );
   });
 });

@@ -63,6 +63,12 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
         title: 'Gadget Review',
         category: 'gadget',
       },
+      {
+        id: '01M67MP2W0VKCK2DFWM166CR27',
+        slug: '%e5%8f%b0%e6%b9%be-travel',
+        title: 'Taiwan Travel',
+        category: '%e6%9c%aa%e5%88%86%e9%a1%9e',
+      },
     ];
 
     for (const a of articles) {
@@ -87,7 +93,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
 
       const hash = calculateHash(content);
 
-      // Baseline snapshot and sync state matching 0.1.8/0.1.9 serializer
+      // Baseline snapshot and sync state matching 0.1.8/0.1.9 serializer (epoch seconds for lastSyncedAt)
       cache.saveSyncState({
         id: a.id,
         localFilePath: relPath,
@@ -95,7 +101,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
         remoteRev: 'rev_1',
         status: 'published',
         slug: a.slug,
-        lastSyncedAt: Date.now(),
+        lastSyncedAt: Math.floor(Date.now() / 1000),
       });
 
       cache.saveBaseSnapshot({
@@ -110,8 +116,8 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
 
     // Checking status on upgrade without pulling MUST report 100% synced, 0 modified, 0 invalid
     const status = getWorkspaceStatus(tempDir, cache, 'posts');
-    expect(status.summary.total).toBe(3);
-    expect(status.summary.synced).toBe(3);
+    expect(status.summary.total).toBe(4);
+    expect(status.summary.synced).toBe(4);
     expect(status.summary.modified).toBe(0);
     expect(status.summary.invalid).toBe(0);
     expect(status.summary.untracked).toBe(0);

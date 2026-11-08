@@ -299,4 +299,75 @@ describe('Frontmatter & Markdown Serialization', () => {
     expect(parsed.frontmatter.taxonomies?.tags).toEqual(['%e5%8f%b0%e6%b9%be']);
     expect(parsed.body.trim()).toBe('Valuable unpushed local body content with unicode 台湾.');
   });
+
+  it('lenientRepairMarkdownFrontmatter strictly isolates trailing comments without polluting slug values (C-1 regression)', () => {
+    const withComments = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: %e5%8f%b0%e6%b9%be # Taiwan Slug Comment',
+      'title: "Taiwan with comments"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e # Uncategorized Category Comment',
+      '---',
+      '',
+      'Body with trailing comments in frontmatter.',
+    ].join('\n');
+
+    expect(() => parseMarkdown(withComments)).toThrow();
+
+    const repaired = lenientRepairMarkdownFrontmatter(withComments);
+    expect(repaired).not.toBeNull();
+
+    // The repaired string retains the comments visually
+    expect(repaired).toContain('slug: "%e5%8f%b0%e6%b9%be" # Taiwan Slug Comment');
+    expect(repaired).toContain(
+      '    - "%e6%9c%aa%e5%88%86%e9%a1%9e" # Uncategorized Category Comment',
+    );
+
+    // The parsed data MUST NOT absorb the comment into the string values
+    const parsed = parseMarkdown(repaired!);
+    expect(parsed.frontmatter.slug).toBe('%e5%8f%b0%e6%b9%be');
+    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+  });
+
+  it('lenientRepairMarkdownFrontmatter preserves CRLF line endings verbatim throughout frontmatter and body (M-1 regression)', () => {
+    const crlfBroken = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: %e5%8f%b0%e6%b9%be',
+      'title: "CRLF Post"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+      '---',
+      '',
+      'Line 1 of CRLF body.\r\nLine 2 of CRLF body.\r\n',
+    ].join('\r\n');
+
+    const repaired = lenientRepairMarkdownFrontmatter(crlfBroken);
+    expect(repaired).not.toBeNull();
+
+    // Verify all line endings remain CRLF without any LF mutation
+    expect(repaired).toContain('\r\n');
+    expect(repaired).not.toMatch(/[^\r]\n/);
+    expect(repaired).toContain('Line 1 of CRLF body.\r\nLine 2 of CRLF body.\r\n');
+  });
+
+  it('lenientRepairMarkdownFrontmatter returns null if document is already valid (N-2 phantom diff prevention)', () => {
+    const valid = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: valid-slug',
+      'title: "Valid Post"',
+      'status: draft',
+      '---',
+      '',
+      'Body text.',
+    ].join('\n');
+
+    expect(lenientRepairMarkdownFrontmatter(valid)).toBeNull();
+  });
 });

@@ -63,6 +63,10 @@ export interface PullResult {
   title?: string;
   /** True when the local file has unpushed edits and Emit kept them instead of applying remote changes. */
   localEditsPreserved?: boolean;
+  /** True when frontmatter syntax was non-destructively healed while preserving unpushed local body content. */
+  healed?: boolean;
+  /** True if frontmatter meaning or keys/values were altered during heal (false for syntax-only repair). */
+  meaningChanged?: boolean;
   /** Local copies that diverged from the last synced baseline and were preserved in `<collection>/conflicts/`. */
   quarantined?: QuarantinedLocalCopy[];
 }
@@ -499,12 +503,51 @@ export async function pullArticle(
                 // Syntax-only repair succeeded! Overwrite disk with repaired frontmatter (keeping local body).
                 fs.writeFileSync(fullExistingPath, repaired, 'utf8');
                 const repairedHash = calculateHash(repaired);
+                const parsedRepaired = parseMarkdown(repaired);
+
+                // Update baseline snapshot using the remote rev and remote payload's canonical representation,
+                // so subsequent 3-way merges compare against the remote baseline rather than claiming
+                // local edits are in sync.
+                const rawData = (rawItem.data || {}) as Record<string, unknown>;
+                const effectiveOptions: PullOptions = {
+                  ...options,
+                  bylineIdToSlug: options.bylineIdToSlug || {},
+                };
+                const remoteLocal = apiResponseToLocal(rawItem, effectiveOptions);
+                const remoteCanonMarkdown = serializeMarkdown(
+                  remoteLocal.frontmatter,
+                  remoteLocal.body,
+                );
+                const remoteCanonHash = calculateHash(remoteCanonMarkdown);
+
+                options.cache.saveBaseSnapshot({
+                  id,
+                  rev: remoteRev,
+                  bodyMarkdown: remoteLocal.body,
+                  frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
+                  hash: remoteCanonHash,
+                  savedAt: Math.floor(Date.now() / 1000),
+                });
+
+                // Update syncState keeping remoteCanonHash so local edits (repairedHash) are correctly identified as modified
+                options.cache.saveSyncState({
+                  id,
+                  localFilePath: existingSync.localFilePath,
+                  localHash: remoteCanonHash,
+                  remoteRev,
+                  status: parsedRepaired.frontmatter.status,
+                  slug: parsedRepaired.frontmatter.slug,
+                  lastSyncedAt: Math.floor(Date.now() / 1000),
+                });
+
                 return {
                   id,
-                  slug: existingSync.slug,
-                  status: existingSync.status,
+                  slug: parsedRepaired.frontmatter.slug,
+                  status: parsedRepaired.frontmatter.status,
                   filePath: existingSync.localFilePath,
                   updated: true,
+                  healed: true,
+                  meaningChanged: false,
                   title: rawTitle,
                 };
               }

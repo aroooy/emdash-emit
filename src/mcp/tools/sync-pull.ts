@@ -110,11 +110,13 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           return formatToolError(error);
         }
 
-        const actionText = res.localEditsPreserved
-          ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
-          : res.skipped
-            ? 'ℹ️ Article is already up-to-date'
-            : '✅ Successfully pulled article';
+        const actionText = res.healed
+          ? '🛠️ Repaired frontmatter syntax (unpushed local body was strictly preserved)'
+          : res.localEditsPreserved
+            ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
+            : res.skipped
+              ? 'ℹ️ Article is already up-to-date'
+              : '✅ Successfully pulled article';
         const titleText = res.title ? ` "${res.title}"` : '';
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
         const quarantineNotice = formatQuarantineNotice(res.quarantined);

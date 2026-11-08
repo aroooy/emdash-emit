@@ -214,7 +214,30 @@ export function formatYamlScalar(value: string): string {
  * Guaranteed NEVER to alter the Markdown body or mutate keys/values.
  * Returns the repaired Markdown string, or null if lenient repair could not produce valid frontmatter.
  */
+/**
+ * Attempts lenient regex-based syntax repair on raw Markdown whose frontmatter fails js-yaml parsing.
+ * Restricted strictly to:
+ * 1. Quoting unquoted scalars starting with "%" or containing special characters on array elements (`- %...`) or slug lines (`slug: %...`).
+ *    Preserves any trailing comments (e.g. `slug: %... # comment` or `- %... # comment`) so values are not polluted.
+ * 2. Fixing minor indentation on taxonomy/byline sequence element lines (`- <item>`) strictly within taxonomy/byline blocks.
+ *
+ * Guaranteed NEVER to alter the Markdown body, change keys/values, or mutate newline formats (CRLF/LF).
+ * Returns the repaired Markdown string, or null if lenient repair could not produce valid frontmatter
+ * or if values/meaning were altered.
+ */
 export function lenientRepairMarkdownFrontmatter(content: string): string | null {
+  // If content is already valid, do not touch it (prevents phantom diffs)
+  try {
+    parseMarkdown(content);
+    return null;
+  } catch {
+    // proceed to repair
+  }
+
+  // Detect original EOL
+  const isCrlf = content.includes('\r\n');
+  const eol = isCrlf ? '\r\n' : '\n';
+
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n[\s\S]*)$/);
   if (!match) return null;
 
@@ -223,55 +246,85 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
 
   const lines = rawYaml.split(/\r?\n/);
   const repairedLines: string[] = [];
+  let inTaxonomiesBlock = false;
   let inSequenceBlock = false;
 
   for (const line of lines) {
     let repairedLine = line;
 
-    // Detect section headers for sequences (e.g. "categories:", "tags:", "bylines:")
-    if (/^\s*(categories|tags|bylines):\s*$/.test(line)) {
+    if (/^taxonomies:\s*$/.test(line)) {
+      inTaxonomiesBlock = true;
+      inSequenceBlock = false;
+      repairedLines.push(line);
+      continue;
+    } else if (/^bylines:\s*$/.test(line)) {
+      inTaxonomiesBlock = false;
       inSequenceBlock = true;
       repairedLines.push(line);
       continue;
     } else if (/^\S/.test(line)) {
-      // Top-level key leaves the sequence block
+      // Any other top-level key leaves both taxonomies and bylines blocks
+      inTaxonomiesBlock = false;
       inSequenceBlock = false;
+    } else if (inTaxonomiesBlock && /^\s{2}(categories|tags|[a-zA-Z0-9_-]+):\s*$/.test(line)) {
+      inSequenceBlock = true;
+      repairedLines.push(line);
+      continue;
     }
 
-    // 1. Array element lines (`- <value>`): repair unquoted % or YAML tokens and normalize indentation (4 spaces inside taxonomies)
-    const seqMatch = line.match(/^(\s*)-\s*(.*)$/);
-    if (seqMatch) {
-      const leadingSpace = seqMatch[1];
-      let value = seqMatch[2].trim();
+    // 1. Array element lines (`- <value>`): strictly inside taxonomy or bylines blocks
+    if (inSequenceBlock) {
+      const seqMatch = line.match(/^(\s*)-\s*(.*)$/);
+      if (seqMatch) {
+        const leadingSpace = seqMatch[1];
+        const rest = seqMatch[2].trim();
 
-      // If value starts with % and is unquoted, quote it
-      if (value.startsWith('%') && !value.startsWith('"') && !value.startsWith("'")) {
-        value = JSON.stringify(value);
-      }
+        // Separate value from any trailing comment: e.g. `"%e6%9c%aa" # comment` or `%e6%9c%aa # comment`
+        const commentMatch = rest.match(/^(\S+)(\s+#.*)?$/);
+        let value = commentMatch ? commentMatch[1] : rest;
+        const trailingComment = commentMatch && commentMatch[2] ? commentMatch[2] : '';
 
-      // If indentation inside sequence block is slightly off (e.g. 2 or 3 spaces instead of 4)
-      const indent = inSequenceBlock && leadingSpace.length < 4 ? '    ' : leadingSpace;
-      repairedLine = `${indent}- ${value}`;
-    } else {
-      // 2. Slug key line (`slug: %...`): quote unquoted %
-      const slugMatch = line.match(/^(\s*slug:\s*)(.*)$/);
-      if (slugMatch) {
-        let slugVal = slugMatch[2].trim();
-        if (slugVal.startsWith('%') && !slugVal.startsWith('"') && !slugVal.startsWith("'")) {
-          slugVal = JSON.stringify(slugVal);
+        // If value starts with % and is unquoted, quote it
+        if (value.startsWith('%') && !value.startsWith('"') && !value.startsWith("'")) {
+          value = JSON.stringify(value);
         }
-        repairedLine = `${slugMatch[1]}${slugVal}`;
+
+        // If indentation inside sequence block is slightly off (e.g. 2 or 3 spaces instead of 4)
+        const indent = inTaxonomiesBlock && leadingSpace.length < 4 ? '    ' : leadingSpace;
+        repairedLine = `${indent}- ${value}${trailingComment}`;
+        repairedLines.push(repairedLine);
+        continue;
       }
+    }
+
+    // 2. Slug key line strictly top-level (`^slug:\s*`): quote unquoted % while preserving trailing comment
+    const slugMatch = line.match(/^slug:\s*(.*)$/);
+    if (slugMatch) {
+      const rest = slugMatch[1].trim();
+      const commentMatch = rest.match(/^(\S+)(\s+#.*)?$/);
+      let slugVal = commentMatch ? commentMatch[1] : rest;
+      const trailingComment = commentMatch && commentMatch[2] ? commentMatch[2] : '';
+
+      if (slugVal.startsWith('%') && !slugVal.startsWith('"') && !slugVal.startsWith("'")) {
+        slugVal = JSON.stringify(slugVal);
+      }
+      repairedLine = `slug: ${slugVal}${trailingComment}`;
+      repairedLines.push(repairedLine);
+      continue;
     }
 
     repairedLines.push(repairedLine);
   }
 
-  const candidateYaml = repairedLines.join('\n');
-  const candidateFull = `---${rawYaml.startsWith('\r\n') ? '\r\n' : '\n'}${candidateYaml}${rawYaml.endsWith('\r\n') ? '\r\n' : '\n'}---${bodyWithLeadingNewline}`;
+  const candidateYaml = repairedLines.join(eol);
+  const candidateFull = `---${eol}${candidateYaml}${eol}---${bodyWithLeadingNewline}`;
 
   try {
-    parseMarkdown(candidateFull);
+    const reparsed = parseMarkdown(candidateFull);
+    // Extra validation: verify that slug and IDs were not corrupted by comments
+    if (reparsed.frontmatter.slug.includes('#') || reparsed.frontmatter.id.includes('#')) {
+      return null;
+    }
     return candidateFull;
   } catch {
     return null;

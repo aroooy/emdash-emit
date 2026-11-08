@@ -116,11 +116,11 @@ export function registerStatusInitCommands(
         if (uncachedInvalid.length > 0) {
           const exampleId = uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
           console.log(
-            `💡 Hint: Run "emit pull" to repair cached invalid files. For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
+            `💡 Hint: Run "emit pull" to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
           );
         } else {
           console.log(
-            '💡 Hint: Run "emit pull" to automatically re-serialize and repair invalid frontmatter files.\n',
+            '💡 Hint: Run "emit pull" to automatically re-serialize and repair frontmatter syntax (local body is strictly preserved).\n',
           );
         }
       }

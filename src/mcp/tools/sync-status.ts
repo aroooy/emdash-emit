@@ -86,8 +86,8 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           ? {
               repairHint:
                 uncachedInvalid.length > 0
-                  ? `Run sync_pull to automatically repair cached invalid frontmatter files. For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
-                  : 'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair unquoted %-prefixed frontmatter files.',
+                  ? `Run sync_pull to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
+                  : 'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair frontmatter syntax (local body is strictly preserved).',
             }
           : {}),
         ...(status.summary.conflicts > 0
