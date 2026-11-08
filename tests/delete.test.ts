@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import {
   deleteArticle,
@@ -36,6 +36,7 @@ import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js
 import { ApiError } from '../src/client/error.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { initWorkspace } from '../src/utils/config.js';
+import { setProfile } from '../src/utils/profile.js';
 
 describe('deleteArticle & sync_delete (§4)', () => {
   let tempDir: string;
@@ -50,6 +51,7 @@ describe('deleteArticle & sync_delete (§4)', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     cache.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -321,12 +323,33 @@ describe('deleteArticle & sync_delete (§4)', () => {
   });
 
   describe('MCP sync_delete tool', () => {
+    let customProfilesPath: string;
+
+    beforeEach(() => {
+      customProfilesPath = path.join(tempDir, 'profiles.yaml');
+      setProfile(
+        'default',
+        {
+          origin: 'https://aroooy.net',
+          token: 'test-pat-123',
+          workspace: tempDir,
+        },
+        true,
+        customProfilesPath,
+      );
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(null, { status: 204 })),
+      );
+    });
+
     it('executes via MCP server and returns structured result', async () => {
       setupArticle({ status: 'draft' });
 
       const server = createMcpServer({
         workspaceRoot: tempDir,
         cache,
+        profilesPath: customProfilesPath,
       });
       const registered = (
         server as unknown as {
@@ -361,6 +384,7 @@ describe('deleteArticle & sync_delete (§4)', () => {
       const server = createMcpServer({
         workspaceRoot: tempDir,
         cache,
+        profilesPath: customProfilesPath,
       });
       const registered = (
         server as unknown as {

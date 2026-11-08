@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
 import { resolveInitPlan } from '../src/cli/commands/status.js';
@@ -430,6 +430,28 @@ describe('Emit CLI (Commander)', () => {
   });
 
   it('formats new and delete command failures cleanly without raw stack traces (Major 1 & 2)', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-cli-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    const configDir = path.join(homeDir, '.config', 'emit');
+    fs.mkdirSync(configDir, { recursive: true });
+    setProfile(
+      'default',
+      {
+        origin: 'https://aroooy.net',
+        token: 'test-token',
+        workspace: tempDir,
+      },
+      true,
+      path.join(configDir, 'profiles.yaml'),
+    );
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 })),
+    );
+
     const originalCwd = process.cwd();
     process.chdir(tempDir);
 
@@ -480,9 +502,13 @@ describe('Emit CLI (Commander)', () => {
       expect(delErr).not.toContain('    at ');
       expect(delErr).not.toContain('file://');
     } finally {
+      vi.unstubAllGlobals();
       console.error = originalError;
       process.exit = originalExit;
       process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 });
