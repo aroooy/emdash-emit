@@ -21,6 +21,7 @@
  */
 
 import { refreshAccessToken, type ResolvedAuth } from './auth.js';
+import { ApiError } from './error.js';
 
 export interface AuthenticatedFetchOptions extends RequestInit {
   auth?: ResolvedAuth;
@@ -91,11 +92,34 @@ export async function authenticatedFetch(
     return undefined;
   };
 
-  let response = await fetchFn(input, {
-    ...requestInit,
-    headers,
-    signal: getSignal(),
-  });
+  const executeFetch = async (reqHeaders: Headers): Promise<Response> => {
+    try {
+      return await fetchFn(input, {
+        ...requestInit,
+        headers: reqHeaders,
+        signal: getSignal(),
+      });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
+      const baseMsg = (err as Error)?.message || String(err);
+      const cause = (err as { cause?: { message?: string; code?: string } })?.cause;
+      const causeDetail =
+        cause && (cause.message || cause.code) ? ` (${cause.message || cause.code})` : '';
+      const endpoint =
+        typeof input === 'string' || input instanceof URL ? String(input) : undefined;
+      throw new ApiError({
+        message: `Network request failed: ${baseMsg}${causeDetail}`,
+        code: 'NETWORK_ERROR',
+        endpoint,
+        suggestion:
+          'Verify the origin URL, network connectivity, DNS/VPN settings, and that the EmDash instance is reachable.',
+      });
+    }
+  };
+
+  let response = await executeFetch(headers);
 
   // If 401 and we have a refresh token, attempt automatic token recovery
   if (response.status === 401 && effectiveRefreshToken && effectiveOrigin) {
@@ -116,11 +140,7 @@ export async function authenticatedFetch(
       const retryHeaders = new Headers(requestInit.headers);
       retryHeaders.set('Authorization', `Bearer ${refreshed.token}`);
 
-      response = await fetchFn(input, {
-        ...requestInit,
-        headers: retryHeaders,
-        signal: getSignal(),
-      });
+      response = await executeFetch(retryHeaders);
     } catch {
       // If refresh fails, return original 401 response so caller can handle
     }

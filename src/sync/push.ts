@@ -38,6 +38,7 @@ import { classifyCodeFenceLines } from '../client/portable-text.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
+  formatFrontmatterParseError,
   parseMarkdown,
   serializeMarkdown,
   type Frontmatter,
@@ -518,7 +519,7 @@ export async function pushArticle(
   try {
     parsed = parseMarkdown(rawContent);
   } catch (err: unknown) {
-    const reason = (err as Error).message.split('\n')[0];
+    const reason = formatFrontmatterParseError(err);
     throw new Error(
       `Invalid frontmatter in ${targetFilePath}: ${reason} (quote strings starting with "%" or containing special YAML characters, or run "emit pull" to repair)`,
     );

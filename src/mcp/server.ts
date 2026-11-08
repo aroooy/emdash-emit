@@ -24,6 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolveAuth } from '../client/auth.js';
 import { CacheDatabase } from '../db/cache.js';
+import { checkOriginMismatchWarning } from '../cli/context.js';
 import { DEFAULT_ORIGIN, loadConfig } from '../utils/config.js';
 import { findWorkspaceRoot, getWorkspacePaths, requireWorkspaceRoot } from '../utils/workspace.js';
 import {
@@ -127,6 +128,13 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
     const config =
       preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
     const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
+    const originWarning =
+      checkOriginMismatchWarning(
+        profileToUse,
+        configuredOrigin,
+        resolvedProf?.origin,
+        auth.profileName,
+      ) || undefined;
     const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
 
     return {
@@ -136,6 +144,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       config,
       auth,
       origin,
+      originWarning,
     };
   };
 

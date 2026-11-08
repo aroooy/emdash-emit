@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
-import { parseMarkdown } from '../utils/frontmatter.js';
+import { formatFrontmatterParseError, parseMarkdown } from '../utils/frontmatter.js';
 import { calculateHash } from './pull.js';
 import {
   compareArticleFilenameDesc,
@@ -115,9 +115,7 @@ export function getWorkspaceStatus(
             ? baseWithoutDate.slice(fallbackId.length + 1)
             : baseWithoutDate;
         const syncState = fallbackId !== 'unknown' ? cache.getSyncState(fallbackId) : null;
-        const errorMsg = (err as Error)?.message
-          ? (err as Error).message.split('\n')[0]
-          : 'Invalid frontmatter YAML';
+        const errorMsg = formatFrontmatterParseError(err);
 
         items.push({
           id: fallbackId,

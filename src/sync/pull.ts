@@ -35,6 +35,7 @@ import {
   serializeMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
+import { extractUlidFromFilename } from '../utils/naming.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 
@@ -86,6 +87,34 @@ export interface ListRemoteArticlesOptions {
  */
 export function calculateHash(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/**
+ * Finds all existing Markdown files in `<collection>/{draft,published}/` whose filename
+ * contains the given 26-character ULID. Used to preserve date prefixes and clean up
+ * stale duplicate files when pulling an uncached article.
+ */
+export function findLocalFilesByUlid(
+  workspaceRoot: string,
+  collection: string,
+  id: string,
+): string[] {
+  const matches: string[] = [];
+  for (const sub of ['draft', 'published']) {
+    const subDir = path.join(workspaceRoot, collection, sub);
+    if (!fs.existsSync(subDir)) continue;
+    try {
+      for (const file of fs.readdirSync(subDir)) {
+        if (!file.endsWith('.md')) continue;
+        if (extractUlidFromFilename(file) === id) {
+          matches.push(path.join(collection, sub, file));
+        }
+      }
+    } catch {
+      // Ignore directory read errors
+    }
+  }
+  return matches;
 }
 
 /**
@@ -458,9 +487,16 @@ export async function pullArticle(
 
   // Determine standard relative file path: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md
   const existingSync = options.cache.getSyncState(frontmatter.id);
+  const existingDiskMatches = findLocalFilesByUlid(
+    options.workspaceRoot,
+    frontmatter.collection,
+    frontmatter.id,
+  );
   const existingPrefix = existingSync?.localFilePath
     ? extractDatePrefixFromPath(existingSync.localFilePath)
-    : null;
+    : existingDiskMatches.length > 0
+      ? extractDatePrefixFromPath(existingDiskMatches[0])
+      : null;
 
   const dateInput =
     frontmatter.publishedAt ||
@@ -478,12 +514,19 @@ export async function pullArticle(
   );
   const fullFilePath = path.join(options.workspaceRoot, relPath);
 
-  // Path tracking: Check if the file was previously located at a different path
-  if (existingSync && existingSync.localFilePath !== relPath) {
-    const oldFullPath = path.join(options.workspaceRoot, existingSync.localFilePath);
-    if (fs.existsSync(oldFullPath)) {
+  // Path tracking: Remove any previous file(s) for this ULID at a different path
+  // BEFORE writing fullFilePath so case-insensitive filesystems (e.g. macOS APFS)
+  // do not unlink the newly written file when only casing differs.
+  const staleRelPaths = new Set<string>(existingDiskMatches);
+  if (existingSync?.localFilePath) {
+    staleRelPaths.add(existingSync.localFilePath);
+  }
+  const canonicalResolved = path.resolve(fullFilePath);
+  for (const staleRel of staleRelPaths) {
+    const staleFull = path.resolve(options.workspaceRoot, staleRel);
+    if (staleFull !== canonicalResolved && fs.existsSync(staleFull)) {
       try {
-        fs.unlinkSync(oldFullPath);
+        fs.unlinkSync(staleFull);
       } catch {
         // Ignore removal failure
       }

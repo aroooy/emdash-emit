@@ -83,10 +83,12 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           );
         }
 
+        const allWarnings = [
+          ...(ctx.originWarning ? [ctx.originWarning] : []),
+          ...(res.warnings || []),
+        ];
         const warningLines =
-          res.warnings && res.warnings.length > 0
-            ? ['', '⚠️ Warnings:', ...res.warnings.map((w) => `  - ${w}`)]
-            : [];
+          allWarnings.length > 0 ? ['', '⚠️ Warnings:', ...allWarnings.map((w) => `  - ${w}`)] : [];
 
         return {
           content: [

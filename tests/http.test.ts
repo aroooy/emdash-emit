@@ -22,6 +22,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { authenticatedFetch } from '../src/client/http.js';
+import { ApiError } from '../src/client/error.js';
 import type { ResolvedAuth } from '../src/client/auth.js';
 
 describe('authenticatedFetch (401 Auto-Recovery)', () => {
@@ -88,5 +89,30 @@ describe('authenticatedFetch (401 Auto-Recovery)', () => {
     expect(res.status).toBe(200);
     expect(updatedToken).toBe('new-refreshed-token-999');
     expect(mockFetch).toHaveBeenCalledTimes(3); // 1. Initial 401 -> 2. Refresh token -> 3. Retry with new token
+  });
+
+  it('normalizes low-level fetch network failures (DNS/connection errors) into actionable ApiError (NETWORK_ERROR)', async () => {
+    const netErr = new TypeError('fetch failed', {
+      cause: new Error('getaddrinfo ENOTFOUND solo.example.com'),
+    });
+    const mockFetch = vi.fn().mockRejectedValue(netErr);
+
+    let caught: unknown;
+    try {
+      await authenticatedFetch('https://solo.example.com/_emdash/api/content/posts', {
+        token: 'tok-123',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    const apiErr = caught as ApiError;
+    expect(apiErr.code).toBe('NETWORK_ERROR');
+    expect(apiErr.endpoint).toBe('https://solo.example.com/_emdash/api/content/posts');
+    expect(apiErr.message).toContain('fetch failed');
+    expect(apiErr.message).toContain('getaddrinfo ENOTFOUND solo.example.com');
+    expect(apiErr.toActionableString()).toContain('💡 Suggestion:');
   });
 });

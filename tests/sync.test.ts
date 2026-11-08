@@ -999,4 +999,97 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.previousFilePath).toBe(relPath);
     expect(res.filePath).toBe(`posts/draft/20261108_${assignedServerId}-New-Post-ULID-Swap.md`);
   });
+
+  it('pullArticle repairs an uncached invalid file and cleans up stale duplicate filenames for the same ULID', async () => {
+    const uncachedId = '01M67N0TNFS6F3PJX4T96NKPKT';
+    // Uncached legacy file with lowercased title slug and 20190405_ prefix (no entry in sync_state)
+    const oldBrokenRelPath = `posts/published/20190405_${uncachedId}-old-post.md`;
+    const oldBrokenFullPath = path.join(tempDir, oldBrokenRelPath);
+    fs.mkdirSync(path.dirname(oldBrokenFullPath), { recursive: true });
+    fs.writeFileSync(
+      oldBrokenFullPath,
+      [
+        '---',
+        `id: ${uncachedId}`,
+        'slug: old-post',
+        'title: "Old Post"',
+        'collection: posts',
+        'status: published',
+        'locale: ja',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+        '---',
+        '',
+        'Old post body.',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusBefore.summary.invalid).toBe(1);
+    expect(statusBefore.items[0].cached).toBe(false);
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith(`/content/posts/${uncachedId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: uncachedId,
+            slug: 'old-post',
+            collection: 'posts',
+            status: 'published',
+            _rev: 'rev_1',
+            data: {
+              title: 'Repaired Old Post',
+              body: 'Old post body.',
+            },
+          }),
+        });
+      }
+      if (url.includes('/terms/category')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: '01M6CAT1', slug: '%e6%9c%aa%e5%88%86%e9%a1%9e' }] },
+          }),
+        });
+      }
+      if (url.includes('/terms/tag')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { terms: [] } }),
+        });
+      }
+      if (url.includes('/bylines')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { bylines: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    // Repair via single-article pull (emit pull <ULID>)
+    const res = await pullArticle('posts', uncachedId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    // Preserves 20190405_ prefix from existing disk file and writes canonical title filename
+    expect(res.filePath).toBe(`posts/published/20190405_${uncachedId}-Repaired-Old-Post.md`);
+    // Old broken file ("-old-post.md") is removed so no duplicate remains
+    expect(fs.existsSync(oldBrokenFullPath)).toBe(false);
+    expect(fs.existsSync(path.join(tempDir, res.filePath))).toBe(true);
+    expect(fs.readdirSync(path.join(tempDir, 'posts/published'))).toEqual([
+      `20190405_${uncachedId}-Repaired-Old-Post.md`,
+    ]);
+
+    const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusAfter.summary.total).toBe(1);
+    expect(statusAfter.summary.synced).toBe(1);
+    expect(statusAfter.summary.invalid).toBe(0);
+  });
 });

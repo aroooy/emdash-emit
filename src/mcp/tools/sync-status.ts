@@ -61,6 +61,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
       const responsePayload = {
         items: filteredItems,
         summary: status.summary,
+        ...(ctx.originWarning ? { warnings: [ctx.originWarning] } : {}),
         ...(invalidTruncated > 0
           ? {
               invalidTruncated,

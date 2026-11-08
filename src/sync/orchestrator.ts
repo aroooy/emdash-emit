@@ -27,6 +27,7 @@ import {
   listRemoteArticles,
   pullArticle,
   calculateHash,
+  findLocalFilesByUlid,
   type PullResult,
   type ListRemoteArticlesOptions,
 } from './pull.js';
@@ -203,12 +204,18 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
   let deleted = 0;
   if (shouldPrune) {
     for (const candidate of candidatesToPrune) {
-      const fullPath = path.join(options.workspaceRoot, candidate.localFilePath);
-      if (fs.existsSync(fullPath)) {
-        try {
-          fs.unlinkSync(fullPath);
-        } catch {
-          // ignore
+      const pathsToRemove = new Set<string>([
+        candidate.localFilePath,
+        ...findLocalFilesByUlid(options.workspaceRoot, options.collection, candidate.id),
+      ]);
+      for (const relToRemove of pathsToRemove) {
+        const fullPath = path.join(options.workspaceRoot, relToRemove);
+        if (fs.existsSync(fullPath)) {
+          try {
+            fs.unlinkSync(fullPath);
+          } catch {
+            // ignore
+          }
         }
       }
       options.cache.deleteEntry(candidate.id);

@@ -250,6 +250,9 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         if (taxHint) {
           console.log(`\n${taxHint}`);
         }
+        if (res.categoriesFailed && res.tagsFailed) {
+          process.exit(1);
+        }
       } catch (error) {
         if (error instanceof ApiError) {
           console.error(`\n${error.toActionableString()}`);

@@ -32,6 +32,7 @@ export interface ServerContext {
   config: EmitConfig;
   auth: ResolvedAuth;
   origin: string;
+  originWarning?: string;
 }
 
 export type ContextResolver = (targetProfile?: string) => ServerContext;

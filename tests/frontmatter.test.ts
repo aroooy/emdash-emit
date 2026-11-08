@@ -23,6 +23,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeArticleRelativePath,
+  formatFrontmatterParseError,
   formatFrontmatterYaml,
   formatYamlScalar,
   parseMarkdown,
@@ -244,5 +245,23 @@ describe('Frontmatter & Markdown Serialization', () => {
       'foo: bar',
     ]);
     expect(reparsed.frontmatter.bylines).toEqual(['%e8%91%97%e8%80%85']);
+  });
+
+  it('formatFrontmatterParseError formats ZodError issues into a concise single line instead of "["', () => {
+    const invalid = ['---', 'id: too-short', 'slug: ""', 'title: Valid Title', '---', 'Body'].join(
+      '\n',
+    );
+
+    let caught: unknown;
+    try {
+      parseMarkdown(invalid);
+    } catch (err) {
+      caught = err;
+    }
+
+    const formatted = formatFrontmatterParseError(caught);
+    expect(formatted).not.toBe('[');
+    expect(formatted).toContain('id: ID must be a 26-character ULID');
+    expect(formatted).toContain('slug: Slug cannot be empty');
   });
 });

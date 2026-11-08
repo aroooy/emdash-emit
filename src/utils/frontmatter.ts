@@ -90,6 +90,28 @@ export function parseMarkdown(content: string): ParsedMarkdown {
   };
 }
 
+/**
+ * Formats a parseMarkdown error (js-yaml YAMLException or ZodError) into a concise 1-line summary.
+ * Prevents ZodError's multi-line JSON array `.message` from truncating to `"["`.
+ */
+export function formatFrontmatterParseError(err: unknown): string {
+  if (
+    err &&
+    typeof err === 'object' &&
+    'issues' in err &&
+    Array.isArray((err as z.ZodError).issues)
+  ) {
+    const issues = (err as z.ZodError).issues;
+    return issues
+      .map((i) => `${i.path.length > 0 ? i.path.join('.') : 'frontmatter'}: ${i.message}`)
+      .join('; ');
+  }
+  if (err instanceof Error && err.message) {
+    return err.message.split('\n')[0];
+  }
+  return 'Invalid frontmatter YAML';
+}
+
 // YAML 1.1/1.2 reserved boolean/null/float literals that js-yaml coerces when unquoted.
 const YAML_RESERVED_RE = /^(true|false|null|nil|yes|no|on|off|y|n|~|\.inf|-\.inf|\.nan)$/i;
 

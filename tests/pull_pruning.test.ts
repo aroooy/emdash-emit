@@ -367,4 +367,49 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     // pub-1 MUST NOT be pruned because we only pulled drafts
     expect(fs.existsSync(pubArt.fullPath)).toBe(true);
   });
+
+  it('prunes any duplicate filenames on disk sharing the same 26-char ULID', async () => {
+    const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
+    const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
+    // Simulate a lingering legacy duplicate file for the same ULID
+    const legacyDuplicatePath = path.join(
+      tempDir,
+      `posts/published/20190405_${ulid}-legacy-duplicate.md`,
+    );
+    fs.writeFileSync(legacyDuplicatePath, '# Duplicate', 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      if (url.pathname === '/_emdash/api/openapi.json') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            paths: {
+              '/_emdash/api/content/{collection}': {
+                get: { parameters: [{ name: 'limit', schema: { maximum: 100 } }] },
+              },
+            },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true, data: { items: [], nextCursor: null } }),
+      });
+    });
+
+    const result = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(result.deleted).toBe(1);
+    expect(fs.existsSync(canonical.fullPath)).toBe(false);
+    expect(fs.existsSync(legacyDuplicatePath)).toBe(false);
+  });
 });
