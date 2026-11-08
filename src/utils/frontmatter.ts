@@ -66,11 +66,74 @@ export interface ParsedMarkdown {
 const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
 
 /**
+ * Error thrown when frontmatter parsing or schema validation fails.
+ * Captures the file path, error line if available, and actionable hints for repair.
+ */
+export class FrontmatterParseError extends Error {
+  readonly code = 'FRONTMATTER_PARSE_ERROR';
+  readonly filePath?: string;
+  readonly reason: string;
+  readonly suggestion: string;
+  readonly line?: number;
+
+  constructor(options: {
+    message: string;
+    filePath?: string;
+    reason: string;
+    suggestion?: string;
+    line?: number;
+  }) {
+    super(options.message);
+    this.name = 'FrontmatterParseError';
+    this.filePath = options.filePath;
+    this.reason = options.reason;
+    this.line = options.line;
+    this.suggestion =
+      options.suggestion ||
+      'Quote strings starting with "%" or containing special YAML characters (e.g. - "%e6%9c%aa%e5%88%86%e9%a1%9e"), or run "emit pull" to repair.';
+  }
+}
+
+/**
  * Parses markdown text into validated frontmatter and body.
  */
-export function parseMarkdown(content: string): ParsedMarkdown {
-  const parsed = matter(content);
-  const validated = FrontmatterSchema.parse(parsed.data);
+export function parseMarkdown(content: string, filePath?: string): ParsedMarkdown {
+  let parsed: matter.GrayMatterFile<string>;
+  try {
+    parsed = matter(content);
+  } catch (err: unknown) {
+    const reason = formatFrontmatterParseError(err);
+    let line: number | undefined;
+    if (err && typeof err === 'object' && 'mark' in err) {
+      const mark = (err as { mark?: { line?: number } }).mark;
+      if (typeof mark?.line === 'number') {
+        line = mark.line + 1;
+      }
+    }
+    const locStr = filePath ? ` in ${filePath}` : '';
+    const lineStr = line ? ` at line ${line}` : '';
+    throw new FrontmatterParseError({
+      message: `Invalid frontmatter YAML${locStr}${lineStr}: ${reason}`,
+      filePath,
+      reason,
+      line,
+    });
+  }
+
+  let validated: Frontmatter;
+  try {
+    validated = FrontmatterSchema.parse(parsed.data);
+  } catch (err: unknown) {
+    const reason = formatFrontmatterParseError(err);
+    const locStr = filePath ? ` in ${filePath}` : '';
+    throw new FrontmatterParseError({
+      message: `Invalid frontmatter schema${locStr}: ${reason}`,
+      filePath,
+      reason,
+      suggestion:
+        'Verify required frontmatter fields (id: 26-char ULID, slug, title, status: draft|published).',
+    });
+  }
 
   // Normalize featuredImage casing to the canonical uppercase ULID form so that
   // merge comparisons, cache matching, and push payloads all agree with what
@@ -140,6 +203,79 @@ export function formatYamlScalar(value: string): string {
     return JSON.stringify(value);
   }
   return value;
+}
+
+/**
+ * Attempts lenient regex-based syntax repair on raw Markdown whose frontmatter fails js-yaml parsing.
+ * Restricted strictly to:
+ * 1. Quoting unquoted scalars starting with "%" or containing special characters on array elements (`- %...`) or slug lines (`slug: %...`).
+ * 2. Fixing minor indentation on taxonomy/byline sequence element lines (`- <item>`).
+ *
+ * Guaranteed NEVER to alter the Markdown body or mutate keys/values.
+ * Returns the repaired Markdown string, or null if lenient repair could not produce valid frontmatter.
+ */
+export function lenientRepairMarkdownFrontmatter(content: string): string | null {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n[\s\S]*)$/);
+  if (!match) return null;
+
+  const rawYaml = match[1];
+  const bodyWithLeadingNewline = match[2];
+
+  const lines = rawYaml.split(/\r?\n/);
+  const repairedLines: string[] = [];
+  let inSequenceBlock = false;
+
+  for (const line of lines) {
+    let repairedLine = line;
+
+    // Detect section headers for sequences (e.g. "categories:", "tags:", "bylines:")
+    if (/^\s*(categories|tags|bylines):\s*$/.test(line)) {
+      inSequenceBlock = true;
+      repairedLines.push(line);
+      continue;
+    } else if (/^\S/.test(line)) {
+      // Top-level key leaves the sequence block
+      inSequenceBlock = false;
+    }
+
+    // 1. Array element lines (`- <value>`): repair unquoted % or YAML tokens and normalize indentation (4 spaces inside taxonomies)
+    const seqMatch = line.match(/^(\s*)-\s*(.*)$/);
+    if (seqMatch) {
+      const leadingSpace = seqMatch[1];
+      let value = seqMatch[2].trim();
+
+      // If value starts with % and is unquoted, quote it
+      if (value.startsWith('%') && !value.startsWith('"') && !value.startsWith("'")) {
+        value = JSON.stringify(value);
+      }
+
+      // If indentation inside sequence block is slightly off (e.g. 2 or 3 spaces instead of 4)
+      const indent = inSequenceBlock && leadingSpace.length < 4 ? '    ' : leadingSpace;
+      repairedLine = `${indent}- ${value}`;
+    } else {
+      // 2. Slug key line (`slug: %...`): quote unquoted %
+      const slugMatch = line.match(/^(\s*slug:\s*)(.*)$/);
+      if (slugMatch) {
+        let slugVal = slugMatch[2].trim();
+        if (slugVal.startsWith('%') && !slugVal.startsWith('"') && !slugVal.startsWith("'")) {
+          slugVal = JSON.stringify(slugVal);
+        }
+        repairedLine = `${slugMatch[1]}${slugVal}`;
+      }
+    }
+
+    repairedLines.push(repairedLine);
+  }
+
+  const candidateYaml = repairedLines.join('\n');
+  const candidateFull = `---${rawYaml.startsWith('\r\n') ? '\r\n' : '\n'}${candidateYaml}${rawYaml.endsWith('\r\n') ? '\r\n' : '\n'}---${bodyWithLeadingNewline}`;
+
+  try {
+    parseMarkdown(candidateFull);
+    return candidateFull;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -1092,4 +1092,69 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(statusAfter.summary.synced).toBe(1);
     expect(statusAfter.summary.invalid).toBe(0);
   });
+
+  it('pullArticle performs non-destructive frontmatter heal on local files with unpushed edits, preserving local body', async () => {
+    const articleId = '01M6TESTHEALBODY0000000000';
+    const relPath = `posts/draft/20261108_${articleId}-Heal-Test.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const brokenLocalContent = [
+      '---',
+      `id: ${articleId}`,
+      'slug: heal-test',
+      'title: "Heal Test"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e', // unquoted %
+      '---',
+      '',
+      'Valuable local modifications that have not been pushed.',
+    ].join('\n');
+
+    fs.writeFileSync(fullPath, brokenLocalContent, 'utf8');
+
+    // Baseline cache exists with matching remoteRev
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'baseline_different_hash',
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug: 'heal-test',
+      lastSyncedAt: Date.now(),
+    });
+
+    const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusBefore.summary.invalid).toBe(1);
+
+    const res = await pullArticle('posts', articleId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      rawItem: {
+        id: articleId,
+        slug: 'heal-test',
+        status: 'draft',
+        _rev: 'rev_1',
+        data: { title: 'Heal Test' },
+      },
+    });
+
+    expect(res.updated).toBe(true);
+
+    // The file on disk now has valid frontmatter AND strictly preserves the local body
+    const diskContentAfter = fs.readFileSync(fullPath, 'utf8');
+    expect(diskContentAfter).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(diskContentAfter).toContain('Valuable local modifications that have not been pushed.');
+
+    const parsed = parseMarkdown(diskContentAfter);
+    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(parsed.body.trim()).toBe('Valuable local modifications that have not been pushed.');
+
+    const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusAfter.summary.invalid).toBe(0);
+    expect(statusAfter.summary.modified).toBe(1); // correctly identified as modified local edits!
+  });
 });

@@ -25,6 +25,7 @@ import { ApiError } from '../client/error.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
 import { PushValidationError } from '../sync/push.js';
 import { AmbiguousProfileError } from '../utils/profile.js';
+import { FrontmatterParseError } from '../utils/frontmatter.js';
 
 function toolError(text: string): CallToolResult {
   return {
@@ -58,6 +59,23 @@ export function formatToolError(error: unknown): CallToolResult {
           error: 'PREFLIGHT_VALIDATION_FAILED',
           message: error.message,
           errors: error.errors,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (error instanceof FrontmatterParseError) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          filePath: error.filePath,
+          line: error.line,
+          reason: error.reason,
+          suggestion: error.suggestion,
         },
         null,
         2,

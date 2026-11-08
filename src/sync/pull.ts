@@ -33,6 +33,7 @@ import {
   extractDatePrefixFromPath,
   parseMarkdown,
   serializeMarkdown,
+  lenientRepairMarkdownFrontmatter,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
@@ -476,17 +477,39 @@ export async function pullArticle(
               };
             }
 
-            // Local file has unpushed edits -> protect local edits
-            return {
-              id,
-              slug: existingSync.slug,
-              status: existingSync.status,
-              filePath: existingSync.localFilePath,
-              updated: false,
-              skipped: true,
-              localEditsPreserved: true,
-              title: rawTitle,
-            };
+            // Local file has unpushed edits. Check if frontmatter parses cleanly.
+            // If it parses cleanly, strictly protect local edits without touching the file.
+            try {
+              parseMarkdown(currentDiskContent);
+              return {
+                id,
+                slug: existingSync.slug,
+                status: existingSync.status,
+                filePath: existingSync.localFilePath,
+                updated: false,
+                skipped: true,
+                localEditsPreserved: true,
+                title: rawTitle,
+              };
+            } catch {
+              // Local frontmatter is invalid (e.g. older unquoted % slug or minor indent).
+              // Attempt non-destructive lenient frontmatter repair (body is 100% untouched).
+              const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
+              if (repaired !== null) {
+                // Syntax-only repair succeeded! Overwrite disk with repaired frontmatter (keeping local body).
+                fs.writeFileSync(fullExistingPath, repaired, 'utf8');
+                const repairedHash = calculateHash(repaired);
+                return {
+                  id,
+                  slug: existingSync.slug,
+                  status: existingSync.status,
+                  filePath: existingSync.localFilePath,
+                  updated: true,
+                  title: rawTitle,
+                };
+              }
+              // If lenient repair was impossible without altering meaning, fall through to full pull & quarantine.
+            }
           }
         } catch {
           // If read fails, proceed to normal write

@@ -284,4 +284,49 @@ describe('MCP Tool Error Formatting', () => {
     // Without persist, nothing is rewritten on disk.
     expect(fs.readFileSync(profilesPath, 'utf8')).toContain('solo-site');
   });
+
+  it('surfaces FrontmatterParseError as a structured MCP tool error on sync_push with invalid frontmatter', async () => {
+    const invalidRel = 'posts/draft/20261108_01M6TESTPARSEERR000000000-Invalid.md';
+    const invalidFull = path.join(tempDir, invalidRel);
+    fs.mkdirSync(path.dirname(invalidFull), { recursive: true });
+    fs.writeFileSync(
+      invalidFull,
+      [
+        '---',
+        'id: 01M6TESTPARSEERR000000000',
+        'slug: invalid-test',
+        'title: "Invalid Test"',
+        'status: draft',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e', // unquoted % scalar causes YAMLException
+        '---',
+        '',
+        'Body content with unquoted % in frontmatter.',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const origToken = process.env.EMDASH_TOKEN;
+    const origOrigin = process.env.EMDASH_ORIGIN;
+    try {
+      process.env.EMDASH_TOKEN = 'mock-pat';
+      process.env.EMDASH_ORIGIN = 'https://mock.example.com';
+
+      const registered = handlersOf(createMcpServer({ workspaceRoot: tempDir, cache }));
+      const result = await registered['sync_push'].handler({ filePath: invalidRel });
+
+      expect(result.isError).toBe(true);
+      const payload = JSON.parse(textOf(result));
+      expect(payload.error).toBe('FRONTMATTER_PARSE_ERROR');
+      expect(payload.filePath).toBe(invalidRel);
+      expect(payload.reason).toContain('bad indentation');
+      expect(payload.suggestion).toContain('Quote strings starting with "%"');
+    } finally {
+      if (origToken) process.env.EMDASH_TOKEN = origToken;
+      else delete process.env.EMDASH_TOKEN;
+      if (origOrigin) process.env.EMDASH_ORIGIN = origOrigin;
+      else delete process.env.EMDASH_ORIGIN;
+    }
+  });
 });

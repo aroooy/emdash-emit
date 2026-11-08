@@ -535,15 +535,7 @@ export async function pushArticle(
   }
 
   const rawContent = fs.readFileSync(fullPath, 'utf8');
-  let parsed: ParsedMarkdown;
-  try {
-    parsed = parseMarkdown(rawContent);
-  } catch (err: unknown) {
-    const reason = formatFrontmatterParseError(err);
-    throw new Error(
-      `Invalid frontmatter in ${targetFilePath}: ${reason} (quote strings starting with "%" or containing special YAML characters, or run "emit pull" to repair)`,
-    );
-  }
+  const parsed = parseMarkdown(rawContent, targetFilePath);
   const id = parsed.frontmatter.id;
   const collection = parsed.frontmatter.collection;
 

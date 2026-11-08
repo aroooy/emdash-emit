@@ -26,6 +26,7 @@ import {
   formatFrontmatterParseError,
   formatFrontmatterYaml,
   formatYamlScalar,
+  lenientRepairMarkdownFrontmatter,
   parseMarkdown,
   serializeMarkdown,
   type Frontmatter,
@@ -263,5 +264,39 @@ describe('Frontmatter & Markdown Serialization', () => {
     expect(formatted).not.toBe('[');
     expect(formatted).toContain('id: ID must be a 26-character ULID');
     expect(formatted).toContain('slug: Slug cannot be empty');
+  });
+
+  it('lenientRepairMarkdownFrontmatter repairs unquoted % scalars without touching the body', () => {
+    const broken = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: %e5%8f%b0%e6%b9%be-travel',
+      'title: "Taiwan Travel"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '   - %e6%9c%aa%e5%88%86%e9%a1%9e', // unquoted % scalar + 3 spaces indent
+      '  tags:',
+      '    - %e5%8f%b0%e6%b9%be',
+      '---',
+      '',
+      'Valuable unpushed local body content with unicode 台湾.',
+    ].join('\n');
+
+    // Initially fails parseMarkdown due to YAMLException
+    expect(() => parseMarkdown(broken)).toThrow();
+
+    const repaired = lenientRepairMarkdownFrontmatter(broken);
+    expect(repaired).not.toBeNull();
+    expect(repaired).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(repaired).toContain('    - "%e5%8f%b0%e6%b9%be"');
+    expect(repaired).toContain('Valuable unpushed local body content with unicode 台湾.');
+
+    // Repaired document parses cleanly
+    const parsed = parseMarkdown(repaired!);
+    expect(parsed.frontmatter.id).toBe(validUlid);
+    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(parsed.frontmatter.taxonomies?.tags).toEqual(['%e5%8f%b0%e6%b9%be']);
+    expect(parsed.body.trim()).toBe('Valuable unpushed local body content with unicode 台湾.');
   });
 });
