@@ -621,7 +621,7 @@ emit pull [id] [options]
 
 > [!NOTE]
 > **Why `--no-prune` is rarely needed:**  
-> Automatic pruning is mathematically loss-free: Emit's unpushed edits safeguard strictly aborts the pull if an older article contains local modifications. You only need `--no-prune` in exceptional circumstances, such as temporarily suppressing Git working-tree changes during a quick pull.
+> Automatic pruning is mathematically loss-free: Emit's unpushed edits safeguard inspects both the canonical file and any duplicate filenames sharing the same 26-character ULID, strictly aborting the pull (`SyncPruneConflictError`) if any of them contain local modifications. Clean duplicate files are removed alongside the canonical file. You only need `--no-prune` in exceptional circumstances, such as temporarily suppressing Git working-tree changes during a quick pull.
 
 **Example:**
 
@@ -735,7 +735,7 @@ emit diff [filePath] [-i, --id <id>] [-p, --profile <name>]
 
 ### `emit pull-taxonomies`
 
-Downloads categories and tags from EmDash and generates local YAML definitions under `categories/` and `tags/`. This is also performed automatically by `emit pull` in batch mode.
+Downloads categories and tags from EmDash and generates local YAML definitions under `categories/` and `tags/`. This is also performed automatically by `emit pull` in batch mode. If one taxonomy endpoint fails, existing local definitions for that taxonomy are preserved with a warning; if both endpoints fail, the command exits with code `1`.
 
 ```bash
 emit pull-taxonomies
@@ -923,6 +923,12 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 **Cause**: Categories or tags in frontmatter do not exist in local definitions or remote database (or local cache is stale).
 
 **Solution**: Run `emit pull` or `sync_pull` (taxonomies are synced automatically), or use `emit pull-taxonomies` standalone to refresh your local category and tag list. Preflight Guard G4 will guide you with valid options.
+
+### Q: `[NETWORK_ERROR]`: Network request failed (`fetch failed`)
+
+**Cause**: The configured origin URL is unreachable due to DNS resolution failure, offline network/VPN state, or an incorrect origin in `~/.config/emit/profiles.yaml` or `.emit/config.json`.
+
+**Solution**: Verify the `origin` URL reported in `Endpoint:` and check `emit profile list` / `.emit/config.json`. If `.emit/config.json` and your active profile point to different origins, Emit prints an origin mismatch warning to help you reconcile them.
 
 ---
 

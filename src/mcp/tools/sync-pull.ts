@@ -103,12 +103,13 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           ? 'ℹ️ Article is already up-to-date'
           : '✅ Successfully pulled article';
         const titleText = res.title ? ` "${res.title}"` : '';
+        const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
 
         return {
           content: [
             {
               type: 'text',
-              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}\n\nYou can now read or edit this local Markdown file directly.`,
+              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${warnLine}\n\nYou can now read or edit this local Markdown file directly.`,
             },
           ],
         };
@@ -190,11 +191,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           mediaMsg = `\nMedia: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
         }
 
+        const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${detailBlock}\n\nYou can now read or edit these local Markdown files directly.`,
+              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${detailBlock}${warnLine}\n\nYou can now read or edit these local Markdown files directly.`,
             },
           ],
         };

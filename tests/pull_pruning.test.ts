@@ -368,15 +368,15 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(fs.existsSync(pubArt.fullPath)).toBe(true);
   });
 
-  it('prunes any duplicate filenames on disk sharing the same 26-char ULID', async () => {
+  it('prunes clean duplicate filenames on disk sharing the same 26-char ULID', async () => {
     const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
     const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
-    // Simulate a lingering legacy duplicate file for the same ULID
+    // Simulate a lingering clean duplicate file for the same ULID (matching baseline hash)
     const legacyDuplicatePath = path.join(
       tempDir,
       `posts/published/20190405_${ulid}-legacy-duplicate.md`,
     );
-    fs.writeFileSync(legacyDuplicatePath, '# Duplicate', 'utf8');
+    fs.writeFileSync(legacyDuplicatePath, '# Canonical', 'utf8');
 
     const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
       const url = new URL(urlStr);
@@ -411,5 +411,54 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(result.deleted).toBe(1);
     expect(fs.existsSync(canonical.fullPath)).toBe(false);
     expect(fs.existsSync(legacyDuplicatePath)).toBe(false);
+  });
+
+  it('aborts with SyncPruneConflictError if a duplicate filename for the same 26-char ULID has unpushed edits', async () => {
+    const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
+    const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
+    // Canonical file is clean, but a duplicate file sharing the ULID has unpushed local modifications
+    const editedDuplicateRelPath = `posts/published/20190405_${ulid}-legacy-edited-copy.md`;
+    const editedDuplicateFullPath = path.join(tempDir, editedDuplicateRelPath);
+    fs.writeFileSync(
+      editedDuplicateFullPath,
+      '# Canonical\n\nVALUABLE UNPUSHED LOCAL REWRITING.',
+      'utf8',
+    );
+
+    const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      if (url.pathname === '/_emdash/api/openapi.json') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            paths: {
+              '/_emdash/api/content/{collection}': {
+                get: { parameters: [{ name: 'limit', schema: { maximum: 100 } }] },
+              },
+            },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true, data: { items: [], nextCursor: null } }),
+      });
+    });
+
+    await expect(
+      pullBatch({
+        collection: 'posts',
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        limit: 2,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow(SyncPruneConflictError);
+
+    // Neither the canonical file nor the edited duplicate file may be deleted
+    expect(fs.existsSync(canonical.fullPath)).toBe(true);
+    expect(fs.existsSync(editedDuplicateFullPath)).toBe(true);
   });
 });

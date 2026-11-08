@@ -122,23 +122,29 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
       }
     }
 
-    // Safety guard: Check if any pushed-out candidate has unpushed local changes
+    // Safety guard: Check if any pushed-out candidate (or duplicate file sharing its ULID) has unpushed local changes
     const unpushedConflicts: UnpushedConflictItem[] = [];
     for (const candidate of candidatesToPrune) {
-      const fullPath = path.join(options.workspaceRoot, candidate.localFilePath);
-      if (fs.existsSync(fullPath)) {
-        try {
-          const content = fs.readFileSync(fullPath, 'utf8');
-          const currentHash = calculateHash(content);
-          if (currentHash !== candidate.localHash) {
-            unpushedConflicts.push({
-              id: candidate.id,
-              slug: candidate.slug,
-              filePath: candidate.localFilePath,
-            });
+      const candidatePaths = new Set<string>([
+        candidate.localFilePath,
+        ...findLocalFilesByUlid(options.workspaceRoot, options.collection, candidate.id),
+      ]);
+      for (const relPath of candidatePaths) {
+        const fullPath = path.join(options.workspaceRoot, relPath);
+        if (fs.existsSync(fullPath)) {
+          try {
+            const content = fs.readFileSync(fullPath, 'utf8');
+            const currentHash = calculateHash(content);
+            if (currentHash !== candidate.localHash) {
+              unpushedConflicts.push({
+                id: candidate.id,
+                slug: candidate.slug,
+                filePath: relPath,
+              });
+            }
+          } catch {
+            // If read fails, safely ignore
           }
-        } catch {
-          // If read fails, safely ignore
         }
       }
     }

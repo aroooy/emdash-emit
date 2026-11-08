@@ -492,10 +492,14 @@ export async function pullArticle(
     frontmatter.collection,
     frontmatter.id,
   );
+  const preferredDiskMatch =
+    existingDiskMatches.find((p) =>
+      p.startsWith(`${frontmatter.collection}/${frontmatter.status}/`),
+    ) ?? existingDiskMatches[0];
   const existingPrefix = existingSync?.localFilePath
     ? extractDatePrefixFromPath(existingSync.localFilePath)
-    : existingDiskMatches.length > 0
-      ? extractDatePrefixFromPath(existingDiskMatches[0])
+    : preferredDiskMatch
+      ? extractDatePrefixFromPath(preferredDiskMatch)
       : null;
 
   const dateInput =
