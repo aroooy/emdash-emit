@@ -21,7 +21,7 @@
  */
 
 import type { Command } from 'commander';
-import { getWorkspaceStatus } from '../../sync/status.js';
+import { getWorkspaceStatus, filterStatusItems } from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
 import type { CliContextResolver } from '../context.js';
 import { sameOrigin } from '../context.js';
@@ -74,14 +74,35 @@ export function registerStatusInitCommands(
     .command('status')
     .description('Show sync status of articles in local workspace')
     .option('-c, --collection <collection>', 'Collection to check (default: posts)')
+    .option('-s, --search <term>', 'Filter articles by search term (title, slug, ID, filePath)')
+    .option('--slug <slug>', 'Filter articles by slug')
+    .option('--status <status>', 'Filter by publication status (draft or published)')
+    .option('--sync-status <status>', 'Filter by sync state (synced, modified, untracked, invalid)')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action((options) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
       const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
 
+      const isFiltered = Boolean(
+        options.search || options.slug || options.status || options.syncStatus,
+      );
+      const displayItems = isFiltered
+        ? filterStatusItems(status.items, {
+            search: options.search,
+            slugFilter: options.slug,
+            status: options.status,
+            syncStatus: options.syncStatus,
+          })
+        : status.items;
+
       console.log(`\n--- Workspace Status (${collection} | origin: ${ctx.origin}) ---`);
-      for (const item of status.items) {
+      if (isFiltered) {
+        console.log(
+          `   (Filtered: showing ${displayItems.length} of ${status.items.length} articles)\n`,
+        );
+      }
+      for (const item of displayItems) {
         let icon = '🟢';
         let label = 'synced  ';
         if (item.syncStatus === 'modified') {

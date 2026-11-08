@@ -21,7 +21,11 @@
  */
 
 import type { Command } from 'commander';
-import { createArticleScaffold } from '../../sync/new.js';
+import {
+  createArticleScaffold,
+  checkRemoteDuplicateSlug,
+  DuplicateSlugError,
+} from '../../sync/new.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -39,10 +43,24 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
       'Author byline slug (defaults to first cached non-guest author by slug)',
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action((slug, options) => {
+    .action(async (slug, options) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
       const locale = options.locale || ctx.config.defaultLocale;
+
+      // Best-effort remote duplicate check if connected
+      if (ctx.origin && ctx.auth?.token) {
+        const remoteDup = await checkRemoteDuplicateSlug({
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+          collection,
+          slug,
+        }).catch(() => null);
+        if (remoteDup) {
+          throw new DuplicateSlugError(remoteDup);
+        }
+      }
 
       const res = createArticleScaffold({
         slug,

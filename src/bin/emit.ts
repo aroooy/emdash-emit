@@ -30,6 +30,7 @@ import { registerNewCommand } from '../cli/commands/new.js';
 import { registerPullCommands } from '../cli/commands/pull.js';
 import { registerPushCommand } from '../cli/commands/push.js';
 import { registerStatusInitCommands } from '../cli/commands/status.js';
+import { registerDeleteCommand } from '../cli/commands/delete.js';
 import { getPackageVersion } from '../utils/version.js';
 
 export const program = new Command();
@@ -47,6 +48,7 @@ registerNewCommand(program, resolveContext);
 registerPullCommands(program, resolveContext);
 registerPushCommand(program, resolveContext);
 registerStatusInitCommands(program, resolveContext);
+registerDeleteCommand(program, resolveContext);
 
 // emit mcp
 program

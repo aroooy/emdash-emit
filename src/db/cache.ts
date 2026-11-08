@@ -210,6 +210,27 @@ export class CacheDatabase {
     };
   }
 
+  public getEntryBySlug(slug: string, collection?: string): CachedEntry | null {
+    const query = collection
+      ? 'SELECT * FROM entries WHERE slug = ? AND collection = ? LIMIT 1'
+      : 'SELECT * FROM entries WHERE slug = ? LIMIT 1';
+    const stmt = this.db.prepare(query);
+    const row = (collection ? stmt.get(slug, collection) : stmt.get(slug)) as
+      Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      collection: String(row.collection),
+      slug: String(row.slug),
+      status: String(row.status),
+      title: String(row.title),
+      rev: String(row.rev),
+      publishedAt: row.published_at ? String(row.published_at) : null,
+      rawJson: String(row.raw_json),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
   public listEntries(collection?: string): CachedEntry[] {
     const query = collection
       ? 'SELECT * FROM entries WHERE collection = ? ORDER BY updated_at DESC'
@@ -267,6 +288,11 @@ export class CacheDatabase {
     };
   }
 
+  public deleteBaseSnapshot(id: string): void {
+    const stmt = this.db.prepare('DELETE FROM base_snapshots WHERE id = ?');
+    stmt.run(id);
+  }
+
   // --- sync_state operations ---
 
   public saveSyncState(state: SyncState): void {
@@ -310,6 +336,21 @@ export class CacheDatabase {
   public getSyncStateByPath(filePath: string): SyncState | null {
     const stmt = this.db.prepare('SELECT * FROM sync_state WHERE local_file_path = ?');
     const row = stmt.get(filePath) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      localFilePath: String(row.local_file_path),
+      localHash: String(row.local_hash),
+      remoteRev: String(row.remote_rev),
+      status: String(row.status),
+      slug: String(row.slug),
+      lastSyncedAt: Number(row.last_synced_at),
+    };
+  }
+
+  public getSyncStateBySlug(slug: string): SyncState | null {
+    const stmt = this.db.prepare('SELECT * FROM sync_state WHERE slug = ? LIMIT 1');
+    const row = stmt.get(slug) as Record<string, unknown> | undefined;
     if (!row) return null;
     return {
       id: String(row.id),

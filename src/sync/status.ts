@@ -56,6 +56,40 @@ export interface WorkspaceStatusResult {
   };
 }
 
+export interface StatusFilterOptions {
+  search?: string;
+  slugFilter?: string;
+  status?: 'draft' | 'published';
+  syncStatus?: 'synced' | 'modified' | 'untracked' | 'invalid';
+}
+
+/**
+ * Filters a list of article status items based on search term, slug, publication status, or sync status.
+ */
+export function filterStatusItems(
+  items: ArticleStatusItem[],
+  filters: StatusFilterOptions,
+): ArticleStatusItem[] {
+  return items.filter((item) => {
+    if (filters.status && item.status !== filters.status) return false;
+    if (filters.syncStatus && item.syncStatus !== filters.syncStatus) return false;
+    if (filters.slugFilter) {
+      const q = filters.slugFilter.toLowerCase();
+      if (!item.slug.toLowerCase().includes(q)) return false;
+    }
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      const match =
+        item.title.toLowerCase().includes(q) ||
+        item.slug.toLowerCase().includes(q) ||
+        item.id.toLowerCase().includes(q) ||
+        item.filePath.toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    return true;
+  });
+}
+
 /**
  * Counts preserved divergent local copies in `<collection>/conflicts/`.
  * These files are informational rescue copies: they are never tracked, pushed, or pruned.

@@ -26,6 +26,11 @@ import { SyncPruneConflictError } from '../sync/orchestrator.js';
 import { PushValidationError } from '../sync/push.js';
 import { AmbiguousProfileError } from '../utils/profile.js';
 import { FrontmatterParseError } from '../utils/frontmatter.js';
+import { DuplicateSlugError } from '../sync/new.js';
+import {
+  UnpushedModificationsError,
+  PublishedArticleDeletionForbiddenError,
+} from '../sync/delete.js';
 
 function toolError(text: string): CallToolResult {
   return {
@@ -76,6 +81,43 @@ export function formatToolError(error: unknown): CallToolResult {
         reason: error.reason,
         suggestion: error.suggestion,
       }),
+    );
+  }
+
+  if (error instanceof DuplicateSlugError) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          slug: error.slug,
+          existingId: error.existingId,
+          existingFilePath: error.existingFilePath,
+          existingStatus: error.existingStatus,
+          suggestion: error.suggestion,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (
+    error instanceof UnpushedModificationsError ||
+    error instanceof PublishedArticleDeletionForbiddenError
+  ) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          filePath: error.filePath,
+          id: error.id,
+          suggestion: error.suggestion,
+        },
+        null,
+        2,
+      ),
     );
   }
 

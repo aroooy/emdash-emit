@@ -39,6 +39,7 @@ import { registerSyncPullTools } from './tools/sync-pull.js';
 import { registerSyncPushTool } from './tools/sync-push.js';
 import { registerSyncStatusTool } from './tools/sync-status.js';
 import { registerSyncDiffTool } from './tools/sync-diff.js';
+import { registerSyncDeleteTool } from './tools/sync-delete.js';
 import { getPackageVersion } from '../utils/version.js';
 
 export interface CreateMcpServerOptions {
@@ -194,6 +195,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   registerSyncPushTool(server, resolveContext);
   registerSyncStatusTool(server, resolveContext);
   registerSyncDiffTool(server, resolveContext);
+  registerSyncDeleteTool(server, resolveContext);
 
   return server;
 }

@@ -25,7 +25,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import { createArticleScaffold } from '../src/sync/new.js';
+import {
+  createArticleScaffold,
+  DuplicateSlugError,
+  checkRemoteDuplicateSlug,
+} from '../src/sync/new.js';
 import { parseMarkdown } from '../src/utils/frontmatter.js';
 
 describe('createArticleScaffold (emit new / sync_new)', () => {
@@ -122,5 +126,91 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
     const uncached = createArticleScaffold({ workspaceRoot: tempDir, slug: 'no-cache-byline' });
     const uncachedParsed = parseMarkdown(fs.readFileSync(uncached.fullPath, 'utf8'));
     expect(uncachedParsed.frontmatter.bylines).toEqual([]);
+  });
+
+  describe('Duplicate Slug Guard (§3.1)', () => {
+    it('aborts with DuplicateSlugError if the same slug exists on disk in draft or published', () => {
+      createArticleScaffold({ workspaceRoot: tempDir, slug: 'taiwan-travel', cache });
+
+      expect(() => {
+        createArticleScaffold({ workspaceRoot: tempDir, slug: 'taiwan-travel', cache });
+      }).toThrow(DuplicateSlugError);
+
+      try {
+        createArticleScaffold({ workspaceRoot: tempDir, slug: 'TAIWAN-TRAVEL', cache });
+        expect.unreachable('Should have thrown DuplicateSlugError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(DuplicateSlugError);
+        const dupErr = err as DuplicateSlugError;
+        expect(dupErr.code).toBe('DUPLICATE_SLUG_CONFLICT');
+        expect(dupErr.slug).toBe('taiwan-travel');
+        expect(dupErr.existingFilePath).toContain('taiwan-travel.md');
+        expect(dupErr.message).toContain(
+          "Conflict: An article with slug 'taiwan-travel' already exists!",
+        );
+        expect(dupErr.suggestion).toBe('Edit the existing file, or pick a unique slug.');
+      }
+    });
+
+    it('aborts with DuplicateSlugError if slug exists in cache.db entries', () => {
+      cache.saveEntry({
+        id: '01M67REMOTE0000000000000001',
+        collection: 'posts',
+        slug: 'cached-remote-post',
+        status: 'published',
+        title: 'Cached Remote Post',
+        rev: 'rev-1',
+        publishedAt: '2026-11-01T00:00:00Z',
+        rawJson: '{}',
+        updatedAt: Math.floor(Date.now() / 1000),
+      });
+
+      expect(() => {
+        createArticleScaffold({ workspaceRoot: tempDir, slug: 'cached-remote-post', cache });
+      }).toThrow(DuplicateSlugError);
+    });
+
+    it('detects duplicate slug from remote API via checkRemoteDuplicateSlug', async () => {
+      const mockFetch = async () =>
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M67REMOTE0000000000000002',
+                slug: 'tokyo-ramen',
+                status: 'published',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+
+      const dup = await checkRemoteDuplicateSlug({
+        origin: 'https://test.origin',
+        token: 'token',
+        collection: 'posts',
+        slug: 'tokyo-ramen',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(dup).not.toBeNull();
+      expect(dup?.slug).toBe('tokyo-ramen');
+      expect(dup?.existingId).toBe('01M67REMOTE0000000000000002');
+      expect(dup?.source).toBe('remote');
+    });
+
+    it('safely ignores remote errors in checkRemoteDuplicateSlug', async () => {
+      const errorFetch = async () => new Response('Internal error', { status: 500 });
+
+      const dup = await checkRemoteDuplicateSlug({
+        origin: 'https://test.origin',
+        token: 'token',
+        collection: 'posts',
+        slug: 'some-new-slug',
+        fetchFn: errorFetch as unknown as typeof fetch,
+      });
+
+      expect(dup).toBeNull();
+    });
   });
 });

@@ -23,20 +23,38 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver, ServerContext } from '../context.js';
-import { getWorkspaceStatus, type WorkspaceStatusResult } from '../../sync/status.js';
+import {
+  getWorkspaceStatus,
+  filterStatusItems,
+  type WorkspaceStatusResult,
+} from '../../sync/status.js';
 import { formatToolError } from '../tool-errors.js';
 
-const MAX_INVALID_MCP_ITEMS = 10;
+const MAX_ACTION_REQUIRED = 30;
+const MAX_RECENT_SYNCED = 5;
 
 export function registerSyncStatusTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_status',
-    'Inspect local workspace sync status. Returns all tracked articles sorted newest-first (descending by date), with relative file paths (e.g. posts/published/YYYYMMDD_<id>-<title>.md), publication status (draft/published), and modification state (synced/modified/untracked/invalid). ALWAYS use this tool first to locate local files instead of querying remote APIs.',
+    'Inspect local workspace sync status with articles sorted newest-first. Returns a summary-first payload (concise summary, up to 30 action-required articles, and 5 recent synced articles) to conserve LLM context. Use "search" or "slugFilter" to find specific articles across the full workspace.',
     {
       collection: z
         .string()
         .optional()
         .describe('Collection name to inspect (defaults to "posts")'),
+      search: z
+        .string()
+        .optional()
+        .describe('Search query matching article title, slug, ID, or file path'),
+      slugFilter: z.string().optional().describe('Filter articles by exact or partial slug'),
+      status: z
+        .enum(['draft', 'published'])
+        .optional()
+        .describe('Filter by article publication status (draft or published)'),
+      syncStatus: z
+        .enum(['synced', 'modified', 'untracked', 'invalid'])
+        .optional()
+        .describe('Filter by synchronization state'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -57,14 +75,39 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
         return formatToolError(error);
       }
 
-      // Cap invalid items in MCP output to prevent context window flooding when many files are broken
+      const isFiltered = Boolean(args.search || args.slugFilter || args.status || args.syncStatus);
+      const filteredList = isFiltered
+        ? filterStatusItems(status.items, {
+            search: args.search,
+            slugFilter: args.slugFilter,
+            status: args.status,
+            syncStatus: args.syncStatus,
+          })
+        : null;
+
+      // Extract action-required items (modified, invalid, untracked)
+      // Cap invalid items at 10 to prevent verbose error stack traces from blowing the token budget
+      const MAX_INVALID_MCP_ITEMS = 10;
       let invalidSeen = 0;
-      const filteredItems = status.items.filter((item) => {
-        if (item.syncStatus !== 'invalid') return true;
-        invalidSeen++;
-        return invalidSeen <= MAX_INVALID_MCP_ITEMS;
+      const cappedActionItems = status.items.filter((item) => {
+        if (item.syncStatus === 'synced') return false;
+        if (item.syncStatus === 'invalid') {
+          invalidSeen++;
+          return invalidSeen <= MAX_INVALID_MCP_ITEMS;
+        }
+        return true;
       });
       const invalidTruncated = Math.max(0, status.summary.invalid - MAX_INVALID_MCP_ITEMS);
+
+      const actionRequired = cappedActionItems.slice(0, MAX_ACTION_REQUIRED);
+      const rawActionRequiredCount = status.items.filter((i) => i.syncStatus !== 'synced').length;
+      const actionRequiredTruncated =
+        rawActionRequiredCount > MAX_ACTION_REQUIRED || invalidTruncated > 0;
+
+      // Extract recent synced articles
+      const allSynced = status.items.filter((item) => item.syncStatus === 'synced');
+      const recentArticles = allSynced.slice(0, MAX_RECENT_SYNCED);
+      const recentArticlesTruncated = allSynced.length > MAX_RECENT_SYNCED;
 
       const uncachedInvalid = status.items.filter(
         (item) => item.syncStatus === 'invalid' && item.cached === false,
@@ -73,13 +116,26 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
         uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
 
       const responsePayload = {
-        items: filteredItems,
         summary: status.summary,
+        actionRequired,
+        actionRequiredTruncated,
+        recentArticles,
+        recentArticlesTruncated,
+        total: status.summary.total,
+        searchQuery: args.search || args.slugFilter || null,
+        ...(isFiltered ? { filteredArticles: filteredList } : {}),
+        // Fallback for callers expecting .items:
+        items: isFiltered ? filteredList : [...actionRequired, ...recentArticles],
         ...(ctx.originWarning ? { warnings: [ctx.originWarning] } : {}),
         ...(invalidTruncated > 0
           ? {
               invalidTruncated,
               invalidNote: `...and ${invalidTruncated} more invalid frontmatter file(s) omitted to conserve context.`,
+            }
+          : {}),
+        ...(actionRequiredTruncated && invalidTruncated === 0
+          ? {
+              actionRequiredNote: `...and ${rawActionRequiredCount - MAX_ACTION_REQUIRED} more action-required item(s) omitted. Use search or slugFilter to narrow down.`,
             }
           : {}),
         ...(status.summary.invalid > 0

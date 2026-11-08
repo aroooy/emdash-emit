@@ -52,8 +52,19 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('diff');
     expect(commandNames).toContain('pull');
     expect(commandNames).toContain('push');
+    expect(commandNames).toContain('delete');
     expect(commandNames).toContain('mcp');
     expect(commandNames).toContain('profile');
+  });
+
+  it('delete command exposes safety options', () => {
+    const deleteCmd = program.commands.find((c) => c.name() === 'delete');
+    expect(deleteCmd).toBeDefined();
+    const optionNames = deleteCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--allow-delete-published');
+    expect(optionNames).toContain('--dry-run');
+    expect(optionNames).toContain('--yes');
+    expect(optionNames).toContain('--profile');
   });
 
   it('diff command exposes --id and --profile options', () => {

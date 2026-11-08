@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { createMcpServer } from '../src/mcp/server.js';
+import { calculateHash } from '../src/sync/pull.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { setProfile } from '../src/utils/profile.js';
 
@@ -422,6 +423,133 @@ describe('Emit MCP Server', () => {
     } finally {
       if (originalEnv === undefined) delete process.env.EMDASH_ORIGIN;
       else process.env.EMDASH_ORIGIN = originalEnv;
+    }
+  });
+
+  it('provides summary-first structure with capped actionRequired, recentArticles, and search filters (§3.2)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const pubDir = path.join(tempDir, 'posts', 'published');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+
+    // Create 35 modified/untracked articles to test actionRequired cap of 30
+    for (let i = 1; i <= 35; i++) {
+      const padded = String(i).padStart(2, '0');
+      const id = `01M67MOD0000000000000000${padded}`;
+      const file = `20261101_${id}-mod-${padded}.md`;
+      const content = [
+        '---',
+        `id: ${id}`,
+        `slug: mod-${padded}`,
+        `title: "Mod ${padded}"`,
+        'collection: posts',
+        'status: draft',
+        'locale: ja',
+        '---',
+        '',
+        'Body content',
+      ].join('\n');
+      fs.writeFileSync(path.join(draftDir, file), content, 'utf8');
+    }
+
+    // Create 10 synced articles in published to test recentArticles cap of 5
+    for (let i = 1; i <= 10; i++) {
+      const padded = String(i).padStart(2, '0');
+      const id = `01M67SYNC000000000000000${padded}`;
+      const file = `20261102_${id}-synced-${padded}.md`;
+      const content = [
+        '---',
+        `id: ${id}`,
+        `slug: synced-${padded}`,
+        `title: "Synced ${padded}"`,
+        'collection: posts',
+        'status: published',
+        'locale: ja',
+        '---',
+        '',
+        'Body content',
+      ].join('\n');
+      const fullPath = path.join(pubDir, file);
+      fs.writeFileSync(fullPath, content, 'utf8');
+
+      const hash = calculateHash(content);
+      cache.saveSyncState({
+        id,
+        localFilePath: path.join('posts', 'published', file),
+        localHash: hash,
+        remoteRev: 'rev-1',
+        status: 'published',
+        slug: `synced-${padded}`,
+        lastSyncedAt: 1700000000,
+      });
+      cache.saveBaseSnapshot({
+        id,
+        rev: 'rev-1',
+        frontmatterYaml: JSON.stringify({
+          id,
+          slug: `synced-${padded}`,
+          title: `Synced ${padded}`,
+          collection: 'posts',
+          status: 'published',
+          locale: 'ja',
+        }),
+        bodyMarkdown: 'Body content',
+        hash,
+        savedAt: 1700000000,
+      });
+    }
+
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    // 1. Unfiltered call: returns summary-first payload with 30 capped actionRequired & 5 recentArticles
+    const res = await registered['sync_status'].handler({});
+    expect(res.isError).toBeUndefined();
+    const payload = JSON.parse(res.content[0].text);
+
+    expect(payload.summary.total).toBe(45);
+    expect(payload.summary.untracked).toBe(35);
+    expect(payload.summary.synced).toBe(10);
+
+    expect(payload.actionRequired).toHaveLength(30);
+    expect(payload.actionRequiredTruncated).toBe(true);
+    expect(payload.recentArticles).toHaveLength(5);
+    expect(payload.recentArticlesTruncated).toBe(true);
+
+    // 2. Filter by search: matches specific article
+    const searchRes = await registered['sync_status'].handler({ search: 'synced-07' });
+    const searchPayload = JSON.parse(searchRes.content[0].text);
+    expect(searchPayload.searchQuery).toBe('synced-07');
+    expect(searchPayload.filteredArticles).toHaveLength(1);
+    expect(searchPayload.filteredArticles[0].slug).toBe('synced-07');
+
+    // 3. Filter by slugFilter
+    const slugRes = await registered['sync_status'].handler({ slugFilter: 'mod-05' });
+    const slugPayload = JSON.parse(slugRes.content[0].text);
+    expect(slugPayload.filteredArticles).toHaveLength(1);
+    expect(slugPayload.filteredArticles[0].slug).toBe('mod-05');
+
+    // 4. Filter by status: 'published'
+    const statusRes = await registered['sync_status'].handler({ status: 'published' });
+    const statusPayload = JSON.parse(statusRes.content[0].text);
+    expect(statusPayload.filteredArticles).toHaveLength(10);
+    for (const item of statusPayload.filteredArticles) {
+      expect(item.status).toBe('published');
     }
   });
 });
