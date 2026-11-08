@@ -33,6 +33,7 @@ import {
 } from '../src/sync/delete.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { ApiError } from '../src/client/error.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { initWorkspace } from '../src/utils/config.js';
 
@@ -252,7 +253,7 @@ describe('deleteArticle & sync_delete (§4)', () => {
       expect(fs.existsSync(fullPath)).toBe(false);
     });
 
-    it('aborts and preserves local file if remote server returns 500 error', async () => {
+    it('aborts, preserves local file, and avoids creating rescue copy if remote returns 500 error', async () => {
       const { fullPath } = setupArticle({ status: 'draft' });
 
       const failingFetch = async () =>
@@ -270,11 +271,52 @@ describe('deleteArticle & sync_delete (§4)', () => {
           token: 'test-token-123',
           fetchFn: failingFetch as unknown as typeof fetch,
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(ApiError);
 
-      // Local file must be preserved to prevent desync
+      // Local file and cache must be preserved
       expect(fs.existsSync(fullPath)).toBe(true);
       expect(cache.getSyncState(articleId)).not.toBeNull();
+
+      // No orphan rescue file must be created (Minor 2)
+      const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+      if (fs.existsSync(conflictsDir)) {
+        const files = fs.readdirSync(conflictsDir).filter((f) => f.endsWith('.deleted.md'));
+        expect(files).toHaveLength(0);
+      }
+    });
+
+    it('normalizes network fetch exceptions to ApiError with REMOTE_DELETE_FAILED', async () => {
+      const { fullPath } = setupArticle({ status: 'draft' });
+
+      const unreachableFetch = async () => {
+        throw new TypeError('fetch failed');
+      };
+
+      try {
+        await deleteArticle({
+          workspaceRoot: tempDir,
+          cache,
+          id: articleId,
+          origin: 'https://aroooy.net',
+          token: 'test-token-123',
+          fetchFn: unreachableFetch as unknown as typeof fetch,
+        });
+        expect.unreachable('Should have thrown ApiError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ApiError);
+        const apiErr = err as ApiError;
+        expect(apiErr.code).toBe('REMOTE_DELETE_FAILED');
+        expect(apiErr.message).toContain('Network error during remote DELETE: fetch failed');
+        expect(apiErr.suggestion).toContain('Verify network connectivity');
+      }
+
+      // Local file preserved and no rescue copy created
+      expect(fs.existsSync(fullPath)).toBe(true);
+      const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+      if (fs.existsSync(conflictsDir)) {
+        const files = fs.readdirSync(conflictsDir).filter((f) => f.endsWith('.deleted.md'));
+        expect(files).toHaveLength(0);
+      }
     });
   });
 

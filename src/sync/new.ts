@@ -154,7 +154,6 @@ export function findLocalDuplicateSlug(
 export async function checkRemoteDuplicateSlug(options: {
   origin: string;
   token: string;
-  refreshToken?: string;
   collection: string;
   slug: string;
   fetchFn?: typeof fetch;

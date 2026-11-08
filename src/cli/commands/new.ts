@@ -26,10 +26,22 @@ import {
   checkRemoteDuplicateSlug,
   DuplicateSlugError,
 } from '../../sync/new.js';
+import { ApiError } from '../../client/error.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerNewCommand(program: Command, resolveContext: CliContextResolver): void {
+  const reportActionFailure = (error: unknown): never => {
+    if (error instanceof ApiError) {
+      console.error(error.toActionableString());
+    } else if (error instanceof Error) {
+      console.error(error.message);
+    } else {
+      console.error(String(error));
+    }
+    process.exit(1);
+  };
+
   program
     .command('new <slug>')
     .description(
@@ -44,44 +56,47 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (slug, options) => {
-      const ctx = resolveContext(options.profile);
-      const collection = options.collection || ctx.config.defaultCollection;
-      const locale = options.locale || ctx.config.defaultLocale;
+      try {
+        const ctx = resolveContext(options.profile);
+        const collection = options.collection || ctx.config.defaultCollection;
+        const locale = options.locale || ctx.config.defaultLocale;
 
-      // Best-effort remote duplicate check if connected
-      if (ctx.origin && ctx.auth?.token) {
-        const remoteDup = await checkRemoteDuplicateSlug({
-          origin: ctx.origin,
-          token: ctx.auth.token,
-          refreshToken: ctx.auth.refreshToken,
-          collection,
-          slug,
-        }).catch(() => null);
-        if (remoteDup) {
-          throw new DuplicateSlugError(remoteDup);
+        // Best-effort remote duplicate check if connected
+        if (ctx.origin && ctx.auth?.token) {
+          const remoteDup = await checkRemoteDuplicateSlug({
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            collection,
+            slug,
+          }).catch(() => null);
+          if (remoteDup) {
+            throw new DuplicateSlugError(remoteDup);
+          }
         }
+
+        const res = createArticleScaffold({
+          slug,
+          title: options.title,
+          collection,
+          locale,
+          byline: options.byline,
+          workspaceRoot: ctx.root,
+          cache: ctx.cache,
+        });
+
+        console.log(`✅ Created new article scaffold (ID: ${res.id})`);
+        console.log(`   Path: ${res.filePath}`);
+
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+        if (taxHint) {
+          console.log(`\n${taxHint}`);
+        }
+
+        console.log(`\nNext: Write your content in Markdown, then run:`);
+        console.log(`   emit push ${res.filePath}`);
+      } catch (error) {
+        reportActionFailure(error);
       }
-
-      const res = createArticleScaffold({
-        slug,
-        title: options.title,
-        collection,
-        locale,
-        byline: options.byline,
-        workspaceRoot: ctx.root,
-        cache: ctx.cache,
-      });
-
-      console.log(`✅ Created new article scaffold (ID: ${res.id})`);
-      console.log(`   Path: ${res.filePath}`);
-
-      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
-      if (taxHint) {
-        console.log(`\n${taxHint}`);
-      }
-
-      console.log(`\nNext: Write your content in Markdown, then run:`);
-      console.log(`   emit push ${res.filePath}`);
     });
 }

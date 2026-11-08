@@ -22,9 +22,21 @@
 
 import type { Command } from 'commander';
 import { deleteArticle } from '../../sync/delete.js';
+import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerDeleteCommand(program: Command, resolveContext: CliContextResolver): void {
+  const reportActionFailure = (error: unknown): never => {
+    if (error instanceof ApiError) {
+      console.error(error.toActionableString());
+    } else if (error instanceof Error) {
+      console.error(error.message);
+    } else {
+      console.error(String(error));
+    }
+    process.exit(1);
+  };
+
   program
     .command('delete <target>')
     .description('Safely delete an article from both local workspace and remote EmDash server')
@@ -34,47 +46,49 @@ export function registerDeleteCommand(program: Command, resolveContext: CliConte
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (target, options) => {
-      const ctx = resolveContext(options.profile);
-      const collection = options.collection || ctx.config.defaultCollection;
+      try {
+        // In non-interactive CLI environments, require --yes or treat as dry-run
+        const isDryRun = Boolean(options.dryRun || !options.yes);
+        const ctx = resolveContext(options.profile, { optionalAuth: isDryRun });
+        const collection = options.collection || ctx.config.defaultCollection;
+        const result = await deleteArticle({
+          workspaceRoot: ctx.root,
+          cache: ctx.cache,
+          filePath: target.endsWith('.md') || target.includes('/') ? target : undefined,
+          id: !target.endsWith('.md') && !target.includes('/') ? target : undefined,
+          collection,
+          allowDeletePublished: Boolean(options.allowDeletePublished),
+          dryRun: isDryRun,
+          origin: ctx.origin,
+          token: ctx.auth?.token,
+          refreshToken: ctx.auth?.refreshToken,
+        });
 
-      // In non-interactive CLI environments, require --yes or treat as dry-run
-      const isDryRun = Boolean(options.dryRun || !options.yes);
-
-      const result = await deleteArticle({
-        workspaceRoot: ctx.root,
-        cache: ctx.cache,
-        filePath: target.endsWith('.md') || target.includes('/') ? target : undefined,
-        id: !target.endsWith('.md') && !target.includes('/') ? target : undefined,
-        collection,
-        allowDeletePublished: Boolean(options.allowDeletePublished),
-        dryRun: isDryRun,
-        origin: ctx.origin,
-        token: ctx.auth?.token,
-        refreshToken: ctx.auth?.refreshToken,
-      });
-
-      if (result.dryRun) {
-        console.log(`\n🔍 [DRY-RUN PREVIEW]`);
-        console.log(`   ID:        ${result.id}`);
-        console.log(`   Slug:      ${result.slug}`);
-        console.log(`   Title:     ${result.title}`);
-        console.log(`   Status:    ${result.status}`);
-        console.log(`   File Path: ${result.filePath}`);
-        console.log(`   Lines:     ${result.bodyLineCount} lines`);
-        if (result.referencedMedia.length > 0) {
-          console.log(
-            `   Referenced Media (${result.referencedMedia.length} files preserved in media/):`,
-          );
-          for (const m of result.referencedMedia) {
-            console.log(`     - ${m}`);
+        if (result.dryRun) {
+          console.log(`\n🔍 [DRY-RUN PREVIEW]`);
+          console.log(`   ID:        ${result.id}`);
+          console.log(`   Slug:      ${result.slug}`);
+          console.log(`   Title:     ${result.title}`);
+          console.log(`   Status:    ${result.status}`);
+          console.log(`   File Path: ${result.filePath}`);
+          console.log(`   Lines:     ${result.bodyLineCount} lines`);
+          if (result.referencedMedia.length > 0) {
+            console.log(
+              `   Referenced Media (${result.referencedMedia.length} files preserved in media/):`,
+            );
+            for (const m of result.referencedMedia) {
+              console.log(`     - ${m}`);
+            }
           }
+          console.log(`\n⚠️  To permanently delete this article, run again with --yes:`);
+          const pubFlag = result.status === 'published' ? ' --allow-delete-published' : '';
+          console.log(`   emit delete ${target}${pubFlag} --yes\n`);
+          return;
         }
-        console.log(`\n⚠️  To permanently delete this article, run again with --yes:`);
-        const pubFlag = result.status === 'published' ? ' --allow-delete-published' : '';
-        console.log(`   emit delete ${target}${pubFlag} --yes\n`);
-        return;
-      }
 
-      console.log(`\n${result.message}\n`);
+        console.log(`\n${result.message}\n`);
+      } catch (error) {
+        reportActionFailure(error);
+      }
     });
 }

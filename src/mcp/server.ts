@@ -80,11 +80,12 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media/.
 
 ## AI Workflow (The Golden Path)
-1. [CHECK]: Use sync_status to list locally tracked articles and their file paths (returned newest-first, descending by date). If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).
+1. [CHECK]: Use sync_status to inspect locally tracked articles. Returns a summary-first payload (actionRequired capped at 30 items, recentArticles 5 items). To locate specific articles across the full workspace, use search (title/slug/id/filePath) or slugFilter. If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).
 2. [PULL]: Use sync_pull to sync articles AND taxonomies (categories/tags) from EmDash remote. Batch mode automatically pulls both and returns available taxonomy hints (also returned with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets.
 3. [READ & EDIT]: Read and edit the local Markdown files directly using your standard filesystem tools. Full article content and metadata (title, slug, status, bylines, taxonomies) are stored in the Markdown files.
 4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.
-5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/ (it returns available categories/tags hints), edit it locally, and push when ready.
+5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/ (it returns available categories/tags hints). Rejects duplicates if slug already exists locally or in cache.
+6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
 `.trim();
 
 export function createMcpServer(options?: CreateMcpServerOptions): McpServer {

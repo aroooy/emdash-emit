@@ -65,7 +65,6 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
           const remoteDup = await checkRemoteDuplicateSlug({
             origin: ctx.origin,
             token: ctx.auth.token,
-            refreshToken: ctx.auth.refreshToken,
             collection,
             slug: args.slug,
           }).catch(() => null);

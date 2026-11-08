@@ -44,7 +44,10 @@ export interface CliContext {
   origin: string;
 }
 
-export type CliContextResolver = (profileName?: string) => CliContext;
+export type CliContextResolver = (
+  profileName?: string,
+  options?: { optionalAuth?: boolean },
+) => CliContext;
 
 /** Compares origins ignoring surrounding whitespace and trailing slashes. */
 export const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, '');
@@ -154,7 +157,7 @@ export function resolveOriginPriority(sources: OriginSources): OriginResolution 
 }
 
 export function createCliContextResolver(): CliContextResolver {
-  return (profileName?: string): CliContext => {
+  return (profileName?: string, resolverOptions?: { optionalAuth?: boolean }): CliContext => {
     const profilesData = loadProfilesFile();
     const explicitProf = profileName ? profilesData.profiles[profileName] : undefined;
     const cwdProf = !profileName ? findProfileByDirectory(process.cwd()) : null;
@@ -181,12 +184,21 @@ export function createCliContextResolver(): CliContextResolver {
         origin: preOriginHint,
       });
       if (!resolved) {
-        console.error('❌ Error: No authentication found.');
-        console.error('   Please run "emit profile add <name> --origin <url> --token <token>"');
-        console.error('   or set EMDASH_TOKEN environment variable.');
-        process.exit(1);
+        if (resolverOptions?.optionalAuth) {
+          auth = {
+            source: 'emit-config',
+            token: '',
+            origin: preOriginHint,
+          };
+        } else {
+          console.error('❌ Error: No authentication found.');
+          console.error('   Please run "emit profile add <name> --origin <url> --token <token>"');
+          console.error('   or set EMDASH_TOKEN environment variable.');
+          process.exit(1);
+        }
+      } else {
+        auth = resolved;
       }
-      auth = resolved;
     } catch (err: unknown) {
       if (err instanceof AmbiguousProfileError) {
         console.error(`\n❌ Error: ${err.message}`);

@@ -428,4 +428,61 @@ describe('Emit CLI (Commander)', () => {
       warning: null,
     });
   });
+
+  it('formats new and delete command failures cleanly without raw stack traces (Major 1 & 2)', async () => {
+    const originalCwd = process.cwd();
+    process.chdir(tempDir);
+
+    const errLines: string[] = [];
+    const originalError = console.error;
+    const originalExit = process.exit;
+    const EXIT_SENTINEL = Symbol('emit-test-exit');
+    let exitCode: number | undefined;
+
+    const runCli = async (args: string[]) => {
+      exitCode = undefined;
+      errLines.length = 0;
+      try {
+        await program.parseAsync(['node', 'emit', ...args]);
+      } catch (error) {
+        if (error !== EXIT_SENTINEL) throw error;
+      }
+    };
+
+    console.error = (...args: unknown[]) => {
+      errLines.push(args.map(String).join(' '));
+    };
+    process.exit = ((code?: number) => {
+      exitCode = code ?? 0;
+      throw EXIT_SENTINEL;
+    }) as typeof process.exit;
+
+    try {
+      // 1. Create initial article
+      await runCli(['new', 'duplicate-cli-test']);
+      expect(exitCode).toBeUndefined();
+
+      // 2. emit new with duplicate slug must report clean error without stack trace
+      await runCli(['new', 'duplicate-cli-test']);
+      expect(exitCode).toBe(1);
+      const newErr = errLines.join('\n');
+      expect(newErr).toContain(
+        "Conflict: An article with slug 'duplicate-cli-test' already exists!",
+      );
+      expect(newErr).not.toContain('    at ');
+      expect(newErr).not.toContain('file://');
+
+      // 3. emit delete on non-existent article must report clean error without stack trace
+      await runCli(['delete', 'non-existent-target.md', '--yes']);
+      expect(exitCode).toBe(1);
+      const delErr = errLines.join('\n');
+      expect(delErr).toContain('Local file not found: non-existent-target.md');
+      expect(delErr).not.toContain('    at ');
+      expect(delErr).not.toContain('file://');
+    } finally {
+      console.error = originalError;
+      process.exit = originalExit;
+      process.chdir(originalCwd);
+    }
+  });
 });

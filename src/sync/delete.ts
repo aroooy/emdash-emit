@@ -192,27 +192,31 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
     };
   }
 
-  // Rescue Backup: save copy to <collection>/conflicts/<name>.deleted.md
-  const conflictsDir = path.join(options.workspaceRoot, collection, CONFLICTS_SUBDIR);
-  fs.mkdirSync(conflictsDir, { recursive: true });
-  const filenameBase = path.basename(targetFile, '.md');
-  const rescueRelPath = path.join(collection, CONFLICTS_SUBDIR, `${filenameBase}.deleted.md`);
-  const rescueFullPath = path.join(options.workspaceRoot, rescueRelPath);
-  fs.writeFileSync(rescueFullPath, rawContent, 'utf8');
-
   // Remote API deletion (DELETE /_emdash/api/content/{collection}/{id})
+  // Attempt remote deletion first before touching local files or rescue directories
   let remoteDeleted = false;
   if (options.origin && options.token && articleId && articleId !== 'unknown') {
     const fetchFn = options.fetchFn || globalThis.fetch;
     const url = new URL(`/_emdash/api/content/${collection}/${articleId}`, options.origin);
 
-    const res = await fetchFn(url.toString(), {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        Accept: 'application/json',
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetchFn(url.toString(), {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${options.token}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (fetchErr) {
+      throw new ApiError({
+        endpoint: url.pathname,
+        code: 'REMOTE_DELETE_FAILED',
+        status: 0,
+        message: `Network error during remote DELETE: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+        suggestion: 'Verify network connectivity, origin URL, and remote server status.',
+      });
+    }
 
     if (res.ok || res.status === 204) {
       remoteDeleted = true;
@@ -220,7 +224,7 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
       // Already absent on remote server
       remoteDeleted = false;
     } else {
-      // Remote deletion failed: abort before deleting local file to prevent desync
+      // Remote deletion failed: abort before deleting local file or writing rescue to prevent desync
       const errText = await res.text().catch(() => '');
       throw new ApiError({
         endpoint: url.pathname,
@@ -231,6 +235,14 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
       });
     }
   }
+
+  // Rescue Backup: save copy to <collection>/conflicts/<name>.deleted.md only after remote is confirmed
+  const conflictsDir = path.join(options.workspaceRoot, collection, CONFLICTS_SUBDIR);
+  fs.mkdirSync(conflictsDir, { recursive: true });
+  const filenameBase = path.basename(targetFile, '.md');
+  const rescueRelPath = path.join(collection, CONFLICTS_SUBDIR, `${filenameBase}.deleted.md`);
+  const rescueFullPath = path.join(options.workspaceRoot, rescueRelPath);
+  fs.writeFileSync(rescueFullPath, rawContent, 'utf8');
 
   // Delete local file from disk
   fs.unlinkSync(fullLocalPath);
