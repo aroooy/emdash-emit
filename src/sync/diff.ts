@@ -27,6 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { serializeMarkdown, type Frontmatter } from '../utils/frontmatter.js';
 import { calculateHash } from './pull.js';
+import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 
 export interface DiffResult {
   hasChanges: boolean;
@@ -158,11 +159,14 @@ export function inspectArticleDiff(options: {
   const currentHash = calculateHash(localContent);
   const isModified = syncState ? syncState.localHash !== currentHash : true;
   // base_snapshots.frontmatterYaml stores a JSON-encoded Frontmatter (see pull.ts / push.ts).
-  // Rebuild the base document with the exact same serializer used to write the local file so the
-  // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML.
+  // Rebuild the base document with the exact same serializer and taxonomy candidates used to write the local file so the
+  // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML,
+  // preventing phantom diffs caused by taxonomy inline comments.
+  const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
   const baseFullMarkdown = serializeMarkdown(
     JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter,
     baseSnapshot.bodyMarkdown,
+    candidates,
   );
   const diffResult = computeContextDiff(baseFullMarkdown, localContent, {
     baseLabel: `base [rev: ${baseSnapshot.rev}]`,

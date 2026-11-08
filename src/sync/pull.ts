@@ -485,26 +485,8 @@ export async function pullArticle(
   let candidates = options.candidates;
   const getTaxonomyCandidates = (): TaxonomyCandidates | undefined => {
     if (candidates) return candidates;
-    try {
-      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
-      const catMap: Record<string, string> = {};
-      for (const c of summary.categories) {
-        if (c.name && c.slug) catMap[c.slug] = c.name;
-      }
-      const tagMap: Record<string, string> = {};
-      for (const t of summary.tags) {
-        if (t.name && t.slug) tagMap[t.slug] = t.name;
-      }
-      candidates = {
-        slugToName: {
-          category: catMap,
-          tag: tagMap,
-        },
-      };
-      return candidates;
-    } catch {
-      return undefined;
-    }
+    candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
+    return candidates;
   };
 
   // 1. Fast-path check: If rawItem is provided and not forced, check rev & local hash

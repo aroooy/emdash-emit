@@ -57,7 +57,7 @@ export interface TaxonomyCandidates {
     tag?: Record<string, string>;
     [key: string]: Record<string, string> | undefined;
   };
-  [key: string]: unknown;
+  [key: string]: string[] | { [k: string]: Record<string, string> | undefined } | undefined;
 }
 
 export interface ParsedMarkdown {

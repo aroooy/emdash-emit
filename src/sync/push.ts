@@ -45,7 +45,11 @@ import {
   type ParsedMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
-import { getLocalTaxonomiesSummary, loadLocalTaxonomyMaps } from './taxonomies.js';
+import {
+  getLocalTaxonomiesSummary,
+  loadLocalTaxonomyMaps,
+  loadLocalTaxonomyCandidates,
+} from './taxonomies.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
@@ -606,25 +610,8 @@ export async function pushArticle(
   }
 
   // Pre-build taxonomy candidates with slugToName for frontmatter serialization with inline '# <Name>' comments
-  const candidates: TaxonomyCandidates = options.candidates || {
-    slugToName: {
-      category: {},
-      tag: {},
-    },
-  };
-  if (!options.candidates) {
-    try {
-      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
-      for (const c of summary.categories) {
-        if (c.name && c.slug) candidates.slugToName!.category![c.slug] = c.name;
-      }
-      for (const t of summary.tags) {
-        if (t.name && t.slug) candidates.slugToName!.tag![t.slug] = t.name;
-      }
-    } catch {
-      // ignore
-    }
-  }
+  const candidates: TaxonomyCandidates =
+    options.candidates || loadLocalTaxonomyCandidates(options.workspaceRoot);
 
   // If knownTaxonomies is not explicitly passed, populate from local categories/ and tags/ (if present)
   let knownTaxonomies = options.knownTaxonomies;
@@ -990,7 +977,9 @@ export async function pushArticle(
           rev: remoteParsed.rev,
           bodyMarkdown: remoteParsed.body,
           frontmatterYaml: JSON.stringify(remoteParsed.frontmatter),
-          hash: calculateHash(serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body)),
+          hash: calculateHash(
+            serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body, candidates),
+          ),
           savedAt: Math.floor(Date.now() / 1000),
         });
 

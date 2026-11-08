@@ -23,10 +23,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { computeContextDiff, resolveArticleTarget, inspectArticleDiff } from '../src/sync/diff.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { loadLocalTaxonomyCandidates } from '../src/sync/taxonomies.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
 describe('computeContextDiff', () => {
@@ -247,5 +249,80 @@ describe('resolveArticleTarget & inspectArticleDiff', () => {
     expect(modRes.formattedOutput).toContain('🟡 Modified');
     expect(modRes.formattedOutput).toContain('+Line 2 updated');
     expect(modRes.formattedOutput).toContain('+Line 3 added');
+  });
+
+  it('produces zero phantom diff on untouched article with taxonomy inline comments', () => {
+    const articleId = '01M67TAXPHANTOMDIFFTEST0001';
+    const relPath = 'posts/draft/01M67TAXPHANTOMDIFFTEST0001-phantom-diff.md';
+
+    // Create local categories/ directory with a term
+    const catDir = path.join(tempDir, 'categories');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(catDir, '01CAT01-tech.yaml'),
+      yaml.dump({
+        id: '01CAT01',
+        name: 'Technology',
+        slug: 'tech',
+        taxonomy: 'category',
+      }),
+      'utf8',
+    );
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'phantom-diff',
+      title: 'Phantom Diff Test',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'], tags: [] },
+      bylines: [],
+    };
+    const baseBody = 'Body content.\n';
+
+    // Reconstruct with candidates (as pull/push do)
+    const candidates = loadLocalTaxonomyCandidates(tempDir);
+    const serializedWithComments = serializeMarkdown(frontmatter, baseBody, candidates);
+    expect(serializedWithComments).toContain('- tech # Technology');
+
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializedWithComments, 'utf8');
+
+    const hash = calculateHash(serializedWithComments);
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: 'rev-1',
+      frontmatterYaml: JSON.stringify(frontmatter),
+      bodyMarkdown: baseBody,
+      hash,
+      savedAt: 1700000000,
+    });
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: hash,
+      remoteRev: 'rev-1',
+      status: 'draft',
+      slug: 'phantom-diff',
+      lastSyncedAt: 1700000000,
+    });
+
+    const diffRes = inspectArticleDiff({
+      workspaceRoot: tempDir,
+      cache,
+      id: articleId,
+    });
+
+    expect(diffRes.ok).toBe(true);
+    expect(diffRes.status).toBe('synced');
+    expect(diffRes.diff?.hasChanges).toBe(false);
+    expect(diffRes.diff?.additions).toBe(0);
+    expect(diffRes.diff?.deletions).toBe(0);
+    expect(diffRes.formattedOutput).toContain('🟢 In Sync with base snapshot');
+    expect(diffRes.formattedOutput).toContain('Changes: +0 / -0 lines');
+    expect(diffRes.formattedOutput).toContain('No changes detected.');
   });
 });

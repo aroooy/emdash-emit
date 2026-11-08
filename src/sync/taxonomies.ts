@@ -23,7 +23,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { formatYamlScalar, sanitizeTitleForFilename } from '../utils/frontmatter.js';
+import {
+  formatYamlScalar,
+  sanitizeTitleForFilename,
+  type TaxonomyCandidates,
+} from '../utils/frontmatter.js';
 
 export interface TaxonomyTerm {
   id: string;
@@ -340,18 +344,35 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
 }
 
 /**
- * Loads local taxonomy candidate names (slugs) from categories/ and tags/ directories.
+ * Loads local taxonomy candidate names (slugs and slug-to-name mapping) from categories/ and tags/ directories.
+ * Single source of truth for taxonomy candidate resolution across pull, push, and diff.
  */
-export function loadLocalTaxonomyCandidates(workspaceRoot: string): {
-  categories: string[];
-  tags: string[];
-} {
-  return {
-    categories: Array.from(
-      new Set(readTaxonomyDir(path.join(workspaceRoot, 'categories')).map((c) => c.slug)),
-    ),
-    tags: Array.from(new Set(readTaxonomyDir(path.join(workspaceRoot, 'tags')).map((t) => t.slug))),
-  };
+export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCandidates {
+  try {
+    const summary = getLocalTaxonomiesSummary(workspaceRoot);
+    const catMap: Record<string, string> = {};
+    for (const c of summary.categories) {
+      if (c.name && c.slug) catMap[c.slug] = c.name;
+    }
+    const tagMap: Record<string, string> = {};
+    for (const t of summary.tags) {
+      if (t.name && t.slug) tagMap[t.slug] = t.name;
+    }
+    return {
+      categories: Array.from(new Set(summary.categories.map((c) => c.slug))),
+      tags: Array.from(new Set(summary.tags.map((t) => t.slug))),
+      slugToName: {
+        category: catMap,
+        tag: tagMap,
+      },
+    };
+  } catch {
+    return {
+      categories: [],
+      tags: [],
+      slugToName: { category: {}, tag: {} },
+    };
+  }
 }
 
 /**

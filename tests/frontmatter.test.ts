@@ -103,10 +103,9 @@ describe('Frontmatter & Markdown Serialization', () => {
     expect(yaml).toContain('- hiroaki-hayase');
   });
 
-  it('serializes identically with or without taxonomy candidates (base snapshot invariant)', () => {
-    // Base snapshot reconstruction in src/sync/diff.ts re-serializes the cached frontmatter
-    // without candidates. If candidates ever start affecting output, untouched articles would
-    // show phantom diffs and the 3-way merge baseline would drift. This test locks that in.
+  it('serializes identically with or without taxonomy candidates when slugToName is omitted', () => {
+    // When candidates only provides lists (e.g. legacy { categories: [...] }), serialization
+    // output remains strictly invariant (no trailing comments added).
     const data: Frontmatter = {
       id: validUlid,
       slug: 'cloudflare-guide',
@@ -127,6 +126,30 @@ describe('Frontmatter & Markdown Serialization', () => {
     const withoutCandidates = serializeMarkdown(data, 'Body line.\n');
 
     expect(withCandidates).toBe(withoutCandidates);
+  });
+
+  it('attaches inline comments when slugToName is supplied, matching diff and pull invariants', () => {
+    const data: Frontmatter = {
+      id: validUlid,
+      slug: 'cloudflare-guide',
+      title: 'Cloudflare Guide',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+      bylines: ['hiroaki-hayase'],
+    };
+
+    const withNames = serializeMarkdown(data, 'Body line.\n', {
+      slugToName: {
+        category: { tech: 'Technology' },
+        tag: { cloudflare: 'Cloudflare Workers' },
+      },
+    });
+
+    expect(withNames).toContain('- tech # Technology');
+    expect(withNames).toContain('- cloudflare # Cloudflare Workers');
   });
 
   it('preserves featuredImage across parse and serialization round-trips', () => {
