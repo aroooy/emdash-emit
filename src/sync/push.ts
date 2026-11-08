@@ -50,6 +50,7 @@ import { runPreflightChecks, type DraftImageReference, type PreflightError } fro
 import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
+import { updateConfigSyncedVersion } from '../utils/config.js';
 import {
   fetchRemoteMediaDetail,
   resolveImageMimeType,
@@ -1127,6 +1128,8 @@ export async function pushArticle(
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
     });
+
+    updateConfigSyncedVersion(options.workspaceRoot);
 
     return {
       success: true,

@@ -126,11 +126,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             'or re-run sync_pull with force: true to accept the remote version instead.'
           : '\n\nYou can now read or edit this local Markdown file directly.';
 
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         return {
           content: [
             {
               type: 'text',
-              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}`,
+              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}${metaSuffix}`,
             },
           ],
         };
@@ -224,16 +225,17 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         }
 
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}\n\nYou can now read or edit these local Markdown files directly.`,
+              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}${metaSuffix}\n\nYou can now read or edit these local Markdown files directly.`,
             },
           ],
         };
       } catch (error) {
-        return formatToolError(error);
+        return formatToolError(error, ctx?.meta);
       }
     },
   );
@@ -267,11 +269,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             ? `⚠️ Warning: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions in categories/ and tags/).`
             : `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`;
 
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         return {
           content: [
             {
               type: 'text',
-              text: `${statusLine}${hintBlock}`,
+              text: `${statusLine}${hintBlock}${metaSuffix}`,
             },
           ],
         };
@@ -307,11 +310,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           downloadFiles: args.downloadFiles,
         });
 
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).`,
+              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).${metaSuffix}`,
             },
           ],
         };

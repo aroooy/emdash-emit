@@ -1,0 +1,283 @@
+/*
+ * Copyright (C) 2026 SPORT-SERVICE RS★R
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CacheDatabase } from '../src/db/cache.js';
+import { initWorkspace } from '../src/utils/config.js';
+import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { calculateHash } from '../src/sync/pull.js';
+import {
+  listConflicts,
+  diffConflict,
+  resolveConflict,
+  extractBaseArticleName,
+} from '../src/sync/conflicts.js';
+
+describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', () => {
+  let tempDir: string;
+  let cache: CacheDatabase;
+  const articleId = '01M67CONFLICT0000000000001';
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-conflicts-test-'));
+    initWorkspace(tempDir, { origin: 'https://aroooy.net' });
+    const dbPath = path.join(tempDir, '.emit', 'cache.db');
+    cache = new CacheDatabase(dbPath);
+  });
+
+  afterEach(() => {
+    cache.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function setupArticleFixture() {
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'sample-conflict-article',
+      title: 'Sample Canonical Title',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'] },
+      bylines: [],
+    };
+    const body = 'Canonical Line 1\nCanonical Line 2\n';
+    const canonicalContent = serializeMarkdown(frontmatter, body);
+    const relCanonical = path.join(
+      'posts',
+      'draft',
+      `20261108_${articleId}-sample-conflict-article.md`,
+    );
+    const fullCanonical = path.join(tempDir, relCanonical);
+    fs.mkdirSync(path.dirname(fullCanonical), { recursive: true });
+    fs.writeFileSync(fullCanonical, canonicalContent, 'utf8');
+
+    const hash = calculateHash(canonicalContent);
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relCanonical,
+      localHash: hash,
+      remoteRev: 'rev-1',
+      status: 'draft',
+      slug: 'sample-conflict-article',
+      lastSyncedAt: 1700000000,
+    });
+
+    return { relCanonical, fullCanonical, canonicalContent };
+  }
+
+  it('extractBaseArticleName strips suffixes accurately', () => {
+    expect(extractBaseArticleName('20261108_01M6...-slug.conflict.md')).toBe(
+      '20261108_01M6...-slug',
+    );
+    expect(extractBaseArticleName('20261108_01M6...-slug.deleted.md')).toBe(
+      '20261108_01M6...-slug',
+    );
+    expect(extractBaseArticleName('20261108_01M6...-slug.md')).toBe('20261108_01M6...-slug');
+    expect(extractBaseArticleName('simple')).toBe('simple');
+  });
+
+  it('lists both .conflict.md and .deleted.md files with metadata and canonical detection', () => {
+    const { relCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    // 1. Create a .conflict.md file
+    const conflictFm: Frontmatter = {
+      id: articleId,
+      slug: 'sample-conflict-article',
+      title: 'Diverged Conflict Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const conflictContent = serializeMarkdown(conflictFm, 'Local Diverged Content\n');
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    fs.writeFileSync(path.join(conflictsDir, conflictFileName), conflictContent, 'utf8');
+
+    // 2. Create a .deleted.md rescue file (where canonical does not exist)
+    const deletedId = '01M67DELETE000000000000099';
+    const deletedFm: Frontmatter = {
+      id: deletedId,
+      slug: 'deleted-rescue-article',
+      title: 'Deleted Title',
+      collection: 'posts',
+      status: 'published',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const deletedContent = serializeMarkdown(deletedFm, 'Rescue Body Content\n');
+    const deletedFileName = `20261108_${deletedId}-deleted-rescue-article.deleted.md`;
+    fs.writeFileSync(path.join(conflictsDir, deletedFileName), deletedContent, 'utf8');
+
+    const list = listConflicts(tempDir);
+    expect(list).toHaveLength(2);
+
+    const conflictItem = list.find((i) => i.type === 'conflict');
+    expect(conflictItem).toBeDefined();
+    expect(conflictItem?.fileName).toBe(conflictFileName);
+    expect(conflictItem?.title).toBe('Diverged Conflict Title');
+    expect(conflictItem?.canonicalPath).toBe(relCanonical);
+
+    const deletedItem = list.find((i) => i.type === 'deleted');
+    expect(deletedItem).toBeDefined();
+    expect(deletedItem?.fileName).toBe(deletedFileName);
+    expect(deletedItem?.title).toBe('Deleted Title');
+    expect(deletedItem?.canonicalPath).toBeNull();
+  });
+
+  it('computes line-by-line diff against canonical article', () => {
+    setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFm: Frontmatter = {
+      id: articleId,
+      slug: 'sample-conflict-article',
+      title: 'Diverged Conflict Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const conflictContent = serializeMarkdown(conflictFm, 'Local Diverged Line\n');
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    fs.writeFileSync(path.join(conflictsDir, conflictFileName), conflictContent, 'utf8');
+
+    const diffRes = diffConflict({
+      workspaceRoot: tempDir,
+      filePath: conflictFileName,
+    });
+
+    expect(diffRes.hasDifferences).toBe(true);
+    expect(diffRes.canonicalFilePath).toContain('sample-conflict-article.md');
+    expect(diffRes.diffText).toContain('--- canonical:');
+    expect(diffRes.diffText).toContain('+++ quarantined:');
+  });
+
+  it('resolves conflict using accept-canonical by discarding quarantined file', () => {
+    const { fullCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const conflictFullPath = path.join(conflictsDir, conflictFileName);
+    fs.writeFileSync(conflictFullPath, 'Diverged Content\n', 'utf8');
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: conflictFileName,
+      strategy: 'accept-canonical',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.strategy).toBe('accept-canonical');
+    expect(fs.existsSync(conflictFullPath)).toBe(false);
+    expect(fs.existsSync(fullCanonical)).toBe(true);
+  });
+
+  it('resolves conflict using accept-local by overwriting canonical file and updating cache', () => {
+    const { fullCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFm: Frontmatter = {
+      id: articleId,
+      slug: 'sample-conflict-article',
+      title: 'Accepted Local Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const conflictContent = serializeMarkdown(conflictFm, 'Accepted Local Body\n');
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const conflictFullPath = path.join(conflictsDir, conflictFileName);
+    fs.writeFileSync(conflictFullPath, conflictContent, 'utf8');
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: conflictFileName,
+      strategy: 'accept-local',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.strategy).toBe('accept-local');
+    expect(fs.existsSync(conflictFullPath)).toBe(false);
+    expect(fs.readFileSync(fullCanonical, 'utf8')).toBe(conflictContent);
+
+    // Cache sync state hash must match the new local content
+    const updatedSync = cache.getSyncState(articleId);
+    expect(updatedSync?.localHash).toBe(calculateHash(conflictContent));
+  });
+
+  it('resolves .deleted.md rescue copy by restoring to draft/published directory', () => {
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const rescueId = '01M67RESTORE00000000000001';
+    const rescueFm: Frontmatter = {
+      id: rescueId,
+      slug: 'restored-deleted-post',
+      title: 'Restored Post Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const rescueContent = serializeMarkdown(rescueFm, 'Restored Body\n');
+    const rescueFileName = `20261108_${rescueId}-restored-deleted-post.deleted.md`;
+    const rescueFullPath = path.join(conflictsDir, rescueFileName);
+    fs.writeFileSync(rescueFullPath, rescueContent, 'utf8');
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: rescueFileName,
+      strategy: 'accept-local',
+    });
+
+    expect(res.success).toBe(true);
+    expect(fs.existsSync(rescueFullPath)).toBe(false);
+
+    const expectedRestored = path.join(
+      tempDir,
+      'posts',
+      'draft',
+      `20261108_${rescueId}-restored-deleted-post.md`,
+    );
+    expect(fs.existsSync(expectedRestored)).toBe(true);
+    expect(fs.readFileSync(expectedRestored, 'utf8')).toBe(rescueContent);
+  });
+});

@@ -24,7 +24,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver, ServerContext } from '../context.js';
 import { deleteArticle } from '../../sync/delete.js';
-import { formatToolError } from '../tool-errors.js';
+import { formatToolError, formatToolSuccess } from '../tool-errors.js';
 
 export function registerSyncDeleteTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -81,16 +81,9 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
           refreshToken: ctx.auth?.refreshToken,
         });
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return formatToolSuccess(result as unknown as Record<string, unknown>, ctx.meta);
       } catch (error) {
-        return formatToolError(error);
+        return formatToolError(error, ctx.meta);
       }
     },
   );

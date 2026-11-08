@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getWorkspacePaths, requireWorkspaceRoot } from './workspace.js';
+import { getPackageVersion } from './version.js';
 
 export interface EmitConfig {
   /** Origin written in `.emit/config.json`, or DEFAULT_ORIGIN when unset. Never mixed with env. */
@@ -33,6 +34,14 @@ export interface EmitConfig {
   postsSyncLimit?: number;
   mediaSyncLimit?: number;
   concurrency?: number;
+  /**
+   * Package version that initialized this workspace.
+   */
+  createdWithVersion?: string;
+  /**
+   * Package version of the most recent successful pull or push operation.
+   */
+  lastSyncedVersion?: string;
   /**
    * Runtime-only view of `EMDASH_ORIGIN`, kept separate from `origin` so diagnostics can state
    * which source a value came from. Never persisted by `initWorkspace`.
@@ -74,12 +83,36 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
   fs.mkdirSync(postsDraftDir, { recursive: true });
   fs.mkdirSync(postsPublishedDir, { recursive: true });
 
+  const currentVersion = getPackageVersion();
   const config: EmitConfig = {
     ...DEFAULT_CONFIG,
+    createdWithVersion: currentVersion,
+    lastSyncedVersion: currentVersion,
     ...initialConfig,
   };
 
   fs.writeFileSync(paths.configPath, JSON.stringify(config, null, 2), 'utf8');
+}
+
+/**
+ * Updates `lastSyncedVersion` in `.emit/config.json` after a successful sync operation.
+ */
+export function updateConfigSyncedVersion(workspaceRoot: string, version?: string): void {
+  try {
+    const paths = getWorkspacePaths(workspaceRoot);
+    if (!fs.existsSync(paths.configPath)) return;
+
+    const raw = fs.readFileSync(paths.configPath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const currentVersion = version || getPackageVersion();
+    parsed.lastSyncedVersion = currentVersion;
+    if (!parsed.createdWithVersion) {
+      parsed.createdWithVersion = currentVersion;
+    }
+    fs.writeFileSync(paths.configPath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Non-fatal if config update fails
+  }
 }
 
 /**
@@ -107,6 +140,8 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       postsSyncLimit: parsed.postsSyncLimit || DEFAULT_CONFIG.postsSyncLimit,
       mediaSyncLimit: parsed.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
       concurrency: parsed.concurrency || DEFAULT_CONFIG.concurrency,
+      createdWithVersion: parsed.createdWithVersion,
+      lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,
     };
   } catch {

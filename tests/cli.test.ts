@@ -53,6 +53,8 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('pull');
     expect(commandNames).toContain('push');
     expect(commandNames).toContain('delete');
+    expect(commandNames).toContain('conflicts');
+    expect(commandNames).toContain('doctor');
     expect(commandNames).toContain('mcp');
     expect(commandNames).toContain('profile');
   });
@@ -505,6 +507,55 @@ describe('Emit CLI (Commander)', () => {
       vi.unstubAllGlobals();
       console.error = originalError;
       process.exit = originalExit;
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('executes emit conflicts list and emit doctor commands cleanly (Phase 3)', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-cli-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    const configDir = path.join(homeDir, '.config', 'emit');
+    fs.mkdirSync(configDir, { recursive: true });
+    setProfile(
+      'default',
+      {
+        origin: 'https://aroooy.net',
+        token: 'test-token',
+        workspace: tempDir,
+      },
+      true,
+      path.join(configDir, 'profiles.yaml'),
+    );
+
+    const originalCwd = process.cwd();
+    process.chdir(tempDir);
+
+    const logLines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map(String).join(' '));
+    };
+
+    try {
+      // 1. emit conflicts list in clean workspace
+      logLines.length = 0;
+      await program.parseAsync(['node', 'emit', 'conflicts', 'list']);
+      const confOut = logLines.join('\n');
+      expect(confOut).toContain('No conflicts or rescue backups found');
+
+      // 2. emit doctor in clean workspace
+      logLines.length = 0;
+      await program.parseAsync(['node', 'emit', 'doctor']);
+      const docOut = logLines.join('\n');
+      expect(docOut).toContain('Emit Workspace Doctor');
+      expect(docOut).toContain('Overall Status: HEALTHY');
+    } finally {
+      console.log = originalLog;
       process.chdir(originalCwd);
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;

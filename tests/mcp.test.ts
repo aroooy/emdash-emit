@@ -29,6 +29,7 @@ import { createMcpServer } from '../src/mcp/server.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { setProfile } from '../src/utils/profile.js';
+import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
 describe('Emit MCP Server', () => {
   let tempDir: string;
@@ -86,6 +87,9 @@ describe('Emit MCP Server', () => {
       'sync_pull_media',
       'sync_push',
       'sync_status',
+      'sync_delete',
+      'sync_conflicts',
+      'sync_doctor',
     ];
 
     const registered = (
@@ -551,5 +555,90 @@ describe('Emit MCP Server', () => {
     for (const item of statusPayload.filteredArticles) {
       expect(item.status).toBe('published');
     }
+  });
+
+  it('provides _meta context, sync_conflicts, and sync_doctor tools (Phase 3)', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    // 1. sync_status response contains _meta object
+    const statusRes = await registered['sync_status'].handler({});
+    expect(statusRes.isError).toBeUndefined();
+    const statusPayload = JSON.parse(statusRes.content[0].text);
+    expect(statusPayload._meta).toBeDefined();
+    expect(statusPayload._meta.origin).toBe('https://aroooy.net');
+    expect(statusPayload._meta.profile).toBe('default');
+    expect(statusPayload._meta.workspace).toBe(tempDir);
+    expect(statusPayload._meta.resolvedBy).toBeDefined();
+
+    // 2. sync_conflicts list
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+    const conflictFm: Frontmatter = {
+      id: '01M67TESTCONFLICT000000001',
+      slug: 'mcp-conflict-test',
+      title: 'MCP Conflict Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const conflictContent = serializeMarkdown(conflictFm, 'MCP Conflict Content\n');
+    const conflictFile = '20261108_01M67TESTCONFLICT000000001-mcp-conflict-test.conflict.md';
+    fs.writeFileSync(path.join(conflictsDir, conflictFile), conflictContent, 'utf8');
+
+    const listRes = await registered['sync_conflicts'].handler({ action: 'list' });
+    expect(listRes.isError).toBeUndefined();
+    const listPayload = JSON.parse(listRes.content[0].text);
+    expect(listPayload.count).toBe(1);
+    expect(listPayload.conflicts[0].slug).toBe('mcp-conflict-test');
+    expect(listPayload._meta).toBeDefined();
+
+    // 3. sync_conflicts diff
+    const diffRes = await registered['sync_conflicts'].handler({
+      action: 'diff',
+      filePath: conflictFile,
+    });
+    expect(diffRes.isError).toBeUndefined();
+    const diffPayload = JSON.parse(diffRes.content[0].text);
+    expect(diffPayload.hasDifferences).toBe(true);
+    expect(diffPayload._meta).toBeDefined();
+
+    // 4. sync_conflicts resolve (accept-canonical)
+    const resolveRes = await registered['sync_conflicts'].handler({
+      action: 'resolve',
+      filePath: conflictFile,
+      strategy: 'accept-canonical',
+    });
+    expect(resolveRes.isError).toBeUndefined();
+    const resolvePayload = JSON.parse(resolveRes.content[0].text);
+    expect(resolvePayload.success).toBe(true);
+    expect(resolvePayload.strategy).toBe('accept-canonical');
+    expect(fs.existsSync(path.join(conflictsDir, conflictFile))).toBe(false);
+
+    // 5. sync_doctor
+    const doctorRes = await registered['sync_doctor'].handler({});
+    expect(doctorRes.isError).toBeUndefined();
+    const doctorPayload = JSON.parse(doctorRes.content[0].text);
+    expect(doctorPayload.overallStatus).toBeDefined();
+    expect(doctorPayload.checks).toBeInstanceOf(Array);
+    expect(doctorPayload.checks.length).toBeGreaterThanOrEqual(5);
+    expect(doctorPayload._meta).toBeDefined();
   });
 });

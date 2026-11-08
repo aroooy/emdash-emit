@@ -34,6 +34,7 @@ import {
 import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
 import { syncRemoteBylines } from './bylines.js';
+import { updateConfigSyncedVersion } from '../utils/config.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -257,6 +258,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
       }
     }
   }
+
+  updateConfigSyncedVersion(options.workspaceRoot);
 
   return {
     total: remoteList.length,

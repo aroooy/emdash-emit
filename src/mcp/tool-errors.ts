@@ -21,6 +21,7 @@
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { McpMeta } from './context.js';
 import { ApiError } from '../client/error.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
 import { PushValidationError } from '../sync/push.js';
@@ -45,16 +46,33 @@ function toolError(text: string): CallToolResult {
 }
 
 /**
- * Formats a known Emit error into a structured MCP tool result.
+ * Formats a successful MCP response as formatted JSON with optional _meta context.
+ */
+export function formatToolSuccess(data: Record<string, unknown>, meta?: McpMeta): CallToolResult {
+  const payload = meta ? { ...data, _meta: meta } : data;
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
+  };
+}
+
+/**
+ * Formats a known Emit error into a structured MCP tool result with optional _meta context.
  *
  * Without this, the MCP SDK converts a thrown error into `createToolError(String(error))`,
  * which keeps only `error.message` and silently drops the structured diagnostics
  * (`[CODE]`, HTTP status, endpoint, suggestion) that CLI users receive through
  * `ApiError.toActionableString()`. AI agents need the same actionable detail.
  */
-export function formatToolError(error: unknown): CallToolResult {
+export function formatToolError(error: unknown, meta?: McpMeta): CallToolResult {
+  const metaSuffix = meta ? `\n\n_meta: ${JSON.stringify(meta)}` : '';
+
   if (error instanceof ApiError) {
-    return toolError(error.toActionableString());
+    return toolError(error.toActionableString() + metaSuffix);
   }
 
   if (error instanceof PushValidationError) {
@@ -64,6 +82,7 @@ export function formatToolError(error: unknown): CallToolResult {
           error: 'PREFLIGHT_VALIDATION_FAILED',
           message: error.message,
           errors: error.errors,
+          ...(meta ? { _meta: meta } : {}),
         },
         null,
         2,
@@ -73,14 +92,19 @@ export function formatToolError(error: unknown): CallToolResult {
 
   if (error instanceof FrontmatterParseError) {
     return toolError(
-      JSON.stringify({
-        error: error.code,
-        message: error.message,
-        filePath: error.filePath,
-        line: error.line,
-        reason: error.reason,
-        suggestion: error.suggestion,
-      }),
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          filePath: error.filePath,
+          line: error.line,
+          reason: error.reason,
+          suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
+        },
+        null,
+        2,
+      ),
     );
   }
 
@@ -95,6 +119,7 @@ export function formatToolError(error: unknown): CallToolResult {
           existingFilePath: error.existingFilePath,
           existingStatus: error.existingStatus,
           suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
         },
         null,
         2,
@@ -114,6 +139,7 @@ export function formatToolError(error: unknown): CallToolResult {
           filePath: error.filePath,
           id: error.id,
           suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
         },
         null,
         2,
@@ -122,9 +148,9 @@ export function formatToolError(error: unknown): CallToolResult {
   }
 
   if (error instanceof SyncPruneConflictError || error instanceof AmbiguousProfileError) {
-    return toolError(`❌ ${error.message}`);
+    return toolError(`❌ ${error.message}${metaSuffix}`);
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  return toolError(`❌ ${message}`);
+  return toolError(`❌ ${message}${metaSuffix}`);
 }

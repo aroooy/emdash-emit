@@ -56,14 +56,16 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
           id: args.id,
         });
       } catch (error) {
-        return formatToolError(error);
+        return formatToolError(error, ctx.meta);
       }
+
+      const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
 
       return {
         content: [
           {
             type: 'text',
-            text: inspection.formattedOutput,
+            text: `${inspection.formattedOutput}${metaSuffix}`,
           },
         ],
       };

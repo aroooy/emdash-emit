@@ -39,6 +39,7 @@ import {
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
+import { updateConfigSyncedVersion } from '../utils/config.js';
 
 export interface PullOptions extends MapperOptions {
   workspaceRoot: string;
@@ -821,6 +822,8 @@ export async function pullArticle(
     rawJson: JSON.stringify(rawItem),
     updatedAt: Math.floor(Date.now() / 1000),
   });
+
+  updateConfigSyncedVersion(options.workspaceRoot);
 
   return {
     id: frontmatter.id,

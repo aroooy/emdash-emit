@@ -87,17 +87,19 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
         const hintBlock = taxHint ? `\n\n${taxHint}` : '';
 
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
+
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.`,
+              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.${metaSuffix}`,
             },
           ],
         };
       } catch (error) {
         // Slug validation, byline resolution, and taxonomy hint reads all fail here.
-        return formatToolError(error);
+        return formatToolError(error, ctx?.meta);
       }
     },
   );

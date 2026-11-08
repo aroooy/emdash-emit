@@ -61,6 +61,10 @@ export function registerProfileTools(server: McpServer, options: ProfileToolOpti
                 {
                   activeProfile: currentActive,
                   profiles,
+                  _meta: {
+                    activeProfile: currentActive,
+                    profilesPath: options.profilesPath || '~/.config/emit/profiles.yaml',
+                  },
                 },
                 null,
                 2,

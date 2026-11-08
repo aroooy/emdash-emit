@@ -32,7 +32,7 @@ import {
   loadProfilesFile,
   AmbiguousProfileError,
 } from '../utils/profile.js';
-import type { ServerContext, ContextResolver } from './context.js';
+import type { ServerContext, ContextResolver, McpMeta } from './context.js';
 import { registerProfileTools } from './tools/profile.js';
 import { registerSyncNewTool } from './tools/sync-new.js';
 import { registerSyncPullTools } from './tools/sync-pull.js';
@@ -40,6 +40,8 @@ import { registerSyncPushTool } from './tools/sync-push.js';
 import { registerSyncStatusTool } from './tools/sync-status.js';
 import { registerSyncDiffTool } from './tools/sync-diff.js';
 import { registerSyncDeleteTool } from './tools/sync-delete.js';
+import { registerSyncConflictsTool } from './tools/sync-conflicts.js';
+import { registerSyncDoctorTool } from './tools/sync-doctor.js';
 import { getPackageVersion } from '../utils/version.js';
 
 export interface CreateMcpServerOptions {
@@ -86,6 +88,9 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.
 5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/ (it returns available categories/tags hints). Rejects duplicates if slug already exists locally or in cache.
 6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
+7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical').
+8. [DOCTOR]: Use sync_doctor to diagnose workspace health (version compatibility, origin consistency, frontmatter integrity, conflicts/quarantine, and media references).
+All tool responses include "_meta" context describing profile, workspace directory, origin, and resolution mechanism.
 `.trim();
 
 export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
@@ -162,6 +167,28 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       authOrigin: auth.origin,
     });
 
+    let resolvedBy = 'default';
+    if (auth.source === 'env') {
+      resolvedBy = 'env';
+    } else if (profileToUse) {
+      resolvedBy = 'explicit-profile-argument';
+    } else if (cwdProf) {
+      resolvedBy = 'workspace-directory-match';
+    } else if (auth.workspace) {
+      resolvedBy = 'workspace-origin-match';
+    } else if (auth.source === 'profile') {
+      resolvedBy = 'single-profile-fallback';
+    } else {
+      resolvedBy = auth.source;
+    }
+
+    const meta: McpMeta = {
+      profile: auth.profileName || activeProfileOverride || 'default',
+      workspace: workspaceRoot,
+      origin: resolution.origin,
+      resolvedBy,
+    };
+
     return {
       root: workspaceRoot,
       paths,
@@ -170,6 +197,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       auth,
       origin: resolution.origin,
       originWarning: resolution.warning || undefined,
+      meta,
     };
   };
 
@@ -197,6 +225,8 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   registerSyncStatusTool(server, resolveContext);
   registerSyncDiffTool(server, resolveContext);
   registerSyncDeleteTool(server, resolveContext);
+  registerSyncConflictsTool(server, resolveContext);
+  registerSyncDoctorTool(server, resolveContext);
 
   return server;
 }

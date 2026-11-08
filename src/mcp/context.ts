@@ -25,6 +25,13 @@ import type { ResolvedAuth } from '../client/auth.js';
 import type { WorkspacePaths } from '../utils/workspace.js';
 import type { EmitConfig } from '../utils/config.js';
 
+export interface McpMeta {
+  profile: string;
+  workspace: string;
+  origin: string;
+  resolvedBy: string;
+}
+
 export interface ServerContext {
   root: string;
   paths: WorkspacePaths;
@@ -33,6 +40,7 @@ export interface ServerContext {
   auth: ResolvedAuth;
   origin: string;
   originWarning?: string;
+  meta: McpMeta;
 }
 
 export type ContextResolver = (targetProfile?: string) => ServerContext;

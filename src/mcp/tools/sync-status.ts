@@ -28,7 +28,7 @@ import {
   filterStatusItems,
   type WorkspaceStatusResult,
 } from '../../sync/status.js';
-import { formatToolError } from '../tool-errors.js';
+import { formatToolError, formatToolSuccess } from '../tool-errors.js';
 
 const MAX_ACTION_REQUIRED = 30;
 const MAX_RECENT_SYNCED = 5;
@@ -153,14 +153,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           : {}),
       };
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(responsePayload, null, 2),
-          },
-        ],
-      };
+      return formatToolSuccess(responsePayload, ctx.meta);
     },
   );
 }
