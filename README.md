@@ -17,6 +17,7 @@
   - [Unpushed Edits Safeguard](#3-unpushed-edits-safeguard)
   - [Pure TypeScript & Zero Native Builds](#4-pure-typescript--zero-native-builds)
   - [Distributed Mutex Lock & 3-Way Merge](#5-distributed-mutex-lock--3-way-merge)
+  - [Division of Labor with the Official EmDash MCP](#6-division-of-labor-with-the-official-emdash-mcp)
 - [🌟 Key Features](#-key-features)
 - [📦 Installation](#-installation)
 - [🚀 Initial Setup & Profiles](#-initial-setup--profiles)
@@ -88,9 +89,11 @@ To prevent user expectations from misaligning with the tool's purpose, it is imp
 
 If your site contains thousands of articles, they remain safe, searchable, and intact in your Cloudflare D1 database. Emit only pulls the active working set into your local workspace, keeping your directory clean and searches instant. Need to edit a specific older article outside the active window? Simply pull it on demand using `emit pull <article-id>`.
 
+These Non-Goals are **deliberate design decisions, not missing capabilities**: raising `postsSyncLimit` (see below) can in fact fetch tens of thousands of articles, so Emit *could* clone a whole site — it chooses not to expose that as its default workflow. The sliding window is a boundary on what stays *on disk*, never on what you can *reach*: every historical article remains editable through an on-demand `emit pull <id>`, and writing a long-form piece that cites or revises many past posts works exactly the same way — fetch each referenced article by ULID, edit it, push it. For operations that genuinely belong to the whole library (bulk media management, site-wide content queries), pair Emit with the [official EmDash MCP](#6-division-of-labor-with-the-official-emdash-mcp) instead of asking Emit to reinvent them.
+
 > [!NOTE]
-> **Can the sync limit be adjusted?**
-> Yes. While `--all` is intentionally omitted from the CLI to protect the sliding window discipline, you can customize the window size by setting `postsSyncLimit: 300` (or any desired number) in `.emit/config.json`. Emit's internal pagination engine will automatically batch-fetch up to that configured limit.
+> **Can the sync limit be adjusted — and why is there no `--all` for articles?**
+> Yes. Set `postsSyncLimit: 300` (or any larger number, e.g. your full article count) in `.emit/config.json`, and Emit's internal pagination engine automatically batch-fetches up to that configured limit. What Emit deliberately omits is a `--all` *flag* for articles: pulling the entire history into the workspace is an explicit configuration choice, not a routine default, so the "staging desk" discipline is preserved in day-to-day UX while remaining fully escapable when you truly want a larger working set. Media is intentionally different — `emit pull-media --all` does exist, because media files are inert assets that never carry unsynced writing risk.
 
 ### 2. The Sliding Window "Staging Desk" Model
 
@@ -122,12 +125,25 @@ To prevent concurrent race conditions when multiple authors or AI agents collabo
 * Emit acquires a distributed 7-minute lease via `POST /_emdash/api/content/{collection}/{id}/lock` before writing to remote articles, with automatic heartbeats and `try/finally` release guarantees.
 * If concurrent edits occur, Emit utilizes a **Hybrid 3-Way Merge** engine (`node-diff3`), merging YAML frontmatter fields and Markdown body text independently.
 
+### 6. Division of Labor with the Official EmDash MCP
+
+Emit is intentionally not a complete EmDash client. The [official EmDash MCP server](https://github.com/aroooy/emdash) (and the Admin Dashboard) remains the canonical surface for whole-library operations, and the two tools are designed to be used **side by side against the same site**:
+
+| Operation | Right Tool |
+| --- | --- |
+| Drafting, reviewing, diffing, publishing articles with safety guards | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools) |
+| On-demand retrieval of any single historical article by ULID | **Emit** (`emit pull <id>`) |
+| Bulk media library management (mass upload, mass delete, full-library listing) | **Official EmDash MCP** (e.g. `media_upload`) / Admin Dashboard |
+| Site-wide content queries, arbitrary collection operations outside the authoring loop | **Official EmDash MCP** raw content tools |
+
+This division is a design stance, not a limitation to work around: Emit focuses its guardrails (G1–G14, locks, 3-way merge, quarantine) on the *authoring loop* where data loss actually happens, and leaves fleet-scale operations to the server-native tooling that already handles them safely.
+
 ---
 
 ## 🌟 Key Features
 
 * **AI-First Authoring Workflow**: Built specifically for autonomous agents and humans to draft, inspect, and sync local Markdown files safely.
-* **Sliding Window Synchronization**: Automatically manages an active sliding window of recent posts (default: latest 100), pruning older cached entries from disk.
+* **Sliding Window Synchronization**: Automatically manages an active sliding window of recent posts (default: latest 100), pruning older cached entries from disk. The window bounds what stays on disk, not what you can reach — any historical article remains available via `emit pull <id>`, and the window size is configurable (`postsSyncLimit`) when a larger working set is genuinely needed.
 * **Unpushed Edits Safeguard**: Detects unpushed local changes outside the sync window and aborts sync safely before any files can be deleted.
 * **Git-Style Workspace Encapsulation**: Houses local SQLite cache (`node:sqlite`) and workspace configuration neatly inside a `.emit/` hidden folder.
 * **Multi-Site Profile Management**: Manage multiple EmDash sites and credentials in `~/.config/emit/profiles.yaml` with automatic workspace directory detection.
@@ -466,7 +482,7 @@ You can author articles completely offline using local images and let `emit push
 
 #### Workflow B: Pre-Uploaded Media & Featured Hero Images
 
-1. **Upload via Admin / EmDash MCP**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`).
+1. **Upload via Admin / EmDash MCP**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`) — bulk media library management is intentionally the official tooling's domain (see [Division of Labor](#6-division-of-labor-with-the-official-emdash-mcp)).
 2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`. Note that `emit pull-media --prune` safely ignores `media/drafts/`.
 3. **Embed in Articles**:
    - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media record `id`) or `null` in frontmatter.
@@ -1009,6 +1025,10 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 * If you want to keep the changes: Push them to remote using `emit push posts/draft/...`.
 * If you want to discard local edits: Delete or revert the file, then re-run `emit pull`.
 * If you want to temporarily skip pruning: Run `emit pull --no-prune`.
+
+### Q: I want to write a comprehensive piece that references my entire back-catalog — is that supported?
+
+**Yes.** The sliding window limits which articles *stay on disk*, not which articles you can *work with*. To reference, quote, or revise any historical post, fetch it individually: `emit pull <article-ULID>` (MCP: `sync_pull` with `id`). Each fetched article enters the normal authoring loop — edit, diff, push — with all guardrails applied. If you prefer a permanently larger local working set instead, raise `postsSyncLimit` in `.emit/config.json`; Emit's pagination engine will fetch up to that size automatically. What Emit deliberately does not offer is a default "clone the whole site" mode; for genuine whole-library operations (bulk media management, site-wide queries), use the official EmDash MCP alongside Emit — see [Division of Labor with the Official EmDash MCP](#6-division-of-labor-with-the-official-emdash-mcp).
 
 ### Q: `PushValidationError`: Cannot publish article live without `--allow-publish`
 
