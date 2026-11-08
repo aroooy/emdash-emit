@@ -1155,7 +1155,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     // Promotion happens only on the push that actually succeeded
     expect(fs.existsSync(draftImgPath)).toBe(false);
-    const promotedRel = `media/${todayPrefix}_${mediaRecordId}-window-test.png`;
+    const promotedRel = `media/20261107_${mediaRecordId}-window-test.png`;
     expect(fs.existsSync(path.join(tempDir, promotedRel))).toBe(true);
     expect(cache.getMediaState(localHash)?.status).toBe('ready');
     expect(cache.getMediaState(localHash)?.workspacePath).toBe(promotedRel);
