@@ -209,15 +209,6 @@ export function formatYamlScalar(value: string): string {
  * Attempts lenient regex-based syntax repair on raw Markdown whose frontmatter fails js-yaml parsing.
  * Restricted strictly to:
  * 1. Quoting unquoted scalars starting with "%" or containing special characters on array elements (`- %...`) or slug lines (`slug: %...`).
- * 2. Fixing minor indentation on taxonomy/byline sequence element lines (`- <item>`).
- *
- * Guaranteed NEVER to alter the Markdown body or mutate keys/values.
- * Returns the repaired Markdown string, or null if lenient repair could not produce valid frontmatter.
- */
-/**
- * Attempts lenient regex-based syntax repair on raw Markdown whose frontmatter fails js-yaml parsing.
- * Restricted strictly to:
- * 1. Quoting unquoted scalars starting with "%" or containing special characters on array elements (`- %...`) or slug lines (`slug: %...`).
  *    Preserves any trailing comments (e.g. `slug: %... # comment` or `- %... # comment`) so values are not polluted.
  * 2. Fixing minor indentation on taxonomy/byline sequence element lines (`- <item>`) strictly within taxonomy/byline blocks.
  *
@@ -234,8 +225,11 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
     // proceed to repair
   }
 
-  // Detect original EOL
-  const isCrlf = content.includes('\r\n');
+  // Detect original frontmatter EOL from the opening delimiter
+  const frontmatterOpening = content.match(/^---\r?\n/);
+  const isCrlf = frontmatterOpening
+    ? frontmatterOpening[0] === '---\r\n'
+    : content.includes('\r\n');
   const eol = isCrlf ? '\r\n' : '\n';
 
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n[\s\S]*)$/);
@@ -321,8 +315,24 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
 
   try {
     const reparsed = parseMarkdown(candidateFull);
-    // Extra validation: verify that slug and IDs were not corrupted by comments
+    // Extra validation: verify that slug, IDs, taxonomies, and bylines were not corrupted by comments
     if (reparsed.frontmatter.slug.includes('#') || reparsed.frontmatter.id.includes('#')) {
+      return null;
+    }
+    if (reparsed.frontmatter.taxonomies) {
+      for (const list of Object.values(reparsed.frontmatter.taxonomies)) {
+        if (
+          Array.isArray(list) &&
+          list.some((item) => typeof item !== 'string' || item.includes('#'))
+        ) {
+          return null;
+        }
+      }
+    }
+    if (
+      reparsed.frontmatter.bylines &&
+      reparsed.frontmatter.bylines.some((item) => typeof item !== 'string' || item.includes('#'))
+    ) {
       return null;
     }
     return candidateFull;

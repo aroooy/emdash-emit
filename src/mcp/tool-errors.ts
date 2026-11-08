@@ -68,18 +68,14 @@ export function formatToolError(error: unknown): CallToolResult {
 
   if (error instanceof FrontmatterParseError) {
     return toolError(
-      JSON.stringify(
-        {
-          error: error.code,
-          message: error.message,
-          filePath: error.filePath,
-          line: error.line,
-          reason: error.reason,
-          suggestion: error.suggestion,
-        },
-        null,
-        2,
-      ),
+      JSON.stringify({
+        error: error.code,
+        message: error.message,
+        filePath: error.filePath,
+        line: error.line,
+        reason: error.reason,
+        suggestion: error.suggestion,
+      }),
     );
   }
 

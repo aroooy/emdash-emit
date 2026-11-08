@@ -370,4 +370,45 @@ describe('Frontmatter & Markdown Serialization', () => {
 
     expect(lenientRepairMarkdownFrontmatter(valid)).toBeNull();
   });
+
+  it('lenientRepairMarkdownFrontmatter detects frontmatter EOL specifically from frontmatter delimiter (N-c)', () => {
+    // Frontmatter uses LF even if subsequent body contains CRLF
+    const lfFrontmatter = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: %e5%8f%b0%e6%b9%be',
+      'title: "LF FM with CRLF body"',
+      'status: draft',
+      '---',
+      '',
+      'CRLF body line 1\r\nCRLF body line 2\r\n',
+    ].join('\n');
+
+    const repaired = lenientRepairMarkdownFrontmatter(lfFrontmatter);
+    expect(repaired).not.toBeNull();
+    // Frontmatter opening should remain LF
+    expect(repaired!.startsWith('---\n')).toBe(true);
+  });
+
+  it('lenientRepairMarkdownFrontmatter rejects repair if comments leak into taxonomy values (N-d)', () => {
+    const corruptedValues = [
+      '---',
+      `id: ${validUlid}`,
+      'slug: valid-slug',
+      'title: "Corrupted Values"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa#corrupted_comment', // unquoted % scalar containing unseparated '#'
+      '---',
+      '',
+      'Body text.',
+    ].join('\n');
+
+    // Initial parse fails because of unquoted %
+    expect(() => parseMarkdown(corruptedValues)).toThrow();
+
+    // Lenient repair rejects it because the parsed taxonomy term would contain '#'
+    expect(lenientRepairMarkdownFrontmatter(corruptedValues)).toBeNull();
+  });
 });

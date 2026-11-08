@@ -436,6 +436,51 @@ export async function pullArticle(
   const fetchFn = createAuthedFetch(options);
   let rawItem = options.rawItem;
 
+  // Helper to fetch assigned terms for a taxonomy ('category' | 'tag')
+  const fetchAssignedTerms = async (taxonomy: 'category' | 'tag'): Promise<string[] | null> => {
+    try {
+      const termsUrl = new URL(
+        `/_emdash/api/content/${collection}/${id}/terms/${taxonomy}`,
+        options.origin,
+      ).toString();
+      const termsRes = await fetchFn(termsUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${options.token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (!termsRes.ok) return null;
+      const termsJson = (await termsRes.json()) as {
+        data?: { terms?: Array<{ slug?: string; id?: string }> };
+      };
+      const assigned = termsJson.data?.terms || [];
+      return assigned.map((t) => t.slug || t.id).filter((s): s is string => Boolean(s));
+    } catch {
+      return null;
+    }
+  };
+
+  // Helper to resolve byline ID-to-slug mapping
+  let bylineIdToSlug = options.bylineIdToSlug;
+  const getBylineIdToSlug = async (): Promise<Record<string, string>> => {
+    if (bylineIdToSlug) return bylineIdToSlug;
+    const cachedMaps = options.cache.getBylineMaps();
+    if (Object.keys(cachedMaps.idToSlug).length > 0) {
+      bylineIdToSlug = cachedMaps.idToSlug;
+      return bylineIdToSlug;
+    }
+    const freshMaps = await syncRemoteBylines({
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      cache: options.cache,
+      fetchFn: options.fetchFn,
+    }).catch(() => ({ slugToId: {}, idToSlug: {} }));
+    bylineIdToSlug = freshMaps.idToSlug;
+    return bylineIdToSlug;
+  };
+
   // 1. Fast-path check: If rawItem is provided and not forced, check rev & local hash
   if (rawItem && !options.force) {
     const existingSync = options.cache.getSyncState(id);
@@ -508,12 +553,30 @@ export async function pullArticle(
                 // Update baseline snapshot using the remote rev and remote payload's canonical representation,
                 // so subsequent 3-way merges compare against the remote baseline rather than claiming
                 // local edits are in sync.
-                const rawData = (rawItem.data || {}) as Record<string, unknown>;
+                // Fetch assigned taxonomy terms so base snapshot reflects remote state rather than empty taxonomies (NEW-1).
+                const resolvedBylineMap = await getBylineIdToSlug();
                 const effectiveOptions: PullOptions = {
                   ...options,
-                  bylineIdToSlug: options.bylineIdToSlug || {},
+                  bylineIdToSlug: resolvedBylineMap,
                 };
                 const remoteLocal = apiResponseToLocal(rawItem, effectiveOptions);
+                const [categoriesTerms, tagsTerms] = await Promise.all([
+                  fetchAssignedTerms('category'),
+                  fetchAssignedTerms('tag'),
+                ]);
+
+                if (categoriesTerms !== null || tagsTerms !== null) {
+                  if (!remoteLocal.frontmatter.taxonomies) {
+                    remoteLocal.frontmatter.taxonomies = {};
+                  }
+                  if (categoriesTerms !== null) {
+                    remoteLocal.frontmatter.taxonomies.categories = categoriesTerms;
+                  }
+                  if (tagsTerms !== null) {
+                    remoteLocal.frontmatter.taxonomies.tags = tagsTerms;
+                  }
+                }
+
                 const remoteCanonMarkdown = serializeMarkdown(
                   remoteLocal.frontmatter,
                   remoteLocal.body,
@@ -615,54 +678,13 @@ export async function pullArticle(
   }
 
   // Ensure byline ID-to-slug mapping is loaded
-  let bylineIdToSlug = options.bylineIdToSlug;
-  if (!bylineIdToSlug) {
-    const cachedMaps = options.cache.getBylineMaps();
-    if (Object.keys(cachedMaps.idToSlug).length > 0) {
-      bylineIdToSlug = cachedMaps.idToSlug;
-    } else {
-      const freshMaps = await syncRemoteBylines({
-        origin: options.origin,
-        token: options.token,
-        refreshToken: options.refreshToken,
-        cache: options.cache,
-        fetchFn: options.fetchFn,
-      }).catch(() => ({ slugToId: {}, idToSlug: {} }));
-      bylineIdToSlug = freshMaps.idToSlug;
-    }
-  }
-
+  const resolvedBylineMap = await getBylineIdToSlug();
   const effectiveOptions: PullOptions = {
     ...options,
-    bylineIdToSlug,
+    bylineIdToSlug: resolvedBylineMap,
   };
 
   const { frontmatter, body, rev } = apiResponseToLocal(rawItem, effectiveOptions);
-
-  // Fetch remote taxonomy assignments (category & tag)
-  const fetchAssignedTerms = async (taxonomy: 'category' | 'tag'): Promise<string[] | null> => {
-    try {
-      const termsUrl = new URL(
-        `/_emdash/api/content/${collection}/${id}/terms/${taxonomy}`,
-        options.origin,
-      ).toString();
-      const termsRes = await fetchFn(termsUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: 'application/json',
-        },
-      });
-      if (!termsRes.ok) return null;
-      const termsJson = (await termsRes.json()) as {
-        data?: { terms?: Array<{ slug?: string; id?: string }> };
-      };
-      const assigned = termsJson.data?.terms || [];
-      return assigned.map((t) => t.slug || t.id).filter((s): s is string => Boolean(s));
-    } catch {
-      return null;
-    }
-  };
 
   const [categoriesTerms, tagsTerms] = await Promise.all([
     fetchAssignedTerms('category'),

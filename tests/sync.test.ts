@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { pushAll } from '../src/sync/orchestrator.js';
+import { hybrid3WayMerge } from '../src/sync/merge.js';
 import { calculateHash, pullArticle } from '../src/sync/pull.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
@@ -1129,6 +1130,29 @@ describe('Pull & Push Synchronization Engine', () => {
     const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(statusBefore.summary.invalid).toBe(1);
 
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/terms/category')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: '01CAT', slug: '%e6%9c%aa%e5%88%86%e9%a1%9e' }] },
+          }),
+        });
+      }
+      if (url.includes('/terms/tag')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: '01TAG', slug: 'travel' }] },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ data: {} }),
+      });
+    });
+
     const res = await pullArticle('posts', articleId, {
       ...options,
       workspaceRoot: tempDir,
@@ -1140,6 +1164,7 @@ describe('Pull & Push Synchronization Engine', () => {
         _rev: 'rev_1',
         data: { title: 'Heal Test' },
       },
+      fetchFn: mockFetch as unknown as typeof fetch,
     });
 
     expect(res.updated).toBe(true);
@@ -1155,9 +1180,34 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
     expect(parsed.body.trim()).toBe('Valuable local modifications that have not been pushed.');
 
+    // Base snapshot contains remote taxonomy assignments (NEW-1)
+    const baseSnapshot = cache.getBaseSnapshot(articleId);
+    expect(baseSnapshot).not.toBeNull();
+    const baseFm = JSON.parse(baseSnapshot!.frontmatterYaml);
+    expect(baseFm.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(baseFm.taxonomies?.tags).toEqual(['travel']);
+
     const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(statusAfter.summary.invalid).toBe(0);
     expect(statusAfter.summary.modified).toBe(1); // correctly identified as modified local edits!
+
+    // Subsequent pull with same rev cleanly preserves local edits without quarantine or false conflict
+    const res2 = await pullArticle('posts', articleId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      rawItem: {
+        id: articleId,
+        slug: 'heal-test',
+        status: 'draft',
+        _rev: 'rev_1',
+        data: { title: 'Heal Test' },
+      },
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(res2.skipped).toBe(true);
+    expect(res2.localEditsPreserved).toBe(true);
+    expect(res2.quarantined).toBeUndefined();
   });
 
   it('pullArticle falls through to quarantine when frontmatter cannot be leniently healed without altering meaning (M-3)', async () => {
@@ -1232,5 +1282,131 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(fs.readFileSync(conflictFull, 'utf8')).toContain(
       'Valuable local content that must be rescued in conflicts/.',
     );
+  });
+
+  it('pullArticle heal maintains correct base snapshot taxonomy terms for subsequent 3-way merge when remote rev advances (NEW-1)', async () => {
+    const articleId = '01M67HEAL3WAY0000000000001';
+    const relPath = `posts/draft/20261108_${articleId}-Heal-3Way.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // 1. Broken local file with unquoted % category, plus local body edits
+    const brokenLocalContent = [
+      '---',
+      `id: ${articleId}`,
+      'slug: heal-3way',
+      'title: "Heal 3Way"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+      '---',
+      '',
+      'Local valuable body edits.',
+    ].join('\n');
+    fs.writeFileSync(fullPath, brokenLocalContent, 'utf8');
+
+    // Baseline cache exists with matching remoteRev rev_1
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'baseline_different_hash',
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug: 'heal-3way',
+      lastSyncedAt: Date.now(),
+    });
+
+    // Mock fetch for rev_1
+    let remoteTags = ['travel'];
+    let remoteRev = 'rev_1';
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/terms/category')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: '01CAT', slug: '%e6%9c%aa%e5%88%86%e9%a1%9e' }] },
+          }),
+        });
+      }
+      if (url.includes('/terms/tag')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: remoteTags.map((t) => ({ id: `id-${t}`, slug: t })) },
+          }),
+        });
+      }
+      if (url.includes(`/posts/${articleId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: articleId,
+            slug: 'heal-3way',
+            collection: 'posts',
+            status: 'draft',
+            locale: 'ja',
+            _rev: remoteRev,
+            data: { title: 'Heal 3Way', body: 'Remote body content' },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ data: {} }),
+      });
+    });
+
+    // 1. Heal fast-path runs
+    const healRes = await pullArticle('posts', articleId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      rawItem: {
+        id: articleId,
+        slug: 'heal-3way',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        _rev: 'rev_1',
+        data: { title: 'Heal 3Way', body: 'Remote body content' },
+      },
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(healRes.healed).toBe(true);
+
+    // Verify base snapshot contains remote taxonomy terms (NEW-1)
+    const baseSnapshot = cache.getBaseSnapshot(articleId);
+    expect(baseSnapshot).not.toBeNull();
+    const baseFm = JSON.parse(baseSnapshot!.frontmatterYaml);
+    expect(baseFm.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(baseFm.taxonomies?.tags).toEqual(['travel']);
+
+    // 2. Perform 3-way merge using baseSnapshot when remote adds a tag
+    const localParsed = parseMarkdown(fs.readFileSync(fullPath, 'utf8'));
+    const remoteState = {
+      frontmatter: {
+        ...baseFm,
+        taxonomies: {
+          categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'],
+          tags: ['travel', 'japan'], // Remote added 'japan'
+        },
+      },
+      body: 'Remote body content',
+    };
+
+    const mergeResult = hybrid3WayMerge(
+      localParsed,
+      {
+        frontmatter: baseFm,
+        body: baseSnapshot!.bodyMarkdown,
+      },
+      remoteState,
+    );
+
+    expect(mergeResult.hasConflict).toBe(false);
+    expect(mergeResult.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(mergeResult.frontmatter.taxonomies?.tags).toEqual(['travel', 'japan']);
+    expect(mergeResult.body.trim()).toBe('Local valuable body edits.');
   });
 });
