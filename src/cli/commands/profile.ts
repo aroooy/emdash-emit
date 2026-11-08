@@ -72,11 +72,12 @@ export function registerProfileCommands(program: Command): void {
     .option('--workspace <path>', 'Default local workspace directory for this site')
     .option('--active', 'Set this profile as active immediately')
     .action((name, options) => {
-      setProfile(name, {
+      const profileConfig = {
         origin: options.origin,
-        token: options.token,
-        workspace: options.workspace,
-      });
+        token: options.token || '',
+        ...(options.workspace ? { workspace: options.workspace } : {}),
+      };
+      setProfile(name, profileConfig);
       if (options.active) {
         setActiveProfile(name);
       }

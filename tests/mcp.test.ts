@@ -260,4 +260,56 @@ describe('Emit MCP Server', () => {
       expect.anything(),
     );
   });
+
+  it('sync_status caps invalid items at 10 and includes invalidTruncated + repairHint', async () => {
+    const pubDir = path.join(tempDir, 'posts', 'published');
+    fs.mkdirSync(pubDir, { recursive: true });
+
+    // Create 15 broken markdown files with unquoted %-prefixed taxonomy terms
+    for (let i = 1; i <= 15; i++) {
+      const padded = String(i).padStart(2, '0');
+      const id = `01M67N19JPWNGFZ0M6KBQ8FS${padded}`;
+      const file = `20261107_${id}-Broken-${padded}.md`;
+      const content = [
+        '---',
+        `id: ${id}`,
+        `slug: broken-${padded}`,
+        `title: "Broken ${padded}"`,
+        'collection: posts',
+        'status: published',
+        'locale: ja',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+        '---',
+        '',
+        'Body',
+      ].join('\n');
+      fs.writeFileSync(path.join(pubDir, file), content, 'utf8');
+    }
+
+    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const res = await registered['sync_status'].handler({});
+    const parsed = JSON.parse(res.content[0].text);
+    expect(parsed.summary.total).toBe(15);
+    expect(parsed.summary.invalid).toBe(15);
+    expect(
+      parsed.items.filter((i: { syncStatus: string }) => i.syncStatus === 'invalid'),
+    ).toHaveLength(10);
+    expect(parsed.invalidTruncated).toBe(5);
+    expect(parsed.repairHint).toContain('sync_pull');
+  });
 });

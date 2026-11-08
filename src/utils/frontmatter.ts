@@ -90,19 +90,49 @@ export function parseMarkdown(content: string): ParsedMarkdown {
   };
 }
 
+// YAML 1.1/1.2 reserved boolean/null/float literals that js-yaml coerces when unquoted.
+const YAML_RESERVED_RE = /^(true|false|null|nil|yes|no|on|off|y|n|~|\.inf|-\.inf|\.nan)$/i;
+
+// Safe unquoted scalar: starts with Unicode letter, digit, or underscore, followed by letters, digits, ., _, /, -
+// Excludes %-prefixed strings (YAML directives), leading hyphens/colons, whitespace, and punctuation.
+const SAFE_PLAIN_SCALAR_RE = /^[\p{L}\p{N}_][\p{L}\p{N}._/-]*$/u;
+
+// Digit-leading strings that js-yaml coerces into Number or Date when unquoted (e.g. "123", "1.5", "0123...", "2026-11-07").
+// Normal ULIDs ("01M6GV...") and alphanumeric slugs ("2026-11-07-post", "3d-printer") contain non-numeric letters and stay unquoted.
+const YAML_NUMERIC_OR_DATE_RE =
+  /^(\d[\d_]*(\.[\d_]*)?([eE][+-]?\d+)?|0[xXoObB][0-9a-fA-F_]+|\d{4}-\d{1,2}-\d{1,2}([T\s].*)?)$/;
+
+/**
+ * Formats a scalar string for YAML frontmatter.
+ * Keeps safe plain scalars (ASCII/CJK slugs, standard ULIDs) unquoted to preserve
+ * baseline hash compatibility, while quoting %-prefixed strings, numbers, dates,
+ * reserved literals, and strings containing special YAML characters via JSON.stringify.
+ */
+export function formatYamlScalar(value: string): string {
+  if (
+    value.length === 0 ||
+    !SAFE_PLAIN_SCALAR_RE.test(value) ||
+    YAML_RESERVED_RE.test(value) ||
+    YAML_NUMERIC_OR_DATE_RE.test(value)
+  ) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
 /**
  * Formats a frontmatter object into clean YAML with helpful candidate comments.
  */
-export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCandidates): string {
+export function formatFrontmatterYaml(data: Frontmatter, _candidates?: TaxonomyCandidates): string {
   const lines: string[] = ['---'];
 
-  lines.push(`id: ${data.id}`);
-  lines.push(`slug: ${data.slug}`);
+  lines.push(`id: ${formatYamlScalar(data.id)}`);
+  lines.push(`slug: ${formatYamlScalar(data.slug)}`);
   lines.push(`title: ${JSON.stringify(data.title)}`);
-  lines.push(`collection: ${data.collection}`);
+  lines.push(`collection: ${formatYamlScalar(data.collection)}`);
   lines.push(`status: ${data.status}`);
   lines.push(`publishedAt: ${data.publishedAt ? JSON.stringify(data.publishedAt) : 'null'}`);
-  lines.push(`locale: ${data.locale}`);
+  lines.push(`locale: ${formatYamlScalar(data.locale)}`);
   if (data.featuredImage !== undefined) {
     lines.push(
       `featuredImage: ${data.featuredImage ? JSON.stringify(data.featuredImage) : 'null'}`,
@@ -122,7 +152,7 @@ export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCa
       lines.push('    []');
     } else {
       for (const term of terms) {
-        lines.push(`    - ${term}`);
+        lines.push(`    - ${formatYamlScalar(term)}`);
       }
     }
   }
@@ -146,7 +176,7 @@ export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCa
     lines.push('  []');
   } else {
     for (const byline of bylines) {
-      lines.push(`  - ${byline}`);
+      lines.push(`  - ${formatYamlScalar(byline)}`);
     }
   }
 

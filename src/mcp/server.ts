@@ -24,9 +24,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolveAuth } from '../client/auth.js';
 import { CacheDatabase } from '../db/cache.js';
-import { loadConfig } from '../utils/config.js';
-import { getWorkspacePaths, requireWorkspaceRoot } from '../utils/workspace.js';
-import { loadProfilesFile, AmbiguousProfileError } from '../utils/profile.js';
+import { DEFAULT_ORIGIN, loadConfig } from '../utils/config.js';
+import { findWorkspaceRoot, getWorkspacePaths, requireWorkspaceRoot } from '../utils/workspace.js';
+import {
+  findProfileByDirectory,
+  loadProfilesFile,
+  AmbiguousProfileError,
+} from '../utils/profile.js';
 import type { ServerContext, ContextResolver } from './context.js';
 import { registerProfileTools } from './tools/profile.js';
 import { registerSyncNewTool } from './tools/sync-new.js';
@@ -73,9 +77,29 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   // Helper to resolve workspace context based on optional profile
   const resolveContext: ContextResolver = (targetProfile?: string): ServerContext => {
     const profileToUse = targetProfile || activeProfileOverride;
+    const profilesData = loadProfilesFile();
+    const explicitProf = profileToUse ? profilesData.profiles[profileToUse] : undefined;
+    const cwdProf = !profileToUse ? findProfileByDirectory(process.cwd()) : null;
+    const nearestEmitRoot = !profileToUse ? findWorkspaceRoot(process.cwd()) : null;
+
+    const preResolvedWorkspace =
+      options?.workspaceRoot ||
+      explicitProf?.workspace ||
+      cwdProf?.config.workspace ||
+      nearestEmitRoot ||
+      process.env.EMDASH_WORKSPACE;
+
+    const preConfig = preResolvedWorkspace ? loadConfig(preResolvedWorkspace) : undefined;
+    const preOriginHint =
+      preConfig && preConfig.origin !== DEFAULT_ORIGIN ? preConfig.origin : undefined;
+
     let auth;
     try {
-      auth = resolveAuth({ profile: profileToUse });
+      auth = resolveAuth({
+        profile: profileToUse,
+        cwd: preResolvedWorkspace || process.cwd(),
+        origin: preOriginHint,
+      });
       if (!auth) {
         throw new Error(
           'No authentication token found. Please run emit profile add or set EMDASH_TOKEN.',
@@ -90,19 +114,20 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       throw err;
     }
 
-    const profilesData = loadProfilesFile();
-    const activeProf = profileToUse ? profilesData.profiles[profileToUse] : undefined;
-    const origin = activeProf?.origin || auth.origin || 'https://example.com';
+    const resolvedProf =
+      explicitProf ||
+      (auth.profileName ? profilesData.profiles[auth.profileName] : undefined) ||
+      cwdProf?.config;
 
     const workspaceRoot =
-      options?.workspaceRoot ||
-      activeProf?.workspace ||
-      process.env.EMDASH_WORKSPACE ||
-      requireWorkspaceRoot();
+      preResolvedWorkspace || resolvedProf?.workspace || auth.workspace || requireWorkspaceRoot();
 
     const paths = getWorkspacePaths(workspaceRoot);
     const cache = options?.cache || new CacheDatabase(paths.dbPath);
-    const config = loadConfig(paths.configPath);
+    const config =
+      preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
+    const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
+    const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
 
     return {
       root: workspaceRoot,

@@ -31,6 +31,7 @@ import { unwrapEnvelope, extractRev } from '../client/api.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
+  parseMarkdown,
   serializeMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
@@ -297,9 +298,11 @@ export async function pullArticle(
             articleDate,
           );
 
-          // If path matches and contents are unchanged, safely skip
+          // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML;
+          // if an older serializer wrote unquoted %-prefixed slugs that fail parseMarkdown, fall through to self-heal)
           if (existingSync.localFilePath === expectedRelPath) {
             if (currentDiskHash === existingSync.localHash) {
+              parseMarkdown(currentDiskContent);
               return {
                 id,
                 slug: existingSync.slug,

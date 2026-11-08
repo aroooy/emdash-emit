@@ -71,6 +71,18 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           };
         }
 
+        const transitionLines: string[] = [];
+        if (res.previousId) {
+          transitionLines.push(
+            `🆔 Server assigned canonical ULID: '${res.previousId}' -> '${res.id}'.`,
+          );
+        }
+        if (res.previousFilePath) {
+          transitionLines.push(
+            `📄 Local file renamed: "${res.previousFilePath}" -> "${res.filePath}" (use the new path for subsequent edits/pushes).`,
+          );
+        }
+
         const warningLines =
           res.warnings && res.warnings.length > 0
             ? ['', '⚠️ Warnings:', ...res.warnings.map((w) => `  - ${w}`)]
@@ -82,6 +94,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
               type: 'text',
               text: [
                 `✅ Successfully pushed '${res.id}' to remote (${res.filePath}, rev: ${res.rev}).`,
+                ...transitionLines,
                 ...warningLines,
               ].join('\n'),
             },

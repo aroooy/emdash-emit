@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeArticleRelativePath,
   formatFrontmatterYaml,
+  formatYamlScalar,
   parseMarkdown,
   serializeMarkdown,
   type Frontmatter,
@@ -187,5 +188,61 @@ describe('Frontmatter & Markdown Serialization', () => {
       '2026-01-25',
     );
     expect(p2).toBe(`posts/published/20260125_${validUlid}-日本語タイトル-テスト-特殊文字.md`);
+  });
+
+  it('quotes %-prefixed slugs, reserved words, dates, and all-digit ULIDs while keeping standard ASCII/CJK scalars unquoted', () => {
+    // Standard ULIDs and ASCII/CJK slugs remain unquoted (baseline hash invariant)
+    expect(formatYamlScalar(validUlid)).toBe(validUlid);
+    expect(formatYamlScalar('cloudflare-guide')).toBe('cloudflare-guide');
+    expect(formatYamlScalar('2026-11-08-post')).toBe('2026-11-08-post');
+    expect(formatYamlScalar('未分類')).toBe('未分類');
+
+    // %-prefixed percent-encoded slugs and strings containing % are quoted
+    expect(formatYamlScalar('%e6%9c%aa%e5%88%86%e9%a1%9e')).toBe('"%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(formatYamlScalar('50%off')).toBe('"50%off"');
+
+    // All-digit 26-char ULID, numbers, ISO dates, and YAML reserved words are quoted
+    const allDigitUlid = '01234567890123456789012345';
+    expect(formatYamlScalar(allDigitUlid)).toBe(`"${allDigitUlid}"`);
+    expect(formatYamlScalar('2026-11-08')).toBe('"2026-11-08"');
+    expect(formatYamlScalar('true')).toBe('"true"');
+    expect(formatYamlScalar('null')).toBe('"null"');
+    expect(formatYamlScalar('yes')).toBe('"yes"');
+
+    // Full round-trip with adversarial values
+    const fm: Frontmatter = {
+      id: allDigitUlid,
+      slug: '%e6%97%a5%e6%9c%ac%e8%aa%9e-slug',
+      title: 'Percent Encoded & All-Digit ID Post',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: {
+        categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e', '未分類'],
+        tags: ['50%off', 'true', '2026-11-08', 'foo: bar'],
+      },
+      bylines: ['%e8%91%97%e8%80%85'],
+    };
+
+    const serialized = serializeMarkdown(fm, 'Adversarial YAML body.\n');
+    expect(serialized).toContain(`id: "${allDigitUlid}"`);
+    expect(serialized).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(serialized).toContain('    - 未分類');
+
+    const reparsed = parseMarkdown(serialized);
+    expect(reparsed.frontmatter.id).toBe(allDigitUlid);
+    expect(reparsed.frontmatter.slug).toBe('%e6%97%a5%e6%9c%ac%e8%aa%9e-slug');
+    expect(reparsed.frontmatter.taxonomies?.categories).toEqual([
+      '%e6%9c%aa%e5%88%86%e9%a1%9e',
+      '未分類',
+    ]);
+    expect(reparsed.frontmatter.taxonomies?.tags).toEqual([
+      '50%off',
+      'true',
+      '2026-11-08',
+      'foo: bar',
+    ]);
+    expect(reparsed.frontmatter.bylines).toEqual(['%e8%91%97%e8%80%85']);
   });
 });

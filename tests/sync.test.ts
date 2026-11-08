@@ -25,10 +25,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullArticle } from '../src/sync/pull.js';
+import { pushAll } from '../src/sync/orchestrator.js';
+import { calculateHash, pullArticle } from '../src/sync/pull.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
-import { formatDatePrefix, serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import {
+  formatDatePrefix,
+  parseMarkdown,
+  serializeMarkdown,
+  type Frontmatter,
+} from '../src/utils/frontmatter.js';
 
 describe('Pull & Push Synchronization Engine', () => {
   let tempDir: string;
@@ -792,5 +798,205 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.items[3].filePath).toBe(
       'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old-Draft.md',
     );
+  });
+
+  it('getWorkspaceStatus surfaces invalid YAML frontmatter files and pushAll safely excludes them', async () => {
+    const brokenId = '01M67N19JPWNGFZ0M6KBQ8FS99';
+    const brokenRelPath = `posts/published/20261107_${brokenId}-Broken-Post.md`;
+    const brokenFullPath = path.join(tempDir, brokenRelPath);
+    fs.mkdirSync(path.dirname(brokenFullPath), { recursive: true });
+
+    // Unquoted %-prefixed taxonomy term (legacy serializer output)
+    const brokenMarkdown = [
+      '---',
+      `id: ${brokenId}`,
+      'slug: broken-post',
+      'title: "Broken Post"',
+      'collection: posts',
+      'status: published',
+      'locale: ja',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+      '  tags:',
+      '    []',
+      'bylines:',
+      '  []',
+      '---',
+      '',
+      'Broken body.',
+    ].join('\n');
+    fs.writeFileSync(brokenFullPath, brokenMarkdown, 'utf8');
+
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.total).toBe(1);
+    expect(status.summary.invalid).toBe(1);
+    expect(status.items[0].syncStatus).toBe('invalid');
+    expect(status.items[0].id).toBe(brokenId);
+    expect(status.items[0].error).toBeDefined();
+
+    // pushAll must NOT crash on the invalid file; it should skip it and report invalid: 1
+    const pushAllRes = await pushAll({
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+    });
+    expect(pushAllRes.total).toBe(0);
+    expect(pushAllRes.pushed).toBe(0);
+    expect(pushAllRes.invalid).toBe(1);
+  });
+
+  it('pullArticle self-heals a legacy broken YAML frontmatter file even when localHash matches disk', async () => {
+    const brokenId = '01M67N19JPWNGFZ0M6KBQ8FS88';
+    const relPath = `posts/published/20261107_${brokenId}-Self-Heal.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const brokenMarkdown = [
+      '---',
+      `id: ${brokenId}`,
+      'slug: self-heal',
+      'title: "Self Heal"',
+      'collection: posts',
+      'status: published',
+      'publishedAt: "2026-11-07T00:00:00.000Z"',
+      'locale: ja',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+      '  tags:',
+      '    []',
+      'bylines:',
+      '  []',
+      '---',
+      '',
+      'Self heal body.',
+    ].join('\n');
+    fs.writeFileSync(fullPath, brokenMarkdown, 'utf8');
+    const brokenHash = calculateHash(brokenMarkdown);
+
+    cache.saveSyncState({
+      id: brokenId,
+      localFilePath: relPath,
+      localHash: brokenHash,
+      remoteRev: 'rev_1',
+      status: 'published',
+      slug: 'self-heal',
+      lastSyncedAt: 1730500000,
+    });
+
+    const rawItem = {
+      id: brokenId,
+      slug: 'self-heal',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-07T00:00:00.000Z',
+      _rev: 'rev_1',
+      data: {
+        title: 'Self Heal',
+        body: 'Self heal body.',
+      },
+    };
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/terms/category')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: '01M6CAT1', slug: '%e6%9c%aa%e5%88%86%e9%a1%9e' }] },
+          }),
+        });
+      }
+      if (url.includes('/terms/tag')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { terms: [] } }),
+        });
+      }
+      if (url.includes('/bylines')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { bylines: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    // Pull without --force: Fast-path detects parseMarkdown failure and falls through to re-serialize
+    const res = await pullArticle('posts', brokenId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      rawItem,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.updated).toBe(true);
+    expect(res.skipped).toBeUndefined();
+
+    const healedContent = fs.readFileSync(fullPath, 'utf8');
+    expect(healedContent).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    const parsed = parseMarkdown(healedContent);
+    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+
+    // Now getWorkspaceStatus sees it as synced (0 invalid)
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.invalid).toBe(0);
+    expect(status.summary.synced).toBe(1);
+  });
+
+  it('pushArticle reports previousId and previousFilePath when initial POST assigns a new server ULID', async () => {
+    const provisionalId = '01M60000000000000000000001';
+    const assignedServerId = '01M6SERVERASSIGNEDULID9999';
+    const fm: Frontmatter = {
+      id: provisionalId,
+      slug: 'new-post-ulid-swap',
+      title: 'New Post ULID Swap',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const relPath = `posts/draft/20261108_${provisionalId}-New-Post-ULID-Swap.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Initial draft body.'), 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && !url.includes('/terms/')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: {
+              id: assignedServerId,
+              slug: 'new-post-ulid-swap',
+              createdAt: '2026-11-08T00:00:00.000Z',
+              _rev: '1',
+            },
+          }),
+        });
+      }
+      if (url.includes('/bylines')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { bylines: [] } }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const res = await pushArticle(relPath, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.id).toBe(assignedServerId);
+    expect(res.previousId).toBe(provisionalId);
+    expect(res.previousFilePath).toBe(relPath);
+    expect(res.filePath).toBe(`posts/draft/20261108_${assignedServerId}-New-Post-ULID-Swap.md`);
   });
 });

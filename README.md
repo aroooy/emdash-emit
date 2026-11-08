@@ -202,7 +202,7 @@ cd /path/to/local/blog-repo
 emit init
 ```
 
-This creates the `.emit/` directory with a default `config.json` and initializes the local baseline cache SQLite database (`.emit/cache.db`).
+This creates the `.emit/` directory with `config.json` (inheriting `origin` from your resolved profile when `--origin` is omitted, and automatically linking `workspace` back into `~/.config/emit/profiles.yaml` unless `--no-link` is passed) and initializes the local baseline cache SQLite database (`.emit/cache.db`).
 
 ### 3. Multi-Site Management (Directory-Driven & Zero Friction)
 
@@ -258,7 +258,7 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 | `origin` | `"https://example.com"` | Base URL of the target EmDash instance (overridden by `EMDASH_ORIGIN` or active profile) |
 | `defaultCollection` | `"posts"` | Default content collection when `--collection` is omitted |
 | `defaultLocale` | `"ja"` | Default locale used when scaffolding new drafts via `emit new` / `sync_new` |
-| `postsSyncLimit` | `100` | Sliding window size for batch article pulls (also supports legacy `syncLimit` fallback) |
+| `postsSyncLimit` | `100` | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback) |
 | `mediaSyncLimit` | `300` | Default maximum items fetched by `emit pull-media` / `sync_pull_media` |
 | `concurrency` | `8` | Parallel HTTP fetch concurrency during batch pulls |
 
@@ -333,7 +333,7 @@ Emit maintains a local SQLite database via Node.js built-in `node:sqlite` (`src/
 | --- | --- |
 | `entries` | Caches the latest remote JSON envelope and revision (`rev`) for each synced article |
 | `base_snapshots` | Stores the baseline Markdown body and baseline frontmatter at the last synced revision to power Hybrid 3-Way Merge (`frontmatter_yaml` holds a **JSON-encoded** `Frontmatter` object, not YAML text) |
-| `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified`) |
+| `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified` vs `untracked`, plus `invalid` when YAML frontmatter fails parsing; `invalid` files are excluded from `emit push --all` and automatically self-healed on `emit pull` / `sync_pull`) |
 | `bylines` | Caches remote author records (`id`, `slug`, `display_name`, `is_guest`) synced automatically via `/_emdash/api/mcp` (`byline_list`) on pull, enabling slug ⇔ ULID resolution and default author selection |
 | `media_state` | Tracks offline draft image uploads (`local_hash`, `media_id`, `storage_key`, `url`, `workspace_path`, `status`: `pending` \| `uploaded` \| `ready` \| `failed`) for idempotency, retry recovery, and cross-article asset reuse |
 

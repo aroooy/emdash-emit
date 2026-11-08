@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { sanitizeTitleForFilename } from '../utils/frontmatter.js';
+import { formatYamlScalar, sanitizeTitleForFilename } from '../utils/frontmatter.js';
 
 export interface TaxonomyTerm {
   id: string;
@@ -278,12 +278,49 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
   const toMaps = (items: LocalTaxonomyItem[]) => {
     const slugToId: Record<string, string> = {};
     const idToSlug: Record<string, string> = {};
-    for (const item of sortDeterministically(items)) {
+    const sorted = sortDeterministically(items);
+
+    // 1. Register canonical slugs first
+    for (const item of sorted) {
       idToSlug[item.id] = item.slug;
       if (!slugToId[item.slug]) {
         slugToId[item.slug] = item.id;
       }
     }
+
+    // 2. Collect candidate aliases (decoded percent-encoded slug and human-readable name)
+    // Only register an alias if it does not collide with any canonical slug and maps uniquely to 1 term ID.
+    const aliasToIds = new Map<string, Set<string>>();
+    const recordAliasCandidate = (alias: string | undefined, id: string) => {
+      if (!alias || !alias.trim()) return;
+      const trimmed = alias.trim();
+      let set = aliasToIds.get(trimmed);
+      if (!set) {
+        set = new Set<string>();
+        aliasToIds.set(trimmed, set);
+      }
+      set.add(id);
+    };
+
+    for (const item of sorted) {
+      recordAliasCandidate(item.name, item.id);
+      if (item.slug.includes('%')) {
+        try {
+          const decoded = decodeURIComponent(item.slug);
+          recordAliasCandidate(decoded, item.id);
+        } catch {
+          // Ignore malformed percent-encoding (URIError)
+        }
+      }
+    }
+
+    for (const [alias, ids] of aliasToIds.entries()) {
+      if (!slugToId[alias] && ids.size === 1) {
+        const [uniqueId] = ids;
+        slugToId[alias] = uniqueId;
+      }
+    }
+
     return { slugToId, idToSlug };
   };
 
@@ -372,9 +409,10 @@ export function formatTaxonomiesHint(
   const maxTags = options?.maxTags ?? DEFAULT_MAX_TAGS;
 
   const formatItem = (item: LocalTaxonomyItem): string => {
+    const formattedSlug = formatYamlScalar(item.slug);
     return item.slug.toLowerCase() === item.name.toLowerCase()
-      ? item.slug
-      : `${item.slug} (${item.name})`;
+      ? formattedSlug
+      : `${formattedSlug} (${item.name})`;
   };
 
   const sections: string[] = [];

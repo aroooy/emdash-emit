@@ -23,12 +23,17 @@
 import { CacheDatabase } from '../db/cache.js';
 import { resolveAuth, type ResolvedAuth } from '../client/auth.js';
 import {
+  findWorkspaceRoot,
   getWorkspacePaths,
   requireWorkspaceRoot,
   type WorkspacePaths,
 } from '../utils/workspace.js';
-import { loadConfig, type EmitConfig } from '../utils/config.js';
-import { loadProfilesFile, AmbiguousProfileError } from '../utils/profile.js';
+import { DEFAULT_ORIGIN, loadConfig, type EmitConfig } from '../utils/config.js';
+import {
+  findProfileByDirectory,
+  loadProfilesFile,
+  AmbiguousProfileError,
+} from '../utils/profile.js';
 
 export interface CliContext {
   root: string;
@@ -43,9 +48,28 @@ export type CliContextResolver = (profileName?: string) => CliContext;
 
 export function createCliContextResolver(): CliContextResolver {
   return (profileName?: string): CliContext => {
+    const profilesData = loadProfilesFile();
+    const explicitProf = profileName ? profilesData.profiles[profileName] : undefined;
+    const cwdProf = !profileName ? findProfileByDirectory(process.cwd()) : null;
+    const nearestEmitRoot = !profileName ? findWorkspaceRoot(process.cwd()) : null;
+
+    const preResolvedWorkspace =
+      explicitProf?.workspace ||
+      cwdProf?.config.workspace ||
+      nearestEmitRoot ||
+      process.env.EMDASH_WORKSPACE;
+
+    const preConfig = preResolvedWorkspace ? loadConfig(preResolvedWorkspace) : undefined;
+    const preOriginHint =
+      preConfig && preConfig.origin !== DEFAULT_ORIGIN ? preConfig.origin : undefined;
+
     let auth: ResolvedAuth;
     try {
-      const resolved = resolveAuth({ profile: profileName });
+      const resolved = resolveAuth({
+        profile: profileName,
+        cwd: preResolvedWorkspace || process.cwd(),
+        origin: preOriginHint,
+      });
       if (!resolved) {
         console.error('❌ Error: No authentication found.');
         console.error('   Please run "emit profile add <name> --origin <url> --token <token>"');
@@ -63,14 +87,15 @@ export function createCliContextResolver(): CliContextResolver {
       throw err;
     }
 
-    const profilesData = loadProfilesFile();
-    const activeProf = profileName ? profilesData.profiles[profileName] : undefined;
-    const origin = activeProf?.origin || auth.origin || 'https://example.com';
+    const resolvedProf =
+      explicitProf ||
+      (auth.profileName ? profilesData.profiles[auth.profileName] : undefined) ||
+      cwdProf?.config;
 
     let workspaceRoot: string;
     try {
       workspaceRoot =
-        activeProf?.workspace || process.env.EMDASH_WORKSPACE || requireWorkspaceRoot();
+        preResolvedWorkspace || resolvedProf?.workspace || auth.workspace || requireWorkspaceRoot();
     } catch {
       console.error('❌ Error: Current directory is not inside an Emit workspace.');
       console.error('   Run "emit init" to initialize this directory, or "cd" into a workspace.');
@@ -79,7 +104,10 @@ export function createCliContextResolver(): CliContextResolver {
 
     const paths = getWorkspacePaths(workspaceRoot);
     const cache = new CacheDatabase(paths.dbPath);
-    const config = loadConfig(paths.configPath);
+    const config =
+      preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
+    const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
+    const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
 
     return {
       root: workspaceRoot,

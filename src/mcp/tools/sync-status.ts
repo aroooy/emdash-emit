@@ -25,10 +25,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
 import { getWorkspaceStatus } from '../../sync/status.js';
 
+const MAX_INVALID_MCP_ITEMS = 10;
+
 export function registerSyncStatusTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_status',
-    'Inspect local workspace sync status. Returns all tracked articles sorted newest-first (descending by date), with relative file paths (e.g. posts/published/YYYYMMDD_<id>-<title>.md), publication status (draft/published), and modification state (synced/modified/untracked). ALWAYS use this tool first to locate local files instead of querying remote APIs.',
+    'Inspect local workspace sync status. Returns all tracked articles sorted newest-first (descending by date), with relative file paths (e.g. posts/published/YYYYMMDD_<id>-<title>.md), publication status (draft/published), and modification state (synced/modified/untracked/invalid). ALWAYS use this tool first to locate local files instead of querying remote APIs.',
     {
       collection: z
         .string()
@@ -41,11 +43,37 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
       const collection = args.collection || ctx.config.defaultCollection;
       const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
 
+      // Cap invalid items in MCP output to prevent context window flooding when many files are broken
+      let invalidSeen = 0;
+      const filteredItems = status.items.filter((item) => {
+        if (item.syncStatus !== 'invalid') return true;
+        invalidSeen++;
+        return invalidSeen <= MAX_INVALID_MCP_ITEMS;
+      });
+      const invalidTruncated = Math.max(0, status.summary.invalid - MAX_INVALID_MCP_ITEMS);
+
+      const responsePayload = {
+        items: filteredItems,
+        summary: status.summary,
+        ...(invalidTruncated > 0
+          ? {
+              invalidTruncated,
+              invalidNote: `...and ${invalidTruncated} more invalid frontmatter file(s) omitted to conserve context.`,
+            }
+          : {}),
+        ...(status.summary.invalid > 0
+          ? {
+              repairHint:
+                'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair unquoted %-prefixed frontmatter files.',
+            }
+          : {}),
+      };
+
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(status, null, 2),
+            text: JSON.stringify(responsePayload, null, 2),
           },
         ],
       };

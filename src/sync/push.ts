@@ -41,6 +41,7 @@ import {
   parseMarkdown,
   serializeMarkdown,
   type Frontmatter,
+  type ParsedMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps } from './taxonomies.js';
@@ -73,6 +74,8 @@ export interface PushResult {
   id: string;
   rev: string;
   filePath: string;
+  previousId?: string;
+  previousFilePath?: string;
   conflict: boolean;
   warnings: string[];
   errors?: PreflightError[];
@@ -509,8 +512,17 @@ export async function pushArticle(
     throw new Error(`Target file not found: ${targetFilePath}`);
   }
 
+  const originalRelPath = path.relative(options.workspaceRoot, fullPath);
   const rawContent = fs.readFileSync(fullPath, 'utf8');
-  const parsed = parseMarkdown(rawContent);
+  let parsed: ParsedMarkdown;
+  try {
+    parsed = parseMarkdown(rawContent);
+  } catch (err: unknown) {
+    const reason = (err as Error).message.split('\n')[0];
+    throw new Error(
+      `Invalid frontmatter in ${targetFilePath}: ${reason} (quote strings starting with "%" or containing special YAML characters, or run "emit pull" to repair)`,
+    );
+  }
   const id = parsed.frontmatter.id;
   const collection = parsed.frontmatter.collection;
 
@@ -787,6 +799,8 @@ export async function pushArticle(
       id: actualId,
       rev: finalRev,
       filePath: newRelPath,
+      ...(actualId !== id ? { previousId: id } : {}),
+      ...(originalRelPath !== newRelPath ? { previousFilePath: originalRelPath } : {}),
       conflict: false,
       warnings,
     };
@@ -1068,6 +1082,7 @@ export async function pushArticle(
       id,
       rev: finalRev,
       filePath: newRelPath,
+      ...(originalRelPath !== newRelPath ? { previousFilePath: originalRelPath } : {}),
       conflict: false,
       warnings,
     };

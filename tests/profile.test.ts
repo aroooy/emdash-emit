@@ -238,4 +238,56 @@ describe('Profile Management (profiles.yaml)', () => {
       if (origApiToken) process.env.EMDASH_API_TOKEN = origApiToken;
     }
   });
+
+  it('omits undefined optional fields when saving profiles.yaml (no !<tag:yaml.org,2002:js/undefined>) and normalizes on load', () => {
+    setProfile(
+      'clean-prof',
+      {
+        origin: 'https://aroooy.net',
+        token: 'pat_clean',
+        workspace: undefined,
+      },
+      true,
+      customProfilesPath,
+    );
+
+    const rawYaml = fs.readFileSync(customProfilesPath, 'utf8');
+    expect(rawYaml).not.toContain('js/undefined');
+    expect(rawYaml).not.toContain('workspace:');
+
+    const loaded = loadProfilesFile(customProfilesPath);
+    expect(loaded.profiles['clean-prof'].origin).toBe('https://aroooy.net');
+    expect(loaded.profiles['clean-prof'].token).toBe('pat_clean');
+    expect(loaded.profiles['clean-prof'].workspace).toBeUndefined();
+  });
+
+  it('prefers deepest (longest path) workspace match for nested workspaces and resolves by origin hint', () => {
+    setProfile(
+      'parent-ws',
+      { origin: 'https://parent.example.com', token: 't1', workspace: '/projects/mono' },
+      false,
+      customProfilesPath,
+    );
+    setProfile(
+      'nested-ws',
+      { origin: 'https://nested.example.com', token: 't2', workspace: '/projects/mono/sites/sub' },
+      false,
+      customProfilesPath,
+    );
+
+    const matchNested = findProfileByDirectory(
+      '/projects/mono/sites/sub/posts/draft',
+      customProfilesPath,
+    );
+    expect(matchNested?.name).toBe('nested-ws');
+
+    // Origin hint disambiguates when cwd does not match any profile workspace
+    const byOrigin = resolveTargetProfile({
+      cwd: '/elsewhere',
+      origin: 'https://nested.example.com/',
+      customPath: customProfilesPath,
+    });
+    expect(byOrigin?.name).toBe('nested-ws');
+    expect(byOrigin?.source).toBe('workspace');
+  });
 });

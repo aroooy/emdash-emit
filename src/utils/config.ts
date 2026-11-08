@@ -34,8 +34,10 @@ export interface EmitConfig {
   concurrency?: number;
 }
 
+export const DEFAULT_ORIGIN = 'https://example.com';
+
 const DEFAULT_CONFIG: EmitConfig = {
-  origin: 'https://example.com',
+  origin: DEFAULT_ORIGIN,
   defaultCollection: 'posts',
   defaultLocale: 'ja',
   postsSyncLimit: 100,

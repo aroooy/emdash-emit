@@ -25,16 +25,21 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown } from '../utils/frontmatter.js';
 import { calculateHash } from './pull.js';
-import { compareArticleFilenameDesc } from '../utils/naming.js';
+import {
+  compareArticleFilenameDesc,
+  extractUlidFromFilename,
+  stripDatePrefix,
+} from '../utils/naming.js';
 
 export interface ArticleStatusItem {
   id: string;
   slug: string;
   title: string;
   status: 'draft' | 'published';
-  syncStatus: 'synced' | 'modified' | 'untracked';
+  syncStatus: 'synced' | 'modified' | 'untracked' | 'invalid';
   filePath: string;
   rev?: string;
+  error?: string;
 }
 
 export interface WorkspaceStatusResult {
@@ -44,6 +49,7 @@ export interface WorkspaceStatusResult {
     synced: number;
     modified: number;
     untracked: number;
+    invalid: number;
   };
 }
 
@@ -61,12 +67,12 @@ export function getWorkspaceStatus(
   if (!fs.existsSync(collectionDir)) {
     return {
       items: [],
-      summary: { total: 0, synced: 0, modified: 0, untracked: 0 },
+      summary: { total: 0, synced: 0, modified: 0, untracked: 0, invalid: 0 },
     };
   }
 
   // Scan draft/ and published/ subdirectories
-  const subdirs = ['draft', 'published'];
+  const subdirs: Array<'draft' | 'published'> = ['draft', 'published'];
   for (const sub of subdirs) {
     const subDirPath = path.join(collectionDir, sub);
     if (!fs.existsSync(subDirPath)) continue;
@@ -100,8 +106,28 @@ export function getWorkspaceStatus(
           filePath: relPath,
           rev: syncState?.remoteRev,
         });
-      } catch {
-        // Skip invalid markdown files
+      } catch (err: unknown) {
+        const fallbackId = extractUlidFromFilename(file) || 'unknown';
+        const baseWithoutDate = stripDatePrefix(file).replace(/\.md$/i, '');
+        const fallbackTitle =
+          fallbackId !== 'unknown' && baseWithoutDate.startsWith(`${fallbackId}-`)
+            ? baseWithoutDate.slice(fallbackId.length + 1)
+            : baseWithoutDate;
+        const syncState = fallbackId !== 'unknown' ? cache.getSyncState(fallbackId) : null;
+        const errorMsg = (err as Error)?.message
+          ? (err as Error).message.split('\n')[0]
+          : 'Invalid frontmatter YAML';
+
+        items.push({
+          id: fallbackId,
+          slug: syncState?.slug || 'invalid-frontmatter',
+          title: fallbackTitle,
+          status: sub,
+          syncStatus: 'invalid',
+          filePath: relPath,
+          rev: syncState?.remoteRev,
+          error: errorMsg,
+        });
       }
     }
   }
@@ -114,6 +140,7 @@ export function getWorkspaceStatus(
     synced: items.filter((i) => i.syncStatus === 'synced').length,
     modified: items.filter((i) => i.syncStatus === 'modified').length,
     untracked: items.filter((i) => i.syncStatus === 'untracked').length,
+    invalid: items.filter((i) => i.syncStatus === 'invalid').length,
   };
 
   return { items, summary };

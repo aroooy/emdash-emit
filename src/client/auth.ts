@@ -47,6 +47,7 @@ export interface ResolvedAuth {
 export interface AuthOptions {
   profile?: string;
   cwd?: string;
+  origin?: string;
   customProfilesPath?: string;
   customConfigPath?: string;
   emdashAuthPath?: string;
@@ -88,6 +89,7 @@ export function resolveAuth(options?: AuthOptions): ResolvedAuth | null {
   const profileRes = resolveTargetProfile({
     profile: options?.profile,
     cwd: options?.cwd,
+    origin: options?.origin,
     customPath: options?.customProfilesPath,
   });
 

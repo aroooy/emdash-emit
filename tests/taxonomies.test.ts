@@ -27,6 +27,7 @@ import os from 'node:os';
 import {
   pullTaxonomies,
   loadLocalTaxonomyCandidates,
+  loadLocalTaxonomyMaps,
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
 } from '../src/sync/taxonomies.js';
@@ -210,5 +211,53 @@ describe('Taxonomies Sync Engine', () => {
     expect(res.tagsFailed).toBe(true);
     // Local YAML must NOT be pruned or deleted on fetch error
     expect(fs.existsSync(localCatFile)).toBe(true);
+  });
+
+  it('loadLocalTaxonomyMaps resolves unique decoded slugs and names, rejects colliding aliases, and survives malformed percent-encoding', () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    // Category 1: percent-encoded slug "%e6%9c%aa%e5%88%86%e9%a1%9e" (decodes to "未分類"), name "未分類" -> unique
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Uncat.yaml'),
+      'id: 01M6CAT1\nname: 未分類\nslug: "%e6%9c%aa%e5%88%86%e9%a1%9e"\ncount: 10\n',
+    );
+    // Category 2 & 3: colliding name "共通名" across two different category IDs -> must NOT register "共通名" alias
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT2-DupA.yaml'),
+      'id: 01M6CAT2\nname: 共通名\nslug: dup-a\ncount: 5\n',
+    );
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT3-DupB.yaml'),
+      'id: 01M6CAT3\nname: 共通名\nslug: dup-b\ncount: 3\n',
+    );
+    // Tag 1: malformed percent sequence "%E0%A4%A" -> must not throw URIError
+    fs.writeFileSync(
+      path.join(tagDir, '01M6TAG1-Malformed.yaml'),
+      'id: 01M6TAG1\nname: MalformedTag\nslug: "%E0%A4%A"\ncount: 1\n',
+    );
+
+    const maps = loadLocalTaxonomyMaps(tempDir);
+
+    // Canonical slug works
+    expect(maps.slugToId.category['%e6%9c%aa%e5%88%86%e9%a1%9e']).toBe('01M6CAT1');
+    // Unique decoded slug / name alias works
+    expect(maps.slugToId.category['未分類']).toBe('01M6CAT1');
+
+    // Canonical slugs for colliding categories work, but ambiguous name "共通名" is NOT registered
+    expect(maps.slugToId.category['dup-a']).toBe('01M6CAT2');
+    expect(maps.slugToId.category['dup-b']).toBe('01M6CAT3');
+    expect(maps.slugToId.category['共通名']).toBeUndefined();
+
+    // Malformed percent-encoding survived without throwing, and unique name alias works
+    expect(maps.slugToId.tag['%E0%A4%A']).toBe('01M6TAG1');
+    expect(maps.slugToId.tag['MalformedTag']).toBe('01M6TAG1');
+
+    // formatTaxonomiesHint quotes %-prefixed slugs so copy-pasting into YAML frontmatter is valid
+    const summary = getLocalTaxonomiesSummary(tempDir);
+    const hint = formatTaxonomiesHint(summary);
+    expect(hint).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e" (未分類)');
   });
 });

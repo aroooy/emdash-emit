@@ -108,8 +108,9 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             ? parseInt(options.concurrency, 10)
             : ctx.config.concurrency || 8;
 
+          const windowLabel = options.status === 'all' ? `${limit}/status` : `${limit}`;
           console.log(
-            `Fetching articles from remote (${collection}, status: ${options.status}, window: ${limit}, concurrency: ${concurrency})...`,
+            `Fetching articles from remote (${collection}, status: ${options.status}, window: ${windowLabel}, concurrency: ${concurrency})...`,
           );
           const batchResult = await pullBatch({
             collection,
@@ -140,8 +141,16 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
 
           const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
+          const publishedCount = batchResult.items.filter(
+            (i) => !i.deleted && i.status === 'published',
+          ).length;
+          const draftCount = batchResult.items.filter(
+            (i) => !i.deleted && i.status === 'draft',
+          ).length;
+          const statusBreakdown =
+            options.status === 'all' ? ` [${publishedCount} published, ${draftCount} draft]` : '';
           console.log(
-            `\n🎉 Articles: ${batchResult.total} total (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
+            `\n🎉 Articles: ${batchResult.total} total${statusBreakdown} (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
           );
 
           // 3. Pull media (if --media)

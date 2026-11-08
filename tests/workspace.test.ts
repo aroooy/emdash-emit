@@ -29,6 +29,7 @@ import {
   getWorkspacePaths,
   requireWorkspaceRoot,
 } from '../src/utils/workspace.js';
+import { DEFAULT_ORIGIN, initWorkspace, loadConfig } from '../src/utils/config.js';
 
 describe('Workspace Utils', () => {
   let tempDir: string;
@@ -77,5 +78,18 @@ describe('Workspace Utils', () => {
     expect(paths.configPath).toBe(path.join(tempDir, '.emit', 'config.json'));
     expect(paths.dbPath).toBe(path.join(tempDir, '.emit', 'cache.db'));
     expect(paths.postsDir).toBe(path.join(tempDir, 'posts'));
+  });
+
+  it('initWorkspace writes .emit/config.json and loadConfig(workspaceRoot) reads it back accurately', () => {
+    initWorkspace(tempDir, {
+      origin: 'https://aroooy.net',
+      postsSyncLimit: 250,
+    });
+
+    const loaded = loadConfig(tempDir);
+    expect(loaded.origin).toBe('https://aroooy.net');
+    expect(loaded.postsSyncLimit).toBe(250);
+    expect(loaded.defaultCollection).toBe('posts');
+    expect(DEFAULT_ORIGIN).toBe('https://example.com');
   });
 });

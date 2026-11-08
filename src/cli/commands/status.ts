@@ -50,16 +50,28 @@ export function registerStatusInitCommands(
         } else if (item.syncStatus === 'untracked') {
           icon = '⚪';
           label = 'untracked';
+        } else if (item.syncStatus === 'invalid') {
+          icon = '🔴';
+          label = 'invalid ';
         }
 
         const titleDisplay = item.title ? ` (${item.title})` : '';
+        const errorDisplay = item.error ? ` — ${item.error}` : '';
         const paddedStatus = (item.status || '').padEnd(9, ' ');
-        console.log(`  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}`);
+        console.log(
+          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${errorDisplay}`,
+        );
       }
 
+      const invalidSuffix = status.summary.invalid > 0 ? `, ${status.summary.invalid} invalid` : '';
       console.log(
-        `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked)\n`,
+        `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix})\n`,
       );
+      if (status.summary.invalid > 0) {
+        console.log(
+          '💡 Hint: Run "emit pull" to automatically re-serialize and repair invalid frontmatter files.\n',
+        );
+      }
     });
 
   // emit diff [filePath]
@@ -125,16 +137,44 @@ export function registerStatusInitCommands(
     .command('init')
     .description('Initialize current directory as an Emit local workspace')
     .option('--origin <url>', 'EmDash instance origin URL')
-    .action(async (options) => {
+    .option(
+      '--no-link',
+      'Do not automatically link this workspace directory to the resolved profile',
+    )
+    .action(async (options: { origin?: string; link?: boolean }) => {
       const root = process.cwd();
       const { initWorkspace } = await import('../../utils/config.js');
       const { getWorkspacePaths } = await import('../../utils/workspace.js');
+      const { resolveTargetProfile, setProfile } = await import('../../utils/profile.js');
 
-      initWorkspace(root, options.origin ? { origin: options.origin } : undefined);
+      let resolvedProfile = null;
+      try {
+        resolvedProfile = resolveTargetProfile({ cwd: root });
+      } catch {
+        // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
+      }
+
+      const effectiveOrigin =
+        options.origin || resolvedProfile?.config.origin || process.env.EMDASH_ORIGIN;
+
+      initWorkspace(root, effectiveOrigin ? { origin: effectiveOrigin } : undefined);
       const paths = getWorkspacePaths(root);
 
       console.log(`✅ Initialized Emit workspace at: ${root}`);
       console.log(`   Config: ${paths.configPath}`);
       console.log(`   Database: ${paths.dbPath}`);
+
+      if (
+        options.link !== false &&
+        resolvedProfile &&
+        !resolvedProfile.config.workspace &&
+        resolvedProfile.config.origin === effectiveOrigin
+      ) {
+        setProfile(resolvedProfile.name, {
+          ...resolvedProfile.config,
+          workspace: root,
+        });
+        console.log(`🔗 Linked profile "${resolvedProfile.name}" -> workspace ${root}`);
+      }
     });
 }

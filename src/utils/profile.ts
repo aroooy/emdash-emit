@@ -59,9 +59,34 @@ export function loadProfilesFile(customPath?: string): ProfilesFile {
     if (!parsed || typeof parsed !== 'object') {
       return { profiles: {} };
     }
+    const rawProfiles =
+      parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {};
+    const profiles: Record<string, ProfileConfig> = {};
+
+    for (const [key, prof] of Object.entries(rawProfiles)) {
+      if (!prof || typeof prof !== 'object') continue;
+      const clean: ProfileConfig = {
+        origin: typeof prof.origin === 'string' ? prof.origin : '',
+        token: typeof prof.token === 'string' ? prof.token : '',
+      };
+      if (typeof prof.workspace === 'string' && prof.workspace.trim().length > 0) {
+        clean.workspace = prof.workspace.trim();
+      }
+      if (typeof prof.defaultCollection === 'string' && prof.defaultCollection.trim().length > 0) {
+        clean.defaultCollection = prof.defaultCollection.trim();
+      }
+      if (typeof prof.defaultLocale === 'string' && prof.defaultLocale.trim().length > 0) {
+        clean.defaultLocale = prof.defaultLocale.trim();
+      }
+      profiles[key] = clean;
+    }
+
     return {
-      active: typeof parsed.active === 'string' ? parsed.active : undefined,
-      profiles: parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {},
+      active:
+        typeof parsed.active === 'string' && parsed.active.trim().length > 0
+          ? parsed.active.trim()
+          : undefined,
+      profiles,
     };
   } catch (err) {
     throw new Error(`Failed to parse profiles file at ${filePath}: ${(err as Error).message}`);
@@ -70,6 +95,8 @@ export function loadProfilesFile(customPath?: string): ProfilesFile {
 
 /**
  * Saves the profiles configuration to ~/.config/emit/profiles.yaml with restricted permissions (0600).
+ * Explicitly strips undefined/empty optional properties before dumping because js-yaml serializes
+ * `{ workspace: undefined }` as `workspace: !<tag:yaml.org,2002:js/undefined> ''` even when skipInvalid: true is set.
  */
 export function saveProfilesFile(data: ProfilesFile, customPath?: string): void {
   const filePath = customPath || getDefaultProfilesPath();
@@ -78,12 +105,40 @@ export function saveProfilesFile(data: ProfilesFile, customPath?: string): void 
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
-  const dump = yaml.dump(data, { indent: 2, lineWidth: -1 });
+  const sanitizedProfiles: Record<string, Record<string, string>> = {};
+  for (const [key, prof] of Object.entries(data.profiles)) {
+    if (!prof || typeof prof !== 'object') continue;
+    const clean: Record<string, string> = {
+      origin: prof.origin,
+    };
+    if (typeof prof.token === 'string' && prof.token.length > 0) {
+      clean.token = prof.token;
+    }
+    if (typeof prof.workspace === 'string' && prof.workspace.trim().length > 0) {
+      clean.workspace = prof.workspace.trim();
+    }
+    if (typeof prof.defaultCollection === 'string' && prof.defaultCollection.trim().length > 0) {
+      clean.defaultCollection = prof.defaultCollection.trim();
+    }
+    if (typeof prof.defaultLocale === 'string' && prof.defaultLocale.trim().length > 0) {
+      clean.defaultLocale = prof.defaultLocale.trim();
+    }
+    sanitizedProfiles[key] = clean;
+  }
+
+  const cleanFile: Record<string, unknown> = {};
+  if (typeof data.active === 'string' && data.active.trim().length > 0) {
+    cleanFile.active = data.active.trim();
+  }
+  cleanFile.profiles = sanitizedProfiles;
+
+  const dump = yaml.dump(cleanFile, { indent: 2, lineWidth: -1 });
   fs.writeFileSync(filePath, dump, { encoding: 'utf8', mode: 0o600 });
 }
 
 /**
  * Discovers which profile matches the given directory (or cwd) based on configured workspace paths.
+ * Selects the deepest (longest path) match so nested workspaces are not absorbed by ancestor profiles.
  */
 export function findProfileByDirectory(
   dir: string = process.cwd(),
@@ -92,21 +147,26 @@ export function findProfileByDirectory(
   const file = loadProfilesFile(customPath);
   const normalizedTarget = path.resolve(dir);
 
+  let bestMatch: { name: string; config: ProfileConfig; length: number } | null = null;
+
   for (const [name, p] of Object.entries(file.profiles)) {
     if (!p.workspace) continue;
     const normalizedWs = path.resolve(p.workspace);
     // Exact match or subpath of the profile's workspace
     if (normalizedTarget === normalizedWs || normalizedTarget.startsWith(normalizedWs + path.sep)) {
-      return { name, config: p };
+      if (!bestMatch || normalizedWs.length > bestMatch.length) {
+        bestMatch = { name, config: p, length: normalizedWs.length };
+      }
     }
   }
 
-  return null;
+  return bestMatch ? { name: bestMatch.name, config: bestMatch.config } : null;
 }
 
 export interface ResolveProfileOptions {
   profile?: string;
   cwd?: string;
+  origin?: string;
   customPath?: string;
 }
 
@@ -160,7 +220,20 @@ export function resolveTargetProfile(options?: ResolveProfileOptions): ResolvePr
     return { name: byDir.name, config: byDir.config, source: 'workspace' };
   }
 
-  // 3. Exactly one profile exists
+  // 3. Auto-match by workspace origin (e.g. from .emit/config.json) when unique
+  if (options?.origin) {
+    const normalizeUrl = (u: string): string => u.trim().replace(/\/+$/, '');
+    const targetOrigin = normalizeUrl(options.origin);
+    const matchingByOrigin = profileNames.filter(
+      (name) => normalizeUrl(file.profiles[name].origin || '') === targetOrigin,
+    );
+    if (matchingByOrigin.length === 1) {
+      const matchedName = matchingByOrigin[0];
+      return { name: matchedName, config: file.profiles[matchedName], source: 'workspace' };
+    }
+  }
+
+  // 4. Exactly one profile exists
   if (profileNames.length === 1) {
     const singleName = profileNames[0];
     return { name: singleName, config: file.profiles[singleName], source: 'single' };

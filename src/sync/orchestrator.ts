@@ -253,16 +253,20 @@ export interface PushAllResult {
   total: number;
   pushed: number;
   skipped: number;
+  invalid: number;
   results: PushResult[];
 }
 
 /**
  * Orchestrates pushing all modified/untracked files in the workspace.
+ * Excludes synced and invalid (YAML parse error) files so invalid files do not crash batch push.
  * Reusable across CLI and MCP servers.
  */
 export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
   const status = getWorkspaceStatus(options.workspaceRoot, options.cache, options.collection);
-  const toPush = status.items.filter((i) => i.syncStatus !== 'synced');
+  const toPush = status.items.filter(
+    (i) => i.syncStatus === 'modified' || i.syncStatus === 'untracked',
+  );
 
   const results: PushResult[] = [];
   let pushed = 0;
@@ -285,6 +289,7 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
     total: toPush.length,
     pushed,
     skipped: status.items.length - toPush.length,
+    invalid: status.summary.invalid,
     results,
   };
 }

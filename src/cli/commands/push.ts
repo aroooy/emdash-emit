@@ -49,13 +49,25 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             allowPublish: options.allowPublish,
           });
 
+          if (pushResult.invalid > 0) {
+            console.warn(
+              `⚠️ Skipped ${pushResult.invalid} file(s) with invalid YAML frontmatter (run "emit status" or "emit pull" to inspect/repair).`,
+            );
+          }
+
           if (pushResult.total === 0) {
-            console.log('✨ All articles are already in sync. Nothing to push.');
+            console.log('✨ All valid articles are already in sync. Nothing to push.');
             return;
           }
 
           for (const res of pushResult.results) {
             console.log(`✅ Pushed ${res.id} (${res.filePath})`);
+            if (res.previousId) {
+              console.log(`   🆔 Server assigned ULID: ${res.previousId} -> ${res.id}`);
+            }
+            if (res.previousFilePath) {
+              console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
+            }
             if (res.warnings && res.warnings.length > 0) {
               console.warn(`   ⚠️ Warnings (${res.warnings.length}):`);
               for (const w of res.warnings) {
@@ -90,6 +102,12 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           );
         } else {
           console.log(`✅ Successfully pushed ${res.id} -> ${res.filePath} (rev: ${res.rev})`);
+          if (res.previousId) {
+            console.log(`   🆔 Server assigned ULID: ${res.previousId} -> ${res.id}`);
+          }
+          if (res.previousFilePath) {
+            console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
+          }
           if (res.warnings && res.warnings.length > 0) {
             console.warn(`\n⚠️ Warnings (${res.warnings.length}):`);
             for (const w of res.warnings) {
