@@ -25,6 +25,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { program } from '../src/bin/emit.js';
+import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
+import { resolveInitPlan } from '../src/cli/commands/status.js';
 import { initWorkspace } from '../src/utils/config.js';
 
 describe('Emit CLI (Commander)', () => {
@@ -94,5 +96,69 @@ describe('Emit CLI (Commander)', () => {
   it('executes emit guide cleanly', () => {
     const guideCmd = program.commands.find((c) => c.name() === 'guide');
     expect(guideCmd).toBeDefined();
+  });
+
+  it('resolveInitPlan inherits profile origin and enforces 3-guard auto-link rules', () => {
+    const baseProfile = {
+      name: 'aroooy.net',
+      source: 'single' as const,
+      config: {
+        origin: 'https://aroooy.net',
+        token: 'pat_123',
+      },
+    };
+
+    // Default: inherits origin from profile and links workspace when unset
+    expect(resolveInitPlan({}, baseProfile)).toEqual({
+      effectiveOrigin: 'https://aroooy.net',
+      shouldLinkProfile: true,
+    });
+
+    // Guard 1: --no-link (options.link === false) prevents linking
+    expect(resolveInitPlan({ link: false }, baseProfile)).toEqual({
+      effectiveOrigin: 'https://aroooy.net',
+      shouldLinkProfile: false,
+    });
+
+    // Guard 2: profile already has a workspace configured -> do not overwrite
+    expect(
+      resolveInitPlan(
+        {},
+        {
+          ...baseProfile,
+          config: { ...baseProfile.config, workspace: '/existing/ws' },
+        },
+      ),
+    ).toEqual({
+      effectiveOrigin: 'https://aroooy.net',
+      shouldLinkProfile: false,
+    });
+
+    // Guard 3: explicit --origin differs from resolved profile origin -> do not link to wrong profile
+    expect(resolveInitPlan({ origin: 'https://other.example.com' }, baseProfile)).toEqual({
+      effectiveOrigin: 'https://other.example.com',
+      shouldLinkProfile: false,
+    });
+
+    // No profile resolved -> falls back to envOrigin and does not link
+    expect(resolveInitPlan({}, null, 'https://env.example.com')).toEqual({
+      effectiveOrigin: 'https://env.example.com',
+      shouldLinkProfile: false,
+    });
+  });
+
+  it('formats pull window label (N/status for all) and status breakdown accurately', () => {
+    expect(formatPullWindowLabel('all', 100)).toBe('100/status');
+    expect(formatPullWindowLabel('published', 100)).toBe('100');
+    expect(formatPullWindowLabel('draft', 50)).toBe('50');
+
+    const sampleItems = [
+      { status: 'published' },
+      { status: 'published' },
+      { status: 'draft' },
+      { status: 'published', deleted: true },
+    ];
+    expect(formatPullStatusBreakdown('all', sampleItems)).toBe(' [2 published, 1 draft]');
+    expect(formatPullStatusBreakdown('published', sampleItems)).toBe('');
   });
 });

@@ -31,6 +31,20 @@ import {
 import { pullMedia } from '../../sync/media.js';
 import type { CliContextResolver } from '../context.js';
 
+export function formatPullWindowLabel(status: string | undefined, limit: number): string {
+  return status === 'all' ? `${limit}/status` : `${limit}`;
+}
+
+export function formatPullStatusBreakdown(
+  status: string | undefined,
+  items: Array<{ deleted?: boolean; status?: string }>,
+): string {
+  if (status !== 'all') return '';
+  const publishedCount = items.filter((i) => !i.deleted && i.status === 'published').length;
+  const draftCount = items.filter((i) => !i.deleted && i.status === 'draft').length;
+  return ` [${publishedCount} published, ${draftCount} draft]`;
+}
+
 export function registerPullCommands(program: Command, resolveContext: CliContextResolver): void {
   // emit pull [id]
   program
@@ -108,7 +122,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             ? parseInt(options.concurrency, 10)
             : ctx.config.concurrency || 8;
 
-          const windowLabel = options.status === 'all' ? `${limit}/status` : `${limit}`;
+          const windowLabel = formatPullWindowLabel(options.status, limit);
           console.log(
             `Fetching articles from remote (${collection}, status: ${options.status}, window: ${windowLabel}, concurrency: ${concurrency})...`,
           );
@@ -141,14 +155,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
 
           const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
-          const publishedCount = batchResult.items.filter(
-            (i) => !i.deleted && i.status === 'published',
-          ).length;
-          const draftCount = batchResult.items.filter(
-            (i) => !i.deleted && i.status === 'draft',
-          ).length;
-          const statusBreakdown =
-            options.status === 'all' ? ` [${publishedCount} published, ${draftCount} draft]` : '';
+          const statusBreakdown = formatPullStatusBreakdown(options.status, batchResult.items);
           console.log(
             `\n🎉 Articles: ${batchResult.total} total${statusBreakdown} (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
           );

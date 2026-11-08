@@ -24,6 +24,32 @@ import type { Command } from 'commander';
 import { getWorkspaceStatus } from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
 import type { CliContextResolver } from '../context.js';
+import type { ResolveProfileResult } from '../../utils/profile.js';
+
+export interface InitPlanResult {
+  effectiveOrigin?: string;
+  shouldLinkProfile: boolean;
+}
+
+/**
+ * Determines the effective origin for `emit init` and whether the resolved profile
+ * should be automatically linked to the workspace (3-guard check: link enabled,
+ * profile workspace unset, and profile origin matches effective origin).
+ */
+export function resolveInitPlan(
+  options: { origin?: string; link?: boolean },
+  resolvedProfile: ResolveProfileResult | null,
+  envOrigin?: string,
+): InitPlanResult {
+  const effectiveOrigin = options.origin || resolvedProfile?.config.origin || envOrigin;
+  const shouldLinkProfile = Boolean(
+    options.link !== false &&
+    resolvedProfile &&
+    !resolvedProfile.config.workspace &&
+    resolvedProfile.config.origin === effectiveOrigin,
+  );
+  return { effectiveOrigin, shouldLinkProfile };
+}
 
 export function registerStatusInitCommands(
   program: Command,
@@ -56,10 +82,12 @@ export function registerStatusInitCommands(
         }
 
         const titleDisplay = item.title ? ` (${item.title})` : '';
+        const cacheTag =
+          item.syncStatus === 'invalid' && item.cached === false ? ' [uncached]' : '';
         const errorDisplay = item.error ? ` — ${item.error}` : '';
         const paddedStatus = (item.status || '').padEnd(9, ' ');
         console.log(
-          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${errorDisplay}`,
+          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${cacheTag}${errorDisplay}`,
         );
       }
 
@@ -68,9 +96,19 @@ export function registerStatusInitCommands(
         `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix})\n`,
       );
       if (status.summary.invalid > 0) {
-        console.log(
-          '💡 Hint: Run "emit pull" to automatically re-serialize and repair invalid frontmatter files.\n',
+        const uncachedInvalid = status.items.filter(
+          (i) => i.syncStatus === 'invalid' && i.cached === false,
         );
+        if (uncachedInvalid.length > 0) {
+          const exampleId = uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
+          console.log(
+            `💡 Hint: Run "emit pull" to repair cached invalid files. For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
+          );
+        } else {
+          console.log(
+            '💡 Hint: Run "emit pull" to automatically re-serialize and repair invalid frontmatter files.\n',
+          );
+        }
       }
     });
 
@@ -154,8 +192,11 @@ export function registerStatusInitCommands(
         // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
       }
 
-      const effectiveOrigin =
-        options.origin || resolvedProfile?.config.origin || process.env.EMDASH_ORIGIN;
+      const { effectiveOrigin, shouldLinkProfile } = resolveInitPlan(
+        options,
+        resolvedProfile,
+        process.env.EMDASH_ORIGIN,
+      );
 
       initWorkspace(root, effectiveOrigin ? { origin: effectiveOrigin } : undefined);
       const paths = getWorkspacePaths(root);
@@ -164,12 +205,7 @@ export function registerStatusInitCommands(
       console.log(`   Config: ${paths.configPath}`);
       console.log(`   Database: ${paths.dbPath}`);
 
-      if (
-        options.link !== false &&
-        resolvedProfile &&
-        !resolvedProfile.config.workspace &&
-        resolvedProfile.config.origin === effectiveOrigin
-      ) {
+      if (shouldLinkProfile && resolvedProfile) {
         setProfile(resolvedProfile.name, {
           ...resolvedProfile.config,
           workspace: root,

@@ -333,7 +333,7 @@ Emit maintains a local SQLite database via Node.js built-in `node:sqlite` (`src/
 | --- | --- |
 | `entries` | Caches the latest remote JSON envelope and revision (`rev`) for each synced article |
 | `base_snapshots` | Stores the baseline Markdown body and baseline frontmatter at the last synced revision to power Hybrid 3-Way Merge (`frontmatter_yaml` holds a **JSON-encoded** `Frontmatter` object, not YAML text) |
-| `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified` vs `untracked`, plus `invalid` when YAML frontmatter fails parsing; `invalid` files are excluded from `emit push --all` and automatically self-healed on `emit pull` / `sync_pull`) |
+| `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified` vs `untracked`, plus `invalid` when YAML frontmatter fails parsing; `invalid` files are excluded from `emit push --all`, cached `invalid` files are automatically self-healed on batch `emit pull` / `sync_pull`, and uncached `invalid` files outside the sliding window can be repaired via `emit pull <ULID>` or `sync_pull(id: "<ULID>")`) |
 | `bylines` | Caches remote author records (`id`, `slug`, `display_name`, `is_guest`) synced automatically via `/_emdash/api/mcp` (`byline_list`) on pull, enabling slug ⇔ ULID resolution and default author selection |
 | `media_state` | Tracks offline draft image uploads (`local_hash`, `media_id`, `storage_key`, `url`, `workspace_path`, `status`: `pending` \| `uploaded` \| `ready` \| `failed`) for idempotency, retry recovery, and cross-article asset reuse |
 
@@ -607,7 +607,7 @@ emit pull [id] [options]
 ```
 
 * `[id]`: Optional article ID or ULID. If specified, pulls only that specific article (even if outside the window). Taxonomies are not pulled in single-article mode.
-* `-s, --status <draft|published|all>`: Filter by publication status (default: `all`).
+* `-s, --status <draft|published|all>`: Filter by publication status (default: `all`). When set to `all`, the sliding window (`postsSyncLimit`, default `100`) is applied **per status** (fetching up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel).
 * `-c, --collection <collection>`: Collection name (default: `posts`).
 * `--no-prune`: Do not prune local articles that have fallen outside the sliding window (escape hatch; not intended for routine use).
 * `--force`: Force overwrite local files and bypass differential hash checking.
@@ -656,11 +656,11 @@ Available Categories:
 Available Tags:
   - ai, cloudflare, emit, typescript
 
-Fetching articles from remote (posts, status: all, window: 100, concurrency: 8)...
-  [1/100] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
-  [2/100] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
+Fetching articles from remote (posts, status: all, window: 100/status, concurrency: 8)...
+  [1/169] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
+  [2/169] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
 
-🎉 Articles: 100 total (12 updated, 88 skipped/up-to-date)
+🎉 Articles: 169 total [100 published, 69 draft] (12 updated, 157 skipped/up-to-date)
 
 ```
 

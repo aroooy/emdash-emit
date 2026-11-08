@@ -39,6 +39,7 @@ export interface ArticleStatusItem {
   syncStatus: 'synced' | 'modified' | 'untracked' | 'invalid';
   filePath: string;
   rev?: string;
+  cached?: boolean;
   error?: string;
 }
 
@@ -126,6 +127,7 @@ export function getWorkspaceStatus(
           syncStatus: 'invalid',
           filePath: relPath,
           rev: syncState?.remoteRev,
+          cached: Boolean(syncState),
           error: errorMsg,
         });
       }

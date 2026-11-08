@@ -52,6 +52,12 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
       });
       const invalidTruncated = Math.max(0, status.summary.invalid - MAX_INVALID_MCP_ITEMS);
 
+      const uncachedInvalid = status.items.filter(
+        (item) => item.syncStatus === 'invalid' && item.cached === false,
+      );
+      const exampleUncachedId =
+        uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
+
       const responsePayload = {
         items: filteredItems,
         summary: status.summary,
@@ -64,7 +70,9 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
         ...(status.summary.invalid > 0
           ? {
               repairHint:
-                'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair unquoted %-prefixed frontmatter files.',
+                uncachedInvalid.length > 0
+                  ? `Run sync_pull to automatically repair cached invalid frontmatter files. For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
+                  : 'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair unquoted %-prefixed frontmatter files.',
             }
           : {}),
       };
