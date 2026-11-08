@@ -24,8 +24,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolveAuth } from '../client/auth.js';
 import { CacheDatabase } from '../db/cache.js';
-import { checkOriginMismatchWarning } from '../cli/context.js';
-import { DEFAULT_ORIGIN, loadConfig } from '../utils/config.js';
+import { resolveOriginPriority } from '../cli/context.js';
+import { DEFAULT_ORIGIN, getEnvOrigin, loadConfig } from '../utils/config.js';
 import { findWorkspaceRoot, getWorkspacePaths, requireWorkspaceRoot } from '../utils/workspace.js';
 import {
   findProfileByDirectory,
@@ -98,6 +98,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       ? findProfileByDirectory(process.cwd(), options?.profilesPath)
       : null;
     const nearestEmitRoot = !profileToUse ? findWorkspaceRoot(process.cwd()) : null;
+    const envOrigin = getEnvOrigin();
 
     const preResolvedWorkspace =
       options?.workspaceRoot ||
@@ -107,8 +108,10 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       process.env.EMDASH_WORKSPACE;
 
     const preConfig = preResolvedWorkspace ? loadConfig(preResolvedWorkspace) : undefined;
-    const preOriginHint =
+    const preConfiguredOrigin =
       preConfig && preConfig.origin !== DEFAULT_ORIGIN ? preConfig.origin : undefined;
+    // An explicit EMDASH_ORIGIN is also a valid disambiguation hint for multi-profile setups.
+    const preOriginHint = preConfiguredOrigin || envOrigin;
 
     let auth;
     try {
@@ -136,6 +139,8 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       explicitProf ||
       (auth.profileName ? profilesData.profiles[auth.profileName] : undefined) ||
       cwdProf?.config;
+    // An auto-resolved profile may only override the workspace config when none was requested.
+    const autoProf = profileToUse ? undefined : resolvedProf;
 
     const workspaceRoot =
       preResolvedWorkspace || resolvedProf?.workspace || auth.workspace || requireWorkspaceRoot();
@@ -145,14 +150,15 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
     const config =
       preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
     const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
-    const originWarning =
-      checkOriginMismatchWarning(
-        profileToUse,
-        configuredOrigin,
-        resolvedProf?.origin,
-        auth.profileName,
-      ) || undefined;
-    const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
+    const resolution = resolveOriginPriority({
+      explicitProfileName: profileToUse,
+      explicitProfileOrigin: explicitProf?.origin,
+      envOrigin,
+      configuredOrigin,
+      autoProfileOrigin: autoProf?.origin,
+      autoProfileName: auth.profileName || cwdProf?.name,
+      authOrigin: auth.origin,
+    });
 
     return {
       root: workspaceRoot,
@@ -160,8 +166,8 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       cache,
       config,
       auth,
-      origin,
-      originWarning,
+      origin: resolution.origin,
+      originWarning: resolution.warning || undefined,
     };
   };
 

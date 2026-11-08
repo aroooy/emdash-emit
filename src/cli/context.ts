@@ -28,7 +28,7 @@ import {
   requireWorkspaceRoot,
   type WorkspacePaths,
 } from '../utils/workspace.js';
-import { DEFAULT_ORIGIN, loadConfig, type EmitConfig } from '../utils/config.js';
+import { DEFAULT_ORIGIN, getEnvOrigin, loadConfig, type EmitConfig } from '../utils/config.js';
 import {
   findProfileByDirectory,
   loadProfilesFile,
@@ -46,25 +46,111 @@ export interface CliContext {
 
 export type CliContextResolver = (profileName?: string) => CliContext;
 
+/** Compares origins ignoring surrounding whitespace and trailing slashes. */
+export const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, '');
+export const sameOrigin = (a: string, b: string): boolean =>
+  normalizeOrigin(a) === normalizeOrigin(b);
+
+export interface OriginSources {
+  /** Explicitly selected profile name (`--profile` / MCP `profile` parameter), if any. */
+  explicitProfileName?: string;
+  /** Origin of the explicitly selected profile. */
+  explicitProfileOrigin?: string;
+  /** `EMDASH_ORIGIN` override, kept separate from the workspace config value. */
+  envOrigin?: string;
+  /** Origin written in `.emit/config.json` (already filtered to undefined when DEFAULT_ORIGIN). */
+  configuredOrigin?: string;
+  /** Origin of the automatically resolved profile (cwd match / unique origin match / single). */
+  autoProfileOrigin?: string;
+  autoProfileName?: string;
+  /** Origin carried by the resolved auth (env token, emdash-cli auth.json, emit credentials). */
+  authOrigin?: string;
+}
+
+export interface OriginResolution {
+  origin: string;
+  warning: string | null;
+}
+
 /**
- * Returns an actionable warning message when the local workspace's `.emit/config.json` origin
- * differs from the auto-resolved profile's origin (and no explicit `--profile` override was given).
+ * Resolves the effective origin and returns an actionable warning whenever a higher-precedence
+ * source silently overrides a lower one.
+ *
+ * Precedence (most explicit first):
+ *   explicit --profile > EMDASH_ORIGIN > auto-resolved profile > resolved auth origin
+ *   > .emit/config.json > DEFAULT_ORIGIN
+ *
+ * `EMDASH_ORIGIN` outranks an *implicitly* resolved profile so CI/staging overrides actually take
+ * effect, while an *explicitly* selected profile outranks the ambient env var because it is a
+ * deliberate in-band instruction. Every conflict is surfaced instead of swallowed.
  */
-export function checkOriginMismatchWarning(
-  explicitProfileName: string | undefined,
-  configuredOrigin: string | undefined,
-  profileOrigin: string | undefined,
-  resolvedProfileName?: string,
-): string | null {
-  if (explicitProfileName || !configuredOrigin || !profileOrigin) {
-    return null;
+export function resolveOriginPriority(sources: OriginSources): OriginResolution {
+  const {
+    explicitProfileName,
+    explicitProfileOrigin,
+    envOrigin,
+    configuredOrigin,
+    autoProfileOrigin,
+    autoProfileName,
+    authOrigin,
+  } = sources;
+  const profileLabel = autoProfileName ? `"${autoProfileName}"` : 'the resolved profile';
+
+  // 1. Explicitly selected profile wins, but a conflicting override must still be reported.
+  if (explicitProfileOrigin) {
+    if (envOrigin && !sameOrigin(envOrigin, explicitProfileOrigin)) {
+      return {
+        origin: explicitProfileOrigin,
+        warning: `⚠️ Warning: EMDASH_ORIGIN (${envOrigin}) is ignored because profile "${explicitProfileName}" was explicitly selected (origin ${explicitProfileOrigin}). Unset EMDASH_ORIGIN if this is unintended.`,
+      };
+    }
+    if (configuredOrigin && !sameOrigin(configuredOrigin, explicitProfileOrigin)) {
+      return {
+        origin: explicitProfileOrigin,
+        warning: `⚠️ Warning: Workspace .emit/config.json origin (${configuredOrigin}) differs from explicitly selected profile "${explicitProfileName}" origin (${explicitProfileOrigin}). Using profile origin; drop --profile to target the workspace instead.`,
+      };
+    }
+    return { origin: explicitProfileOrigin, warning: null };
   }
-  const normalize = (u: string): string => u.trim().replace(/\/+$/, '');
-  if (normalize(configuredOrigin) === normalize(profileOrigin)) {
-    return null;
+
+  // 2. EMDASH_ORIGIN override beats an auto-resolved profile / workspace config.
+  if (envOrigin) {
+    if (autoProfileOrigin && !sameOrigin(envOrigin, autoProfileOrigin)) {
+      return {
+        origin: envOrigin,
+        warning: `⚠️ Warning: EMDASH_ORIGIN (${envOrigin}) overrides ${profileLabel} origin (${autoProfileOrigin}). Writes now target EMDASH_ORIGIN; unset it or pass --profile <name> to use ${autoProfileOrigin}.`,
+      };
+    }
+    if (configuredOrigin && !sameOrigin(envOrigin, configuredOrigin)) {
+      return {
+        origin: envOrigin,
+        warning: `⚠️ Warning: EMDASH_ORIGIN (${envOrigin}) overrides Workspace .emit/config.json origin (${configuredOrigin}). Unset EMDASH_ORIGIN if this is unintended.`,
+      };
+    }
+    return { origin: envOrigin, warning: null };
   }
-  const profLabel = resolvedProfileName ? `"${resolvedProfileName}"` : 'active';
-  return `⚠️ Warning: Workspace .emit/config.json origin (${configuredOrigin}) differs from resolved profile ${profLabel} origin (${profileOrigin}). Using profile origin (${profileOrigin}); pass --profile <name> or update .emit/config.json if this is unintended.`;
+
+  // 3. Auto-resolved profile wins over the workspace config, with a mismatch warning.
+  if (autoProfileOrigin) {
+    if (configuredOrigin && !sameOrigin(configuredOrigin, autoProfileOrigin)) {
+      return {
+        origin: autoProfileOrigin,
+        warning: `⚠️ Warning: Workspace .emit/config.json origin (${configuredOrigin}) differs from resolved profile ${profileLabel} origin (${autoProfileOrigin}). Using profile origin (${autoProfileOrigin}); pass --profile <name> or update .emit/config.json if this is unintended.`,
+      };
+    }
+    return { origin: autoProfileOrigin, warning: null };
+  }
+
+  // 4. Auth-carried origin (emdash-cli / emit credentials / env token without EMDASH_ORIGIN).
+  if (authOrigin) {
+    return { origin: authOrigin, warning: null };
+  }
+
+  // 5. Workspace config, then the sentinel default.
+  if (configuredOrigin) {
+    return { origin: configuredOrigin, warning: null };
+  }
+  return { origin: DEFAULT_ORIGIN, warning: null };
 }
 
 export function createCliContextResolver(): CliContextResolver {
@@ -73,6 +159,7 @@ export function createCliContextResolver(): CliContextResolver {
     const explicitProf = profileName ? profilesData.profiles[profileName] : undefined;
     const cwdProf = !profileName ? findProfileByDirectory(process.cwd()) : null;
     const nearestEmitRoot = !profileName ? findWorkspaceRoot(process.cwd()) : null;
+    const envOrigin = getEnvOrigin();
 
     const preResolvedWorkspace =
       explicitProf?.workspace ||
@@ -81,8 +168,10 @@ export function createCliContextResolver(): CliContextResolver {
       process.env.EMDASH_WORKSPACE;
 
     const preConfig = preResolvedWorkspace ? loadConfig(preResolvedWorkspace) : undefined;
-    const preOriginHint =
+    const preConfiguredOrigin =
       preConfig && preConfig.origin !== DEFAULT_ORIGIN ? preConfig.origin : undefined;
+    // An explicit EMDASH_ORIGIN is also a valid disambiguation hint for multi-profile setups.
+    const preOriginHint = preConfiguredOrigin || envOrigin;
 
     let auth: ResolvedAuth;
     try {
@@ -112,6 +201,8 @@ export function createCliContextResolver(): CliContextResolver {
       explicitProf ||
       (auth.profileName ? profilesData.profiles[auth.profileName] : undefined) ||
       cwdProf?.config;
+    // An auto-resolved profile may only override the workspace config when none was requested.
+    const autoProf = profileName ? undefined : resolvedProf;
 
     let workspaceRoot: string;
     try {
@@ -128,16 +219,18 @@ export function createCliContextResolver(): CliContextResolver {
     const config =
       preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
     const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
-    const mismatchWarning = checkOriginMismatchWarning(
-      profileName,
+    const resolution = resolveOriginPriority({
+      explicitProfileName: profileName,
+      explicitProfileOrigin: explicitProf?.origin,
+      envOrigin,
       configuredOrigin,
-      resolvedProf?.origin,
-      auth.profileName,
-    );
-    if (mismatchWarning) {
-      console.warn(mismatchWarning);
+      autoProfileOrigin: autoProf?.origin,
+      autoProfileName: auth.profileName || cwdProf?.name,
+      authOrigin: auth.origin,
+    });
+    if (resolution.warning) {
+      console.warn(resolution.warning);
     }
-    const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
 
     return {
       root: workspaceRoot,
@@ -145,7 +238,7 @@ export function createCliContextResolver(): CliContextResolver {
       cache,
       config,
       auth,
-      origin,
+      origin: resolution.origin,
     };
   };
 }

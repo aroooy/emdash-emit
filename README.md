@@ -222,7 +222,7 @@ emit profile list
 ```
 
 **How Automatic Profile Resolution Works:**
-1. **Directory-Driven Auto Detection (Recommended)**: When you `cd ~/blogs/personal` and run `emit pull`, `emit push`, or launch an AI agent, Emit detects your current folder and automatically uses the `personal` profile. When you `cd ~/blogs/work`, it seamlessly connects to `work`.
+1. **Directory-Driven Auto Detection (Recommended)**: When you `cd ~/blogs/personal` and run `emit pull`, `emit push`, or launch an AI agent, Emit detects your current folder and automatically uses the `personal` profile. When you `cd ~/blogs/work`, it seamlessly connects to `work`. Directory comparison is symlink-safe (`fs.realpathSync`), so a workspace reached through a symlinked path (or a macOS `/tmp`-style alias) still resolves to the right profile.
 2. **Explicit Profile Flag**: You can explicitly specify `--profile <name>` (or pass `profile: "<name>"` in MCP) from any directory to override automatic detection.
 3. **Ambiguity Safeguard**: If you run a command outside of any registered workspace and omit `--profile`, Emit aborts with an `AmbiguousProfileError` instead of guessing or silently pushing to the wrong site.
 
@@ -230,13 +230,26 @@ emit profile list
 
 Emit resolves authentication credentials using a strict 4-tier priority chain (`src/client/auth.ts`):
 
-1. **Environment Variables (`EMDASH_TOKEN` or `EMDASH_API_TOKEN`, plus optional `EMDASH_ORIGIN`)**: Highest priority; ideal for CI/CD pipelines and one-off overrides.
+1. **Environment Variables (`EMDASH_TOKEN` or `EMDASH_API_TOKEN`)**: Highest priority; ideal for CI/CD pipelines and one-off overrides. `EMDASH_ORIGIN` (and `EMDASH_WORKSPACE`) are read here as well and documented under [Origin Resolution Precedence](#origin-resolution-precedence).
 2. **Site Profile Registry (`~/.config/emit/profiles.yaml`)**: Matched via `--profile <name>` (or MCP `profile`), current workspace directory auto-detection, or a single registered profile.
 3. **EmDash CLI Credentials (`~/.config/emdash/auth.json`)**: Fallback when no token is configured in the profile.
 4. **Emit Custom Credentials (`~/.config/emit/credentials.json`)**: Final fallback.
 
 **Automatic OAuth Token Refresh on HTTP 401 (`src/client/http.ts`)**:
 When credentials include a `refresh_token` (such as OAuth sessions in `~/.config/emdash/auth.json` or `~/.config/emit/credentials.json`) and a request returns `401 Unauthorized`, Emit automatically exchanges the `refresh_token` at `POST /_emdash/api/auth/token` (`grant_type: "refresh_token"`), persists the refreshed token back to `auth.json` when applicable, and transparently retries the request once.
+
+#### Origin Resolution Precedence
+
+The target instance (`origin`) is resolved by one shared function (`resolveOriginPriority()` in `src/cli/context.ts`, reused by the MCP server) so CLI and MCP always agree:
+
+1. **Explicitly selected profile** — `--profile <name>` (or MCP `profile: "<name>"`)
+2. **`EMDASH_ORIGIN`** — overrides an *implicitly* resolved profile so CI/staging overrides actually take effect
+3. **Auto-resolved profile** — current-directory match, unique origin match, or the single registered profile
+4. **Resolved auth origin** — carried by `~/.config/emdash/auth.json` / `~/.config/emit/credentials.json`
+5. **Workspace `.emit/config.json`** → then the `https://example.com` sentinel default
+
+> [!NOTE]
+> Every silent override is surfaced as a `⚠️ Warning` naming the **real source** of each value (`.emit/config.json` values are never mislabeled as `EMDASH_ORIGIN` or the reverse). When you select `--profile` explicitly, `EMDASH_ORIGIN` is ignored **and reported**. Comparisons ignore trailing slashes. `emit init` follows the same ranking (`--origin` > `EMDASH_ORIGIN` > auto-resolved profile) and refuses to link the workspace to a profile whose origin does not match the initialized origin.
 
 ### 5. Workspace Configuration (`.emit/config.json`)
 
@@ -255,7 +268,7 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `origin` | `"https://example.com"` | Base URL of the target EmDash instance (overridden by `EMDASH_ORIGIN` or active profile) |
+| `origin` | `"https://example.com"` | Base URL of the target EmDash instance, exactly as written to disk. It is never rewritten in-memory by `EMDASH_ORIGIN`; see [Origin Resolution Precedence](#origin-resolution-precedence) for how the effective origin is chosen |
 | `defaultCollection` | `"posts"` | Default content collection when `--collection` is omitted |
 | `defaultLocale` | `"ja"` | Default locale used when scaffolding new drafts via `emit new` / `sync_new` |
 | `postsSyncLimit` | `100` | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback) |

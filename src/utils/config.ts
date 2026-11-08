@@ -25,6 +25,7 @@ import path from 'node:path';
 import { getWorkspacePaths, requireWorkspaceRoot } from './workspace.js';
 
 export interface EmitConfig {
+  /** Origin written in `.emit/config.json`, or DEFAULT_ORIGIN when unset. Never mixed with env. */
   origin: string;
   defaultCollection: string;
   defaultLocale: string;
@@ -32,9 +33,22 @@ export interface EmitConfig {
   postsSyncLimit?: number;
   mediaSyncLimit?: number;
   concurrency?: number;
+  /**
+   * Runtime-only view of `EMDASH_ORIGIN`, kept separate from `origin` so diagnostics can state
+   * which source a value came from. Never persisted by `initWorkspace`.
+   */
+  envOrigin?: string;
 }
 
 export const DEFAULT_ORIGIN = 'https://example.com';
+
+/**
+ * Returns the trimmed `EMDASH_ORIGIN` override, or undefined when unset.
+ */
+export function getEnvOrigin(): string | undefined {
+  const value = process.env.EMDASH_ORIGIN?.trim();
+  return value ? value : undefined;
+}
 
 const DEFAULT_CONFIG: EmitConfig = {
   origin: DEFAULT_ORIGIN,
@@ -74,11 +88,12 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
 export function loadConfig(workspaceRoot?: string): EmitConfig {
   const root = workspaceRoot || requireWorkspaceRoot();
   const paths = getWorkspacePaths(root);
+  const envOrigin = getEnvOrigin();
 
   if (!fs.existsSync(paths.configPath)) {
     return {
       ...DEFAULT_CONFIG,
-      origin: process.env.EMDASH_ORIGIN || DEFAULT_CONFIG.origin,
+      envOrigin,
     };
   }
 
@@ -86,14 +101,15 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
     const raw = fs.readFileSync(paths.configPath, 'utf8');
     const parsed = JSON.parse(raw) as Partial<EmitConfig>;
     return {
-      origin: process.env.EMDASH_ORIGIN || parsed.origin || DEFAULT_CONFIG.origin,
+      origin: parsed.origin || DEFAULT_CONFIG.origin,
       defaultCollection: parsed.defaultCollection || DEFAULT_CONFIG.defaultCollection,
       defaultLocale: parsed.defaultLocale || DEFAULT_CONFIG.defaultLocale,
       postsSyncLimit: parsed.postsSyncLimit || DEFAULT_CONFIG.postsSyncLimit,
       mediaSyncLimit: parsed.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
       concurrency: parsed.concurrency || DEFAULT_CONFIG.concurrency,
+      envOrigin,
     };
   } catch {
-    return DEFAULT_CONFIG;
+    return { ...DEFAULT_CONFIG, envOrigin };
   }
 }

@@ -27,8 +27,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
 import { resolveInitPlan } from '../src/cli/commands/status.js';
-import { checkOriginMismatchWarning } from '../src/cli/context.js';
-import { initWorkspace } from '../src/utils/config.js';
+import { resolveOriginPriority } from '../src/cli/context.js';
+import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
 
 describe('Emit CLI (Commander)', () => {
   let tempDir: string;
@@ -113,12 +113,14 @@ describe('Emit CLI (Commander)', () => {
     expect(resolveInitPlan({}, baseProfile)).toEqual({
       effectiveOrigin: 'https://aroooy.net',
       shouldLinkProfile: true,
+      warning: null,
     });
 
     // Guard 1: --no-link (options.link === false) prevents linking
     expect(resolveInitPlan({ link: false }, baseProfile)).toEqual({
       effectiveOrigin: 'https://aroooy.net',
       shouldLinkProfile: false,
+      warning: null,
     });
 
     // Guard 2: profile already has a workspace configured -> do not overwrite
@@ -133,18 +135,33 @@ describe('Emit CLI (Commander)', () => {
     ).toEqual({
       effectiveOrigin: 'https://aroooy.net',
       shouldLinkProfile: false,
+      warning: null,
     });
 
     // Guard 3: explicit --origin differs from resolved profile origin -> do not link to wrong profile
     expect(resolveInitPlan({ origin: 'https://other.example.com' }, baseProfile)).toEqual({
       effectiveOrigin: 'https://other.example.com',
       shouldLinkProfile: false,
+      warning: null,
     });
 
     // No profile resolved -> falls back to envOrigin and does not link
     expect(resolveInitPlan({}, null, 'https://env.example.com')).toEqual({
       effectiveOrigin: 'https://env.example.com',
       shouldLinkProfile: false,
+      warning: null,
+    });
+
+    // Trailing-slash-only difference still counts as a match (link allowed, silent)
+    expect(
+      resolveInitPlan(
+        { origin: 'https://aroooy.net/' },
+        { ...baseProfile, config: { ...baseProfile.config, origin: 'https://aroooy.net' } },
+      ),
+    ).toEqual({
+      effectiveOrigin: 'https://aroooy.net/',
+      shouldLinkProfile: true,
+      warning: null,
     });
   });
 
@@ -163,37 +180,115 @@ describe('Emit CLI (Commander)', () => {
     expect(formatPullStatusBreakdown('published', sampleItems)).toBe('');
   });
 
-  it('checkOriginMismatchWarning warns when workspace config.json origin differs from auto-resolved profile origin', () => {
+  it('resolveOriginPriority ranks sources and surfaces every override as a warning', () => {
     // Same origin (ignoring trailing slash) -> no warning
     expect(
-      checkOriginMismatchWarning(
-        undefined,
-        'https://aroooy.net/',
-        'https://aroooy.net',
-        'aroooy.net',
-      ),
-    ).toBeNull();
-
-    // Explicit --profile override -> no warning
-    expect(
-      checkOriginMismatchWarning(
-        'solo',
-        'https://other.example.com',
-        'https://solo.example.com',
-        'solo',
-      ),
-    ).toBeNull();
+      resolveOriginPriority({
+        configuredOrigin: 'https://aroooy.net/',
+        autoProfileOrigin: 'https://aroooy.net',
+        autoProfileName: 'aroooy.net',
+      }),
+    ).toEqual({ origin: 'https://aroooy.net', warning: null });
 
     // Auto-resolved profile differs from workspace .emit/config.json origin -> emits warning
-    const warn = checkOriginMismatchWarning(
-      undefined,
-      'https://other.example.com',
-      'https://solo.example.com',
-      'solo',
+    const autoWarn = resolveOriginPriority({
+      configuredOrigin: 'https://other.example.com',
+      autoProfileOrigin: 'https://solo.example.com',
+      autoProfileName: 'solo',
+    });
+    expect(autoWarn.origin).toBe('https://solo.example.com');
+    expect(autoWarn.warning).toContain('https://other.example.com');
+    expect(autoWarn.warning).toContain('"solo"');
+    expect(autoWarn.warning).toContain('https://solo.example.com');
+
+    // EMDASH_ORIGIN outranks an auto-resolved profile (CI / staging override must take effect)
+    const envWarn = resolveOriginPriority({
+      envOrigin: 'https://staging.example.com',
+      configuredOrigin: 'https://aroooy.net',
+      autoProfileOrigin: 'https://aroooy.net',
+      autoProfileName: 'aroooy.net',
+    });
+    expect(envWarn.origin).toBe('https://staging.example.com');
+    expect(envWarn.warning).toContain('EMDASH_ORIGIN (https://staging.example.com)');
+    expect(envWarn.warning).toContain('https://aroooy.net');
+    // The warning names the real source: never labels the env value as config.json content.
+    expect(envWarn.warning).not.toContain('.emit/config.json origin (https://staging.example.com)');
+
+    // EMDASH_ORIGIN matching the profile -> override is not a conflict, so stay silent
+    expect(
+      resolveOriginPriority({
+        envOrigin: 'https://aroooy.net',
+        configuredOrigin: 'https://aroooy.net',
+        autoProfileOrigin: 'https://aroooy.net/',
+        autoProfileName: 'aroooy.net',
+      }).warning,
+    ).toBeNull();
+
+    // Explicit --profile outranks EMDASH_ORIGIN, but the ignored override is reported
+    const explicitWarn = resolveOriginPriority({
+      explicitProfileName: 'solo',
+      explicitProfileOrigin: 'https://solo.example.com',
+      envOrigin: 'https://staging.example.com',
+    });
+    expect(explicitWarn.origin).toBe('https://solo.example.com');
+    expect(explicitWarn.warning).toContain(
+      'EMDASH_ORIGIN (https://staging.example.com) is ignored',
     );
-    expect(warn).not.toBeNull();
-    expect(warn).toContain('https://other.example.com');
-    expect(warn).toContain('"solo"');
-    expect(warn).toContain('https://solo.example.com');
+
+    // Explicit --profile with no conflict -> no warning
+    expect(
+      resolveOriginPriority({
+        explicitProfileName: 'solo',
+        explicitProfileOrigin: 'https://solo.example.com',
+        configuredOrigin: 'https://solo.example.com',
+      }).warning,
+    ).toBeNull();
+
+    // No profile/env -> auth origin, then workspace config, then the sentinel default
+    expect(
+      resolveOriginPriority({ authOrigin: 'https://auth.example.com', configuredOrigin: undefined })
+        .origin,
+    ).toBe('https://auth.example.com');
+    expect(resolveOriginPriority({ configuredOrigin: 'https://cfg.example.com' }).origin).toBe(
+      'https://cfg.example.com',
+    );
+    expect(resolveOriginPriority({}).origin).toBe(DEFAULT_ORIGIN);
+  });
+
+  it('emit init ranks EMDASH_ORIGIN above the auto-resolved profile and skips mismatched linking', () => {
+    const baseProfile = {
+      name: 'aroooy.net',
+      source: 'single' as const,
+      config: { origin: 'https://aroooy.net', token: 'pat_123' },
+    };
+
+    // EMDASH_ORIGIN overrides the auto-resolved profile, so linking to it would be wrong
+    const envOverride = resolveInitPlan({}, baseProfile, 'https://staging.example.com');
+    expect(envOverride.effectiveOrigin).toBe('https://staging.example.com');
+    expect(envOverride.shouldLinkProfile).toBe(false);
+    expect(envOverride.warning).toContain('EMDASH_ORIGIN (https://staging.example.com)');
+    expect(envOverride.warning).toContain('https://aroooy.net');
+    expect(envOverride.warning).toContain('"aroooy.net"');
+
+    // EMDASH_ORIGIN matching the profile keeps the auto-link behaviour (silent)
+    expect(resolveInitPlan({}, baseProfile, 'https://aroooy.net')).toEqual({
+      effectiveOrigin: 'https://aroooy.net',
+      shouldLinkProfile: true,
+      warning: null,
+    });
+    expect(resolveInitPlan({}, baseProfile, 'https://aroooy.net/').shouldLinkProfile).toBe(true);
+
+    // Explicit --origin still outranks EMDASH_ORIGIN (deliberate, so no warning)
+    expect(
+      resolveInitPlan(
+        { origin: 'https://manual.example.com' },
+        baseProfile,
+        'https://env.example.com',
+      ),
+    ).toEqual({
+      effectiveOrigin: 'https://manual.example.com',
+      shouldLinkProfile: false,
+      warning: null,
+    });
   });
 });

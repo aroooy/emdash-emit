@@ -377,4 +377,51 @@ describe('Emit MCP Server', () => {
       fs.rmSync(otherRoot, { recursive: true, force: true });
     }
   });
+
+  it('surfaces an EMDASH_ORIGIN override as a warning instead of silently retargeting writes', async () => {
+    // The temp workspace and the custom profile both point at https://aroooy.net. An ambient
+    // EMDASH_ORIGIN must outrank the implicitly resolved profile (so CI/staging overrides take
+    // effect) while telling the agent that writes were retargeted.
+    const originalEnv = process.env.EMDASH_ORIGIN;
+    process.env.EMDASH_ORIGIN = 'https://staging.example.com';
+    try {
+      const server = createMcpServer({
+        workspaceRoot: tempDir,
+        cache,
+        profilesPath: customProfilesPath,
+      });
+      const registered = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              handler: (
+                args: Record<string, unknown>,
+              ) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }>;
+            }
+          >;
+        }
+      )._registeredTools;
+
+      const overridden = await registered['sync_status'].handler({});
+      expect(overridden.isError).toBeUndefined();
+      const payload = JSON.parse(overridden.content[0].text) as { warnings?: string[] };
+      expect(payload.warnings).toBeDefined();
+      expect(payload.warnings?.[0]).toContain(
+        'EMDASH_ORIGIN (https://staging.example.com) overrides',
+      );
+      expect(payload.warnings?.[0]).toContain('Writes now target EMDASH_ORIGIN');
+
+      // An explicit in-band profile outranks the ambient env var, but the conflict is still reported.
+      const explicit = await registered['sync_status'].handler({ profile: 'default' });
+      expect(explicit.isError).toBeUndefined();
+      const explicitPayload = JSON.parse(explicit.content[0].text) as { warnings?: string[] };
+      expect(explicitPayload.warnings?.[0]).toContain(
+        'is ignored because profile "default" was explicitly selected',
+      );
+    } finally {
+      if (originalEnv === undefined) delete process.env.EMDASH_ORIGIN;
+      else process.env.EMDASH_ORIGIN = originalEnv;
+    }
+  });
 });

@@ -92,4 +92,25 @@ describe('Workspace Utils', () => {
     expect(loaded.defaultCollection).toBe('posts');
     expect(DEFAULT_ORIGIN).toBe('https://example.com');
   });
+
+  it('loadConfig keeps EMDASH_ORIGIN separate from the file value so diagnostics stay truthful', () => {
+    initWorkspace(tempDir, { origin: 'https://aroooy.net' });
+    const original = process.env.EMDASH_ORIGIN;
+    process.env.EMDASH_ORIGIN = 'https://staging.example.com';
+    try {
+      const loaded = loadConfig(tempDir);
+      // `origin` must remain exactly what .emit/config.json says, never the env override.
+      expect(loaded.origin).toBe('https://aroooy.net');
+      expect(loaded.envOrigin).toBe('https://staging.example.com');
+      // The override must not be persisted back into the workspace file.
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(tempDir, '.emit', 'config.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      expect(raw.envOrigin).toBeUndefined();
+      expect(raw.origin).toBe('https://aroooy.net');
+    } finally {
+      if (original === undefined) delete process.env.EMDASH_ORIGIN;
+      else process.env.EMDASH_ORIGIN = original;
+    }
+  });
 });

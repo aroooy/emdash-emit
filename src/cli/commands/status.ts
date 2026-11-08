@@ -24,31 +24,45 @@ import type { Command } from 'commander';
 import { getWorkspaceStatus } from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
 import type { CliContextResolver } from '../context.js';
+import { sameOrigin } from '../context.js';
 import type { ResolveProfileResult } from '../../utils/profile.js';
 
 export interface InitPlanResult {
   effectiveOrigin?: string;
   shouldLinkProfile: boolean;
+  /** Actionable warning when a higher-precedence origin source silently overrides a lower one. */
+  warning: string | null;
 }
 
 /**
  * Determines the effective origin for `emit init` and whether the resolved profile
  * should be automatically linked to the workspace (3-guard check: link enabled,
  * profile workspace unset, and profile origin matches effective origin).
+ *
+ * Origin precedence mirrors runtime resolution (`resolveOriginPriority`):
+ * explicit `--origin` > `EMDASH_ORIGIN` > auto-resolved profile.
  */
 export function resolveInitPlan(
   options: { origin?: string; link?: boolean },
   resolvedProfile: ResolveProfileResult | null,
   envOrigin?: string,
 ): InitPlanResult {
-  const effectiveOrigin = options.origin || resolvedProfile?.config.origin || envOrigin;
+  const effectiveOrigin = options.origin || envOrigin || resolvedProfile?.config.origin;
   const shouldLinkProfile = Boolean(
     options.link !== false &&
     resolvedProfile &&
     !resolvedProfile.config.workspace &&
-    resolvedProfile.config.origin === effectiveOrigin,
+    sameOrigin(resolvedProfile.config.origin, effectiveOrigin || ''),
   );
-  return { effectiveOrigin, shouldLinkProfile };
+
+  let warning: string | null = null;
+  if (envOrigin && resolvedProfile && !sameOrigin(envOrigin, resolvedProfile.config.origin)) {
+    warning = options.origin
+      ? null
+      : `⚠️ Warning: EMDASH_ORIGIN (${envOrigin}) overrides resolved profile "${resolvedProfile.name}" origin (${resolvedProfile.config.origin}). The workspace was initialized for EMDASH_ORIGIN and was not linked to that profile.`;
+  }
+
+  return { effectiveOrigin, shouldLinkProfile, warning };
 }
 
 export function registerStatusInitCommands(
@@ -202,11 +216,15 @@ export function registerStatusInitCommands(
         // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
       }
 
-      const { effectiveOrigin, shouldLinkProfile } = resolveInitPlan(
+      const { effectiveOrigin, shouldLinkProfile, warning } = resolveInitPlan(
         options,
         resolvedProfile,
         process.env.EMDASH_ORIGIN,
       );
+
+      if (warning) {
+        console.warn(warning);
+      }
 
       initWorkspace(root, effectiveOrigin ? { origin: effectiveOrigin } : undefined);
       const paths = getWorkspacePaths(root);
