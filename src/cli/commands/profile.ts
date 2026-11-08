@@ -30,6 +30,18 @@ import {
 } from '../../utils/profile.js';
 
 export function registerProfileCommands(program: Command): void {
+  /**
+   * Profile management is local-file work, and its failures (unknown profile name, ambiguous
+   * multi-profile resolution) are user-correctable. Report them as one actionable line with a
+   * non-zero exit instead of leaking a raw Node stack trace, matching how pull/push already
+   * format errors.
+   */
+  const reportProfileFailure = (error: unknown): never => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`❌ ${message}`);
+    process.exit(1);
+  };
+
   const profileCmd = program
     .command('profile')
     .description('Manage EmDash site connection profiles (multi-site support)');
@@ -72,16 +84,20 @@ export function registerProfileCommands(program: Command): void {
     .option('--workspace <path>', 'Default local workspace directory for this site')
     .option('--active', 'Set this profile as active immediately')
     .action((name, options) => {
-      const profileConfig = {
-        origin: options.origin,
-        token: options.token || '',
-        ...(options.workspace ? { workspace: options.workspace } : {}),
-      };
-      setProfile(name, profileConfig);
-      if (options.active) {
-        setActiveProfile(name);
+      try {
+        const profileConfig = {
+          origin: options.origin,
+          token: options.token || '',
+          ...(options.workspace ? { workspace: options.workspace } : {}),
+        };
+        setProfile(name, profileConfig);
+        if (options.active) {
+          setActiveProfile(name);
+        }
+        console.log(`✅ Profile "${name}" configured successfully.`);
+      } catch (error) {
+        reportProfileFailure(error);
       }
-      console.log(`✅ Profile "${name}" configured successfully.`);
     });
 
   // emit profile use <name>
@@ -89,8 +105,12 @@ export function registerProfileCommands(program: Command): void {
     .command('use <name>')
     .description('Set active default profile')
     .action((name) => {
-      setActiveProfile(name);
-      console.log(`✅ Active profile set to "${name}".`);
+      try {
+        setActiveProfile(name);
+        console.log(`✅ Active profile set to "${name}".`);
+      } catch (error) {
+        reportProfileFailure(error);
+      }
     });
 
   // emit profile remove <name>
@@ -98,8 +118,12 @@ export function registerProfileCommands(program: Command): void {
     .command('remove <name>')
     .description('Remove a profile')
     .action((name) => {
-      removeProfile(name);
-      console.log(`✅ Profile "${name}" removed.`);
+      try {
+        removeProfile(name);
+        console.log(`✅ Profile "${name}" removed.`);
+      } catch (error) {
+        reportProfileFailure(error);
+      }
     });
 
   // emit profile current
@@ -108,7 +132,13 @@ export function registerProfileCommands(program: Command): void {
     .description('Show currently resolved profile and origin')
     .option('-p, --profile <name>', 'Explicit profile name to inspect')
     .action((options) => {
-      const resolved = resolveTargetProfile({ profile: options.profile });
+      let resolved: ReturnType<typeof resolveTargetProfile>;
+      try {
+        resolved = resolveTargetProfile({ profile: options.profile });
+      } catch (error) {
+        reportProfileFailure(error);
+        return;
+      }
       if (!resolved) {
         console.log('No profile resolved (relying on environment variables or defaults).');
         return;

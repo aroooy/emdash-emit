@@ -29,6 +29,7 @@ import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/com
 import { resolveInitPlan } from '../src/cli/commands/status.js';
 import { resolveOriginPriority } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
+import { setProfile } from '../src/utils/profile.js';
 
 describe('Emit CLI (Commander)', () => {
   let tempDir: string;
@@ -97,6 +98,64 @@ describe('Emit CLI (Commander)', () => {
   it('executes emit guide cleanly', () => {
     const guideCmd = program.commands.find((c) => c.name() === 'guide');
     expect(guideCmd).toBeDefined();
+  });
+  it('formats profile command failures as one actionable line instead of a raw stack trace', async () => {
+    // Profile subcommands read/write ~/.config/emit/profiles.yaml, so point HOME at a throwaway
+    // directory; os.homedir() prefers process.env.HOME on POSIX.
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-cli-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    const errLines: string[] = [];
+    const originalError = console.error;
+    const originalExit = process.exit;
+    const EXIT_SENTINEL = Symbol('emit-test-exit');
+    let exitCode: number | undefined;
+
+    const runCli = async (args: string[]) => {
+      exitCode = undefined;
+      errLines.length = 0;
+      try {
+        await program.parseAsync(['node', 'emit', ...args]);
+      } catch (error) {
+        if (error !== EXIT_SENTINEL) throw error;
+      }
+    };
+
+    console.error = (...args: unknown[]) => {
+      errLines.push(args.map(String).join(' '));
+    };
+    process.exit = ((code?: number) => {
+      exitCode = code ?? 0;
+      throw EXIT_SENTINEL;
+    }) as typeof process.exit;
+
+    try {
+      await runCli(['profile', 'use', 'ghost']);
+      expect(exitCode).toBe(1);
+      expect(errLines.join('\n')).toContain('❌ Profile "ghost" not found');
+      expect(errLines.join('\n')).not.toContain('    at ');
+
+      await runCli(['profile', 'remove', 'ghost']);
+      expect(exitCode).toBe(1);
+      expect(errLines.join('\n')).toContain('❌ Profile "ghost" does not exist.');
+      expect(errLines.join('\n')).not.toContain('    at ');
+
+      // Two profiles, neither matching the current directory: "current" must report the ambiguity.
+      setProfile('site-a', { origin: 'https://site-a.example.com', token: 'tok-a' });
+      setProfile('site-b', { origin: 'https://site-b.example.com', token: 'tok-b' });
+      await runCli(['profile', 'current']);
+      expect(exitCode).toBe(1);
+      expect(errLines.join('\n')).toContain('❌ Multiple profiles are configured');
+      expect(errLines.join('\n')).toContain('site-a');
+      expect(errLines.join('\n')).not.toContain('    at ');
+    } finally {
+      console.error = originalError;
+      process.exit = originalExit;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it('resolveInitPlan inherits profile origin and enforces 3-guard auto-link rules', () => {
