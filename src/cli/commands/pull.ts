@@ -29,6 +29,7 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
+import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
 export function formatPullWindowLabel(status: string | undefined, limit: number): string {
@@ -202,6 +203,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           console.error(`\n❌ ${error.message}`);
           process.exit(1);
         }
+        if (error instanceof ApiError) {
+          console.error(`\n${error.toActionableString()}`);
+          process.exit(1);
+        }
         throw error;
       }
     });
@@ -215,34 +220,42 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (options) => {
       const ctx = resolveContext(options.profile);
-      console.log('Pulling categories and tags from remote...');
-      const res = await pullTaxonomies({
-        workspaceRoot: ctx.root,
-        origin: ctx.origin,
-        token: ctx.auth.token,
-        refreshToken: ctx.auth.refreshToken,
-      });
-      const prunedCatMsg = res.deletedCategoriesCount
-        ? `, ${res.deletedCategoriesCount} categories pruned`
-        : '';
-      const prunedTagMsg = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
-      if (res.categoriesFailed) {
-        console.warn(
-          '⚠️  Failed to fetch remote categories: preserved existing local definitions.',
-        );
-      }
-      if (res.tagsFailed) {
-        console.warn('⚠️  Failed to fetch remote tags: preserved existing local definitions.');
-      }
-      if (!res.categoriesFailed || !res.tagsFailed) {
-        console.log(
-          `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
-        );
-      }
-      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
-      if (taxHint) {
-        console.log(`\n${taxHint}`);
+      try {
+        console.log('Pulling categories and tags from remote...');
+        const res = await pullTaxonomies({
+          workspaceRoot: ctx.root,
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+        });
+        const prunedCatMsg = res.deletedCategoriesCount
+          ? `, ${res.deletedCategoriesCount} categories pruned`
+          : '';
+        const prunedTagMsg = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
+        if (res.categoriesFailed) {
+          console.warn(
+            '⚠️  Failed to fetch remote categories: preserved existing local definitions.',
+          );
+        }
+        if (res.tagsFailed) {
+          console.warn('⚠️  Failed to fetch remote tags: preserved existing local definitions.');
+        }
+        if (!res.categoriesFailed || !res.tagsFailed) {
+          console.log(
+            `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
+          );
+        }
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+        if (taxHint) {
+          console.log(`\n${taxHint}`);
+        }
+      } catch (error) {
+        if (error instanceof ApiError) {
+          console.error(`\n${error.toActionableString()}`);
+          process.exit(1);
+        }
+        throw error;
       }
     });
 
@@ -263,21 +276,29 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           ? parseInt(options.limit, 10)
           : ctx.config.mediaSyncLimit || 300;
 
-      console.log(`Pulling media from remote (${options.all ? 'all' : `limit: ${limit}`})...`);
-      const res = await pullMedia({
-        workspaceRoot: ctx.root,
-        origin: ctx.origin,
-        token: ctx.auth.token,
-        refreshToken: ctx.auth.refreshToken,
-        limit,
-        all: options.all,
-        prune: options.prune,
-        downloadFiles: !options.metadataOnly,
-      });
+      try {
+        console.log(`Pulling media from remote (${options.all ? 'all' : `limit: ${limit}`})...`);
+        const res = await pullMedia({
+          workspaceRoot: ctx.root,
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+          limit,
+          all: options.all,
+          prune: options.prune,
+          downloadFiles: !options.metadataOnly,
+        });
 
-      const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
-      console.log(
-        `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).`,
-      );
+        const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
+        console.log(
+          `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).`,
+        );
+      } catch (error) {
+        if (error instanceof ApiError) {
+          console.error(`\n${error.toActionableString()}`);
+          process.exit(1);
+        }
+        throw error;
+      }
     });
 }

@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
 import { resolveInitPlan } from '../src/cli/commands/status.js';
+import { checkOriginMismatchWarning } from '../src/cli/context.js';
 import { initWorkspace } from '../src/utils/config.js';
 
 describe('Emit CLI (Commander)', () => {
@@ -160,5 +161,39 @@ describe('Emit CLI (Commander)', () => {
     ];
     expect(formatPullStatusBreakdown('all', sampleItems)).toBe(' [2 published, 1 draft]');
     expect(formatPullStatusBreakdown('published', sampleItems)).toBe('');
+  });
+
+  it('checkOriginMismatchWarning warns when workspace config.json origin differs from auto-resolved profile origin', () => {
+    // Same origin (ignoring trailing slash) -> no warning
+    expect(
+      checkOriginMismatchWarning(
+        undefined,
+        'https://aroooy.net/',
+        'https://aroooy.net',
+        'aroooy.net',
+      ),
+    ).toBeNull();
+
+    // Explicit --profile override -> no warning
+    expect(
+      checkOriginMismatchWarning(
+        'solo',
+        'https://other.example.com',
+        'https://solo.example.com',
+        'solo',
+      ),
+    ).toBeNull();
+
+    // Auto-resolved profile differs from workspace .emit/config.json origin -> emits warning
+    const warn = checkOriginMismatchWarning(
+      undefined,
+      'https://other.example.com',
+      'https://solo.example.com',
+      'solo',
+    );
+    expect(warn).not.toBeNull();
+    expect(warn).toContain('https://other.example.com');
+    expect(warn).toContain('"solo"');
+    expect(warn).toContain('https://solo.example.com');
   });
 });

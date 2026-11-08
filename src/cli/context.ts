@@ -46,6 +46,27 @@ export interface CliContext {
 
 export type CliContextResolver = (profileName?: string) => CliContext;
 
+/**
+ * Returns an actionable warning message when the local workspace's `.emit/config.json` origin
+ * differs from the auto-resolved profile's origin (and no explicit `--profile` override was given).
+ */
+export function checkOriginMismatchWarning(
+  explicitProfileName: string | undefined,
+  configuredOrigin: string | undefined,
+  profileOrigin: string | undefined,
+  resolvedProfileName?: string,
+): string | null {
+  if (explicitProfileName || !configuredOrigin || !profileOrigin) {
+    return null;
+  }
+  const normalize = (u: string): string => u.trim().replace(/\/+$/, '');
+  if (normalize(configuredOrigin) === normalize(profileOrigin)) {
+    return null;
+  }
+  const profLabel = resolvedProfileName ? `"${resolvedProfileName}"` : 'active';
+  return `⚠️ Warning: Workspace .emit/config.json origin (${configuredOrigin}) differs from resolved profile ${profLabel} origin (${profileOrigin}). Using profile origin (${profileOrigin}); pass --profile <name> or update .emit/config.json if this is unintended.`;
+}
+
 export function createCliContextResolver(): CliContextResolver {
   return (profileName?: string): CliContext => {
     const profilesData = loadProfilesFile();
@@ -107,6 +128,15 @@ export function createCliContextResolver(): CliContextResolver {
     const config =
       preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
     const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;
+    const mismatchWarning = checkOriginMismatchWarning(
+      profileName,
+      configuredOrigin,
+      resolvedProf?.origin,
+      auth.profileName,
+    );
+    if (mismatchWarning) {
+      console.warn(mismatchWarning);
+    }
     const origin = resolvedProf?.origin || auth.origin || configuredOrigin || DEFAULT_ORIGIN;
 
     return {
