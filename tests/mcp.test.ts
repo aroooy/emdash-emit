@@ -708,6 +708,7 @@ Inline body
       expect(mediaPullRes.content[0].text).toContain(
         `Successfully pulled media for article '${articleId}': 1 referenced item(s)`,
       );
+      expect(mediaPullRes.content[0].text).toContain(`Media IDs: ${mediaId}`);
       expect(mediaPullRes.content[0].text).toContain('_meta:');
     } finally {
       globalThis.fetch = origFetch;

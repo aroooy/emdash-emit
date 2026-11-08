@@ -325,11 +325,15 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         if (args.article) {
           const failedMsg = res.failed ? `, ${res.failed} failed` : '';
+          const idsList =
+            res.mediaIds && res.mediaIds.length > 0
+              ? `\nMedia IDs: ${res.mediaIds.join(', ')}`
+              : '';
           return {
             content: [
               {
                 type: 'text',
-                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${metaSuffix}`,
+                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${idsList}${metaSuffix}`,
               },
             ],
           };
