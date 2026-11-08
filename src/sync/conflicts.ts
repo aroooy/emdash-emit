@@ -82,6 +82,23 @@ export class CanonicalHasUnpushedEditsError extends Error {
   }
 }
 
+export class QuarantinedPathRequiredError extends Error {
+  public code = 'QUARANTINED_PATH_REQUIRED';
+  public filePath: string;
+  public collection: string;
+  public suggestion: string;
+
+  constructor(details: { filePath: string; collection: string }) {
+    super(
+      `Target file must be located inside ${details.collection}/conflicts/: ${details.filePath}`,
+    );
+    this.name = 'QuarantinedPathRequiredError';
+    this.filePath = details.filePath;
+    this.collection = details.collection;
+    this.suggestion = `Specify a quarantined conflict file path located inside ${details.collection}/conflicts/. Run "emit conflicts list" (or MCP sync_conflicts action: "list") to inspect valid targets.`;
+  }
+}
+
 /**
  * Strips the conflict/deletion suffix to recover the original article filename base.
  * e.g. "20261108_01M6...-my-slug.conflict.md" -> "20261108_01M6...-my-slug"
@@ -245,9 +262,10 @@ function resolveConflictFile(
   const directFull = path.isAbsolute(norm) ? norm : path.resolve(workspaceRoot, norm);
   if (fs.existsSync(directFull) && fs.statSync(directFull).isFile()) {
     if (!checkInside(directFull)) {
-      throw new Error(
-        `QUARANTINED_PATH_REQUIRED: Target file must be located inside ${collection}/conflicts/: ${filePathOrName}`,
-      );
+      throw new QuarantinedPathRequiredError({
+        filePath: filePathOrName,
+        collection,
+      });
     }
     const relPath = path.relative(workspaceRoot, directFull);
     return { relPath, fullPath: directFull, fileName: path.basename(directFull) };
@@ -429,7 +447,7 @@ export function resolveConflict(options: {
   const warnings: string[] = [];
   if (!id || id === 'unknown') {
     warnings.push(
-      `Restored article has no valid ULID (id: ${id}). You may need to assign a valid ULID before pushing.`,
+      `Restored article has no valid ULID (id: ${id}). Re-fetch the canonical copy using "emit pull", or rename the file to follow canonical naming ("<yyyyMMdd>_<ulid>-<title>.md") with a matching frontmatter ID before pushing.`,
     );
   }
 

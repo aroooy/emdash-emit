@@ -34,6 +34,7 @@ import {
   resolveConflict,
   extractBaseArticleName,
   CanonicalHasUnpushedEditsError,
+  QuarantinedPathRequiredError,
 } from '../src/sync/conflicts.js';
 
 describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', () => {
@@ -334,7 +335,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
         filePath: relCanonical,
         strategy: 'accept-local',
       }),
-    ).toThrowError(/QUARANTINED_PATH_REQUIRED/);
+    ).toThrowError(QuarantinedPathRequiredError);
   });
 
   it('attaches warning when restoring .deleted.md copy without valid ULID (Minor B)', () => {

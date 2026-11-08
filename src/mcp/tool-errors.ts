@@ -32,7 +32,7 @@ import {
   UnpushedModificationsError,
   PublishedArticleDeletionForbiddenError,
 } from '../sync/delete.js';
-import { CanonicalHasUnpushedEditsError } from '../sync/conflicts.js';
+import { CanonicalHasUnpushedEditsError, QuarantinedPathRequiredError } from '../sync/conflicts.js';
 
 function toolError(text: string): CallToolResult {
   return {
@@ -157,6 +157,23 @@ export function formatToolError(error: unknown, meta?: McpMeta): CallToolResult 
           canonicalFilePath: error.canonicalFilePath,
           conflictFilePath: error.conflictFilePath,
           id: error.id,
+          suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (error instanceof QuarantinedPathRequiredError) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          filePath: error.filePath,
+          collection: error.collection,
           suggestion: error.suggestion,
           ...(meta ? { _meta: meta } : {}),
         },

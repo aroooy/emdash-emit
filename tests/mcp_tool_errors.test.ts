@@ -32,7 +32,10 @@ import { PushValidationError } from '../src/sync/push.js';
 import { AmbiguousProfileError, setProfile } from '../src/utils/profile.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { formatToolError } from '../src/mcp/tool-errors.js';
-import { CanonicalHasUnpushedEditsError } from '../src/sync/conflicts.js';
+import {
+  CanonicalHasUnpushedEditsError,
+  QuarantinedPathRequiredError,
+} from '../src/sync/conflicts.js';
 
 /**
  * MCP tools must hand AI agents the same structured diagnostics the CLI prints. Without
@@ -121,6 +124,17 @@ describe('MCP Tool Error Formatting', () => {
     const unpushedPayload = JSON.parse(textOf(unpushedConflict));
     expect(unpushedPayload.error).toBe('CANONICAL_HAS_UNPUSHED_EDITS');
     expect(unpushedPayload.suggestion).toContain('--force');
+
+    const boundaryError = formatToolError(
+      new QuarantinedPathRequiredError({
+        filePath: 'posts/draft/post.md',
+        collection: 'posts',
+      }),
+    );
+    expect(boundaryError.isError).toBe(true);
+    const boundaryPayload = JSON.parse(textOf(boundaryError));
+    expect(boundaryPayload.error).toBe('QUARANTINED_PATH_REQUIRED');
+    expect(boundaryPayload.suggestion).toContain('posts/conflicts/');
   });
 
   it('falls back to a readable message for plain errors and non-Error throws', () => {

@@ -27,6 +27,7 @@ import {
   diffConflict,
   resolveConflict,
   CanonicalHasUnpushedEditsError,
+  QuarantinedPathRequiredError,
 } from '../../sync/conflicts.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -37,6 +38,9 @@ export function registerConflictsCommand(
   const reportActionFailure = (error: unknown): never => {
     if (error instanceof CanonicalHasUnpushedEditsError) {
       console.error(`❌ ${error.message}`);
+      console.error(`💡 Suggestion: ${error.suggestion}`);
+    } else if (error instanceof QuarantinedPathRequiredError) {
+      console.error(`❌ Error: [QUARANTINED_PATH_REQUIRED] ${error.message}`);
       console.error(`💡 Suggestion: ${error.suggestion}`);
     } else if (error instanceof ApiError) {
       console.error(error.toActionableString());
