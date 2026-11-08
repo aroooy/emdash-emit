@@ -24,7 +24,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { pullMedia, promoteDraftMediaFile } from '../src/sync/media.js';
+import {
+  pullMedia,
+  promoteDraftMediaFile,
+  collectArticleReferencedMediaIds,
+  pullArticleMedia,
+} from '../src/sync/media.js';
 
 describe('Media Sync Engine', () => {
   let tempDir: string;
@@ -262,10 +267,134 @@ describe('Media Sync Engine', () => {
     ]);
 
     const mergedYaml = fs.readFileSync(
-      path.join(mediaDir, '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.yaml'),
+      path.join(mediaDir, '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.png'.replace('.png', '.yaml')),
       'utf8',
     );
     expect(mergedYaml).toContain('alt: LOCAL ALT TEXT');
     expect(mergedYaml).toContain('sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be');
+  });
+
+  it('collects all referenced media ULIDs from frontmatter featuredImage and body markdown/html', () => {
+    const content = `---
+title: Sample Article
+id: 01M67ART000000000000000001
+featuredImage: 01M67MEDA00000000000000001
+---
+
+Here is a paragraph with an image:
+![Photo 1](/_emdash/api/media/file/01M67MEDA00000000000000002.jpg)
+
+Another relative image reference:
+![Photo 2](media/20261108_01M67MEDA00000000000000003-my-photo.png)
+
+And an HTML tag:
+<img src="/_emdash/api/media/file/01M67MEDA00000000000000004" alt="HTML photo" />
+
+Duplicate reference:
+![Photo 1 again](/api/media/file/01M67MEDA00000000000000002)
+`;
+
+    const mediaIds = collectArticleReferencedMediaIds(content);
+    expect(mediaIds).toEqual([
+      '01M67MEDA00000000000000001',
+      '01M67MEDA00000000000000002',
+      '01M67MEDA00000000000000003',
+      '01M67MEDA00000000000000004',
+    ]);
+  });
+
+  it('pulls only targeted media referenced by an article via pullMedia({ article: ... })', async () => {
+    // 1. Setup local article file
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    const articleFilePath = path.join(postsDir, '20261108_01M67ART000000000000000001-test.md');
+    fs.writeFileSync(
+      articleFilePath,
+      `---
+id: 01M67ART000000000000000001
+title: Targeted Media Article
+featuredImage: 01M67TARGET000000000000001
+---
+
+Body with targeted image:
+![Inline](/_emdash/api/media/file/01M67TARGET000000000000002.jpg)
+`,
+      'utf8',
+    );
+
+    const fakeImageBuffer = Buffer.from('targeted media content');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67TARGET000000000000001')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67TARGET000000000000001',
+                filename: 'hero-banner.jpg',
+                mimeType: 'image/jpeg',
+                size: fakeImageBuffer.length,
+                url: '/_emdash/api/media/file/hero-banner.jpg',
+                createdAt: '2026-11-08T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/api/media/01M67TARGET000000000000002')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67TARGET000000000000002',
+                filename: 'inline-chart.png',
+                mimeType: 'image/png',
+                size: fakeImageBuffer.length,
+                url: '/_emdash/api/media/file/inline-chart.png',
+                createdAt: '2026-11-08T12:01:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/')) {
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () =>
+            fakeImageBuffer.buffer.slice(
+              fakeImageBuffer.byteOffset,
+              fakeImageBuffer.byteOffset + fakeImageBuffer.byteLength,
+            ),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000001',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(2);
+    expect(res.downloaded).toBe(2);
+    expect(res.articleId).toBe('01M67ART000000000000000001');
+    expect(res.mediaIds).toEqual(['01M67TARGET000000000000001', '01M67TARGET000000000000002']);
+
+    const mediaDir = path.join(tempDir, 'media');
+    expect(
+      fs.existsSync(path.join(mediaDir, '20261108_01M67TARGET000000000000001-hero-banner.jpg')),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(mediaDir, '20261108_01M67TARGET000000000000001-hero-banner.yaml')),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(mediaDir, '20261108_01M67TARGET000000000000002-inline-chart.png')),
+    ).toBe(true);
   });
 });

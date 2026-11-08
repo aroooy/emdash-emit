@@ -640,5 +640,77 @@ describe('Emit MCP Server', () => {
     expect(doctorPayload.checks).toBeInstanceOf(Array);
     expect(doctorPayload.checks.length).toBeGreaterThanOrEqual(5);
     expect(doctorPayload._meta).toBeDefined();
+
+    // 6. sync_pull_media with article
+    const articleId = '01M67TESTMEDA0000000000001';
+    const mediaId = '01M67HERAMEDA0000000000001';
+    const postWithMedia = path.join(
+      tempDir,
+      'posts',
+      'draft',
+      `20261108_${articleId}-media-test.md`,
+    );
+    fs.mkdirSync(path.dirname(postWithMedia), { recursive: true });
+    fs.writeFileSync(
+      postWithMedia,
+      `---
+id: ${articleId}
+slug: media-test
+title: Media Test Article
+featuredImage: ${mediaId}
+collection: posts
+status: draft
+locale: ja
+taxonomies: {}
+bylines: []
+---
+
+Inline body
+`,
+      'utf8',
+    );
+
+    // Mock fetch for sync_pull_media
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes(`/api/media/${mediaId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: mediaId,
+                filename: 'hero.jpg',
+                mimeType: 'image/jpeg',
+                size: 10,
+                url: '/_emdash/api/media/file/hero.jpg',
+                createdAt: '2026-11-08T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/hero.jpg')) {
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () => new ArrayBuffer(10),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as unknown as typeof fetch;
+
+    try {
+      const mediaPullRes = await registered['sync_pull_media'].handler({
+        article: articleId,
+      });
+      expect(mediaPullRes.isError).toBeUndefined();
+      expect(mediaPullRes.content[0].text).toContain(
+        `Successfully pulled media for article '${articleId}': 1 referenced item(s)`,
+      );
+      expect(mediaPullRes.content[0].text).toContain('_meta:');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

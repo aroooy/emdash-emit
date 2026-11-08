@@ -300,6 +300,14 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
   program
     .command('pull-media')
     .description('Pull remote media files and metadata YAML into local media/ directory')
+    .option(
+      '-a, --article <id-or-path>',
+      'Target specific article ID (ULID) or Markdown file path to pull only referenced media',
+    )
+    .option(
+      '-c, --collection <collection>',
+      'Collection name when using --article (defaults to "posts")',
+    )
     .option('-l, --limit <number>', 'Maximum media items to fetch (default: 300 or config)')
     .option('--all', 'Fetch ALL media files from remote')
     .option('--prune', 'Prune local media files that no longer exist on remote')
@@ -314,6 +322,25 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           : ctx.config.mediaSyncLimit || 300;
 
       try {
+        if (options.article) {
+          console.log(`Pulling media referenced by article '${options.article}'...`);
+          const res = await pullMedia({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            article: options.article,
+            collection: options.collection || ctx.config.defaultCollection,
+            downloadFiles: !options.metadataOnly,
+          });
+
+          const failedMsg = res.failed ? `, ${res.failed} failed` : '';
+          console.log(
+            `✅ Media sync for article '${res.articleId || options.article}' complete: ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).`,
+          );
+          return;
+        }
+
         console.log(`Pulling media from remote (${options.all ? 'all' : `limit: ${limit}`})...`);
         const res = await pullMedia({
           workspaceRoot: ctx.root,

@@ -84,6 +84,18 @@ describe('Emit CLI (Commander)', () => {
     expect(optionNames).toContain('--byline');
   });
 
+  it('pull-media command exposes targeted --article option for media optimization (Phase 4)', () => {
+    const pullMediaCmd = program.commands.find((c) => c.name() === 'pull-media');
+    expect(pullMediaCmd).toBeDefined();
+    const optionNames = pullMediaCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--article');
+    expect(optionNames).toContain('--all');
+    expect(optionNames).toContain('--limit');
+    expect(optionNames).toContain('--prune');
+    expect(optionNames).toContain('--metadata-only');
+    expect(optionNames).toContain('--profile');
+  });
+
   it('push command description mentions auto-uploading media/drafts/* images', () => {
     const pushCmd = program.commands.find((c) => c.name() === 'push');
     expect(pushCmd).toBeDefined();

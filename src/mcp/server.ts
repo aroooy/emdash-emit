@@ -88,8 +88,9 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.
 5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/ (it returns available categories/tags hints). Rejects duplicates if slug already exists locally or in cache.
 6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
-7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical').
+7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical'). Overwriting canonical files with unpushed edits requires force: true (G13).
 8. [DOCTOR]: Use sync_doctor to diagnose workspace health (version compatibility, origin consistency, frontmatter integrity, conflicts/quarantine, and media references).
+9. [MEDIA]: Use sync_pull_media to download media assets and companion YAML metadata into media/. Pass article: <ULID> to pull only media referenced by that specific article without downloading the whole media library.
 All tool responses include "_meta" context describing profile, workspace directory, origin, and resolution mechanism.
 `.trim();
 

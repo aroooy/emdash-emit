@@ -39,6 +39,9 @@
   - [`emit new`](#emit-new)
   - [`emit pull`](#emit-pull)
   - [`emit push`](#emit-push)
+  - [`emit delete`](#emit-delete)
+  - [`emit conflicts`](#emit-conflicts)
+  - [`emit doctor`](#emit-doctor)
   - [`emit status`](#emit-status)
   - [`emit diff`](#emit-diff)
   - [`emit pull-taxonomies`](#emit-pull-taxonomies)
@@ -505,9 +508,9 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 * To push a draft: `emit push posts/draft/<filename>.md`
 * To publish live: update `status: published` and run `emit push posts/draft/<filename>.md --allow-publish`.
 
-### Preflight Safety Guardrails (G1–G12)
+### Preflight Safety Guardrails (G1–G14)
 
-To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 12 strict preflight guardrails before executing any write operation:
+To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 14 strict preflight guardrails before executing any write operation:
 
 | Guard | Code Name | Description | Severity |
 | --- | --- | --- | --- |
@@ -523,6 +526,9 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G10** | `INVALID_FEATURED_IMAGE` | Verifies that `featuredImage` is a 26-character canonical media ULID (normalized to uppercase) or `null`. A remote media URL that contains a ULID is resolved with a warning; local file paths and malformed values are rejected | Error |
 | **G11** | `LOCAL_IMAGE_AUTO_UPLOAD` (`MISSING_LOCAL_IMAGE_FILE` / `INVALID_LOCAL_IMAGE_TYPE` / `LOCAL_IMAGE_SIZE_EXCEEDED` / `PROMOTED_MEDIA_NOT_FOUND_REMOTE` / `[MEDIA_EXISTENCE_UNVERIFIED]`) | Detects standalone `media/drafts/<file>` image lines (or reuses an already-promoted `media/` asset across articles), validates file existence, extension, and size (≤ 50 MiB), queues them for automatic upload, URL rewrite, and `media/` promotion during `push`, and verifies every reused asset against `GET /_emdash/api/media/{id}` before its URL is baked into the body | Info / Warning / Error |
 | **G12** | `QUARANTINED_COPY_NOT_PUSHABLE` | Refuses to push a rescue copy under `posts/conflicts/` (written by a pull that found divergent local content) before any network request, because it would overwrite the canonical article of the same ULID with stale content and recreate duplicate local files | Error |
+| **G13** | `CANONICAL_HAS_UNPUSHED_EDITS` | Protects canonical articles from being silently overwritten during conflict resolution (`accept-local`) when unpushed local modifications exist; requires explicit `--force` (`force: true`) | Error |
+| **G14** | `QUARANTINED_PATH_REQUIRED` | Restricts conflict resolution targets strictly within `<collection>/conflicts/`, preventing accidental overwrites or unlinks outside the quarantine directory | Error |
+| **Guard** | `DUPLICATE_SLUG_GUARD` | Scans local drafts, published posts, cache index, and remote collection during `emit new` / `sync_new` to strictly block creating scaffold articles with already-existing slugs | Error |
 
 ---
 
@@ -715,6 +721,66 @@ emit push posts/draft/20261104_01M6...-my-article.md --allow-publish
 
 ---
 
+### `emit delete`
+
+Safely deletes a local Markdown article and its remote counterpart on EmDash.
+
+```bash
+emit delete <filePathOrId> [--allow-delete-published] [--dry-run] [-y, --yes] [-p, --profile <name>]
+```
+
+* `<filePathOrId>`: Relative/absolute path to the Markdown file, or 26-character article ULID.
+* `--allow-delete-published`: Required when deleting a published article (safety guardrail).
+* `--dry-run`: Previews the deletion, inspecting referenced media and lines without modifying disk or remote.
+* `-y, --yes`: Skips interactive confirmation prompt.
+* `-p, --profile <name>`: Explicitly target a specific connection profile.
+
+> [!NOTE]
+> **Rescue Backups on Deletion**: When an article is deleted, Emit automatically creates a safety rescue backup at `posts/conflicts/<name>.deleted.md` before removing the file, preserving your work in case of accidental deletion.
+
+---
+
+### `emit conflicts`
+
+Inspects, diffs, and resolves quarantined sync conflict copies (`.conflict.md`) and deletion rescue backups (`.deleted.md`) residing in `posts/conflicts/`.
+
+```bash
+# List all quarantined copies with status labels and canonical file paths
+emit conflicts list [-c, --collection <collection>]
+
+# View line-by-line diff between quarantined copy and canonical article
+emit conflicts diff <filePath> [-c, --collection <collection>]
+
+# Resolve conflict with a specific strategy
+emit conflicts resolve <filePath> --accept-local [-f, --force] [-c, --collection <collection>]
+emit conflicts resolve <filePath> --accept-canonical [-c, --collection <collection>]
+```
+
+* `list`: Scans `<collection>/conflicts/`, classifying items as `⚠️ SYNC CONFLICT` or `🗑️ DELETED RESCUE`, showing sizes and dates.
+* `diff`: Displays a unified diff against the current canonical article.
+* `resolve --accept-local`: Restores the quarantined content to the canonical location and purges the quarantine file. Guard **G13** blocks overwriting canonical articles that contain unpushed local modifications unless `-f, --force` is explicitly provided.
+* `resolve --accept-canonical`: Safely discards the quarantined copy, retaining the canonical version.
+
+---
+
+### `emit doctor`
+
+Runs an automated diagnostic health check across the local workspace and cache database.
+
+```bash
+emit doctor [-c, --collection <collection>] [-p, --profile <name>]
+```
+
+Validates 6 critical health vectors:
+1. **Version Compatibility**: Checks tool version against `createdWithVersion` / `lastSyncedVersion` in config.
+2. **Origin Consistency**: Verifies `.emit/config.json`, profile origin, and environment variables.
+3. **Frontmatter Integrity**: Ensures all local Markdown files have valid parseable frontmatter.
+4. **Conflicts & Quarantine**: Flags unresolved conflict copies and deletion backups in `conflicts/`.
+5. **Sync Status**: Verifies local baseline hash tracking.
+6. **Referenced Media Existence**: Validates that all local media referenced in article Markdown bodies exist on disk.
+
+---
+
 ### `emit status`
 
 Displays the local workspace synchronization status compared against the baseline cache.
@@ -787,13 +853,13 @@ Available Tags:
 
 ### `emit pull-media`
 
-Downloads media assets and their companion metadata YAML files into `media/`.
+Downloads media assets and their companion metadata YAML files into `media/`. Supports pulling all media, a limited batch, or targeted media referenced by a specific article.
 
 ```bash
-emit pull-media [-l, --limit <n>] [--all] [--prune] [--metadata-only]
-
+emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune] [--metadata-only]
 ```
 
+* `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space.
 * `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
 * `--all`: Fetch all media items without limit.
 * `--prune`: Remove local media files that no longer exist on remote.
@@ -877,18 +943,21 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
-| `sync_status` | Inspect local sync state (articles newest-first, plus `invalid` and `conflicts` diagnostics) | `collection`, `profile` |
+| `sync_status` | Inspect local sync state (summary-first structure with capped actionRequired, articles, and search filters) | `collection`, `status`, `search`, `profile` |
 | `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints; preserves divergent local copies under `posts/conflicts/`) | `collection`, `id`, `filePath`, `status`, `force`, `noPrune`, `prune`, `postsOnly`, `includeMedia`, `metadataOnly`, `profile` |
-| `sync_new` | Scaffold new article with canonical ULID, frontmatter, default byline, and taxonomy hints | `slug` (required), `title`, `collection`, `locale`, `byline`, `profile` |
+| `sync_new` | Scaffold new article with canonical ULID, frontmatter, default byline, duplicate slug guard, and taxonomy hints | `slug` (required), `title`, `collection`, `locale`, `byline`, `profile` |
 | `sync_push` | Push local article changes to remote with preflight checks and `media/drafts/*` auto-upload; refuses `posts/conflicts/` rescue copies (G12) | `filePath` (required), `allowPublish`, `profile` |
+| `sync_delete` | Safely delete article locally and remotely with rescue backup (`.deleted.md`) and unpushed edit protection | `filePath`, `id`, `allowDeletePublished`, `dryRun`, `profile` |
+| `sync_conflicts` | List, diff, and resolve quarantined conflict copies and deletion backups in `posts/conflicts/` (G13 unpushed edit guard with `force`) | `action` ("list"\|"diff"\|"resolve"), `filePath`, `strategy` ("accept-local"\|"accept-canonical"), `force`, `profile` |
+| `sync_doctor` | Run comprehensive workspace diagnostics (version, origin, frontmatter, conflicts, sync, referenced media) | `collection`, `profile` |
 | `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath`, `id`, `profile` |
 | `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints) | `profile` |
-| `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `downloadFiles`, `profile` |
+| `sync_pull_media` | Pull remote media files and metadata into `media/` (supports batch or targeted article media) | `article`, `limit`, `all`, `downloadFiles`, `profile` |
 | `profile_list` | List all configured connection profiles | (none) |
 | `profile_switch` | Switch active profile for multi-site environments | `name` (required), `persist` |
 
 > [!NOTE]
-> **Every tool failure is a structured result, never a raw throw.** Handlers return `isError: true` with the same diagnostics the CLI prints — `[CODE]`, HTTP status, endpoint, and a `💡 Suggestion` line (or a `PREFLIGHT_VALIDATION_FAILED` JSON payload with guard codes). This includes workspace/profile resolution failures, which list the available profiles so the agent can retry with an explicit `profile` argument.
+> **Uniform `_meta` Context & Structured Diagnostics**: Every MCP tool response (success and error) includes structured `_meta` context containing `profile`, `workspace`, `origin`, and `resolvedBy` resolution rationale. Handlers return structured error payloads with actionable suggestions, HTTP status, and preflight codes rather than uncaught raw exceptions.
 
 ### Autonomous Agent Workflows
 

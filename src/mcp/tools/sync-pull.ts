@@ -287,8 +287,18 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Enables offline browsing and referencing of uploaded images.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article.',
     {
+      article: z
+        .string()
+        .optional()
+        .describe(
+          'Target article ULID or Markdown file path to pull only media referenced by that article',
+        ),
+      collection: z
+        .string()
+        .optional()
+        .describe('Collection name when using article (defaults to "posts")'),
       limit: z
         .number()
         .optional()
@@ -305,12 +315,26 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           origin: ctx.origin,
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
+          article: args.article,
+          collection: args.collection || ctx.config.defaultCollection,
           limit: args.limit || ctx.config.mediaSyncLimit || 300,
           all: args.all,
           downloadFiles: args.downloadFiles,
         });
 
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
+        if (args.article) {
+          const failedMsg = res.failed ? `, ${res.failed} failed` : '';
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${metaSuffix}`,
+              },
+            ],
+          };
+        }
+
         return {
           content: [
             {
