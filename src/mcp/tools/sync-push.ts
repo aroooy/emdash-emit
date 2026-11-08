@@ -88,6 +88,21 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           );
         }
 
+        const taxonomyLines: string[] = [];
+        if (res.resolvedTaxonomies) {
+          for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
+            if (Array.isArray(items)) {
+              for (const item of items) {
+                if (item.input !== item.resolved) {
+                  taxonomyLines.push(
+                    `🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'.`,
+                  );
+                }
+              }
+            }
+          }
+        }
+
         const allWarnings = [
           ...(ctx.originWarning ? [ctx.originWarning] : []),
           ...(res.warnings || []),
@@ -102,6 +117,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
               text: [
                 `✅ Successfully pushed '${res.id}' to remote (${res.filePath}, rev: ${res.rev}).`,
                 ...transitionLines,
+                ...taxonomyLines,
                 ...warningLines,
               ].join('\n'),
             },

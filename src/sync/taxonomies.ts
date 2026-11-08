@@ -437,3 +437,94 @@ export function formatTaxonomiesHint(
 
   return sections.join('\n\n');
 }
+
+/**
+ * Calculates Levenshtein distance between two strings using dynamic programming.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  let prevRow = new Array<number>(n + 1);
+  let currRow = new Array<number>(n + 1);
+
+  for (let j = 0; j <= n; j++) {
+    prevRow[j] = j;
+  }
+
+  for (let i = 1; i <= m; i++) {
+    currRow[0] = i;
+    const aChar = a.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const bChar = b.charCodeAt(j - 1);
+      const cost = aChar === bChar ? 0 : 1;
+      currRow[j] = Math.min(
+        currRow[j - 1] + 1, // insertion
+        prevRow[j] + 1, // deletion
+        prevRow[j - 1] + cost, // substitution
+      );
+    }
+    const temp = prevRow;
+    prevRow = currRow;
+    currRow = temp;
+  }
+
+  return prevRow[n];
+}
+
+/**
+ * Searches local taxonomy items for the closest candidates to an unrecognized input term,
+ * prioritizing exact prefixes, substrings, and edit distance.
+ * Returns formatted suggestions (e.g. `未分類 -> "%e6%9c%aa%e5%88%86%e9%a1%9e"` or `"diary"`).
+ */
+export function findClosestTaxonomySuggestions(
+  input: string,
+  items: LocalTaxonomyItem[],
+  maxSuggestions = 3,
+): string[] {
+  const lowerInput = input.trim().toLowerCase();
+
+  const scored = items.map((item) => {
+    const rawName = (item.name || '').trim();
+    const lowerName = rawName.toLowerCase();
+    const lowerSlug = item.slug.toLowerCase();
+
+    let bestDist = Math.min(
+      levenshteinDistance(lowerInput, lowerSlug),
+      lowerName ? levenshteinDistance(lowerInput, lowerName) : Infinity,
+    );
+
+    // Boost if prefix or substring match
+    if (lowerName.startsWith(lowerInput) || lowerSlug.startsWith(lowerInput)) {
+      bestDist -= 3;
+    } else if (lowerName.includes(lowerInput) || lowerSlug.includes(lowerInput)) {
+      bestDist -= 1.5;
+    }
+
+    let display: string;
+    if (rawName && lowerName !== lowerSlug) {
+      display = `${rawName} -> ${formatYamlScalar(item.slug)}`;
+    } else {
+      display = formatYamlScalar(item.slug);
+    }
+
+    return { display, dist: bestDist };
+  });
+
+  scored.sort((a, b) => a.dist - b.dist);
+
+  // Deduplicate displays while maintaining top ranking
+  const uniqueDisplays: string[] = [];
+  const seen = new Set<string>();
+  for (const s of scored) {
+    if (!seen.has(s.display)) {
+      seen.add(s.display);
+      uniqueDisplays.push(s.display);
+      if (uniqueDisplays.length >= maxSuggestions) break;
+    }
+  }
+
+  return uniqueDisplays;
+}

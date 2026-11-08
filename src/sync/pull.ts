@@ -37,7 +37,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { getLocalTaxonomiesSummary, loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 
 export interface PullOptions extends MapperOptions {
@@ -481,6 +481,32 @@ export async function pullArticle(
     return bylineIdToSlug;
   };
 
+  // Helper to resolve taxonomy candidates for frontmatter inline comments
+  let candidates = options.candidates;
+  const getTaxonomyCandidates = (): TaxonomyCandidates | undefined => {
+    if (candidates) return candidates;
+    try {
+      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
+      const catMap: Record<string, string> = {};
+      for (const c of summary.categories) {
+        if (c.name && c.slug) catMap[c.slug] = c.name;
+      }
+      const tagMap: Record<string, string> = {};
+      for (const t of summary.tags) {
+        if (t.name && t.slug) tagMap[t.slug] = t.name;
+      }
+      candidates = {
+        slugToName: {
+          category: catMap,
+          tag: tagMap,
+        },
+      };
+      return candidates;
+    } catch {
+      return undefined;
+    }
+  };
+
   // 1. Fast-path check: If rawItem is provided and not forced, check rev & local hash
   if (rawItem && !options.force) {
     const existingSync = options.cache.getSyncState(id);
@@ -580,17 +606,23 @@ export async function pullArticle(
                 const remoteCanonMarkdown = serializeMarkdown(
                   remoteLocal.frontmatter,
                   remoteLocal.body,
+                  getTaxonomyCandidates(),
                 );
                 const remoteCanonHash = calculateHash(remoteCanonMarkdown);
 
-                options.cache.saveBaseSnapshot({
-                  id,
-                  rev: remoteRev,
-                  bodyMarkdown: remoteLocal.body,
-                  frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
-                  hash: remoteCanonHash,
-                  savedAt: Math.floor(Date.now() / 1000),
-                });
+                // If term requests both failed over network, preserve existing base snapshot if available
+                // to avoid wiping out taxonomy baselines with an empty assignment (R-2).
+                const existingBase = options.cache.getBaseSnapshot(id);
+                if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
+                  options.cache.saveBaseSnapshot({
+                    id,
+                    rev: remoteRev,
+                    bodyMarkdown: remoteLocal.body,
+                    frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
+                    hash: remoteCanonHash,
+                    savedAt: Math.floor(Date.now() / 1000),
+                  });
+                }
 
                 // Update syncState keeping remoteCanonHash so local edits (repairedHash) are correctly identified as modified
                 options.cache.saveSyncState({
@@ -704,7 +736,7 @@ export async function pullArticle(
   }
 
   // Format full Markdown
-  const markdownContent = serializeMarkdown(frontmatter, body);
+  const markdownContent = serializeMarkdown(frontmatter, body, getTaxonomyCandidates());
   const contentHash = calculateHash(markdownContent);
 
   // Determine standard relative file path: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md

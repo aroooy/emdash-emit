@@ -68,6 +68,19 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             if (res.previousFilePath) {
               console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
             }
+            if (res.resolvedTaxonomies) {
+              for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
+                if (Array.isArray(items)) {
+                  for (const item of items) {
+                    if (item.input !== item.resolved) {
+                      console.log(
+                        `   🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'`,
+                      );
+                    }
+                  }
+                }
+              }
+            }
             if (res.warnings && res.warnings.length > 0) {
               console.warn(`   ⚠️ Warnings (${res.warnings.length}):`);
               for (const w of res.warnings) {
@@ -107,6 +120,19 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           }
           if (res.previousFilePath) {
             console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
+          }
+          if (res.resolvedTaxonomies) {
+            for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
+              if (Array.isArray(items)) {
+                for (const item of items) {
+                  if (item.input !== item.resolved) {
+                    console.log(
+                      `   🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'`,
+                    );
+                  }
+                }
+              }
+            }
           }
           if (res.warnings && res.warnings.length > 0) {
             console.warn(`\n⚠️ Warnings (${res.warnings.length}):`);

@@ -52,7 +52,12 @@ export interface TaxonomyCandidates {
   categories?: string[];
   tags?: string[];
   bylines?: string[];
-  [key: string]: string[] | undefined;
+  slugToName?: {
+    category?: Record<string, string>;
+    tag?: Record<string, string>;
+    [key: string]: Record<string, string> | undefined;
+  };
+  [key: string]: unknown;
 }
 
 export interface ParsedMarkdown {
@@ -344,7 +349,7 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
 /**
  * Formats a frontmatter object into clean YAML with helpful candidate comments.
  */
-export function formatFrontmatterYaml(data: Frontmatter, _candidates?: TaxonomyCandidates): string {
+export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCandidates): string {
   const lines: string[] = ['---'];
 
   lines.push(`id: ${formatYamlScalar(data.id)}`);
@@ -372,8 +377,16 @@ export function formatFrontmatterYaml(data: Frontmatter, _candidates?: TaxonomyC
     if (terms.length === 0) {
       lines.push('    []');
     } else {
+      const singularKey = taxKey === 'categories' ? 'category' : taxKey === 'tags' ? 'tag' : taxKey;
+      const slugMap = candidates?.slugToName?.[singularKey] || candidates?.slugToName?.[taxKey];
+
       for (const term of terms) {
-        lines.push(`    - ${formatYamlScalar(term)}`);
+        const humanName = slugMap?.[term];
+        const comment =
+          humanName && humanName.trim() && humanName.trim().toLowerCase() !== term.toLowerCase()
+            ? ` # ${humanName.trim()}`
+            : '';
+        lines.push(`    - ${formatYamlScalar(term)}${comment}`);
       }
     }
   }

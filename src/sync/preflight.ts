@@ -40,6 +40,11 @@ import {
   type Frontmatter,
   type ParsedMarkdown,
 } from '../utils/frontmatter.js';
+import {
+  findClosestTaxonomySuggestions,
+  getLocalTaxonomiesSummary,
+  type LocalTaxonomiesSummary,
+} from './taxonomies.js';
 import type { CacheDatabase } from '../db/cache.js';
 
 export interface PreflightOptions {
@@ -293,23 +298,50 @@ export function runPreflightChecks(
 
   // G4: Taxonomy hallucination check
   if (options?.knownTaxonomies && frontmatter.taxonomies) {
+    let summary: LocalTaxonomiesSummary | null = null;
+    if (options.workspaceRoot) {
+      try {
+        summary = getLocalTaxonomiesSummary(options.workspaceRoot);
+      } catch {
+        summary = null;
+      }
+    }
+
     for (const [taxName, terms] of Object.entries(frontmatter.taxonomies)) {
       const allowed = options.knownTaxonomies[taxName];
       if (allowed && Array.isArray(terms)) {
         for (const term of terms) {
           if (!allowed.includes(term)) {
-            const allowedPreview = allowed.slice(0, 20).join(', ');
-            const moreSuffix = allowed.length > 20 ? ' ...' : '';
             // Term IDs are canonical 26-char ULIDs: uppercase Crockford base32 (excludes I, L, O, U).
             // Restricting to that alphabet prevents 26-character slugs from being mislabeled as IDs.
             const isTermId = /^[0-9A-HJ-NP-Z]{26}$/.test(term);
             const staleNote = isTermId
               ? ' (term ID was not found in local definitions and may be stale or deleted)'
               : '';
+
+            const taxItems = summary
+              ? taxName === 'categories'
+                ? summary.categories
+                : taxName === 'tags'
+                  ? summary.tags
+                  : []
+              : [];
+
+            let suggestion: string;
+            if (taxItems.length > 0) {
+              const suggestions = findClosestTaxonomySuggestions(term, taxItems, 3);
+              const formattedList = suggestions.map((s) => `  - ${s}`).join('\n');
+              suggestion = `Did you mean:\n${formattedList}\n\nRun sync_pull_taxonomies to refresh, or create it via official MCP first.`;
+            } else {
+              const allowedPreview = allowed.slice(0, 20).join(', ');
+              const moreSuffix = allowed.length > 20 ? ' ...' : '';
+              suggestion = `Use one of the allowed ${taxName}: [${allowedPreview}${moreSuffix}], run sync_pull_taxonomies to refresh, or create it via official MCP first.`;
+            }
+
             errors.push({
               code: 'INVALID_TAXONOMY_ERROR',
               message: `Unknown ${taxName} term: '${term}'${staleNote}.`,
-              suggestion: `Use one of the allowed ${taxName}: [${allowedPreview}${moreSuffix}], run sync_pull_taxonomies to refresh, or create it via official MCP first.`,
+              suggestion,
             });
           }
         }

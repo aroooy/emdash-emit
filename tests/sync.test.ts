@@ -1124,7 +1124,7 @@ describe('Pull & Push Synchronization Engine', () => {
       remoteRev: 'rev_1',
       status: 'draft',
       slug: 'heal-test',
-      lastSyncedAt: Date.now(),
+      lastSyncedAt: Math.floor(Date.now() / 1000),
     });
 
     const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
@@ -1314,7 +1314,7 @@ describe('Pull & Push Synchronization Engine', () => {
       remoteRev: 'rev_1',
       status: 'draft',
       slug: 'heal-3way',
-      lastSyncedAt: Date.now(),
+      lastSyncedAt: Math.floor(Date.now() / 1000),
     });
 
     // Mock fetch for rev_1

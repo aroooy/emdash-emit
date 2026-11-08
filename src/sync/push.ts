@@ -45,7 +45,7 @@ import {
   type ParsedMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
-import { loadLocalTaxonomyMaps } from './taxonomies.js';
+import { getLocalTaxonomiesSummary, loadLocalTaxonomyMaps } from './taxonomies.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
@@ -70,6 +70,12 @@ export interface PushOptions extends MapperOptions {
   knownTaxonomies?: Record<string, string[]>;
 }
 
+export interface ResolvedTaxonomyItem {
+  input: string;
+  resolved: string;
+  id: string;
+}
+
 export interface PushResult {
   success: boolean;
   id: string;
@@ -80,6 +86,11 @@ export interface PushResult {
   conflict: boolean;
   warnings: string[];
   errors?: PreflightError[];
+  resolvedTaxonomies?: {
+    categories?: ResolvedTaxonomyItem[];
+    tags?: ResolvedTaxonomyItem[];
+    [taxonomy: string]: ResolvedTaxonomyItem[] | undefined;
+  };
 }
 
 export class PushValidationError extends Error {
@@ -546,30 +557,73 @@ export async function pushArticle(
   // Pre-load local taxonomy maps once for canonicalization, G4 guard, and remote sync
   const taxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
 
-  // Build a frontmatter view for G4 preflight guard where known term ULIDs are resolved to slugs
-  // (Prevents G4 false positives when frontmatter contains ULID without mutating parsed AST)
-  let preflightParsed = parsed;
-  if (parsed.frontmatter.taxonomies) {
-    const canon = (name: 'category' | 'tag', terms: string[]): string[] =>
-      terms.map((t) => taxonomyMaps.idToSlug[name][t] || t);
+  const resolvedTaxonomies: {
+    categories?: ResolvedTaxonomyItem[];
+    tags?: ResolvedTaxonomyItem[];
+    [taxonomy: string]: ResolvedTaxonomyItem[] | undefined;
+  } = {};
 
-    const preflightTaxonomies: Record<string, string[]> = {
-      ...parsed.frontmatter.taxonomies,
-    };
+  const canonicalizeTerms = (taxName: 'category' | 'tag', terms: string[]): string[] => {
+    const list: ResolvedTaxonomyItem[] = [];
+    const canonicalized = terms.map((term) => {
+      // 1. If term is a ULID in idToSlug
+      if (taxonomyMaps.idToSlug[taxName]?.[term]) {
+        const canonicalSlug = taxonomyMaps.idToSlug[taxName][term];
+        list.push({ input: term, resolved: canonicalSlug, id: term });
+        return canonicalSlug;
+      }
+      // 2. If term is in slugToId (can be canonical slug, decoded slug, or human name alias)
+      const id = taxonomyMaps.slugToId[taxName]?.[term];
+      if (id && taxonomyMaps.idToSlug[taxName]?.[id]) {
+        const canonicalSlug = taxonomyMaps.idToSlug[taxName][id];
+        if (term !== canonicalSlug) {
+          list.push({ input: term, resolved: canonicalSlug, id });
+        }
+        return canonicalSlug;
+      }
+      return term;
+    });
+    if (list.length > 0) {
+      resolvedTaxonomies[taxName === 'category' ? 'categories' : 'tags'] = list;
+    }
+    return canonicalized;
+  };
+
+  // Canonicalize frontmatter taxonomy terms in-place before preflight and payload creation
+  if (parsed.frontmatter.taxonomies) {
     if (parsed.frontmatter.taxonomies.categories) {
-      preflightTaxonomies.categories = canon('category', parsed.frontmatter.taxonomies.categories);
+      parsed.frontmatter.taxonomies.categories = canonicalizeTerms(
+        'category',
+        parsed.frontmatter.taxonomies.categories,
+      );
     }
     if (parsed.frontmatter.taxonomies.tags) {
-      preflightTaxonomies.tags = canon('tag', parsed.frontmatter.taxonomies.tags);
+      parsed.frontmatter.taxonomies.tags = canonicalizeTerms(
+        'tag',
+        parsed.frontmatter.taxonomies.tags,
+      );
     }
+  }
 
-    preflightParsed = {
-      ...parsed,
-      frontmatter: {
-        ...parsed.frontmatter,
-        taxonomies: preflightTaxonomies,
-      },
-    };
+  // Pre-build taxonomy candidates with slugToName for frontmatter serialization with inline '# <Name>' comments
+  const candidates: TaxonomyCandidates = options.candidates || {
+    slugToName: {
+      category: {},
+      tag: {},
+    },
+  };
+  if (!options.candidates) {
+    try {
+      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
+      for (const c of summary.categories) {
+        if (c.name && c.slug) candidates.slugToName!.category![c.slug] = c.name;
+      }
+      for (const t of summary.tags) {
+        if (t.name && t.slug) candidates.slugToName!.tag![t.slug] = t.name;
+      }
+    } catch {
+      // ignore
+    }
   }
 
   // If knownTaxonomies is not explicitly passed, populate from local categories/ and tags/ (if present)
@@ -586,7 +640,7 @@ export async function pushArticle(
   }
 
   // 1. Run Preflight Guards G2 - G11
-  const preflight = runPreflightChecks(targetFilePath, preflightParsed, {
+  const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
     baseMarkdown: baseSnapshot?.bodyMarkdown,
@@ -646,8 +700,14 @@ export async function pushArticle(
         new Set(
           termSlugsOrIds
             .map((item) => {
-              // If item is already a known ULID, preserve it directly to avoid silent substitution
+              // 1. If item is already a known ULID, preserve it directly to avoid silent substitution
               if (idMap[item]) return item;
+              // 2. If item was canonicalized from a specific ULID or alias, preserve the bound term ID
+              const tracked =
+                resolvedTaxonomies[taxonomyName === 'category' ? 'categories' : 'tags'];
+              const match = tracked?.find((t) => t.resolved === item);
+              if (match?.id) return match.id;
+              // 3. Fallback to slugMap
               return slugMap[item] || item;
             })
             .filter((tid): tid is string => Boolean(tid)),
@@ -749,11 +809,7 @@ export async function pushArticle(
     );
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
-    const serializedContent = serializeMarkdown(
-      parsed.frontmatter,
-      parsed.body,
-      options.candidates,
-    );
+    const serializedContent = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
     const newHash = calculateHash(serializedContent);
 
     // Transition status to published if requested and permitted
@@ -814,6 +870,7 @@ export async function pushArticle(
       filePath: newRelPath,
       ...(actualId !== id ? { previousId: id } : {}),
       ...(originalRelPath !== newRelPath ? { previousFilePath: originalRelPath } : {}),
+      ...(Object.keys(resolvedTaxonomies).length > 0 ? { resolvedTaxonomies } : {}),
       conflict: false,
       warnings,
     };
@@ -1017,11 +1074,7 @@ export async function pushArticle(
     );
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
-    const serializedContent = serializeMarkdown(
-      parsed.frontmatter,
-      parsed.body,
-      options.candidates,
-    );
+    const serializedContent = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
     const newHash = calculateHash(serializedContent);
 
     // Transition status (publish or unpublish) via dedicated endpoints if needed
@@ -1096,6 +1149,7 @@ export async function pushArticle(
       rev: finalRev,
       filePath: newRelPath,
       ...(originalRelPath !== newRelPath ? { previousFilePath: originalRelPath } : {}),
+      ...(Object.keys(resolvedTaxonomies).length > 0 ? { resolvedTaxonomies } : {}),
       conflict: false,
       warnings,
     };
