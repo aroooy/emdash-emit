@@ -45,11 +45,7 @@ import {
   type ParsedMarkdown,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
-import {
-  getLocalTaxonomiesSummary,
-  loadLocalTaxonomyMaps,
-  loadLocalTaxonomyCandidates,
-} from './taxonomies.js';
+import { loadLocalTaxonomyMaps, loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';

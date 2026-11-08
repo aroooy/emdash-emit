@@ -37,7 +37,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { getLocalTaxonomiesSummary, loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 
 export interface PullOptions extends MapperOptions {
