@@ -27,6 +27,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // Emit honors EMDASH_* environment variables, so the suite must start from a scrubbed
+    // environment to stay reproducible on any machine (see tests/setup/env-isolation.ts).
+    setupFiles: ['tests/setup/env-isolation.ts'],
   },
 });
-

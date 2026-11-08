@@ -140,18 +140,49 @@ export function saveProfilesFile(data: ProfilesFile, customPath?: string): void 
  * Discovers which profile matches the given directory (or cwd) based on configured workspace paths.
  * Selects the deepest (longest path) match so nested workspaces are not absorbed by ancestor profiles.
  */
+/**
+ * Resolves a directory to its physical path so that directory-driven profile detection also works
+ * when either side of the comparison goes through a symlink (e.g. macOS `/tmp` -> `/private/tmp`,
+ * `/var` -> `/private/var`, or a symlinked `~/blogs` mount).
+ *
+ * When the path does not exist yet (a profile registered before `emit init`, or a subfolder such as
+ * `posts/draft` that has not been created), the deepest existing ancestor is resolved and the
+ * remaining segments are re-appended. Mixing `realpath` results with plain `path.resolve` results
+ * would otherwise compare `/private/var/...` against `/var/...` and silently lose the match.
+ */
+function resolveDirectoryForComparison(dir: string): string {
+  const resolved = path.resolve(dir);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    const missingSegments: string[] = [];
+    let existingAncestor = resolved;
+    while (!fs.existsSync(existingAncestor)) {
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) return resolved;
+      missingSegments.unshift(path.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+    try {
+      return path.join(fs.realpathSync(existingAncestor), ...missingSegments);
+    } catch {
+      return resolved;
+    }
+  }
+}
+
 export function findProfileByDirectory(
   dir: string = process.cwd(),
   customPath?: string,
 ): { name: string; config: ProfileConfig } | null {
   const file = loadProfilesFile(customPath);
-  const normalizedTarget = path.resolve(dir);
+  const normalizedTarget = resolveDirectoryForComparison(dir);
 
   let bestMatch: { name: string; config: ProfileConfig; length: number } | null = null;
 
   for (const [name, p] of Object.entries(file.profiles)) {
     if (!p.workspace) continue;
-    const normalizedWs = path.resolve(p.workspace);
+    const normalizedWs = resolveDirectoryForComparison(p.workspace);
     // Exact match or subpath of the profile's workspace
     if (normalizedTarget === normalizedWs || normalizedTarget.startsWith(normalizedWs + path.sep)) {
       if (!bestMatch || normalizedWs.length > bestMatch.length) {

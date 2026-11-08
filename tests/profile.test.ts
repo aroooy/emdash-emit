@@ -290,4 +290,52 @@ describe('Profile Management (profiles.yaml)', () => {
     expect(byOrigin?.name).toBe('nested-ws');
     expect(byOrigin?.source).toBe('workspace');
   });
+
+  it('matches profile workspaces through symlinks in both registration directions', () => {
+    // Profile registered with a symlinked workspace, command run from the physical path.
+    const realA = path.join(tmpDir, 'real-a');
+    const linkA = path.join(tmpDir, 'link-a');
+    fs.mkdirSync(realA, { recursive: true });
+    fs.symlinkSync(realA, linkA, 'dir');
+    setProfile(
+      'via-link',
+      { origin: 'https://link.example.com', token: 'tok-link', workspace: linkA },
+      false,
+      customProfilesPath,
+    );
+
+    // Profile registered with the physical workspace, command run through a symlink.
+    const realB = path.join(tmpDir, 'real-b');
+    const linkB = path.join(tmpDir, 'link-b');
+    fs.mkdirSync(realB, { recursive: true });
+    fs.symlinkSync(realB, linkB, 'dir');
+    setProfile(
+      'via-real',
+      { origin: 'https://real.example.com', token: 'tok-real', workspace: realB },
+      false,
+      customProfilesPath,
+    );
+
+    const fromPhysical = findProfileByDirectory(
+      path.join(realA, 'posts/draft'),
+      customProfilesPath,
+    );
+    expect(fromPhysical?.name).toBe('via-link');
+
+    const fromSymlink = findProfileByDirectory(path.join(linkB, 'posts'), customProfilesPath);
+    expect(fromSymlink?.name).toBe('via-real');
+
+    // resolveTargetProfile reports both as workspace matches, not as ambiguity
+    expect(
+      resolveTargetProfile({ cwd: path.join(realA, 'posts'), customPath: customProfilesPath })
+        ?.source,
+    ).toBe('workspace');
+    expect(
+      resolveTargetProfile({ cwd: path.join(linkB, 'posts'), customPath: customProfilesPath })
+        ?.source,
+    ).toBe('workspace');
+
+    // Unknown directories still resolve to null instead of guessing
+    expect(findProfileByDirectory(path.join(tmpDir, 'nowhere'), customProfilesPath)).toBeNull();
+  });
 });
