@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { formatFrontmatterParseError, parseMarkdown } from '../utils/frontmatter.js';
-import { calculateHash } from './pull.js';
+import { calculateHash, CONFLICTS_SUBDIR } from './pull.js';
 import {
   compareArticleFilenameDesc,
   extractUlidFromFilename,
@@ -51,7 +51,26 @@ export interface WorkspaceStatusResult {
     modified: number;
     untracked: number;
     invalid: number;
+    /** Preserved divergent local copies stored in `<collection>/conflicts/` by a pull. */
+    conflicts: number;
   };
+}
+
+/**
+ * Counts preserved divergent local copies in `<collection>/conflicts/`.
+ * These files are informational rescue copies: they are never tracked, pushed, or pruned.
+ */
+export function countQuarantinedCopies(
+  workspaceRoot: string,
+  collection: string = 'posts',
+): number {
+  const conflictsDir = path.join(workspaceRoot, collection, CONFLICTS_SUBDIR);
+  if (!fs.existsSync(conflictsDir)) return 0;
+  try {
+    return fs.readdirSync(conflictsDir).filter((f) => f.endsWith('.md')).length;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -68,7 +87,7 @@ export function getWorkspaceStatus(
   if (!fs.existsSync(collectionDir)) {
     return {
       items: [],
-      summary: { total: 0, synced: 0, modified: 0, untracked: 0, invalid: 0 },
+      summary: { total: 0, synced: 0, modified: 0, untracked: 0, invalid: 0, conflicts: 0 },
     };
   }
 
@@ -141,6 +160,7 @@ export function getWorkspaceStatus(
     modified: items.filter((i) => i.syncStatus === 'modified').length,
     untracked: items.filter((i) => i.syncStatus === 'untracked').length,
     invalid: items.filter((i) => i.syncStatus === 'invalid').length,
+    conflicts: countQuarantinedCopies(workspaceRoot, collection),
   };
 
   return { items, summary };

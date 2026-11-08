@@ -23,7 +23,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { getWorkspaceStatus } from '../../sync/status.js';
+import { getWorkspaceStatus, type WorkspaceStatusResult } from '../../sync/status.js';
+import { formatToolError } from '../tool-errors.js';
 
 const MAX_INVALID_MCP_ITEMS = 10;
 
@@ -41,7 +42,12 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
     async (args) => {
       const ctx = resolveContext(args.profile);
       const collection = args.collection || ctx.config.defaultCollection;
-      const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
+      let status: WorkspaceStatusResult;
+      try {
+        status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
+      } catch (error) {
+        return formatToolError(error);
+      }
 
       // Cap invalid items in MCP output to prevent context window flooding when many files are broken
       let invalidSeen = 0;
@@ -74,6 +80,11 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
                 uncachedInvalid.length > 0
                   ? `Run sync_pull to automatically repair cached invalid frontmatter files. For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
                   : 'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair unquoted %-prefixed frontmatter files.',
+            }
+          : {}),
+        ...(status.summary.conflicts > 0
+          ? {
+              conflictsNote: `${status.summary.conflicts} preserved local copy(ies) exist in ${collection}/conflicts/ because a pull found content that diverged from the last synced baseline. Review each copy, merge valuable content manually, then delete it. Preserved copies are never pushed or pruned.`,
             }
           : {}),
       };

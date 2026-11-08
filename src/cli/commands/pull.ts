@@ -21,7 +21,7 @@
  */
 
 import type { Command } from 'commander';
-import { pullArticle } from '../../sync/pull.js';
+import { pullArticle, formatQuarantineNotice } from '../../sync/pull.js';
 import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
 import {
   pullTaxonomies,
@@ -142,6 +142,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
+              } else if (item.localEditsPreserved) {
+                console.log(
+                  `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath})`,
+                );
               } else if (!item.skipped) {
                 console.log(`  [${current}/${total}] ✅ Pulled ${item.slug} -> ${item.filePath}`);
               } else if (current % 50 === 0 || current === total) {
@@ -160,6 +164,18 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           console.log(
             `\n🎉 Articles: ${batchResult.total} total${statusBreakdown} (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
           );
+
+          if (batchResult.preserved && batchResult.preserved > 0) {
+            console.log(
+              `🛡️  ${batchResult.preserved} article(s) had unpushed local edits: Emit kept your local version (remote changes were NOT applied). ` +
+                `Push them with "emit push <filePath>", or re-run with --force to accept the remote version.`,
+            );
+          }
+
+          for (const item of batchResult.items) {
+            const notice = formatQuarantineNotice(item.quarantined);
+            if (notice) console.log(`\n${notice}`);
+          }
 
           // 3. Pull media (if --media)
           if (includeMedia) {
@@ -192,11 +208,21 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           });
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);
+          } else if (res.localEditsPreserved) {
+            console.log(
+              `🛡️ Kept your local edits for ${res.slug} (${res.filePath}); remote changes were NOT applied.`,
+            );
+            console.log(
+              `   Push them with "emit push ${res.filePath}", or re-run with --force to accept the remote version.`,
+            );
           } else if (res.skipped) {
             console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);
           } else {
             console.log(`✅ Pulled ${res.slug} -> ${res.filePath}`);
           }
+
+          const quarantineNotice = formatQuarantineNotice(res.quarantined);
+          if (quarantineNotice) console.log(`\n${quarantineNotice}`);
         }
       } catch (error) {
         if (error instanceof SyncPruneConflictError) {

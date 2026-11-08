@@ -68,6 +68,10 @@ export interface PullBatchResult {
   updated: number;
   skipped: number;
   deleted?: number;
+  /** Articles whose unpushed local edits were kept instead of applying remote changes. */
+  preserved?: number;
+  /** Total number of divergent local copies preserved under `<collection>/conflicts/`. */
+  quarantined?: number;
   items: PullResult[];
 }
 
@@ -150,16 +154,19 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     }
 
     if (unpushedConflicts.length > 0) {
+      const affectedArticles = new Set(unpushedConflicts.map((i) => i.id)).size;
       const filesList = unpushedConflicts.map((i) => `  - ${i.filePath} (${i.slug})`).join('\n');
       const windowMsg = options.limit ? ` (currently: ${options.limit})` : '';
       const message =
-        `Pull aborted: ${unpushedConflicts.length} article(s) outside the sync window have unpushed local edits!\n\n` +
-        `The following article(s) would be pruned from local cache, but contain unpushed changes:\n${filesList}\n\n` +
+        `Pull aborted: ${unpushedConflicts.length} file(s) belonging to ${affectedArticles} article(s) outside the sync window have unpushed local edits!\n\n` +
+        `The following file(s) would be pruned from local cache, but contain unpushed changes` +
+        ` (both the canonical file and any duplicate copy sharing its ULID are inspected):\n${filesList}\n\n` +
         `💡 Why did this happen?\n` +
         `The modified article(s) are older than the workspace sync window${windowMsg}.\n\n` +
         `Recommended actions:\n` +
         `  1. Push local changes:   emit push <filePath>\n` +
-        `  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed\n`;
+        `  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed\n` +
+        `  3. Keep them for now:    emit pull --no-prune (skips window pruning; local files stay untouched)\n`;
 
       throw new SyncPruneConflictError(message, unpushedConflicts, options.limit);
     }
@@ -168,6 +175,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
   const results: PullResult[] = [];
   let updated = 0;
   let skipped = 0;
+  let preserved = 0;
+  let quarantined = 0;
 
   const concurrency = options.concurrency || 8;
   let index = 0;
@@ -192,6 +201,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
       results.push(res);
       if (res.skipped) skipped++;
       else updated++;
+      if (res.localEditsPreserved) preserved++;
+      if (res.quarantined) quarantined += res.quarantined.length;
 
       if (options.onProgress) {
         options.onProgress({
@@ -252,6 +263,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     updated,
     skipped,
     deleted,
+    preserved,
+    quarantined,
     items: results,
   };
 }

@@ -23,8 +23,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { ApiError } from '../../client/error.js';
-import { pushArticle, PushValidationError } from '../../sync/push.js';
+import { pushArticle } from '../../sync/push.js';
+import { formatToolError } from '../tool-errors.js';
 
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -103,35 +103,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           ],
         };
       } catch (err: unknown) {
-        if (err instanceof PushValidationError) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    error: 'PREFLIGHT_VALIDATION_FAILED',
-                    message: err.message,
-                    errors: err.errors,
-                  },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
-        }
-        if (err instanceof ApiError) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: err.toActionableString(),
-              },
-            ],
-          };
-        }
-        throw err;
+        return formatToolError(err);
       }
     },
   );

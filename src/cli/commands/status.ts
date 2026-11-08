@@ -110,6 +110,16 @@ export function registerStatusInitCommands(
           );
         }
       }
+      if (status.summary.conflicts > 0) {
+        console.log(
+          `🩹 ${status.summary.conflicts} preserved local copy(ies) in ${collection}/conflicts/ ` +
+            `(rescue copies created when a pull found divergent content).`,
+        );
+        console.log(
+          '   Review each copy, merge any valuable content into the canonical article, then delete it. ' +
+            'They are never pushed or pruned.\n',
+        );
+      }
     });
 
   // emit diff [filePath]

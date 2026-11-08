@@ -60,6 +60,42 @@ export interface PullResult {
   skipped?: boolean;
   deleted?: boolean;
   title?: string;
+  /** True when the local file has unpushed edits and Emit kept them instead of applying remote changes. */
+  localEditsPreserved?: boolean;
+  /** Local copies that diverged from the last synced baseline and were preserved in `<collection>/conflicts/`. */
+  quarantined?: QuarantinedLocalCopy[];
+}
+
+/**
+ * A local Markdown copy whose content differed from Emit's last synced baseline and was
+ * therefore preserved under `<collection>/conflicts/` before the canonical file was written.
+ * Quarantined copies are informational only: they are not tracked, pushed, or pruned.
+ */
+export interface QuarantinedLocalCopy {
+  /** Relative path of the local file that would have been overwritten or removed. */
+  sourceFilePath: string;
+  /** Relative path of the preserved copy inside `<collection>/conflicts/`. */
+  quarantineFilePath: string;
+  /** Why the copy was preserved: no cache baseline existed, or content diverged from it. */
+  reason: 'no-cache-baseline' | 'diverged-from-baseline';
+}
+
+/** Subdirectory (under a collection) reserved for preserved divergent local copies. */
+export const CONFLICTS_SUBDIR = 'conflicts';
+
+/**
+ * Human/agent readable notice describing preserved local copies.
+ * Returns an empty string when nothing was preserved.
+ */
+export function formatQuarantineNotice(quarantined?: QuarantinedLocalCopy[]): string {
+  if (!quarantined || quarantined.length === 0) return '';
+  const lines = [
+    `🩹 ${quarantined.length} divergent local copy(ies) preserved under ${CONFLICTS_SUBDIR}/ before being overwritten:`,
+    ...quarantined.map((q) => `  - ${q.sourceFilePath} -> ${q.quarantineFilePath} (${q.reason})`),
+    '  Review each rescue copy, merge any valuable content into the canonical article, then delete it.',
+    '  Preserved copies are never pushed or pruned.',
+  ];
+  return lines.join('\n');
 }
 
 export interface RemoteArticleItem {
@@ -115,6 +151,86 @@ export function findLocalFilesByUlid(
     }
   }
   return matches;
+}
+
+/**
+ * Preserves a local Markdown copy verbatim under `<collection>/conflicts/` before Emit
+ * overwrites or removes the original path. Used to guarantee that no divergent local
+ * content (e.g. an uncached file written by another tool or an older serializer) is
+ * silently discarded during a pull.
+ * Returns the relative path of the preserved copy, or null when preservation failed.
+ */
+export function quarantineLocalCopy(
+  workspaceRoot: string,
+  collection: string,
+  sourceRelPath: string,
+  content: string,
+): string | null {
+  const conflictsDir = path.join(workspaceRoot, collection, CONFLICTS_SUBDIR);
+  const baseName = path.basename(sourceRelPath).replace(/\.md$/i, '');
+  let quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}.conflict.md`);
+
+  try {
+    fs.mkdirSync(conflictsDir, { recursive: true });
+    let suffix = 2;
+    while (fs.existsSync(path.join(workspaceRoot, quarantineRel))) {
+      quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}.conflict-${suffix}.md`);
+      suffix += 1;
+      if (suffix > 100) return null;
+    }
+    fs.writeFileSync(path.join(workspaceRoot, quarantineRel), content, 'utf8');
+    return quarantineRel;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discovers local files for this article that are about to be overwritten or unlinked, and
+ * preserves every copy whose content does not match the last synced baseline hash or the
+ * content Emit is about to write.
+ */
+function quarantineDivergentLocalCopies(
+  options: PullOptions,
+  collection: string,
+  localRelPaths: Set<string>,
+  baselineHash: string | undefined,
+  canonicalContent: string,
+): QuarantinedLocalCopy[] {
+  const quarantined: QuarantinedLocalCopy[] = [];
+
+  for (const localRel of localRelPaths) {
+    const localFull = path.resolve(options.workspaceRoot, localRel);
+    if (!fs.existsSync(localFull)) continue;
+
+    let localContent: string;
+    try {
+      localContent = fs.readFileSync(localFull, 'utf8');
+    } catch {
+      continue;
+    }
+
+    // Already identical to what is about to be written: nothing to preserve.
+    if (localContent === canonicalContent) continue;
+    // Identical to the last synced state: carries no information worth preserving.
+    if (baselineHash && calculateHash(localContent) === baselineHash) continue;
+
+    const quarantineRel = quarantineLocalCopy(
+      options.workspaceRoot,
+      collection,
+      localRel,
+      localContent,
+    );
+    if (quarantineRel) {
+      quarantined.push({
+        sourceFilePath: localRel,
+        quarantineFilePath: quarantineRel,
+        reason: baselineHash ? 'diverged-from-baseline' : 'no-cache-baseline',
+      });
+    }
+  }
+
+  return quarantined;
 }
 
 /**
@@ -351,6 +467,7 @@ export async function pullArticle(
               filePath: existingSync.localFilePath,
               updated: false,
               skipped: true,
+              localEditsPreserved: true,
               title: rawTitle,
             };
           }
@@ -526,6 +643,17 @@ export async function pullArticle(
     staleRelPaths.add(existingSync.localFilePath);
   }
   const canonicalResolved = path.resolve(fullFilePath);
+
+  // Data safety: preserve every local copy whose content diverges from the last synced
+  // baseline (or has no cache baseline at all) before it is overwritten or unlinked.
+  const quarantined = quarantineDivergentLocalCopies(
+    options,
+    frontmatter.collection,
+    staleRelPaths,
+    existingSync?.localHash,
+    markdownContent,
+  );
+
   for (const staleRel of staleRelPaths) {
     const staleFull = path.resolve(options.workspaceRoot, staleRel);
     if (staleFull !== canonicalResolved && fs.existsSync(staleFull)) {
@@ -582,5 +710,6 @@ export async function pullArticle(
     filePath: relPath,
     updated: true,
     title: frontmatter.title,
+    quarantined: quarantined.length > 0 ? quarantined : undefined,
   };
 }

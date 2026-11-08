@@ -23,7 +23,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { inspectArticleDiff } from '../../sync/diff.js';
+import { inspectArticleDiff, type ArticleDiffInspection } from '../../sync/diff.js';
+import { formatToolError } from '../tool-errors.js';
 
 export function registerSyncDiffTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -41,12 +42,17 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
     },
     async (args) => {
       const ctx = resolveContext(args.profile);
-      const inspection = inspectArticleDiff({
-        workspaceRoot: ctx.root,
-        cache: ctx.cache,
-        filePath: args.filePath,
-        id: args.id,
-      });
+      let inspection: ArticleDiffInspection;
+      try {
+        inspection = inspectArticleDiff({
+          workspaceRoot: ctx.root,
+          cache: ctx.cache,
+          filePath: args.filePath,
+          id: args.id,
+        });
+      } catch (error) {
+        return formatToolError(error);
+      }
 
       return {
         content: [

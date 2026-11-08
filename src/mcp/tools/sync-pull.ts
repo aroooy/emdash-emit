@@ -23,8 +23,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { pullArticle } from '../../sync/pull.js';
-import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
+import { pullArticle, formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
+import { pullBatch } from '../../sync/orchestrator.js';
 import {
   pullTaxonomies,
   getLocalTaxonomiesSummary,
@@ -33,6 +33,7 @@ import {
 import { pullMedia } from '../../sync/media.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
+import { formatToolError } from '../tool-errors.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
   // sync_pull: Pull remote article(s) and taxonomies
@@ -90,26 +91,39 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       });
 
       if (targetId) {
-        const res = await pullArticle(collection, targetId, {
-          workspaceRoot: ctx.root,
-          cache: ctx.cache,
-          origin,
-          token: ctx.auth.token,
-          refreshToken: ctx.auth.refreshToken,
-          force: args.force,
-        });
+        let res: PullResult;
+        try {
+          res = await pullArticle(collection, targetId, {
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            force: args.force,
+          });
+        } catch (error) {
+          return formatToolError(error);
+        }
 
-        const actionText = res.skipped
-          ? 'ℹ️ Article is already up-to-date'
-          : '✅ Successfully pulled article';
+        const actionText = res.localEditsPreserved
+          ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
+          : res.skipped
+            ? 'ℹ️ Article is already up-to-date'
+            : '✅ Successfully pulled article';
         const titleText = res.title ? ` "${res.title}"` : '';
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
+        const quarantineNotice = formatQuarantineNotice(res.quarantined);
+        const quarantineLine = quarantineNotice ? `\n\n${quarantineNotice}` : '';
+        const nextStep = res.localEditsPreserved
+          ? '\n\nYour local version is intact. Push it with sync_push to publish your edits, ' +
+            'or re-run sync_pull with force: true to accept the remote version instead.'
+          : '\n\nYou can now read or edit this local Markdown file directly.';
 
         return {
           content: [
             {
               type: 'text',
-              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${warnLine}\n\nYou can now read or edit this local Markdown file directly.`,
+              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}`,
             },
           ],
         };
@@ -176,6 +190,17 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const detailBlock =
           listLines.length > 0 ? `\n\n${headerLabel}:\n${listLines.join('\n')}` : '';
 
+        const preservedMsg =
+          batchResult.preserved && batchResult.preserved > 0
+            ? `\n🛡️ ${batchResult.preserved} article(s) had unpushed local edits; Emit kept your local version (remote changes were NOT applied). Push them with sync_push, or re-run with force: true to accept the remote version instead.`
+            : '';
+
+        const quarantineNotices = sortedItems
+          .map((item) => formatQuarantineNotice(item.quarantined))
+          .filter((notice) => notice.length > 0);
+        const quarantineMsg =
+          quarantineNotices.length > 0 ? `\n\n${quarantineNotices.join('\n\n')}` : '';
+
         // 3. Pull media if includeMedia
         let mediaMsg = '';
         if (includeMedia) {
@@ -196,23 +221,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           content: [
             {
               type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${detailBlock}${warnLine}\n\nYou can now read or edit these local Markdown files directly.`,
+              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}\n\nYou can now read or edit these local Markdown files directly.`,
             },
           ],
         };
       } catch (error) {
-        if (error instanceof SyncPruneConflictError) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `❌ ${error.message}`,
-              },
-            ],
-          };
-        }
-        throw error;
+        return formatToolError(error);
       }
     },
   );
@@ -225,34 +239,38 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
-      const res = await pullTaxonomies({
-        workspaceRoot: ctx.root,
-        origin: ctx.origin,
-        token: ctx.auth.token,
-        refreshToken: ctx.auth.refreshToken,
-      });
+      try {
+        const ctx = resolveContext(args.profile);
+        const res = await pullTaxonomies({
+          workspaceRoot: ctx.root,
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+        });
 
-      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 200 });
-      const hintBlock = taxHint ? `\n\n${taxHint}` : '';
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 200 });
+        const hintBlock = taxHint ? `\n\n${taxHint}` : '';
 
-      const failNotes: string[] = [];
-      if (res.categoriesFailed) failNotes.push('categories');
-      if (res.tagsFailed) failNotes.push('tags');
-      const statusLine =
-        failNotes.length > 0
-          ? `⚠️ Warning: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions in categories/ and tags/).`
-          : `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`;
+        const failNotes: string[] = [];
+        if (res.categoriesFailed) failNotes.push('categories');
+        if (res.tagsFailed) failNotes.push('tags');
+        const statusLine =
+          failNotes.length > 0
+            ? `⚠️ Warning: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions in categories/ and tags/).`
+            : `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`;
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `${statusLine}${hintBlock}`,
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${statusLine}${hintBlock}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatToolError(error);
+      }
     },
   );
 
@@ -270,25 +288,29 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
-      const res = await pullMedia({
-        workspaceRoot: ctx.root,
-        origin: ctx.origin,
-        token: ctx.auth.token,
-        refreshToken: ctx.auth.refreshToken,
-        limit: args.limit || ctx.config.mediaSyncLimit || 300,
-        all: args.all,
-        downloadFiles: args.downloadFiles,
-      });
+      try {
+        const ctx = resolveContext(args.profile);
+        const res = await pullMedia({
+          workspaceRoot: ctx.root,
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+          limit: args.limit || ctx.config.mediaSyncLimit || 300,
+          all: args.all,
+          downloadFiles: args.downloadFiles,
+        });
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).`,
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatToolError(error);
+      }
     },
   );
 }

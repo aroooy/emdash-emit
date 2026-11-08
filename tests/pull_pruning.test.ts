@@ -254,9 +254,12 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
       const conflictError = err as SyncPruneConflictError;
       expect(conflictError.conflictItems).toHaveLength(1);
       expect(conflictError.conflictItems[0].id).toBe('01M6ART03');
-      expect(conflictError.message).toContain('Pull aborted: 1 article(s) outside the sync window');
+      expect(conflictError.message).toContain(
+        'Pull aborted: 1 file(s) belonging to 1 article(s) outside the sync window',
+      );
       expect(conflictError.message).toContain('emit push <filePath>');
       expect(conflictError.message).toContain('postsSyncLimit');
+      expect(conflictError.message).toContain('emit pull --no-prune');
     }
 
     // art3 must NOT be deleted
@@ -460,5 +463,57 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     // Neither the canonical file nor the edited duplicate file may be deleted
     expect(fs.existsSync(canonical.fullPath)).toBe(true);
     expect(fs.existsSync(editedDuplicateFullPath)).toBe(true);
+  });
+
+  it('reports conflict counts as files and deduplicated articles when several files share one ULID', async () => {
+    const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
+    const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
+    fs.writeFileSync(canonical.fullPath, '# Canonical\n\nLocal canonical edits.', 'utf8');
+    const duplicateRelPath = `posts/published/20190405_${ulid}-legacy-edited-copy.md`;
+    const duplicateFullPath = path.join(tempDir, duplicateRelPath);
+    fs.writeFileSync(duplicateFullPath, '# Canonical\n\nLocal duplicate edits.', 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      if (url.pathname === '/_emdash/api/openapi.json') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            paths: {
+              '/_emdash/api/content/{collection}': {
+                get: { parameters: [{ name: 'limit', schema: { maximum: 100 } }] },
+              },
+            },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true, data: { items: [], nextCursor: null } }),
+      });
+    });
+
+    let conflict: SyncPruneConflictError | undefined;
+    try {
+      await pullBatch({
+        collection: 'posts',
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        limit: 2,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(SyncPruneConflictError);
+      conflict = err as SyncPruneConflictError;
+    }
+
+    expect(conflict).toBeDefined();
+    expect(conflict?.conflictItems).toHaveLength(2);
+    // Two files belong to a single article: the message must not read as "2 articles"
+    expect(conflict?.message).toContain('2 file(s) belonging to 1 article(s)');
+    expect(fs.existsSync(canonical.fullPath)).toBe(true);
+    expect(fs.existsSync(duplicateFullPath)).toBe(true);
   });
 });
