@@ -24,6 +24,7 @@ import type { Command } from 'commander';
 import { pushArticle, PushValidationError } from '../../sync/push.js';
 import { pushAll } from '../../sync/orchestrator.js';
 import { ApiError } from '../../client/error.js';
+import { FrontmatterParseError } from '../../utils/frontmatter.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerPushCommand(program: Command, resolveContext: CliContextResolver): void {
@@ -152,11 +153,23 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           }
           process.exit(1);
         }
+        if (err instanceof FrontmatterParseError) {
+          console.error(`\n❌ Error: [${err.code}] ${err.message}`);
+          if (err.suggestion) {
+            console.error(`   💡 Suggestion: ${err.suggestion}`);
+          }
+          process.exit(1);
+        }
         if (err instanceof ApiError) {
           console.error(`\n${err.toActionableString()}`);
           process.exit(1);
         }
-        throw err;
+        if (err instanceof Error) {
+          console.error(`\n❌ Error: ${err.message}`);
+          process.exit(1);
+        }
+        console.error(`\n❌ Error: ${String(err)}`);
+        process.exit(1);
       }
     });
 }

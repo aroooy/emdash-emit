@@ -40,6 +40,7 @@ import { extractUlidFromFilename } from '../utils/naming.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
+import { fetchAssignedTerms as fetchAssignedTermsShared } from './terms.js';
 
 export interface PullOptions extends MapperOptions {
   workspaceRoot: string;
@@ -438,29 +439,15 @@ export async function pullArticle(
   let rawItem = options.rawItem;
 
   // Helper to fetch assigned terms for a taxonomy ('category' | 'tag')
-  const fetchAssignedTerms = async (taxonomy: 'category' | 'tag'): Promise<string[] | null> => {
-    try {
-      const termsUrl = new URL(
-        `/_emdash/api/content/${collection}/${id}/terms/${taxonomy}`,
-        options.origin,
-      ).toString();
-      const termsRes = await fetchFn(termsUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: 'application/json',
-        },
-      });
-      if (!termsRes.ok) return null;
-      const termsJson = (await termsRes.json()) as {
-        data?: { terms?: Array<{ slug?: string; id?: string }> };
-      };
-      const assigned = termsJson.data?.terms || [];
-      return assigned.map((t) => t.slug || t.id).filter((s): s is string => Boolean(s));
-    } catch {
-      return null;
-    }
-  };
+  const fetchAssignedTerms = (taxonomy: 'category' | 'tag'): Promise<string[] | null> =>
+    fetchAssignedTermsShared({
+      origin: options.origin,
+      token: options.token,
+      collection,
+      id,
+      taxonomy,
+      fetchFn,
+    });
 
   // Helper to resolve byline ID-to-slug mapping
   let bylineIdToSlug = options.bylineIdToSlug;
@@ -490,153 +477,150 @@ export async function pullArticle(
     return candidates;
   };
 
-  // 1. Fast-path check: If rawItem is provided and not forced, check rev & local hash
-  if (rawItem && !options.force) {
+  // Helper to test fast-path (unmodified skip or non-destructive frontmatter heal)
+  const tryFastPathOrHeal = async (item: Record<string, unknown>): Promise<PullResult | null> => {
+    if (options.force) return null;
     const existingSync = options.cache.getSyncState(id);
-    const remoteRev = String(rawItem._rev || rawItem.rev || rawItem.version || '1');
+    const remoteRev = String(item._rev || item.rev || item.version || '1');
 
-    if (existingSync && existingSync.remoteRev === remoteRev) {
-      const fullExistingPath = path.join(options.workspaceRoot, existingSync.localFilePath);
-      if (fs.existsSync(fullExistingPath)) {
-        try {
-          const currentDiskContent = fs.readFileSync(fullExistingPath, 'utf8');
-          const currentDiskHash = calculateHash(currentDiskContent);
+    if (!existingSync || existingSync.remoteRev !== remoteRev) {
+      return null;
+    }
 
-          // Check if file path matches current naming standard
-          const existingPrefix = extractDatePrefixFromPath(existingSync.localFilePath);
-          const rawData = (rawItem.data || {}) as Record<string, unknown>;
-          const rawTitle = String(rawData.title || rawItem.title || rawItem.slug || '');
-          const articleDate =
-            (rawItem.publishedAt as string) ||
-            existingPrefix ||
-            (rawItem.createdAt as string) ||
-            null;
-          const expectedRelPath = computeArticleRelativePath(
-            collection,
-            String(rawItem.status || 'draft'),
+    const fullExistingPath = path.join(options.workspaceRoot, existingSync.localFilePath);
+    if (!fs.existsSync(fullExistingPath)) {
+      return null;
+    }
+
+    try {
+      const currentDiskContent = fs.readFileSync(fullExistingPath, 'utf8');
+      const currentDiskHash = calculateHash(currentDiskContent);
+
+      // Check if file path matches current naming standard
+      const existingPrefix = extractDatePrefixFromPath(existingSync.localFilePath);
+      const rawData = (item.data || {}) as Record<string, unknown>;
+      const rawTitle = String(rawData.title || item.title || item.slug || '');
+      const articleDate =
+        (item.publishedAt as string) || existingPrefix || (item.createdAt as string) || null;
+      const expectedRelPath = computeArticleRelativePath(
+        collection,
+        String(item.status || 'draft'),
+        id,
+        rawTitle,
+        articleDate,
+      );
+
+      // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML)
+      if (existingSync.localFilePath === expectedRelPath) {
+        if (currentDiskHash === existingSync.localHash) {
+          parseMarkdown(currentDiskContent);
+          return {
             id,
-            rawTitle,
-            articleDate,
-          );
+            slug: existingSync.slug,
+            status: existingSync.status,
+            filePath: existingSync.localFilePath,
+            updated: false,
+            skipped: true,
+            title: rawTitle,
+          };
+        }
 
-          // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML;
-          // if an older serializer wrote unquoted %-prefixed slugs that fail parseMarkdown, fall through to self-heal)
-          if (existingSync.localFilePath === expectedRelPath) {
-            if (currentDiskHash === existingSync.localHash) {
-              parseMarkdown(currentDiskContent);
-              return {
-                id,
-                slug: existingSync.slug,
-                status: existingSync.status,
-                filePath: existingSync.localFilePath,
-                updated: false,
-                skipped: true,
-                title: rawTitle,
-              };
-            }
-
-            // Local file has unpushed edits. Check if frontmatter parses cleanly.
-            // If it parses cleanly, strictly protect local edits without touching the file.
-            try {
-              parseMarkdown(currentDiskContent);
-              return {
-                id,
-                slug: existingSync.slug,
-                status: existingSync.status,
-                filePath: existingSync.localFilePath,
-                updated: false,
-                skipped: true,
-                localEditsPreserved: true,
-                title: rawTitle,
-              };
-            } catch {
-              // Local frontmatter is invalid (e.g. older unquoted % slug or minor indent).
-              // Attempt non-destructive lenient frontmatter repair (body is 100% untouched).
-              const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
-              if (repaired !== null) {
-                // Syntax-only repair succeeded! Overwrite disk with repaired frontmatter (keeping local body).
-                fs.writeFileSync(fullExistingPath, repaired, 'utf8');
-                const repairedHash = calculateHash(repaired);
-                const parsedRepaired = parseMarkdown(repaired);
-
-                // Update baseline snapshot using the remote rev and remote payload's canonical representation,
-                // so subsequent 3-way merges compare against the remote baseline rather than claiming
-                // local edits are in sync.
-                // Fetch assigned taxonomy terms so base snapshot reflects remote state rather than empty taxonomies (NEW-1).
-                const resolvedBylineMap = await getBylineIdToSlug();
-                const effectiveOptions: PullOptions = {
-                  ...options,
-                  bylineIdToSlug: resolvedBylineMap,
-                };
-                const remoteLocal = apiResponseToLocal(rawItem, effectiveOptions);
-                const [categoriesTerms, tagsTerms] = await Promise.all([
-                  fetchAssignedTerms('category'),
-                  fetchAssignedTerms('tag'),
-                ]);
-
-                if (categoriesTerms !== null || tagsTerms !== null) {
-                  if (!remoteLocal.frontmatter.taxonomies) {
-                    remoteLocal.frontmatter.taxonomies = {};
-                  }
-                  if (categoriesTerms !== null) {
-                    remoteLocal.frontmatter.taxonomies.categories = categoriesTerms;
-                  }
-                  if (tagsTerms !== null) {
-                    remoteLocal.frontmatter.taxonomies.tags = tagsTerms;
-                  }
-                }
-
-                const remoteCanonMarkdown = serializeMarkdown(
-                  remoteLocal.frontmatter,
-                  remoteLocal.body,
-                  getTaxonomyCandidates(),
-                );
-                const remoteCanonHash = calculateHash(remoteCanonMarkdown);
-
-                // If term requests both failed over network, preserve existing base snapshot if available
-                // to avoid wiping out taxonomy baselines with an empty assignment (R-2).
-                const existingBase = options.cache.getBaseSnapshot(id);
-                if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
-                  options.cache.saveBaseSnapshot({
-                    id,
-                    rev: remoteRev,
-                    bodyMarkdown: remoteLocal.body,
-                    frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
-                    hash: remoteCanonHash,
-                    savedAt: Math.floor(Date.now() / 1000),
-                  });
-                }
-
-                // Update syncState keeping remoteCanonHash so local edits (repairedHash) are correctly identified as modified
-                options.cache.saveSyncState({
-                  id,
-                  localFilePath: existingSync.localFilePath,
-                  localHash: remoteCanonHash,
-                  remoteRev,
-                  status: parsedRepaired.frontmatter.status,
-                  slug: parsedRepaired.frontmatter.slug,
-                  lastSyncedAt: Math.floor(Date.now() / 1000),
-                });
-
-                return {
-                  id,
-                  slug: parsedRepaired.frontmatter.slug,
-                  status: parsedRepaired.frontmatter.status,
-                  filePath: existingSync.localFilePath,
-                  updated: true,
-                  healed: true,
-                  meaningChanged: false,
-                  title: rawTitle,
-                };
-              }
-              // If lenient repair was impossible without altering meaning, fall through to full pull & quarantine.
-            }
-          }
+        // Local file has unpushed edits. Check if frontmatter parses cleanly.
+        try {
+          parseMarkdown(currentDiskContent);
+          return {
+            id,
+            slug: existingSync.slug,
+            status: existingSync.status,
+            filePath: existingSync.localFilePath,
+            updated: false,
+            skipped: true,
+            localEditsPreserved: true,
+            title: rawTitle,
+          };
         } catch {
-          // If read fails, proceed to normal write
+          // Local frontmatter is invalid. Attempt non-destructive lenient frontmatter repair.
+          const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
+          if (repaired !== null) {
+            fs.writeFileSync(fullExistingPath, repaired, 'utf8');
+            const parsedRepaired = parseMarkdown(repaired);
+
+            const resolvedBylineMap = await getBylineIdToSlug();
+            const effectiveOptions: PullOptions = {
+              ...options,
+              bylineIdToSlug: resolvedBylineMap,
+            };
+            const remoteLocal = apiResponseToLocal(item, effectiveOptions);
+            const [categoriesTerms, tagsTerms] = await Promise.all([
+              fetchAssignedTerms('category'),
+              fetchAssignedTerms('tag'),
+            ]);
+
+            if (categoriesTerms !== null || tagsTerms !== null) {
+              if (!remoteLocal.frontmatter.taxonomies) {
+                remoteLocal.frontmatter.taxonomies = {};
+              }
+              if (categoriesTerms !== null) {
+                remoteLocal.frontmatter.taxonomies.categories = categoriesTerms;
+              }
+              if (tagsTerms !== null) {
+                remoteLocal.frontmatter.taxonomies.tags = tagsTerms;
+              }
+            }
+
+            const remoteCanonMarkdown = serializeMarkdown(
+              remoteLocal.frontmatter,
+              remoteLocal.body,
+              getTaxonomyCandidates(),
+            );
+            const remoteCanonHash = calculateHash(remoteCanonMarkdown);
+
+            const existingBase = options.cache.getBaseSnapshot(id);
+            if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
+              options.cache.saveBaseSnapshot({
+                id,
+                rev: remoteRev,
+                bodyMarkdown: remoteLocal.body,
+                frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
+                hash: remoteCanonHash,
+                savedAt: Math.floor(Date.now() / 1000),
+              });
+            }
+
+            options.cache.saveSyncState({
+              id,
+              localFilePath: existingSync.localFilePath,
+              localHash: remoteCanonHash,
+              remoteRev,
+              status: parsedRepaired.frontmatter.status,
+              slug: parsedRepaired.frontmatter.slug,
+              lastSyncedAt: Math.floor(Date.now() / 1000),
+            });
+
+            return {
+              id,
+              slug: parsedRepaired.frontmatter.slug,
+              status: parsedRepaired.frontmatter.status,
+              filePath: existingSync.localFilePath,
+              updated: true,
+              healed: true,
+              meaningChanged: false,
+              title: rawTitle,
+            };
+          }
         }
       }
+    } catch {
+      // If error, fall through to full pull
     }
+
+    return null;
+  };
+
+  // 1. Fast-path check: If rawItem is provided in options, test fast-path / heal
+  if (rawItem) {
+    const fastResult = await tryFastPathOrHeal(rawItem);
+    if (fastResult) return fastResult;
   }
 
   // 2. Fetch raw item if not passed in options
@@ -690,6 +674,10 @@ export async function pullArticle(
     }
 
     rawItem = (await res.json()) as Record<string, unknown>;
+
+    // Step 2b (D5): Test fast-path / non-destructive heal for single-article pull as well!
+    const singleHealResult = await tryFastPathOrHeal(rawItem);
+    if (singleHealResult) return singleHealResult;
   }
 
   // Ensure byline ID-to-slug mapping is loaded

@@ -515,6 +515,16 @@ describe('Emit CLI (Commander)', () => {
       expect(delErr).toContain('Local file not found: non-existent-target.md');
       expect(delErr).not.toContain('    at ');
       expect(delErr).not.toContain('file://');
+
+      // 4. emit push on invalid frontmatter must report clean error without stack trace (D4)
+      const brokenFilePath = path.join(tempDir, 'posts', 'draft', '20261109_01M6TEST-broken.md');
+      fs.writeFileSync(brokenFilePath, '---\n:::invalid yaml:::\n---\nbody\n', 'utf8');
+      await runCli(['push', brokenFilePath]);
+      expect(exitCode).toBe(1);
+      const pushErr = errLines.join('\n');
+      expect(pushErr).toContain('Error:');
+      expect(pushErr).not.toContain('    at ');
+      expect(pushErr).not.toContain('file://');
     } finally {
       vi.unstubAllGlobals();
       console.error = originalError;

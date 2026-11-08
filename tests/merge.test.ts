@@ -21,7 +21,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { hybrid3WayMerge, mergeBody, mergeFrontmatter } from '../src/sync/merge.js';
+import {
+  hybrid3WayMerge,
+  mergeBody,
+  mergeFrontmatter,
+  mergeTaxonomies,
+} from '../src/sync/merge.js';
 import type { Frontmatter, ParsedMarkdown } from '../src/utils/frontmatter.js';
 
 describe('Hybrid 3-Way Merge Engine', () => {
@@ -170,6 +175,46 @@ describe('Hybrid 3-Way Merge Engine', () => {
       expect(res.frontmatter.status).toBe('published');
       expect(res.body).toContain('Local Section 1');
       expect(res.body).toContain('Remote Section 2');
+    });
+  });
+
+  describe('mergeTaxonomies (D2)', () => {
+    it('cleanly unions non-conflicting tag additions from both sides', () => {
+      const base = { tags: ['travel'] };
+      const local = { tags: ['travel', 'hiking'] };
+      const remote = { tags: ['travel', 'japan'] };
+
+      const { merged, conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags.sort()).toEqual(['hiking', 'japan', 'travel']);
+    });
+
+    it('accepts remote taxonomy when local frontmatter omits that taxonomy key', () => {
+      const base = { categories: ['news'], tags: ['travel'] };
+      const local = { categories: ['news'] }; // tags omitted
+      const remote = { categories: ['news'], tags: ['travel', 'japan'] };
+
+      const { merged, conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toHaveLength(0);
+      expect(merged.categories).toEqual(['news']);
+      expect(merged.tags).toEqual(['travel', 'japan']);
+    });
+
+    it('detects conflict when one side deletes a term while the other side kept/modified it', () => {
+      const base = { tags: ['travel'] };
+      const local = { tags: [] }; // local deleted 'travel'
+      const remote = { tags: ['travel', 'japan'] }; // remote kept 'travel' and added 'japan'
+
+      const { conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toContain('tags');
+    });
+
+    it('detects conflict when both sides assign different terms without a common base', () => {
+      const local = { categories: ['cat-a'] };
+      const remote = { categories: ['cat-b'] };
+
+      const { conflicts } = mergeTaxonomies(local, null, remote);
+      expect(conflicts).toContain('categories');
     });
   });
 });

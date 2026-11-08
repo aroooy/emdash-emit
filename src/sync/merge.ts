@@ -28,20 +28,145 @@ export interface MergeResult {
   frontmatter: Frontmatter;
   body: string;
   warnings: string[];
+  /**
+   * Taxonomy names (e.g. "categories", "tags") where local and remote both changed the
+   * assignment differently. Callers must NOT silently resolve these: taxonomy assignments
+   * are user intent and dropping either side is data loss.
+   */
+  taxonomyConflicts: string[];
+}
+
+/** Order-insensitive normalization for a taxonomy term list (undefined stays undefined). */
+function normalizeTermList(val: unknown): string[] | undefined {
+  if (!Array.isArray(val)) return undefined;
+  return [...new Set(val.map((v) => String(v)))].sort();
+}
+
+/**
+ * Merges taxonomies per taxonomy name (categories / tags / custom) with set semantics,
+ * so an edit to tags never collides with a remote edit to categories.
+ */
+export function mergeTaxonomies(
+  local: Record<string, string[]> | undefined,
+  base: Record<string, string[]> | undefined | null,
+  remote: Record<string, string[]> | undefined,
+): { merged: Record<string, string[]>; conflicts: string[] } {
+  const merged: Record<string, string[]> = {};
+  const conflicts: string[] = [];
+  const names = new Set([
+    ...Object.keys(local || {}),
+    ...Object.keys(base || {}),
+    ...Object.keys(remote || {}),
+  ]);
+  const eq = (a: string[] | undefined, b: string[] | undefined) =>
+    JSON.stringify(a) === JSON.stringify(b);
+
+  for (const name of names) {
+    const lDefined = local !== undefined && name in local && local[name] !== undefined;
+    const rDefined = remote !== undefined && name in remote && remote[name] !== undefined;
+    const bDefined =
+      base !== null && base !== undefined && name in base && base[name] !== undefined;
+
+    // Case 1: Neither side defined this taxonomy
+    if (!lDefined && !rDefined) {
+      if (bDefined && base![name] !== undefined) {
+        merged[name] = base![name];
+      }
+      continue;
+    }
+
+    // Case 2: Only local defined this taxonomy
+    if (lDefined && !rDefined) {
+      if (!bDefined) {
+        merged[name] = local![name];
+      } else {
+        const l = normalizeTermList(local![name]);
+        const b = normalizeTermList(base![name]);
+        if (eq(l, b)) {
+          // Local didn't change it, remote deleted it
+        } else {
+          // Local changed it, remote deleted it -> Conflict
+          conflicts.push(name);
+          merged[name] = local![name];
+        }
+      }
+      continue;
+    }
+
+    // Case 3: Only remote defined this taxonomy (local omitted the field)
+    if (!lDefined && rDefined) {
+      // Local didn't specify this taxonomy: accept remote state
+      merged[name] = remote![name];
+      continue;
+    }
+
+    // Case 4: Both local and remote defined this taxonomy
+    const lRaw = local![name];
+    const rRaw = remote![name];
+    const l = normalizeTermList(lRaw) ?? [];
+    const r = normalizeTermList(rRaw) ?? [];
+
+    if (eq(l, r)) {
+      merged[name] = lRaw;
+      continue;
+    }
+
+    if (!bDefined) {
+      conflicts.push(name);
+      merged[name] = lRaw;
+      continue;
+    }
+
+    const b = normalizeTermList(base![name]) ?? [];
+    const baseSet = new Set(b);
+    const localSet = new Set(l);
+    const remoteSet = new Set(r);
+
+    const localAdded = l.filter((x) => !baseSet.has(x));
+    const localRemoved = b.filter((x) => !localSet.has(x));
+    const remoteAdded = r.filter((x) => !baseSet.has(x));
+    const remoteRemoved = b.filter((x) => !remoteSet.has(x));
+
+    // If either side deleted terms, any disagreement is a conflict
+    if (localRemoved.length > 0 || remoteRemoved.length > 0) {
+      if (
+        !eq(localRemoved.sort(), remoteRemoved.sort()) ||
+        !eq(localAdded.sort(), remoteAdded.sort())
+      ) {
+        conflicts.push(name);
+        merged[name] = lRaw;
+        continue;
+      }
+    }
+
+    // Neither side deleted terms (or both did identical deletion/addition):
+    // Perform clean set union of additions without conflict
+    const allRemovals = new Set([...localRemoved, ...remoteRemoved]);
+    const mergedTerms = [
+      ...b.filter((x) => !allRemovals.has(x)),
+      ...localAdded,
+      ...remoteAdded.filter((x) => !localSet.has(x)),
+    ];
+    merged[name] = mergedTerms;
+  }
+
+  return { merged, conflicts };
 }
 
 /**
  * Merges frontmatter fields key by key.
  * Never inserts conflict markers into YAML (always produces valid Frontmatter).
  * On collision (both local and remote modified the same field differently), remote takes precedence
- * and a warning is logged.
+ * and a warning is logged. Taxonomies are the exception: they are merged per taxonomy name with set
+ * semantics and true conflicts are reported via `taxonomyConflicts` instead of being overwritten.
  */
 export function mergeFrontmatter(
   local: Frontmatter,
   base: Frontmatter | null,
   remote: Frontmatter,
-): { merged: Frontmatter; warnings: string[] } {
+): { merged: Frontmatter; warnings: string[]; taxonomyConflicts: string[] } {
   const warnings: string[] = [];
+  let taxonomyConflicts: string[] = [];
   const merged: Frontmatter = { ...remote };
 
   // Helper to check equality
@@ -60,6 +185,17 @@ export function mergeFrontmatter(
   ];
 
   for (const key of keys) {
+    if (key === 'taxonomies') {
+      const tax = mergeTaxonomies(
+        local.taxonomies,
+        base ? base.taxonomies : null,
+        remote.taxonomies,
+      );
+      merged.taxonomies = tax.merged;
+      taxonomyConflicts = tax.conflicts;
+      continue;
+    }
+
     const localVal = local[key];
     const remoteVal = remote[key];
     const baseVal = base ? base[key] : undefined;
@@ -94,7 +230,7 @@ export function mergeFrontmatter(
   merged.id = remote.id || local.id;
   merged.collection = remote.collection || local.collection;
 
-  return { merged, warnings };
+  return { merged, warnings, taxonomyConflicts };
 }
 
 /**
@@ -131,11 +267,11 @@ export function hybrid3WayMerge(
   base: { frontmatter: Frontmatter; body: string } | null,
   remote: { frontmatter: Frontmatter; body: string },
 ): MergeResult {
-  const { merged: frontmatter, warnings } = mergeFrontmatter(
-    local.frontmatter,
-    base ? base.frontmatter : null,
-    remote.frontmatter,
-  );
+  const {
+    merged: frontmatter,
+    warnings,
+    taxonomyConflicts,
+  } = mergeFrontmatter(local.frontmatter, base ? base.frontmatter : null, remote.frontmatter);
 
   const baseBody = base ? base.body : '';
   const { mergedBody: body, hasConflict } = mergeBody(local.body, baseBody, remote.body);
@@ -145,5 +281,6 @@ export function hybrid3WayMerge(
     frontmatter,
     body,
     warnings,
+    taxonomyConflicts,
   };
 }

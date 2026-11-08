@@ -51,6 +51,7 @@ import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pu
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
+import { fetchAssignedTaxonomies } from './terms.js';
 import {
   fetchRemoteMediaDetail,
   resolveImageMimeType,
@@ -933,6 +934,35 @@ export async function pushArticle(
       const remoteItem = (await getRes.json()) as Record<string, unknown>;
       const remoteParsed = apiResponseToLocal(remoteItem, options);
 
+      // Fetch remote taxonomy assignments because GET /content/{collection}/{id} does not include them!
+      const remoteTax = await fetchAssignedTaxonomies({
+        origin: options.origin,
+        token: options.token,
+        collection,
+        id,
+        fetchFn,
+      });
+
+      if (!remoteParsed.frontmatter.taxonomies) {
+        remoteParsed.frontmatter.taxonomies = {};
+      }
+      if (remoteTax.categories !== null) {
+        remoteParsed.frontmatter.taxonomies.categories = remoteTax.categories;
+      } else if (baseSnapshot) {
+        const baseFm = JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter;
+        if (baseFm.taxonomies?.categories) {
+          remoteParsed.frontmatter.taxonomies.categories = baseFm.taxonomies.categories;
+        }
+      }
+      if (remoteTax.tags !== null) {
+        remoteParsed.frontmatter.taxonomies.tags = remoteTax.tags;
+      } else if (baseSnapshot) {
+        const baseFm = JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter;
+        if (baseFm.taxonomies?.tags) {
+          remoteParsed.frontmatter.taxonomies.tags = baseFm.taxonomies.tags;
+        }
+      }
+
       // Perform Hybrid 3-Way Merge
       const baseInfo = baseSnapshot
         ? {
@@ -947,6 +977,14 @@ export async function pushArticle(
       });
 
       warnings.push(...mergeResult.warnings);
+
+      // If taxonomy conflict occurred, treat as conflict to prevent silent data loss (D2)
+      if (mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0) {
+        mergeResult.hasConflict = true;
+        warnings.push(
+          `Conflict on taxonomies (${mergeResult.taxonomyConflicts.join(', ')}): local and remote changes could not be cleanly merged. Push aborted to prevent data loss.`,
+        );
+      }
 
       if (mergeResult.hasConflict) {
         // Unresolvable conflict in body: write conflict markers to local file for AI/human resolution

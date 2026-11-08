@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.11] - 2026-11-09
+
+### Fixed
+- **Doctor Media References False-Positive (D1)**:
+  - Resolved `/_emdash/api/media/file/<storageKey>` references against indexed `media/*.yaml` companion documents and local media files.
+  - Fixes false-positive warnings where valid remote canonical image references were falsely reported as missing from disk.
+- **Push 3-Way Merge Taxonomy Preservation (D2)**:
+  - Ensured remote taxonomy terms are fetched via `/_emdash/api/content/{collection}/{id}/terms/{category,tag}` during 409 conflict resolution, rather than assuming empty taxonomies from content GET endpoint.
+  - Added `taxonomyConflicts` detection in `mergeTaxonomies`: when local and remote both modify taxonomies differently, push aborts to prevent silent data loss.
+- **CLI Clean Error Output for Frontmatter Failures (D4)**:
+  - In `emit push`, trapped `FrontmatterParseError` and plain errors to display single-line actionable error messages with suggestions instead of raw Node runtime stack traces (conforming to AGENTS.md §5).
+- **Single Article Pull Non-Destructive Heal Symmetry (D5)**:
+  - Extended the non-destructive frontmatter healing (`tryFastPathOrHeal`) to single-article pull (`emit pull <ULID>`), eliminating behavioral divergence between batch pull and single ID pull.
+- **Guide & Package Distribution (D6)**:
+  - Added `emit delete`, `emit conflicts`, `emit doctor`, and `emit pull-media` to `emit guide`'s Handy Commands.
+  - Included `CHANGELOG.md` in `package.json`'s `files` distribution array.
+
+---
+
 ## [0.1.10] - 2026-11-08
 
 ### Summary of Major Architectural Upgrades (Phases 1a, 1b, 2, 3, 4)

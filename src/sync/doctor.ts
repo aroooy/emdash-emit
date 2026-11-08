@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import type { CacheDatabase } from '../db/cache.js';
 import type { EmitConfig } from '../utils/config.js';
 import { getPackageVersion } from '../utils/version.js';
@@ -203,6 +204,45 @@ export async function runWorkspaceDoctor(
   }
 
   // 6. Media References Integrity Check
+  // Index all local media companion YAMLs and files to resolve both local paths and storageKey URLs (D1)
+  const mediaDir = path.join(options.workspaceRoot, 'media');
+  const knownStorageKeys = new Set<string>();
+  const knownMediaIds = new Set<string>();
+  const knownLocalFiles = new Set<string>();
+
+  if (fs.existsSync(mediaDir)) {
+    const mediaFiles = fs.readdirSync(mediaDir);
+    for (const f of mediaFiles) {
+      knownLocalFiles.add(f);
+      knownLocalFiles.add(path.posix.join('media', f));
+      if (f.endsWith('.yaml')) {
+        try {
+          const doc = yaml.load(fs.readFileSync(path.join(mediaDir, f), 'utf8')) as Record<
+            string,
+            unknown
+          > | null;
+          if (doc) {
+            if (typeof doc.storageKey === 'string' && doc.storageKey) {
+              knownStorageKeys.add(doc.storageKey);
+            }
+            if (typeof doc.id === 'string' && doc.id) {
+              knownMediaIds.add(doc.id);
+            }
+          }
+        } catch {
+          // ignore corrupted individual yaml
+        }
+      }
+    }
+    const draftsDir = path.join(mediaDir, 'drafts');
+    if (fs.existsSync(draftsDir)) {
+      for (const df of fs.readdirSync(draftsDir)) {
+        knownLocalFiles.add(path.posix.join('media', 'drafts', df));
+        knownLocalFiles.add(path.posix.join('../../media', 'drafts', df));
+      }
+    }
+  }
+
   const missingMedia: string[] = [];
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
@@ -214,8 +254,26 @@ export async function runWorkspaceDoctor(
         const content = fs.readFileSync(path.join(dir, file), 'utf8');
         const refs = scanArticleMediaReferences(content);
         for (const ref of refs) {
-          const mediaFullPath = path.join(options.workspaceRoot, ref);
-          if (!fs.existsSync(mediaFullPath)) {
+          // Check 1: EmDash public storageKey route: /_emdash/api/media/file/<storageKey>
+          const storageKeyMatch = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
+          if (storageKeyMatch) {
+            const key = storageKeyMatch[1];
+            if (!knownStorageKeys.has(key)) {
+              missingMedia.push(
+                `${ref} (storageKey '${key}' not found in media/*.yaml, referenced by ${path.join(collection, status, file)})`,
+              );
+            }
+            continue;
+          }
+
+          // Check 2: Direct relative or local filesystem path
+          const cleanRef = ref.replace(/^[./]+/, '');
+          const directFull = path.isAbsolute(ref) ? ref : path.join(options.workspaceRoot, ref);
+          if (
+            !fs.existsSync(directFull) &&
+            !knownLocalFiles.has(ref) &&
+            !knownLocalFiles.has(cleanRef)
+          ) {
             missingMedia.push(`${ref} (referenced by ${path.join(collection, status, file)})`);
           }
         }

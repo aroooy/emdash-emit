@@ -1210,6 +1210,88 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res2.quarantined).toBeUndefined();
   });
 
+  it('pullArticle performs non-destructive frontmatter heal on single-article pull fetched via HTTP (D5)', async () => {
+    const singleHealId = '01M67SINGLEHEAL00000000001';
+    const relPath = `posts/draft/20261109_${singleHealId}-Single-Heal.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Local file with unquoted percent-encoded category and unpushed body edits
+    const brokenContent = [
+      '---',
+      `id: ${singleHealId}`,
+      'slug: single-heal',
+      'title: "Single Heal"',
+      'status: draft',
+      'taxonomies:',
+      '  categories:',
+      '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+      '---',
+      '',
+      'Unique local body edits that must be preserved.',
+    ].join('\n');
+    fs.writeFileSync(fullPath, brokenContent, 'utf8');
+
+    cache.saveSyncState({
+      id: singleHealId,
+      localFilePath: relPath,
+      localHash: 'baseline_hash_orig',
+      remoteRev: 'rev_remote_1',
+      status: 'draft',
+      slug: 'single-heal',
+      lastSyncedAt: Math.floor(Date.now() / 1000),
+    });
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes(`/posts/${singleHealId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: singleHealId,
+            slug: 'single-heal',
+            collection: 'posts',
+            status: 'draft',
+            locale: 'ja',
+            _rev: 'rev_remote_1',
+            data: { title: 'Single Heal', body: 'Remote body content' },
+          }),
+        });
+      }
+      if (url.includes(`/terms/category`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { terms: [{ id: 'cat1', slug: '%e6%9c%aa%e5%88%86%e9%a1%9e' }] },
+          }),
+        });
+      }
+      if (url.includes(`/terms/tag`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: { terms: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    // Invoke pullArticle WITHOUT rawItem (simulates `emit pull <id>`)
+    const res = await pullArticle('posts', singleHealId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.healed).toBe(true);
+    expect(res.updated).toBe(true);
+    expect(res.quarantined).toBeUndefined();
+
+    // Verify local body was preserved
+    const diskContentAfter = fs.readFileSync(fullPath, 'utf8');
+    expect(diskContentAfter).toContain('Unique local body edits that must be preserved.');
+    expect(diskContentAfter).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e"');
+  });
+
   it('pullArticle falls through to quarantine when frontmatter cannot be leniently healed without altering meaning (M-3)', async () => {
     const unhealableId = '01M6UNHEALABLE00000000000';
     const relPath = `posts/draft/20261108_${unhealableId}-Unhealable.md`;

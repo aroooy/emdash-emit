@@ -206,4 +206,54 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('warning');
     expect(mCheck?.message).toContain('missing from disk');
   });
+
+  it('correctly resolves canonical storageKey media references against companion YAML (D1)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    // Companion YAML in media/
+    const companionYaml = [
+      'id: 01M67MEDIA000000000000001',
+      'filename: sample.png',
+      'storageKey: uploads/2026/11/sample.png',
+      'mimeType: image/png',
+    ].join('\n');
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67MEDIA000000000000001-sample.yaml'),
+      companionYaml,
+      'utf8',
+    );
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-ref-canonical-post',
+      title: 'Media Ref Canonical Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    // Reference by canonical EmDash media URL
+    const body =
+      'Check this image: ![img](https://aroooy.net/_emdash/api/media/file/uploads/2026/11/sample.png)\n';
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-ref-canonical-post.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    expect(mCheck?.message).toContain('All referenced local media files exist on disk');
+  });
 });

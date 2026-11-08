@@ -204,9 +204,13 @@ export function registerStatusInitCommands(
                     emit push <file> --allow-publish
 
 ■ Handy Commands
-  - emit status     ... View local editing status and diff against remote
-  - emit pull [id]  ... Sync remote articles + taxonomies into local workspace
-  - emit mcp        ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
+  - emit status       ... View local editing status and diff against remote
+  - emit pull [id]    ... Sync remote articles + taxonomies into local workspace
+  - emit delete <id>  ... Safely delete article locally & remotely (saves .deleted.md rescue copy)
+  - emit conflicts    ... List, diff, and resolve quarantined copies in posts/conflicts/
+  - emit doctor       ... Diagnose workspace health, version, origin, and media references
+  - emit pull-media   ... Download remote media assets (supports --article <id> for targeted sync)
+  - emit mcp          ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
 
 ■ Collaboration Rules with AI (AGENTS.md)
   - Strict prohibition against creating throwaway temporary files (e.g. temp.md).
