@@ -44,6 +44,14 @@ import { getPackageVersion } from '../utils/version.js';
 export interface CreateMcpServerOptions {
   workspaceRoot?: string;
   cache?: CacheDatabase;
+  /**
+   * Optional custom profiles.yaml path. When provided, every profile lookup performed by this
+   * server (explicit profile, cwd-matched profile, and auth resolution) reads only this file
+   * instead of the user-level ~/.config/emit/profiles.yaml. This keeps embedded usage and CI
+   * runs deterministic: results no longer depend on which sites happen to be configured on the
+   * machine executing the process.
+   */
+  profilesPath?: string;
 }
 
 export const EMIT_MCP_INSTRUCTIONS = `
@@ -84,9 +92,11 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   // Helper to resolve workspace context based on optional profile
   const resolveContext: ContextResolver = (targetProfile?: string): ServerContext => {
     const profileToUse = targetProfile || activeProfileOverride;
-    const profilesData = loadProfilesFile();
+    const profilesData = loadProfilesFile(options?.profilesPath);
     const explicitProf = profileToUse ? profilesData.profiles[profileToUse] : undefined;
-    const cwdProf = !profileToUse ? findProfileByDirectory(process.cwd()) : null;
+    const cwdProf = !profileToUse
+      ? findProfileByDirectory(process.cwd(), options?.profilesPath)
+      : null;
     const nearestEmitRoot = !profileToUse ? findWorkspaceRoot(process.cwd()) : null;
 
     const preResolvedWorkspace =
@@ -106,6 +116,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
         profile: profileToUse,
         cwd: preResolvedWorkspace || process.cwd(),
         origin: preOriginHint,
+        customProfilesPath: options?.profilesPath,
       });
       if (!auth) {
         throw new Error(
@@ -170,6 +181,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
     setActiveOverride: (name) => {
       activeProfileOverride = name;
     },
+    profilesPath: options?.profilesPath,
   });
   registerSyncNewTool(server, resolveContext);
   registerSyncPullTools(server, resolveContext);

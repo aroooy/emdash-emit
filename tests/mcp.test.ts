@@ -60,7 +60,11 @@ describe('Emit MCP Server', () => {
   });
 
   it('initializes MCP server and registers sync tools with comprehensive descriptions and instructions', () => {
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
     expect(server).toBeDefined();
 
     // Verify MCP instructions
@@ -127,7 +131,11 @@ describe('Emit MCP Server', () => {
   });
 
   it('G1 Guard: blocks sync_push without filePath or id', async () => {
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
     expect(server).toBeDefined();
   });
 
@@ -146,7 +154,11 @@ describe('Emit MCP Server', () => {
       'id: 01M6TAG1\nname: nodejs\nslug: nodejs\n',
     );
 
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
     const registered = (
       server as unknown as {
         _registeredTools: Record<
@@ -226,6 +238,7 @@ describe('Emit MCP Server', () => {
     const server = createMcpServer({
       workspaceRoot: tempDir,
       cache,
+      profilesPath: customProfilesPath,
     });
     const registered = (
       server as unknown as {
@@ -288,7 +301,11 @@ describe('Emit MCP Server', () => {
       fs.writeFileSync(path.join(pubDir, file), content, 'utf8');
     }
 
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
     const registered = (
       server as unknown as {
         _registeredTools: Record<
@@ -311,5 +328,53 @@ describe('Emit MCP Server', () => {
     ).toHaveLength(10);
     expect(parsed.invalidTruncated).toBe(5);
     expect(parsed.repairHint).toContain('sync_pull');
+  });
+
+  it('honors profilesPath so resolution never depends on the machine-level profiles.yaml', async () => {
+    // Add two more sites to the custom file only. Neither matches the temp workspace and no
+    // explicit profile is requested, so the custom file is genuinely ambiguous. If createMcpServer
+    // ignored profilesPath and read ~/.config/emit/profiles.yaml instead, this would resolve
+    // silently against whatever happens to be configured on the executing machine.
+    setProfile(
+      'site-a',
+      { origin: 'https://site-a.example.com', token: 'tok-a' },
+      false,
+      customProfilesPath,
+    );
+    setProfile(
+      'site-b',
+      { origin: 'https://site-b.example.com', token: 'tok-b' },
+      false,
+      customProfilesPath,
+    );
+
+    const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-mcp-ambiguous-'));
+    try {
+      const server = createMcpServer({
+        workspaceRoot: otherRoot,
+        cache,
+        profilesPath: customProfilesPath,
+      });
+      const registered = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              handler: (
+                args: Record<string, unknown>,
+              ) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }>;
+            }
+          >;
+        }
+      )._registeredTools;
+
+      const res = await registered['sync_status'].handler({});
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('Multiple site profiles exist');
+      expect(res.content[0].text).toContain('site-a');
+      expect(res.content[0].text).toContain('site-b');
+    } finally {
+      fs.rmSync(otherRoot, { recursive: true, force: true });
+    }
   });
 });

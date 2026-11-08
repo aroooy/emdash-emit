@@ -871,6 +871,9 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 | `profile_list` | List all configured connection profiles | (none) |
 | `profile_switch` | Switch active profile for multi-site environments | `name` (required), `persist` |
 
+> [!NOTE]
+> **Every tool failure is a structured result, never a raw throw.** Handlers return `isError: true` with the same diagnostics the CLI prints — `[CODE]`, HTTP status, endpoint, and a `💡 Suggestion` line (or a `PREFLIGHT_VALIDATION_FAILED` JSON payload with guard codes). This includes workspace/profile resolution failures, which list the available profiles so the agent can retry with an explicit `profile` argument.
+
 ### Autonomous Agent Workflows
 
 With Emit connected via MCP, you can give high-level natural language instructions to your AI:

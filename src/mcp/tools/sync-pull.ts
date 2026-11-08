@@ -22,7 +22,7 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver } from '../context.js';
+import type { ContextResolver, ServerContext } from '../context.js';
 import { pullArticle, formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
 import { pullBatch } from '../../sync/orchestrator.js';
 import {
@@ -80,7 +80,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
+      let ctx: ServerContext;
+      try {
+        ctx = resolveContext(args.profile);
+      } catch (error) {
+        return formatToolError(error);
+      }
       const collection = args.collection || ctx.config.defaultCollection;
       const origin = ctx.origin;
 

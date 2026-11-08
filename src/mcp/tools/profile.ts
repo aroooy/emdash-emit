@@ -23,44 +23,54 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadProfilesFile, setActiveProfile } from '../../utils/profile.js';
+import { formatToolError } from '../tool-errors.js';
 
-export function registerProfileTools(
-  server: McpServer,
-  options: {
-    getActiveOverride: () => string | undefined;
-    setActiveOverride: (name: string | undefined) => void;
-  },
-): void {
+export interface ProfileToolOptions {
+  getActiveOverride: () => string | undefined;
+  setActiveOverride: (name: string | undefined) => void;
+  /**
+   * Custom profiles.yaml path forwarded from createMcpServer. When set, profile tools read and
+   * write exactly the same file the sync tools resolve against, so an embedded server never
+   * reports profiles it cannot actually use.
+   */
+  profilesPath?: string;
+}
+
+export function registerProfileTools(server: McpServer, options: ProfileToolOptions): void {
   // profile_list: List available profiles and indicate active one
   server.tool(
     'profile_list',
-    'List configured site profiles from ~/.config/emit/profiles.yaml, showing their origin URLs, workspace roots, and active selection.',
+    'List configured site profiles from the Emit profiles file (~/.config/emit/profiles.yaml by default), showing their origin URLs, workspace roots, and active selection.',
     {},
     async () => {
-      const data = loadProfilesFile();
-      const currentActive = options.getActiveOverride() || data.active;
-      const profiles = Object.entries(data.profiles).map(([name, p]) => ({
-        name,
-        origin: p.origin,
-        workspace: p.workspace,
-        active: name === currentActive,
-      }));
+      try {
+        const data = loadProfilesFile(options.profilesPath);
+        const currentActive = options.getActiveOverride() || data.active;
+        const profiles = Object.entries(data.profiles).map(([name, p]) => ({
+          name,
+          origin: p.origin,
+          workspace: p.workspace,
+          active: name === currentActive,
+        }));
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                activeProfile: currentActive,
-                profiles,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  activeProfile: currentActive,
+                  profiles,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return formatToolError(error);
+      }
     },
   );
 
@@ -73,35 +83,41 @@ export function registerProfileTools(
       persist: z
         .boolean()
         .optional()
-        .describe('If true, updates active profile in ~/.config/emit/profiles.yaml permanently'),
+        .describe('If true, updates active profile in profiles.yaml permanently'),
     },
     async (args) => {
-      const data = loadProfilesFile();
-      if (!data.profiles[args.name]) {
+      try {
+        const data = loadProfilesFile(options.profilesPath);
+        if (!data.profiles[args.name]) {
+          // Marked as a tool error so clients/agents can branch on isError instead of scraping text.
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `❌ Profile "${args.name}" not found. Available profiles: ${Object.keys(data.profiles).join(', ') || 'none'}.`,
+              },
+            ],
+          };
+        }
+
+        if (args.persist) {
+          setActiveProfile(args.name, options.profilesPath);
+        }
+        options.setActiveOverride(args.name);
+
+        const p = data.profiles[args.name];
         return {
           content: [
             {
               type: 'text',
-              text: `❌ Profile "${args.name}" not found. Available profiles: ${Object.keys(data.profiles).join(', ') || 'none'}.`,
+              text: `✅ Switched active profile to "${args.name}" (origin: ${p.origin}, workspace: ${p.workspace}${args.persist ? ', persisted to profiles.yaml' : ''}).`,
             },
           ],
         };
+      } catch (error) {
+        return formatToolError(error);
       }
-
-      if (args.persist) {
-        setActiveProfile(args.name);
-      }
-      options.setActiveOverride(args.name);
-
-      const p = data.profiles[args.name];
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `✅ Switched active profile to "${args.name}" (origin: ${p.origin}, workspace: ${p.workspace}${args.persist ? ', persisted to profiles.yaml' : ''}).`,
-          },
-        ],
-      };
     },
   );
 }

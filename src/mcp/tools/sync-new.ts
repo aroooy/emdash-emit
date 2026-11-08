@@ -22,9 +22,10 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver } from '../context.js';
+import type { ContextResolver, ServerContext } from '../context.js';
 import { createArticleScaffold } from '../../sync/new.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
+import { formatToolError } from '../tool-errors.js';
 
 export function registerSyncNewTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -45,30 +46,41 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
-      const collection = args.collection || ctx.config.defaultCollection;
-      const res = createArticleScaffold({
-        slug: args.slug,
-        workspaceRoot: ctx.root,
-        collection,
-        title: args.title,
-        locale: args.locale || ctx.config.defaultLocale,
-        byline: args.byline,
-        cache: ctx.cache,
-      });
+      let ctx: ServerContext;
+      try {
+        ctx = resolveContext(args.profile);
+      } catch (error) {
+        return formatToolError(error);
+      }
 
-      const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-      const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
-      const hintBlock = taxHint ? `\n\n${taxHint}` : '';
+      try {
+        const collection = args.collection || ctx.config.defaultCollection;
+        const res = createArticleScaffold({
+          slug: args.slug,
+          workspaceRoot: ctx.root,
+          collection,
+          title: args.title,
+          locale: args.locale || ctx.config.defaultLocale,
+          byline: args.byline,
+          cache: ctx.cache,
+        });
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.`,
-          },
-        ],
-      };
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+        const hintBlock = taxHint ? `\n\n${taxHint}` : '';
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.`,
+            },
+          ],
+        };
+      } catch (error) {
+        // Slug validation, byline resolution, and taxonomy hint reads all fail here.
+        return formatToolError(error);
+      }
     },
   );
 }

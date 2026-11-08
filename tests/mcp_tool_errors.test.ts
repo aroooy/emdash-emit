@@ -29,7 +29,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { ApiError } from '../src/client/error.js';
 import { SyncPruneConflictError } from '../src/sync/orchestrator.js';
 import { PushValidationError } from '../src/sync/push.js';
-import { AmbiguousProfileError } from '../src/utils/profile.js';
+import { AmbiguousProfileError, setProfile } from '../src/utils/profile.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { formatToolError } from '../src/mcp/tool-errors.js';
 
@@ -143,14 +143,7 @@ describe('MCP Tool Error Formatting', () => {
     process.env.EMDASH_ORIGIN = 'https://example.com';
     try {
       const server = createMcpServer({ workspaceRoot: tempDir, cache });
-      const registered = (
-        server as unknown as {
-          _registeredTools: Record<
-            string,
-            { handler: (args: Record<string, unknown>) => Promise<CallToolResult> }
-          >;
-        }
-      )._registeredTools;
+      const registered = handlersOf(server);
 
       const result = await registered['sync_push'].handler({ filePath: conflictRel });
 
@@ -166,5 +159,129 @@ describe('MCP Tool Error Formatting', () => {
       if (origOrigin) process.env.EMDASH_ORIGIN = origOrigin;
       else delete process.env.EMDASH_ORIGIN;
     }
+  });
+
+  /**
+   * `McpServer._registeredTools` holds `RegisteredTool` objects (callable, with a `.handler`
+   * property). The helper keeps the private-field cast in one place so each test can invoke a tool
+   * exactly as the SDK does, without duplicating the unsafe cast.
+   */
+  const handlersOf = (
+    server: unknown,
+  ): Record<
+    string,
+    {
+      handler: (args: Record<string, unknown>, extra?: unknown) => Promise<CallToolResult>;
+      description?: string;
+    }
+  > =>
+    (
+      server as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (args: Record<string, unknown>, extra?: unknown) => Promise<CallToolResult>;
+            description?: string;
+          }
+        >;
+      }
+    )._registeredTools;
+
+  /**
+   * Workspace/profile resolution runs before any I/O in every sync tool. When it fails, agents must
+   * still receive a formatted `isError` result instead of a raw throw that the MCP SDK collapses
+   * into an opaque one-liner. A stray EMDASH_TOKEN would short-circuit profile resolution, so the
+   * env tiers are cleared to keep this deterministic on any machine.
+   */
+  it('routes ambiguous profile resolution through formatToolError in every context tool', async () => {
+    const profilesPath = path.join(tempDir, 'profiles.yaml');
+    setProfile(
+      'alpha-site',
+      { origin: 'https://alpha.example.com', token: 'tok-alpha' },
+      false,
+      profilesPath,
+    );
+    setProfile(
+      'beta-site',
+      { origin: 'https://beta.example.com', token: 'tok-beta' },
+      false,
+      profilesPath,
+    );
+
+    const savedEnv: Record<string, string | undefined> = {
+      EMDASH_TOKEN: process.env.EMDASH_TOKEN,
+      EMDASH_API_TOKEN: process.env.EMDASH_API_TOKEN,
+    };
+    delete process.env.EMDASH_TOKEN;
+    delete process.env.EMDASH_API_TOKEN;
+
+    try {
+      const registered = handlersOf(
+        createMcpServer({ workspaceRoot: tempDir, cache, profilesPath }),
+      );
+
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['sync_status', {}],
+        ['sync_pull', {}],
+        ['sync_push', { filePath: 'posts/draft/20261108_01M6ABCDEF1234567890123456-post.md' }],
+        ['sync_diff', { id: '01M6ABCDEF1234567890123456' }],
+        ['sync_new', { slug: 'ambiguity-probe' }],
+      ];
+
+      for (const [toolName, args] of cases) {
+        let result: CallToolResult;
+        try {
+          result = await registered[toolName].handler(args);
+        } catch (err) {
+          throw new Error(
+            `${toolName} must return a formatted error result instead of throwing (${String(err)})`,
+          );
+        }
+        expect(result.isError, toolName).toBe(true);
+        expect(textOf(result), toolName).toContain('Multiple site profiles exist');
+        expect(textOf(result), toolName).toContain('alpha-site');
+        expect(textOf(result), toolName).toContain('beta-site');
+      }
+
+      // Failed calls must not leave partial artifacts behind.
+      expect(fs.existsSync(path.join(tempDir, 'posts'))).toBe(false);
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value) process.env[key] = value;
+        else delete process.env[key];
+      }
+    }
+  });
+
+  it('honors profilesPath in profile tools and marks profile failures as tool errors', async () => {
+    const profilesPath = path.join(tempDir, 'profiles-solo.yaml');
+    setProfile(
+      'solo-site',
+      { origin: 'https://solo.example.com', token: 'tok-solo' },
+      true,
+      profilesPath,
+    );
+
+    const registered = handlersOf(createMcpServer({ workspaceRoot: tempDir, cache, profilesPath }));
+
+    // profile_list must report exactly the profiles the sync tools can actually resolve, never the
+    // machine-level ~/.config/emit/profiles.yaml.
+    const listed = await registered['profile_list'].handler({});
+    expect(listed.isError).toBeUndefined();
+    const payload = JSON.parse(textOf(listed));
+    expect(payload.activeProfile).toBe('solo-site');
+    expect(payload.profiles.map((p: { name: string }) => p.name)).toEqual(['solo-site']);
+
+    const missing = await registered['profile_switch'].handler({ name: 'typo-site' });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain('Profile "typo-site" not found');
+    expect(textOf(missing)).toContain('solo-site');
+
+    const switched = await registered['profile_switch'].handler({ name: 'solo-site' });
+    expect(switched.isError).toBeUndefined();
+    expect(textOf(switched)).toContain('Switched active profile to "solo-site"');
+
+    // Without persist, nothing is rewritten on disk.
+    expect(fs.readFileSync(profilesPath, 'utf8')).toContain('solo-site');
   });
 });

@@ -22,7 +22,7 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver } from '../context.js';
+import type { ContextResolver, ServerContext } from '../context.js';
 import { inspectArticleDiff, type ArticleDiffInspection } from '../../sync/diff.js';
 import { formatToolError } from '../tool-errors.js';
 
@@ -41,7 +41,12 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
+      let ctx: ServerContext;
+      try {
+        ctx = resolveContext(args.profile);
+      } catch (error) {
+        return formatToolError(error);
+      }
       let inspection: ArticleDiffInspection;
       try {
         inspection = inspectArticleDiff({

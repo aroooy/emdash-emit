@@ -22,7 +22,7 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver } from '../context.js';
+import type { ContextResolver, ServerContext } from '../context.js';
 import { getWorkspaceStatus, type WorkspaceStatusResult } from '../../sync/status.js';
 import { formatToolError } from '../tool-errors.js';
 
@@ -40,7 +40,15 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
-      const ctx = resolveContext(args.profile);
+      // Resolve context inside the guard too: workspace/profile resolution can throw
+      // AmbiguousProfileError or "Not inside an Emit workspace", and agents need those
+      // formatted the same way as every other tool failure.
+      let ctx: ServerContext;
+      try {
+        ctx = resolveContext(args.profile);
+      } catch (error) {
+        return formatToolError(error);
+      }
       const collection = args.collection || ctx.config.defaultCollection;
       let status: WorkspaceStatusResult;
       try {
