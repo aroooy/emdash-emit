@@ -32,6 +32,7 @@ import { PushValidationError } from '../src/sync/push.js';
 import { AmbiguousProfileError, setProfile } from '../src/utils/profile.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { formatToolError } from '../src/mcp/tool-errors.js';
+import { CanonicalHasUnpushedEditsError } from '../src/sync/conflicts.js';
 
 /**
  * MCP tools must hand AI agents the same structured diagnostics the CLI prints. Without
@@ -108,6 +109,18 @@ describe('MCP Tool Error Formatting', () => {
     const ambiguous = formatToolError(new AmbiguousProfileError(['aroooy', 'staging']));
     expect(ambiguous.isError).toBe(true);
     expect(textOf(ambiguous)).toContain('Multiple profiles are configured (aroooy, staging)');
+
+    const unpushedConflict = formatToolError(
+      new CanonicalHasUnpushedEditsError({
+        canonicalFilePath: 'posts/draft/post.md',
+        conflictFilePath: 'posts/conflicts/post.conflict.md',
+        id: '01M6ABCDEF1234567890123456',
+      }),
+    );
+    expect(unpushedConflict.isError).toBe(true);
+    const unpushedPayload = JSON.parse(textOf(unpushedConflict));
+    expect(unpushedPayload.error).toBe('CANONICAL_HAS_UNPUSHED_EDITS');
+    expect(unpushedPayload.suggestion).toContain('--force');
   });
 
   it('falls back to a readable message for plain errors and non-Error throws', () => {

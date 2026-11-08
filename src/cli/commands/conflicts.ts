@@ -22,7 +22,12 @@
 
 import type { Command } from 'commander';
 import { ApiError } from '../../client/error.js';
-import { listConflicts, diffConflict, resolveConflict } from '../../sync/conflicts.js';
+import {
+  listConflicts,
+  diffConflict,
+  resolveConflict,
+  CanonicalHasUnpushedEditsError,
+} from '../../sync/conflicts.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerConflictsCommand(
@@ -30,7 +35,10 @@ export function registerConflictsCommand(
   resolveContext: CliContextResolver,
 ): void {
   const reportActionFailure = (error: unknown): never => {
-    if (error instanceof ApiError) {
+    if (error instanceof CanonicalHasUnpushedEditsError) {
+      console.error(`❌ ${error.message}`);
+      console.error(`💡 Suggestion: ${error.suggestion}`);
+    } else if (error instanceof ApiError) {
       console.error(error.toActionableString());
     } else if (error instanceof Error) {
       console.error(`❌ Error: ${error.message}`);
@@ -135,6 +143,10 @@ export function registerConflictsCommand(
       'Replace canonical article with quarantined copy and delete quarantine',
     )
     .option('--accept-canonical', 'Discard the quarantined copy and keep canonical article')
+    .option(
+      '-f, --force',
+      'Force overwrite canonical article even if it has unpushed local modifications',
+    )
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (filePath, options) => {
@@ -153,10 +165,16 @@ export function registerConflictsCommand(
           cache: ctx.cache,
           filePath,
           strategy,
+          force: options.force,
           collection,
         });
 
         console.log(`✅ ${result.message}`);
+        if (result.warnings && result.warnings.length > 0) {
+          for (const w of result.warnings) {
+            console.log(`⚠️ Warning: ${w}`);
+          }
+        }
       } catch (err) {
         reportActionFailure(err);
       }

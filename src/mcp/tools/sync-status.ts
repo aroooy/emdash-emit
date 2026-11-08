@@ -148,7 +148,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           : {}),
         ...(status.summary.conflicts > 0
           ? {
-              conflictsNote: `${status.summary.conflicts} preserved local copy(ies) exist in ${collection}/conflicts/ because a pull found content that diverged from the last synced baseline. Review each copy, merge valuable content manually, then delete it. Preserved copies are never pushed or pruned automatically, and sync_push refuses a posts/conflicts/ path with QUARANTINED_COPY_NOT_PUSHABLE.`,
+              conflictsNote: `${status.summary.conflicts} preserved local copy(ies) exist in ${collection}/conflicts/ (sync conflicts and deletion rescue backups are both preserved here). Review each copy, merge valuable content manually, or use sync_conflicts (action: 'list' | 'diff' | 'resolve'). Preserved copies are never pushed or pruned automatically, and sync_push refuses a posts/conflicts/ path with QUARANTINED_COPY_NOT_PUSHABLE.`,
             }
           : {}),
       };

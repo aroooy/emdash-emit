@@ -49,6 +49,10 @@ export function registerSyncConflictsTool(
         .describe(
           'Resolution strategy for action="resolve": "accept-local" (restore/apply quarantined copy) or "accept-canonical" (discard quarantined copy)',
         ),
+      force: z
+        .boolean()
+        .optional()
+        .describe('Force overwrite canonical article even if it has unpushed local modifications'),
       collection: z
         .string()
         .optional()
@@ -114,6 +118,7 @@ export function registerSyncConflictsTool(
             cache: ctx.cache,
             filePath: args.filePath,
             strategy: args.strategy,
+            force: args.force,
             collection,
           });
           return formatToolSuccess(res as unknown as Record<string, unknown>, ctx.meta);

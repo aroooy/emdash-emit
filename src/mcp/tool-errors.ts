@@ -32,6 +32,7 @@ import {
   UnpushedModificationsError,
   PublishedArticleDeletionForbiddenError,
 } from '../sync/delete.js';
+import { CanonicalHasUnpushedEditsError } from '../sync/conflicts.js';
 
 function toolError(text: string): CallToolResult {
   return {
@@ -137,6 +138,24 @@ export function formatToolError(error: unknown, meta?: McpMeta): CallToolResult 
           error: error.code,
           message: error.message,
           filePath: error.filePath,
+          id: error.id,
+          suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (error instanceof CanonicalHasUnpushedEditsError) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          canonicalFilePath: error.canonicalFilePath,
+          conflictFilePath: error.conflictFilePath,
           id: error.id,
           suggestion: error.suggestion,
           ...(meta ? { _meta: meta } : {}),

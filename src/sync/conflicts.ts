@@ -60,6 +60,26 @@ export interface ConflictResolutionResult {
   conflictFilePath: string;
   canonicalFilePath?: string | null;
   message: string;
+  warnings?: string[];
+}
+
+export class CanonicalHasUnpushedEditsError extends Error {
+  public code = 'CANONICAL_HAS_UNPUSHED_EDITS';
+  public canonicalFilePath: string;
+  public conflictFilePath: string;
+  public id: string;
+  public suggestion: string;
+
+  constructor(details: { canonicalFilePath: string; conflictFilePath: string; id: string }) {
+    super(
+      `ABORT: Canonical article "${details.canonicalFilePath}" contains unpushed local modifications. Overwriting it with quarantined copy "${details.conflictFilePath}" would lose those edits.`,
+    );
+    this.name = 'CanonicalHasUnpushedEditsError';
+    this.canonicalFilePath = details.canonicalFilePath;
+    this.conflictFilePath = details.conflictFilePath;
+    this.id = details.id;
+    this.suggestion = `Inspect differences first with "emit conflicts diff ${details.conflictFilePath}" or "emit diff ${details.canonicalFilePath}". If you explicitly intend to discard canonical edits and overwrite, pass --force (or MCP force: true).`;
+  }
 }
 
 /**
@@ -215,14 +235,26 @@ function resolveConflictFile(
   collection = 'posts',
 ): { relPath: string; fullPath: string; fileName: string } {
   const norm = filePathOrName.trim();
+  const conflictsDir = path.resolve(workspaceRoot, collection, 'conflicts');
+
+  const checkInside = (p: string) => {
+    const rel = path.relative(conflictsDir, p);
+    return !rel.startsWith('..') && !path.isAbsolute(rel);
+  };
+
   const directFull = path.isAbsolute(norm) ? norm : path.resolve(workspaceRoot, norm);
   if (fs.existsSync(directFull) && fs.statSync(directFull).isFile()) {
+    if (!checkInside(directFull)) {
+      throw new Error(
+        `QUARANTINED_PATH_REQUIRED: Target file must be located inside ${collection}/conflicts/: ${filePathOrName}`,
+      );
+    }
     const relPath = path.relative(workspaceRoot, directFull);
     return { relPath, fullPath: directFull, fileName: path.basename(directFull) };
   }
 
   // Check inside collection/conflicts
-  const insideFull = path.join(workspaceRoot, collection, 'conflicts', path.basename(norm));
+  const insideFull = path.join(conflictsDir, path.basename(norm));
   if (fs.existsSync(insideFull) && fs.statSync(insideFull).isFile()) {
     const relPath = path.relative(workspaceRoot, insideFull);
     return { relPath, fullPath: insideFull, fileName: path.basename(insideFull) };
@@ -312,6 +344,7 @@ export function resolveConflict(options: {
   cache: CacheDatabase;
   filePath: string;
   strategy: 'accept-local' | 'accept-canonical';
+  force?: boolean;
   collection?: string;
 }): ConflictResolutionResult {
   const collection = options.collection || 'posts';
@@ -361,7 +394,29 @@ export function resolveConflict(options: {
   const baseName = extractBaseArticleName(fileName);
   let canonicalRel = findCanonicalArticlePath(options.workspaceRoot, baseName, id, collection);
 
-  if (!canonicalRel) {
+  if (canonicalRel) {
+    const canonicalFull = path.join(options.workspaceRoot, canonicalRel);
+    // Major 1 Guard: Check if canonical file has unpushed modifications
+    if (!options.force && fs.existsSync(canonicalFull)) {
+      const canonicalContent = fs.readFileSync(canonicalFull, 'utf8');
+      const canonicalHash = calculateHash(canonicalContent);
+      let canonicalId = id;
+      try {
+        const parsedCan = parseMarkdown(canonicalContent);
+        canonicalId = parsedCan.frontmatter.id;
+      } catch {
+        // fallback
+      }
+      const syncState = options.cache.getSyncState(canonicalId);
+      if (syncState && syncState.localHash !== canonicalHash) {
+        throw new CanonicalHasUnpushedEditsError({
+          canonicalFilePath: canonicalRel,
+          conflictFilePath: relPath,
+          id: canonicalId,
+        });
+      }
+    }
+  } else {
     // Recreate target file in collection/status/baseName.md
     canonicalRel = path.join(collection, status, `${baseName}.md`);
   }
@@ -369,6 +424,14 @@ export function resolveConflict(options: {
   const canonicalFull = path.join(options.workspaceRoot, canonicalRel);
   fs.mkdirSync(path.dirname(canonicalFull), { recursive: true });
   fs.writeFileSync(canonicalFull, conflictContent, 'utf8');
+
+  // Minor B: check if restored article is missing valid ULID
+  const warnings: string[] = [];
+  if (!id || id === 'unknown') {
+    warnings.push(
+      `Restored article has no valid ULID (id: ${id}). You may need to assign a valid ULID before pushing.`,
+    );
+  }
 
   // Update cache sync state if id is valid
   if (id && id !== 'unknown') {
@@ -394,5 +457,6 @@ export function resolveConflict(options: {
     conflictFilePath: relPath,
     canonicalFilePath: canonicalRel,
     message: `Restored quarantined content to ${canonicalRel} and removed ${relPath}.`,
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }

@@ -33,6 +33,7 @@ import {
   diffConflict,
   resolveConflict,
   extractBaseArticleName,
+  CanonicalHasUnpushedEditsError,
 } from '../src/sync/conflicts.js';
 
 describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', () => {
@@ -279,5 +280,83 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     );
     expect(fs.existsSync(expectedRestored)).toBe(true);
     expect(fs.readFileSync(expectedRestored, 'utf8')).toBe(rescueContent);
+  });
+
+  it('rejects accept-local when canonical article has unpushed modifications (Major 1)', () => {
+    const { fullCanonical } = setupArticleFixture();
+    // Simulate unpushed local edit on canonical article
+    fs.appendFileSync(fullCanonical, '\nNew unpushed paragraph on canonical\n', 'utf8');
+
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    fs.writeFileSync(path.join(conflictsDir, conflictFileName), 'Quarantined Content\n', 'utf8');
+
+    expect(() =>
+      resolveConflict({
+        workspaceRoot: tempDir,
+        cache,
+        filePath: conflictFileName,
+        strategy: 'accept-local',
+      }),
+    ).toThrowError(CanonicalHasUnpushedEditsError);
+  });
+
+  it('allows accept-local when canonical article has unpushed modifications if force: true is supplied (Major 1)', () => {
+    const { fullCanonical } = setupArticleFixture();
+    fs.appendFileSync(fullCanonical, '\nNew unpushed paragraph on canonical\n', 'utf8');
+
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const conflictContent = 'Forced Quarantined Content\n';
+    fs.writeFileSync(path.join(conflictsDir, conflictFileName), conflictContent, 'utf8');
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: conflictFileName,
+      strategy: 'accept-local',
+      force: true,
+    });
+
+    expect(res.success).toBe(true);
+    expect(fs.readFileSync(fullCanonical, 'utf8')).toBe(conflictContent);
+  });
+
+  it('rejects resolving files outside posts/conflicts/ (Minor A)', () => {
+    const { relCanonical } = setupArticleFixture();
+
+    expect(() =>
+      resolveConflict({
+        workspaceRoot: tempDir,
+        cache,
+        filePath: relCanonical,
+        strategy: 'accept-local',
+      }),
+    ).toThrowError(/QUARANTINED_PATH_REQUIRED/);
+  });
+
+  it('attaches warning when restoring .deleted.md copy without valid ULID (Minor B)', () => {
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const corruptedDeletedFile = '20261108_corrupted-article.deleted.md';
+    fs.writeFileSync(
+      path.join(conflictsDir, corruptedDeletedFile),
+      '---\nslug: corrupted-post\n---\nbody\n',
+      'utf8',
+    );
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: corruptedDeletedFile,
+      strategy: 'accept-local',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.warnings).toBeDefined();
+    expect(res.warnings?.[0]).toContain('no valid ULID');
   });
 });
