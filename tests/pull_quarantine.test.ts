@@ -29,9 +29,11 @@ import {
   calculateHash,
   CONFLICTS_SUBDIR,
   formatQuarantineNotice,
+  isQuarantinedRelativePath,
   pullArticle,
 } from '../src/sync/pull.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
+import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { countQuarantinedCopies, getWorkspaceStatus } from '../src/sync/status.js';
 import { parseMarkdown, serializeMarkdown } from '../src/utils/frontmatter.js';
 
@@ -318,5 +320,69 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     const status = getWorkspaceStatus(tempDir, cache);
     expect(status.summary.invalid).toBe(0);
     expect(status.summary.conflicts).toBe(1);
+  });
+
+  it('classifies only <collection>/conflicts/ paths as rescue copies', () => {
+    expect(
+      isQuarantinedRelativePath(`posts/${CONFLICTS_SUBDIR}/20190405_${ulid}-X.conflict.md`),
+    ).toBe(true);
+    expect(isQuarantinedRelativePath('notes/conflicts/20190405_x.conflict.md')).toBe(true);
+    expect(isQuarantinedRelativePath(`posts/published/20190405_${ulid}-X.md`)).toBe(false);
+    // A slug that merely contains the word "conflicts" must not be mistaken for a rescue copy.
+    expect(isQuarantinedRelativePath(`posts/draft/20190405_${ulid}-conflicts.md`)).toBe(false);
+    expect(isQuarantinedRelativePath(`${CONFLICTS_SUBDIR}/orphan.md`)).toBe(false);
+  });
+
+  it('refuses to push a rescue copy so stale divergent content cannot overwrite the canonical article', async () => {
+    const brokenFullPath = writeBrokenFile('STALE DIVERGENT RESCUE CONTENT that must never win.');
+
+    const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      if (url.pathname.endsWith('/terms/category')) {
+        return Promise.resolve(termsResponse('category'));
+      }
+      if (url.pathname.endsWith('/terms/tag')) {
+        return Promise.resolve(termsResponse('tag'));
+      }
+      return Promise.resolve({ ok: true, json: async () => remoteItem() });
+    }) as unknown as typeof fetch;
+
+    const res = await pullArticle('posts', ulid, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      bylineIdToSlug: {},
+    });
+
+    const conflictRel = res.quarantined![0].quarantineFilePath;
+    const rescueContent = fs.readFileSync(path.join(tempDir, conflictRel), 'utf8');
+    const canonicalBefore = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+
+    // The guard must reject the push before a single network request is attempted.
+    const neverFetch = vi.fn() as unknown as typeof fetch;
+    let captured: PushValidationError | undefined;
+    try {
+      await pushArticle(conflictRel, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: neverFetch,
+      });
+    } catch (err: unknown) {
+      captured = err as PushValidationError;
+    }
+
+    expect(captured).toBeInstanceOf(PushValidationError);
+    expect(captured?.errors[0].code).toBe('QUARANTINED_COPY_NOT_PUSHABLE');
+    expect(captured?.errors[0].suggestion).toContain('canonical');
+    expect(neverFetch).not.toHaveBeenCalled();
+
+    // Both files survive untouched: the rescue copy keeps its content and the canonical article
+    // keeps its repaired remote state. The stale original path stays gone.
+    expect(fs.readFileSync(path.join(tempDir, conflictRel), 'utf8')).toBe(rescueContent);
+    expect(fs.readFileSync(path.join(tempDir, res.filePath), 'utf8')).toBe(canonicalBefore);
+    expect(fs.existsSync(brokenFullPath)).toBe(false);
+    expect(countQuarantinedCopies(tempDir)).toBe(1);
   });
 });

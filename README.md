@@ -32,7 +32,7 @@
   - [Media Management & Upload Workflow](#media-management--upload-workflow)
 - [🤖 The Golden Path for AI & Humans (4-Step Cycle)](#-the-golden-path-for-ai--humans-4-step-cycle)
   - [The 4-Step Authoring Cycle](#the-4-step-authoring-cycle)
-  - [Preflight Safety Guardrails (G1–G11)](#preflight-safety-guardrails-g1g11)
+  - [Preflight Safety Guardrails (G1–G12)](#preflight-safety-guardrails-g1g12)
 - [🛠 CLI Command Reference](#-cli-command-reference)
   - [`emit init`](#emit-init)
   - [`emit profile`](#emit-profile)
@@ -320,8 +320,10 @@ your-blog/
 └── posts/                          # Local Markdown Articles (<yyyyMMdd>_<ulid>-<title>.md)
     ├── draft/                      # Draft articles (named after title; falls back to slug if empty)
     │   └── 20261104_01M6...-My-New-Post.md
-    └── published/                  # Live published articles
-        └── 20261015_01M5...-Getting-Started.md
+    ├── published/                  # Live published articles
+    │   └── 20261015_01M5...-Getting-Started.md
+    └── conflicts/                  # Read-only rescue copies of divergent local content (written by pull; never pushed or pruned)
+        └── 20261101_01M5...-Getting-Started.conflict.md
 
 ```
 
@@ -487,9 +489,9 @@ Whether you are a human developer or an autonomous AI agent (Antigravity, Claude
 * To push a draft: `emit push posts/draft/<filename>.md`
 * To publish live: update `status: published` and run `emit push posts/draft/<filename>.md --allow-publish`.
 
-### Preflight Safety Guardrails (G1–G11)
+### Preflight Safety Guardrails (G1–G12)
 
-To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 11 strict preflight guardrails before executing any write operation:
+To ensure autonomous AI agents and automated scripts cannot corrupt workspace state or accidentally publish unintended content, Emit enforces 12 strict preflight guardrails before executing any write operation:
 
 | Guard | Code Name | Description | Severity |
 | --- | --- | --- | --- |
@@ -504,6 +506,7 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 | **G9** | `MODIFIED_OPAQUE_BLOCK` | Verifies that `<!--ec:block ... -->` opaque fences have not been tampered with or corrupted | Error |
 | **G10** | `INVALID_FEATURED_IMAGE` | Verifies that `featuredImage` is a 26-character canonical media ULID (normalized to uppercase) or `null`. A remote media URL that contains a ULID is resolved with a warning; local file paths and malformed values are rejected | Error |
 | **G11** | `LOCAL_IMAGE_AUTO_UPLOAD` (`MISSING_LOCAL_IMAGE_FILE` / `INVALID_LOCAL_IMAGE_TYPE` / `LOCAL_IMAGE_SIZE_EXCEEDED` / `PROMOTED_MEDIA_NOT_FOUND_REMOTE` / `[MEDIA_EXISTENCE_UNVERIFIED]`) | Detects standalone `media/drafts/<file>` image lines (or reuses an already-promoted `media/` asset across articles), validates file existence, extension, and size (≤ 50 MiB), queues them for automatic upload, URL rewrite, and `media/` promotion during `push`, and verifies every reused asset against `GET /_emdash/api/media/{id}` before its URL is baked into the body | Info / Warning / Error |
+| **G12** | `QUARANTINED_COPY_NOT_PUSHABLE` | Refuses to push a rescue copy under `posts/conflicts/` (written by a pull that found divergent local content) before any network request, because it would overwrite the canonical article of the same ULID with stale content and recreate duplicate local files | Error |
 
 ---
 
@@ -623,6 +626,9 @@ emit pull [id] [options]
 > **Why `--no-prune` is rarely needed:**  
 > Automatic pruning is mathematically loss-free: Emit's unpushed edits safeguard inspects both the canonical file and any duplicate filenames sharing the same 26-character ULID, strictly aborting the pull (`SyncPruneConflictError`) if any of them contain local modifications. Clean duplicate files are removed alongside the canonical file. You only need `--no-prune` in exceptional circumstances, such as temporarily suppressing Git working-tree changes during a quick pull.
 
+> [!NOTE]
+> **Unpushed writing is never discarded.** When a pull finds local content that diverges from the last synced baseline, Emit first moves that file to `posts/conflicts/<name>.conflict.md` (a read-only rescue copy) and then writes the canonical article. Rescue copies are never pushed or pruned automatically, and pushing one directly is refused with `QUARANTINED_COPY_NOT_PUSHABLE` (Guard **G12**): read the copy, merge any valuable content into the canonical article, then delete it. If an invalid file also carries local edits, `--force` is the escape hatch (it quarantines the divergent copy, then writes the repaired file).
+
 **Example:**
 
 ```bash
@@ -709,12 +715,16 @@ emit status [-c, --collection <collection>] [-p, --profile <name>]
   🟡 [modified] draft     posts/draft/20261104_01M6BBB...-AI-Workflow-Guide.md (AI Workflow Guide)
   ⚪ [untracked] draft     posts/draft/20261104_01M6AAA...-Draft-Notes.md (Draft Notes)
   🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-Getting-Started.md (Getting Started)
+  🔴 [invalid ] published posts/published/20190405_01M6CCC...-Broken-Post.md (Broken-Post) [uncached] — bad indentation of a mapping entry at line 5
 
-Summary: 3 total (1 synced, 1 modified, 1 untracked)
+Summary: 4 total (1 synced, 1 modified, 1 untracked, 1 invalid)
 ```
 
 > [!NOTE]
 > Articles are sorted newest-first by date prefix and ULID. The date prefix reflects the article's publication or creation date, not the last-modified time. To locate currently active edits, look for files marked `[modified]`.
+
+> [!NOTE]
+> `[invalid]` marks a file whose YAML frontmatter could not be parsed (usually an older serializer wrote unquoted percent-encoded taxonomy slugs). Batch `emit pull` self-heals cached invalid files; files outside the sliding window are marked `[uncached]` and are repaired with `emit pull <ULID>` (MCP: `sync_pull` with `id: "<ULID>"`). When `<collection>/conflicts/` holds rescue copies, the count is reported separately (`conflicts`) and never counted as an article.
 
 ---
 
@@ -851,10 +861,10 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 
 | Tool | Purpose | Key Parameters |
 | --- | --- | --- |
-| `sync_status` | Inspect local sync state (articles returned newest-first) | `collection`, `profile` |
-| `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints) | `collection`, `id`, `filePath`, `status`, `force`, `noPrune`, `prune`, `postsOnly`, `includeMedia`, `metadataOnly`, `profile` |
+| `sync_status` | Inspect local sync state (articles newest-first, plus `invalid` and `conflicts` diagnostics) | `collection`, `profile` |
+| `sync_pull` | Pull remote articles **and taxonomies** into local workspace (includes taxonomy hints; preserves divergent local copies under `posts/conflicts/`) | `collection`, `id`, `filePath`, `status`, `force`, `noPrune`, `prune`, `postsOnly`, `includeMedia`, `metadataOnly`, `profile` |
 | `sync_new` | Scaffold new article with canonical ULID, frontmatter, default byline, and taxonomy hints | `slug` (required), `title`, `collection`, `locale`, `byline`, `profile` |
-| `sync_push` | Push local article changes to remote with preflight checks and `media/drafts/*` auto-upload | `filePath` (required), `allowPublish`, `profile` |
+| `sync_push` | Push local article changes to remote with preflight checks and `media/drafts/*` auto-upload; refuses `posts/conflicts/` rescue copies (G12) | `filePath` (required), `allowPublish`, `profile` |
 | `sync_diff` | Inspect diff between working file and baseline snapshot | `filePath`, `id`, `profile` |
 | `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints) | `profile` |
 | `sync_pull_media` | Pull remote media files and metadata into `media/` | `limit`, `all`, `downloadFiles`, `profile` |

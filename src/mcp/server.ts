@@ -54,10 +54,16 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 ## Local Directory Structure
 - posts/published/YYYYMMDD_<ulid>-<title>.md : Published articles in Markdown
 - posts/draft/YYYYMMDD_<ulid>-<title>.md : Draft articles in Markdown
+- posts/conflicts/<name>.conflict.md : Preserved divergent local copies (read-only rescue content; never an article)
 - categories/<id>-<name>.yaml : Category definitions
 - tags/<id>-<name>.yaml : Tag definitions
 - media/<yyyyMMdd>_<id>-<name>.<ext> & .yaml : Media assets & companion metadata
 - media/drafts/<filename> : Staging folder for offline draft images (auto-uploaded on sync_push)
+
+## Rescue Copy Rule (posts/conflicts/)
+- sync_pull moves a local file whose content diverged from the remote into posts/conflicts/ before overwriting it, so unpushed writing is never discarded.
+- Read rescue copies and merge any valuable content into the canonical article, then delete the copy.
+- Never pass a posts/conflicts/ path to sync_push: it is refused with QUARANTINED_COPY_NOT_PUSHABLE because it would overwrite the canonical article with stale content.
 
 ## Media & Image Rules (Two Distinct ID Spaces)
 - Frontmatter featuredImage uses the 26-character media record id (e.g. "01M67P0MBMJQQXH2K95HHCYRYB") or null.

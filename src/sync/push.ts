@@ -47,7 +47,7 @@ import {
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps } from './taxonomies.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
-import { calculateHash } from './pull.js';
+import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
 import {
@@ -514,6 +514,26 @@ export async function pushArticle(
   }
 
   const originalRelPath = path.relative(options.workspaceRoot, fullPath);
+
+  // Rescue copies under "<collection>/conflicts/" are deliberately unpushable. They exist only to
+  // retain divergent local content that a pull was about to overwrite; pushing one as-is would
+  // replace the canonical article's remote title/slug/body with stale divergent content and
+  // regenerate the duplicate-file-for-one-ULID state that quarantine exists to repair.
+  if (isQuarantinedRelativePath(originalRelPath)) {
+    throw new PushValidationError(`Refusing to push a preserved rescue copy: ${originalRelPath}`, [
+      {
+        code: 'QUARANTINED_COPY_NOT_PUSHABLE',
+        message:
+          `'${originalRelPath}' is a preserved rescue copy under "${CONFLICTS_SUBDIR}/". ` +
+          'Rescue copies hold stale divergent content captured before a pull overwrote it; ' +
+          'pushing one would overwrite the canonical article of the same ULID and recreate duplicate local files.',
+        suggestion:
+          'Merge the valuable lines into the canonical article file (posts/draft/... or posts/published/...), then delete this copy. ' +
+          'To intentionally replace the remote version, copy the rescue file over the canonical path and push that canonical path instead.',
+      },
+    ]);
+  }
+
   const rawContent = fs.readFileSync(fullPath, 'utf8');
   let parsed: ParsedMarkdown;
   try {

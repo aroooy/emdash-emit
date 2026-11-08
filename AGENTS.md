@@ -32,7 +32,8 @@ This document defines the **official workflow rules (The Golden Path) and coding
 │   └── drafts/                     <-- Staging folder for offline draft images (auto-uploaded on push)
 └── posts/                          <-- [Local Markdown Files for Humans & AI]
     ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
-    └── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
+    ├── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
+    └── conflicts/                  <-- Read-only rescue copies written by pull when local content diverged (never articles, never pushed)
 ```
 
 - **Boundary Rule**: All operations take place relative to the workspace root containing `.emit/`. Commands run from subdirectories (e.g. `posts/draft/`) automatically discover the parent workspace root.
@@ -96,7 +97,7 @@ bylines:                           # Author byline slugs (defaults to first non-
 
 ## 4. Strict Safety Guardrails for AI Agents
 
-These rules are enforced at the code level via Preflight Guards (G1–G11):
+These rules are enforced at the code level via Preflight Guards (G1–G12):
 
 ### 1. Prohibition of Throwaway Temporary Files
 - **Never create disposable files** such as `temp.md`, `draft.md`, or `scratch.md` in the workspace.
@@ -133,6 +134,13 @@ These rules are enforced at the code level via Preflight Guards (G1–G11):
 - Emit canonicalizes `featuredImage` to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
 - `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
 - Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.
+
+### 7. Rescue Copies under `posts/conflicts/` (Read-Only)
+
+- When a pull finds local content that diverges from the last synced baseline, Emit moves the divergent file to `<collection>/conflicts/<name>.conflict.md` before writing the canonical article, so unpushed writing is never discarded.
+- **Never treat a rescue copy as an article**: `getWorkspaceStatus` / `emit status` scan only `draft/` and `published/`, count `conflicts/` separately (`summary.conflicts`), and `pushAll` never selects it.
+- **Never push a rescue copy**: Guard **G12** (`QUARANTINED_COPY_NOT_PUSHABLE`) refuses it before any network request. Read the copy, merge the valuable lines into the canonical article, then delete the copy. To intentionally replace the remote version, copy the rescue file over the canonical path and push that canonical path instead.
+- **Never create files in `conflicts/` yourself** and never move a rescue copy back into `draft/` or `published/` with `mv`; merge its content into the canonical file instead.
 
 ---
 

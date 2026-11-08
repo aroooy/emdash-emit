@@ -84,6 +84,23 @@ export interface QuarantinedLocalCopy {
 export const CONFLICTS_SUBDIR = 'conflicts';
 
 /**
+ * Detects a workspace-relative rescue-copy path (`<collection>/conflicts/<file>.md`).
+ *
+ * Canonical articles always live at `<collection>/draft|published/<file>.md`, so matching the
+ * second path segment is sufficient and avoids false positives from a slug that merely contains
+ * the word "conflicts". Used by the push guard (QUARANTINED_COPY_NOT_PUSHABLE) so a rescue copy
+ * can never silently overwrite the canonical article it was preserved from.
+ */
+export function isQuarantinedRelativePath(relPath: string): boolean {
+  const segments = relPath
+    .split(path.sep)
+    .join('/')
+    .split('/')
+    .filter((seg) => seg.length > 0);
+  return segments.length >= 3 && segments[1] === CONFLICTS_SUBDIR;
+}
+
+/**
  * Human/agent readable notice describing preserved local copies.
  * Returns an empty string when nothing was preserved.
  */
@@ -93,7 +110,7 @@ export function formatQuarantineNotice(quarantined?: QuarantinedLocalCopy[]): st
     `🩹 ${quarantined.length} divergent local copy(ies) preserved under ${CONFLICTS_SUBDIR}/ before being overwritten:`,
     ...quarantined.map((q) => `  - ${q.sourceFilePath} -> ${q.quarantineFilePath} (${q.reason})`),
     '  Review each rescue copy, merge any valuable content into the canonical article, then delete it.',
-    '  Preserved copies are never pushed or pruned.',
+    `  Preserved copies are never pushed or pruned; pushing a rescue copy directly is refused (QUARANTINED_COPY_NOT_PUSHABLE).`,
   ];
   return lines.join('\n');
 }

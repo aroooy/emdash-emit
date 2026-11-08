@@ -117,7 +117,7 @@ export function registerStatusInitCommands(
         );
         console.log(
           '   Review each copy, merge any valuable content into the canonical article, then delete it. ' +
-            'They are never pushed or pruned.\n',
+            'They are never pushed or pruned; pushing one directly is refused (QUARANTINED_COPY_NOT_PUSHABLE).\n',
         );
       }
     });
