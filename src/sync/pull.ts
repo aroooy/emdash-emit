@@ -40,7 +40,7 @@ import { extractUlidFromFilename } from '../utils/naming.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
-import { fetchAssignedTerms as fetchAssignedTermsShared } from './terms.js';
+import { fetchAssignedTerms as fetchAssignedTermsShared, computeTaxonomyHash } from './terms.js';
 
 export interface PullOptions extends MapperOptions {
   workspaceRoot: string;
@@ -185,6 +185,27 @@ export function findLocalFilesByUlid(
  * silently discarded during a pull.
  * Returns the relative path of the preserved copy, or null when preservation failed.
  */
+/**
+ * Resolves canonical relative path for an article symmetrically between
+ * batch fast-path and full pull (EMIT-005 / R7).
+ */
+export function resolveCanonicalArticlePath(
+  collection: string,
+  status: string,
+  id: string,
+  title: string,
+  dates: {
+    publishedAt?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  },
+  existingPrefix?: string | null,
+): string {
+  const dateInput =
+    dates.publishedAt || existingPrefix || dates.createdAt || dates.updatedAt || null;
+  return computeArticleRelativePath(collection, status, id, title, dateInput);
+}
+
 export function quarantineLocalCopy(
   workspaceRoot: string,
   collection: string,
@@ -539,19 +560,18 @@ export async function pullArticle(
       const rawTitle = String(
         rawData.title || rawObj.title || item.title || rawObj.slug || item.slug || '',
       );
-      const articleDate =
-        (rawObj.publishedAt as string) ||
-        (item.publishedAt as string) ||
-        existingPrefix ||
-        (rawObj.createdAt as string) ||
-        (item.createdAt as string) ||
-        null;
-      const expectedRelPath = computeArticleRelativePath(
+      const targetStatus = String(rawObj.status || item.status || 'draft');
+      const expectedRelPath = resolveCanonicalArticlePath(
         collection,
-        String(rawObj.status || item.status || 'draft'),
+        targetStatus,
         id,
         rawTitle,
-        articleDate,
+        {
+          publishedAt: (rawObj.publishedAt as string) || (item.publishedAt as string) || null,
+          createdAt: (rawObj.createdAt as string) || (item.createdAt as string) || null,
+          updatedAt: (rawObj.updatedAt as string) || (item.updatedAt as string) || null,
+        },
+        existingPrefix,
       );
 
       // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML)
@@ -639,6 +659,11 @@ export async function pullArticle(
               status: parsedRepaired.frontmatter.status,
               slug: parsedRepaired.frontmatter.slug,
               lastSyncedAt: Math.floor(Date.now() / 1000),
+              remoteTaxonomyHash: computeTaxonomyHash(
+                remoteLocal.frontmatter.taxonomies?.categories,
+                remoteLocal.frontmatter.taxonomies?.tags,
+              ),
+              taxonomyApplyPending: 0,
             });
 
             return {
@@ -782,19 +807,17 @@ export async function pullArticle(
       ? extractDatePrefixFromPath(preferredDiskMatch)
       : null;
 
-  const dateInput =
-    frontmatter.publishedAt ||
-    existingPrefix ||
-    (rawItem.createdAt as string) ||
-    (rawItem.updatedAt as string) ||
-    null;
-
-  const relPath = computeArticleRelativePath(
+  const relPath = resolveCanonicalArticlePath(
     frontmatter.collection,
     frontmatter.status,
     frontmatter.id,
     frontmatter.title || frontmatter.slug,
-    dateInput,
+    {
+      publishedAt: (frontmatter.publishedAt as string) || (rawItem.publishedAt as string) || null,
+      createdAt: (rawItem.createdAt as string) || null,
+      updatedAt: (rawItem.updatedAt as string) || null,
+    },
+    existingPrefix,
   );
   const fullFilePath = path.join(options.workspaceRoot, relPath);
 
@@ -852,6 +875,11 @@ export async function pullArticle(
     status: frontmatter.status,
     slug: frontmatter.slug,
     lastSyncedAt: Math.floor(Date.now() / 1000),
+    remoteTaxonomyHash: computeTaxonomyHash(
+      frontmatter.taxonomies?.categories,
+      frontmatter.taxonomies?.tags,
+    ),
+    taxonomyApplyPending: 0,
     ...(options.force ? { conflictPending: 0, conflictCopyHash: null } : {}),
   });
 

@@ -722,6 +722,12 @@ emit push [file] [options]
 * `[file]`: Relative or absolute path to the Markdown file.
 * `--allow-publish`: Required when promoting an article to `status: published`.
 * `--all`: Pushes all modified files in the workspace.
+* `--no-taxonomy-audit`: Skips pre-PUT remote taxonomy divergence audit.
+* `--allow-unapplied-taxonomies`: Pushes article body even if taxonomy term assignment fails (bypasses Guard G17).
+* `--allow-wipe-taxonomies`: Confirms intentional deletion of all assigned categories or tags.
+* `--resolve-taxonomy <strategy>`: Resolves taxonomy conflict explicitly (`union`, `local`, or `remote`).
+* `--revive`: Pushes an article that was previously marked delete_pending.
+* `-f, --force`: Bypasses non-critical safety guardrails.
 * `-p, --profile <name>`: Explicitly target a specific connection profile.
 
 **Example:**

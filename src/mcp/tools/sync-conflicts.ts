@@ -23,7 +23,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver, ServerContext } from '../context.js';
-import { listConflicts, diffConflict, resolveConflict } from '../../sync/conflicts.js';
+import {
+  listConflicts,
+  diffConflict,
+  resolveConflict,
+  pruneConflicts,
+} from '../../sync/conflicts.js';
 import { formatToolError, formatToolSuccess } from '../tool-errors.js';
 
 export function registerSyncConflictsTool(
@@ -32,11 +37,11 @@ export function registerSyncConflictsTool(
 ): void {
   server.tool(
     'sync_conflicts',
-    'Manage quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/. Actions: "list" (view quarantined files and types), "diff" (inspect line-by-line differences against canonical live article), and "resolve" (strategy "accept-local" to restore/replace canonical article, or "accept-canonical" to discard quarantined copy).',
+    'Manage quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/. Actions: "list" (view quarantined files and types), "diff" (inspect line-by-line differences against canonical live article), "resolve" (strategy "accept-local" to restore/replace canonical article, or "accept-canonical" to discard quarantined copy), and "prune" (clean up eligible quarantined copies with safety checks).',
     {
       action: z
-        .enum(['list', 'diff', 'resolve'])
-        .describe('Operation to perform: "list", "diff", or "resolve"'),
+        .enum(['list', 'diff', 'resolve', 'prune'])
+        .describe('Operation to perform: "list", "diff", "resolve", or "prune"'),
       filePath: z
         .string()
         .optional()
@@ -53,6 +58,22 @@ export function registerSyncConflictsTool(
         .boolean()
         .optional()
         .describe('Force overwrite canonical article even if it has unpushed local modifications'),
+      olderThan: z
+        .string()
+        .optional()
+        .describe(
+          'For action="prune": duration string (e.g. "7d", "24h") to prune only copies older than this age',
+        ),
+      dryRun: z
+        .boolean()
+        .optional()
+        .describe('For action="prune": simulate pruning without deleting any files'),
+      allowOrphanRescues: z
+        .boolean()
+        .optional()
+        .describe(
+          'For action="prune": allow pruning orphan deleted rescue copies (.deleted.md) without live canonical files',
+        ),
       collection: z
         .string()
         .optional()
@@ -124,8 +145,22 @@ export function registerSyncConflictsTool(
           return formatToolSuccess(res as unknown as Record<string, unknown>, ctx.meta);
         }
 
+        if (args.action === 'prune') {
+          const res = pruneConflicts({
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            collection,
+            olderThan: args.olderThan,
+            dryRun: args.dryRun,
+            allowOrphanRescues: args.allowOrphanRescues,
+          });
+          return formatToolSuccess(res as unknown as Record<string, unknown>, ctx.meta);
+        }
+
         return formatToolError(
-          new Error(`Unknown action "${args.action}". Must be "list", "diff", or "resolve".`),
+          new Error(
+            `Unknown action "${args.action}". Must be "list", "diff", "resolve", or "prune".`,
+          ),
           ctx.meta,
         );
       } catch (err) {

@@ -97,7 +97,7 @@ bylines:                           # Author byline slugs (defaults to first non-
 
 ## 4. Strict Safety Guardrails for AI Agents
 
-These rules are enforced at the code level via Preflight Guards (G1–G14):
+These rules are enforced at the code level via Preflight Guards (G1–G17):
 
 ### 1. Prohibition of Throwaway Temporary Files
 - **Never create disposable files** such as `temp.md`, `draft.md`, or `scratch.md` in the workspace.
@@ -151,6 +151,7 @@ These rules are enforced at the code level via Preflight Guards (G1–G14):
   - To discard canonical edits and force overwrite, explicitly pass `-f, --force` (or MCP `force: true`).
 - **Quarantined Path Restriction (Guard G14 / `QUARANTINED_PATH_REQUIRED`)**:
   - `emit conflicts resolve` and `diff` strictly validate that target files are located within `<collection>/conflicts/`. Arbitrary workspace paths are rejected before any unlink or write operation.
+- **Conflict Pending Preservation across Pulls**: `conflict_pending = 1` is preserved across normal pulls via UPSERT COALESCE semantics so unreviewed conflicts cannot be silently forgotten. It is cleared only through explicit resolution (`emit conflicts resolve` / `--resolve-taxonomy`), auto-cleared by `emit doctor` when neither conflict copy nor divergence exists, or cleared via `--force`.
 
 ### 9. Taxonomy Conflict Management, Wipe Guard & Revive (G15 / G16)
 
@@ -168,6 +169,13 @@ These rules are enforced at the code level via Preflight Guards (G1–G14):
 - Pruning strictly respects safety boundaries:
   - If a canonical article contains unpushed local edits, its rescue copy is skipped.
   - Deletion backups (`.deleted.md`) that have no canonical article require `--allow-orphan-rescues` to be pruned.
+
+### 11. Taxonomy Partial Failure Guard (Guard G17 / `TAXONOMY_APPLY_PENDING`)
+
+- **Taxonomy Apply Pending Guard (`TAXONOMY_APPLY_PENDING`)**:
+  - If article body PUT succeeds but subsequent taxonomy term update POST fails, `sync_state.taxonomy_apply_pending = 1` is recorded in the SQLite cache, and baseline taxonomies and hash are reverted to prior values to prevent silent drift.
+  - Subsequent bare re-pushes are strictly blocked by Guard G17 until resolved, preventing phantom clean overwrites. Pass `--allow-unapplied-taxonomies` (or MCP `allowUnappliedTaxonomies: true`) or `-f, --force` to override.
+  - To resolve cleanly: run `emit pull-taxonomies` (or MCP `sync_pull_taxonomies`), verify term permissions, and retry push. Single-article pull (`emit pull <id>`) also automatically refreshes taxonomy definitions to avoid `NOT_FOUND` errors.
 
 ---
 

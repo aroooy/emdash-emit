@@ -115,6 +115,14 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
       const exampleUncachedId =
         uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
 
+      const warnings: string[] = [];
+      if (ctx.originWarning) warnings.push(ctx.originWarning);
+      if (status.summary.conflicts > 0) {
+        warnings.push(
+          `⚠️ ${status.summary.conflicts} unreviewed quarantine copy(ies) in ${collection}/conflicts/`,
+        );
+      }
+
       const responsePayload = {
         summary: status.summary,
         actionRequired,
@@ -126,7 +134,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
         ...(isFiltered ? { filteredArticles: filteredList } : {}),
         // Fallback for callers expecting .items:
         items: isFiltered ? filteredList : [...actionRequired, ...recentArticles],
-        ...(ctx.originWarning ? { warnings: [ctx.originWarning] } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
         ...(invalidTruncated > 0
           ? {
               invalidTruncated,

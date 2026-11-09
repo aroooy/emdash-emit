@@ -58,6 +58,8 @@ export interface SyncState {
   conflictCopyHash?: string | null;
   conflictCopyPath?: string | null;
   conflictAt?: number | null;
+  remoteTaxonomyHash?: string | null;
+  taxonomyApplyPending?: number;
 }
 
 export interface BylineRecord {
@@ -81,7 +83,7 @@ export interface MediaStateRecord {
   uploadedAt?: number | null;
 }
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 1;
+export const CURRENT_CACHE_SCHEMA_VERSION = 2;
 
 export class CacheDatabase {
   private db: DatabaseSync;
@@ -144,7 +146,9 @@ export class CacheDatabase {
         delete_pending INTEGER NOT NULL DEFAULT 0,
         conflict_copy_hash TEXT,
         conflict_copy_path TEXT,
-        conflict_at INTEGER
+        conflict_at INTEGER,
+        remote_taxonomy_hash TEXT,
+        taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_sync_state_file_path ON sync_state (local_file_path);
     `);
@@ -210,7 +214,7 @@ export class CacheDatabase {
       if (this.dbPath !== ':memory:' && fs.existsSync(this.dbPath)) {
         try {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const bakPath = `${this.dbPath}.bak-0.1.11-${timestamp}`;
+          const bakPath = `${this.dbPath}.bak-0.1.12-${timestamp}`;
           fs.copyFileSync(this.dbPath, bakPath);
 
           // Prune backups: retain only 3 newest .bak-* files
@@ -261,11 +265,22 @@ export class CacheDatabase {
       if (!columnNames.has('conflict_at')) {
         this.db.exec('ALTER TABLE sync_state ADD COLUMN conflict_at INTEGER;');
       }
+      if (!columnNames.has('remote_taxonomy_hash')) {
+        this.db.exec('ALTER TABLE sync_state ADD COLUMN remote_taxonomy_hash TEXT;');
+      }
+      if (!columnNames.has('taxonomy_apply_pending')) {
+        this.db.exec(
+          'ALTER TABLE sync_state ADD COLUMN taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0;',
+        );
+      }
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_sync_state_conflict ON sync_state (conflict_pending);',
       );
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_sync_state_delete ON sync_state (delete_pending);',
+      );
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_sync_state_tax_apply ON sync_state (taxonomy_apply_pending);',
       );
 
       this.db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);
@@ -409,10 +424,33 @@ export class CacheDatabase {
 
   // --- sync_state operations ---
 
+  private rowToSyncState(row: Record<string, unknown>): SyncState {
+    return {
+      id: String(row.id),
+      localFilePath: String(row.local_file_path),
+      localHash: String(row.local_hash),
+      remoteRev: String(row.remote_rev),
+      status: String(row.status),
+      slug: String(row.slug),
+      lastSyncedAt: Number(row.last_synced_at),
+      conflictPending: Number(row.conflict_pending || 0),
+      deletePending: Number(row.delete_pending || 0),
+      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
+      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
+      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
+      remoteTaxonomyHash: row.remote_taxonomy_hash ? String(row.remote_taxonomy_hash) : null,
+      taxonomyApplyPending: Number(row.taxonomy_apply_pending || 0),
+    };
+  }
+
   public saveSyncState(state: SyncState): void {
     const stmt = this.db.prepare(`
-      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at, conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sync_state (
+        id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at,
+        conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at,
+        remote_taxonomy_hash, taxonomy_apply_pending
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         local_file_path = excluded.local_file_path,
         local_hash = excluded.local_hash,
@@ -422,9 +460,11 @@ export class CacheDatabase {
         last_synced_at = excluded.last_synced_at,
         conflict_pending = excluded.conflict_pending,
         delete_pending = excluded.delete_pending,
-        conflict_copy_hash = excluded.conflict_copy_hash,
-        conflict_copy_path = excluded.conflict_copy_path,
-        conflict_at = excluded.conflict_at
+        conflict_copy_hash = CASE WHEN excluded.conflict_copy_hash IS NOT NULL THEN excluded.conflict_copy_hash ELSE sync_state.conflict_copy_hash END,
+        conflict_copy_path = CASE WHEN excluded.conflict_copy_path IS NOT NULL THEN excluded.conflict_copy_path ELSE sync_state.conflict_copy_path END,
+        conflict_at = CASE WHEN excluded.conflict_at IS NOT NULL THEN excluded.conflict_at ELSE sync_state.conflict_at END,
+        remote_taxonomy_hash = CASE WHEN excluded.remote_taxonomy_hash IS NOT NULL THEN excluded.remote_taxonomy_hash ELSE sync_state.remote_taxonomy_hash END,
+        taxonomy_apply_pending = excluded.taxonomy_apply_pending
     `);
     stmt.run(
       state.id,
@@ -439,6 +479,8 @@ export class CacheDatabase {
       state.conflictCopyHash ?? null,
       state.conflictCopyPath ?? null,
       state.conflictAt ?? null,
+      state.remoteTaxonomyHash ?? null,
+      state.taxonomyApplyPending ?? 0,
     );
   }
 
@@ -466,64 +508,30 @@ export class CacheDatabase {
     stmt.run(pending ? 1 : 0, id);
   }
 
+  public setTaxonomyApplyPending(id: string, pending: boolean): void {
+    const stmt = this.db.prepare('UPDATE sync_state SET taxonomy_apply_pending = ? WHERE id = ?');
+    stmt.run(pending ? 1 : 0, id);
+  }
+
   public getSyncState(id: string): SyncState | null {
     const stmt = this.db.prepare('SELECT * FROM sync_state WHERE id = ?');
     const row = stmt.get(id) as Record<string, unknown> | undefined;
     if (!row) return null;
-    return {
-      id: String(row.id),
-      localFilePath: String(row.local_file_path),
-      localHash: String(row.local_hash),
-      remoteRev: String(row.remote_rev),
-      status: String(row.status),
-      slug: String(row.slug),
-      lastSyncedAt: Number(row.last_synced_at),
-      conflictPending: Number(row.conflict_pending || 0),
-      deletePending: Number(row.delete_pending || 0),
-      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
-      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
-      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
-    };
+    return this.rowToSyncState(row);
   }
 
   public getSyncStateByPath(filePath: string): SyncState | null {
     const stmt = this.db.prepare('SELECT * FROM sync_state WHERE local_file_path = ?');
     const row = stmt.get(filePath) as Record<string, unknown> | undefined;
     if (!row) return null;
-    return {
-      id: String(row.id),
-      localFilePath: String(row.local_file_path),
-      localHash: String(row.local_hash),
-      remoteRev: String(row.remote_rev),
-      status: String(row.status),
-      slug: String(row.slug),
-      lastSyncedAt: Number(row.last_synced_at),
-      conflictPending: Number(row.conflict_pending || 0),
-      deletePending: Number(row.delete_pending || 0),
-      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
-      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
-      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
-    };
+    return this.rowToSyncState(row);
   }
 
   public getSyncStateBySlug(slug: string): SyncState | null {
     const stmt = this.db.prepare('SELECT * FROM sync_state WHERE slug = ? LIMIT 1');
     const row = stmt.get(slug) as Record<string, unknown> | undefined;
     if (!row) return null;
-    return {
-      id: String(row.id),
-      localFilePath: String(row.local_file_path),
-      localHash: String(row.local_hash),
-      remoteRev: String(row.remote_rev),
-      status: String(row.status),
-      slug: String(row.slug),
-      lastSyncedAt: Number(row.last_synced_at),
-      conflictPending: Number(row.conflict_pending || 0),
-      deletePending: Number(row.delete_pending || 0),
-      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
-      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
-      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
-    };
+    return this.rowToSyncState(row);
   }
 
   public deleteSyncState(id: string): void {
@@ -534,20 +542,7 @@ export class CacheDatabase {
   public getAllSyncStates(): SyncState[] {
     const stmt = this.db.prepare('SELECT * FROM sync_state');
     const rows = stmt.all() as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      id: String(row.id),
-      localFilePath: String(row.local_file_path),
-      localHash: String(row.local_hash),
-      remoteRev: String(row.remote_rev),
-      status: String(row.status),
-      slug: String(row.slug),
-      lastSyncedAt: Number(row.last_synced_at),
-      conflictPending: Number(row.conflict_pending || 0),
-      deletePending: Number(row.delete_pending || 0),
-      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
-      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
-      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
-    }));
+    return rows.map((r) => this.rowToSyncState(r));
   }
 
   public deleteEntry(id: string): void {

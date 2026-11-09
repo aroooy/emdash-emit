@@ -36,6 +36,12 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         .optional()
         .describe('Collection to diagnose (defaults to defaultCollection or "posts")'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
+      strictMedia: z
+        .boolean()
+        .optional()
+        .describe(
+          'Enforce strict media verification (fail on unpromoted or unverified references)',
+        ),
     },
     async (args) => {
       let ctx: ServerContext;
@@ -54,6 +60,7 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
           profileName: ctx.auth.profileName,
           profileOrigin: ctx.auth.origin,
           collection,
+          strictMedia: Boolean(args.strictMedia),
         });
 
         return formatToolSuccess(report as unknown as Record<string, unknown>, ctx.meta);

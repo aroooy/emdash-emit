@@ -29,6 +29,7 @@ import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
 import { hybrid3WayMerge } from '../src/sync/merge.js';
 import { calculateHash, pullArticle } from '../src/sync/pull.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
+import { computeTaxonomyHash } from '../src/sync/terms.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import {
   formatDatePrefix,
@@ -1781,15 +1782,6 @@ Shared Body
     const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === 'PUT') {
         putAttempts++;
-        if (putAttempts === 1) {
-          return {
-            ok: false,
-            status: 409,
-            statusText: 'Conflict',
-            text: async () => 'Revision mismatch',
-            json: async () => ({ message: 'Revision mismatch' }),
-          };
-        }
         return {
           ok: false,
           status: 422,
@@ -1798,7 +1790,7 @@ Shared Body
           json: async () => ({ message: 'Only one category allowed per post' }),
         };
       }
-      if (url.includes(`/content/posts/${articleId}`)) {
+      if (url.includes(`/content/posts/${articleId}`) && !url.includes('/terms/')) {
         return {
           ok: true,
           status: 200,
@@ -1842,5 +1834,344 @@ Shared Body
         fetchFn: mockFetch as unknown as typeof fetch,
       }),
     ).rejects.toThrowError(/Remote server rejected the merged taxonomy union/);
+  });
+
+  it('R1: detects out-of-band remote taxonomy changes before PUT, synthesizes 409, and merges cleanly', async () => {
+    const articleId = '01M6TESTAUDIT0000000000001';
+    const relPath = `posts/draft/20261109_${articleId}-audit-diverge.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: audit-diverge
+title: Audit Diverge
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+    - local-cat
+---
+
+Audit body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-orig',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'audit-diverge',
+      lastSyncedAt: 1000,
+      remoteTaxonomyHash: computeTaxonomyHash(['news'], []),
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: 'Audit body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'audit-diverge',
+        title: 'Audit Diverge',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        taxonomies: { categories: ['news'] },
+      }),
+      hash: 'hash-orig',
+      savedAt: 1000,
+    });
+
+    let putPayloadCaptured: Record<string, unknown> | null = null;
+    let termsGetCalled = false;
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/terms/category') && method === 'GET') {
+        termsGetCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [{ id: 'cat-remote', slug: 'remote-cat' }] },
+          }),
+        };
+      }
+      if (url.includes('/terms/tag') && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { terms: [] } }),
+        };
+      }
+      if (url.includes(`/content/posts/${articleId}`) && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: articleId,
+            slug: 'audit-diverge',
+            status: 'draft',
+            title: 'Audit Diverge',
+            _rev: '1',
+            data: { title: 'Audit Diverge', body: 'Audit body' },
+          }),
+        };
+      }
+      if (method === 'PUT') {
+        putPayloadCaptured = JSON.parse(String(init?.body || '{}'));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    expect(termsGetCalled).toBe(true);
+    expect(putPayloadCaptured).not.toBeNull();
+    const updatedBase = cache.getBaseSnapshot(articleId);
+    expect(updatedBase).not.toBeNull();
+    const baseFm = JSON.parse(updatedBase!.frontmatterYaml);
+    expect(baseFm.taxonomies.categories).toContain('local-cat');
+    expect(baseFm.taxonomies.categories).toContain('remote-cat');
+  });
+
+  it('R1: skips pre-PUT taxonomy audit when noTaxonomyAudit is passed', async () => {
+    const articleId = '01M6TESTNOAUDIT00000000001';
+    const relPath = `posts/draft/20261109_${articleId}-no-audit.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: no-audit
+title: No Audit
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+---
+
+No audit body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-orig',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'no-audit',
+      lastSyncedAt: 1000,
+      remoteTaxonomyHash: computeTaxonomyHash(['news'], []),
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: 'No audit body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'no-audit',
+        title: 'No Audit',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        taxonomies: { categories: ['news'] },
+      }),
+      hash: 'hash-orig',
+      savedAt: 1000,
+    });
+
+    let termsGetCalled = false;
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/terms/') && method === 'GET') {
+        termsGetCalled = true;
+      }
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      noTaxonomyAudit: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    expect(termsGetCalled).toBe(false);
+  });
+
+  it('R2: handles taxonomy update partial failure, sets taxonomyApplyPending = 1, reverts baseline taxonomy, and enforces Guard G17 until bypassed', async () => {
+    const articleId = '01M6TESTPARTIAL00000000001';
+    const relPath = `posts/draft/20261109_${articleId}-partial.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: partial
+title: partial
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news-new
+---
+
+Partial body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-orig',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'partial',
+      lastSyncedAt: 1000,
+      conflictPending: 0,
+      remoteTaxonomyHash: computeTaxonomyHash(['news-old'], []),
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: 'Partial body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'partial',
+        title: 'partial',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        taxonomies: { categories: ['news-old'] },
+      }),
+      hash: 'hash-orig',
+      savedAt: 1000,
+    });
+
+    // Mock where article PUT succeeds (200), but POST /terms/category fails (500)
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/terms/category') && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [{ id: 'cat-old', slug: 'news-old' }] },
+          }),
+        };
+      }
+      if (url.includes('/terms/tag') && method === 'GET') {
+        return { ok: true, status: 200, json: async () => ({ data: { terms: [] } }) };
+      }
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      if (url.includes('/terms/category') && method === 'POST') {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          text: async () => 'DB connection lost',
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    // Initial push must throw TAXONOMY_UPDATE_FAILED
+    await expect(
+      pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrowError(/Failed to update category terms on remote/);
+
+    // Verify sync_state recorded taxonomy_apply_pending = 1
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.taxonomyApplyPending).toBe(1);
+
+    // Verify baseline snapshot taxonomies rolled back to news-old
+    const baseSnap = cache.getBaseSnapshot(articleId);
+    expect(baseSnap).not.toBeNull();
+    const baseFm = JSON.parse(baseSnap!.frontmatterYaml);
+    expect(baseFm.taxonomies.categories).toEqual(['news-old']);
+
+    // Next bare push must be blocked by Guard G17
+    await expect(
+      pushArticle(syncState!.localFilePath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrowError(/has an unconfirmed taxonomy assignment from a previous failed update/);
+
+    // Push with allowUnappliedTaxonomies = true bypasses Guard G17
+    // Mock fetch for successful retry
+    const mockFetchRetry = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '3' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const resBypass = await pushArticle(syncState!.localFilePath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      allowUnappliedTaxonomies: true,
+      noTaxonomyAudit: true,
+      fetchFn: mockFetchRetry as unknown as typeof fetch,
+    });
+
+    expect(resBypass.success).toBe(true);
+    expect(cache.getSyncState(articleId)?.taxonomyApplyPending).toBe(0);
   });
 });

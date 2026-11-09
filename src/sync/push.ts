@@ -47,11 +47,16 @@ import {
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps, loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
-import { calculateHash, CONFLICTS_SUBDIR, isQuarantinedRelativePath } from './pull.js';
+import {
+  calculateHash,
+  CONFLICTS_SUBDIR,
+  isQuarantinedRelativePath,
+  quarantineLocalCopy,
+} from './pull.js';
 import { hybrid3WayMerge } from './merge.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
-import { fetchAssignedTaxonomies } from './terms.js';
+import { fetchAssignedTaxonomies, computeTaxonomyHash } from './terms.js';
 import {
   fetchRemoteMediaDetail,
   resolveImageMimeType,
@@ -74,8 +79,10 @@ export interface PushOptions extends MapperOptions {
   knownTaxonomies?: Record<string, string[]>;
   resolveTaxonomy?: TaxonomyResolutionStrategy;
   allowWipeTaxonomies?: boolean;
+  allowUnappliedTaxonomies?: boolean;
   revive?: boolean;
   force?: boolean;
+  noTaxonomyAudit?: boolean;
 }
 
 export interface ResolvedTaxonomyItem {
@@ -654,6 +661,21 @@ export async function pushArticle(
     });
   }
 
+  // Guard against blind re-push when previous taxonomy update failed (unapplied remote terms)
+  if (
+    syncState?.taxonomyApplyPending === 1 &&
+    !options.allowUnappliedTaxonomies &&
+    !options.force
+  ) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'TAXONOMY_APPLY_PENDING',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) has an unconfirmed taxonomy assignment from a previous failed update.`,
+      suggestion: `Run "emit pull-taxonomies" to synchronize taxonomy definitions, then re-push (or pass --allow-unapplied-taxonomies / --force).`,
+    });
+  }
+
   const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
@@ -703,8 +725,12 @@ export async function pushArticle(
   const isNewArticle = !syncState;
 
   // Helper to synchronize taxonomy assignments
-  const syncArticleTaxonomies = async (articleId: string) => {
-    if (!parsed.frontmatter.taxonomies) return;
+  const syncArticleTaxonomies = async (
+    articleId: string,
+  ): Promise<Array<{ taxonomy: string; status: number; error: string; endpoint: string }>> => {
+    const failures: Array<{ taxonomy: string; status: number; error: string; endpoint: string }> =
+      [];
+    if (!parsed.frontmatter.taxonomies) return failures;
     const taxMaps = taxonomyMaps;
 
     const updateTaxonomy = async (taxonomyName: 'category' | 'tag', termSlugsOrIds: string[]) => {
@@ -767,6 +793,12 @@ export async function pushArticle(
 
       if (!termRes.ok) {
         const errBody = await termRes.text().catch(() => '');
+        failures.push({
+          taxonomy: taxonomyName,
+          status: termRes.status,
+          error: errBody || termRes.statusText,
+          endpoint: termsUrl,
+        });
         warnings.push(`Failed to update ${taxonomyName} terms: ${termRes.statusText} ${errBody}`);
       }
     };
@@ -777,6 +809,7 @@ export async function pushArticle(
     if (parsed.frontmatter.taxonomies.tags) {
       await updateTaxonomy('tag', parsed.frontmatter.taxonomies.tags);
     }
+    return failures;
   };
 
   if (isNewArticle) {
@@ -831,7 +864,8 @@ export async function pushArticle(
     parsed.frontmatter.id = actualId;
 
     // Sync taxonomies for newly created article
-    await syncArticleTaxonomies(actualId);
+    const taxFailures = await syncArticleTaxonomies(actualId);
+    const hasTaxFailures = taxFailures.length > 0;
 
     const currentPrefix = extractDatePrefixFromPath(fullPath);
     const dateInput =
@@ -880,6 +914,13 @@ export async function pushArticle(
     // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
     finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
+    const finalTaxHash = hasTaxFailures
+      ? null
+      : computeTaxonomyHash(
+          parsed.frontmatter.taxonomies?.categories,
+          parsed.frontmatter.taxonomies?.tags,
+        );
+
     // Update Base snapshot and Sync state
     options.cache.saveBaseSnapshot({
       id: actualId,
@@ -900,7 +941,20 @@ export async function pushArticle(
       lastSyncedAt: Math.floor(Date.now() / 1000),
       conflictPending: 0,
       conflictCopyHash: null,
+      remoteTaxonomyHash: finalTaxHash,
+      taxonomyApplyPending: hasTaxFailures ? 1 : 0,
     });
+
+    if (hasTaxFailures) {
+      throw new ApiError({
+        endpoint: taxFailures[0].endpoint,
+        code: 'TAXONOMY_UPDATE_FAILED',
+        status: taxFailures[0].status || 400,
+        message: `Failed to update ${taxFailures.map((f) => f.taxonomy).join(', ')} terms on remote: ${taxFailures.map((f) => f.error).join('; ')}`,
+        suggestion:
+          'Run "emit pull-taxonomies" to update local definitions, verify taxonomy permissions, and retry push.',
+      });
+    }
 
     return {
       success: true,
@@ -938,14 +992,76 @@ export async function pushArticle(
     );
     const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
 
-    let res = await fetchFn(putUrl, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+    // R1: Pre-PUT Taxonomy Audit to detect out-of-band remote taxonomy changes
+    let remoteTaxAudit: { categories: string[] | null; tags: string[] | null } | null = null;
+    let taxonomyDivergenceDetected = false;
+
+    const baseFm = baseSnapshot?.frontmatterYaml
+      ? (JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter)
+      : null;
+    const hasLocalTaxonomies = Boolean(
+      parsed.frontmatter.taxonomies &&
+      (parsed.frontmatter.taxonomies.categories !== undefined ||
+        parsed.frontmatter.taxonomies.tags !== undefined),
+    );
+    const hasBaseTaxonomies = Boolean(
+      baseFm?.taxonomies && (baseFm.taxonomies.categories || baseFm.taxonomies.tags),
+    );
+
+    if ((hasLocalTaxonomies || hasBaseTaxonomies) && !options.noTaxonomyAudit) {
+      remoteTaxAudit = await fetchAssignedTaxonomies({
+        origin: options.origin,
+        token: options.token,
+        collection,
+        id,
+        fetchFn,
+      });
+
+      if (remoteTaxAudit.categories === null && remoteTaxAudit.tags === null) {
+        warnings.push('⚠️ Remote taxonomy state unknown (could not audit remote terms).');
+      } else {
+        if (remoteTaxAudit.categories === null) {
+          warnings.push('⚠️ Remote category taxonomy state unknown (could not audit categories).');
+        }
+        if (remoteTaxAudit.tags === null) {
+          warnings.push('⚠️ Remote tag taxonomy state unknown (could not audit tags).');
+        }
+        const baselineTaxHash =
+          syncState?.remoteTaxonomyHash ||
+          (baseFm?.taxonomies
+            ? computeTaxonomyHash(baseFm.taxonomies.categories, baseFm.taxonomies.tags)
+            : null);
+
+        const currentRemoteCats =
+          remoteTaxAudit.categories !== null
+            ? remoteTaxAudit.categories
+            : baseFm?.taxonomies?.categories || [];
+        const currentRemoteTags =
+          remoteTaxAudit.tags !== null ? remoteTaxAudit.tags : baseFm?.taxonomies?.tags || [];
+
+        const currentRemoteTaxHash = computeTaxonomyHash(currentRemoteCats, currentRemoteTags);
+
+        if (baselineTaxHash && currentRemoteTaxHash !== baselineTaxHash) {
+          taxonomyDivergenceDetected = true;
+        }
+      }
+    }
+
+    let res = taxonomyDivergenceDetected
+      ? ({
+          status: 409,
+          ok: false,
+          json: async () => ({ error: { code: 'TAXONOMY_DIVERGENCE' } }),
+          text: async () => '',
+        } as unknown as Response)
+      : await fetchFn(putUrl, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${options.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
 
     // 3. Handle 409 Conflict
     if (res.status === 409) {
@@ -965,7 +1081,7 @@ export async function pushArticle(
         });
       }
 
-      // True revision mismatch conflict: fetch remote latest and run Hybrid 3-Way Merge
+      // True revision mismatch conflict or taxonomy divergence: fetch remote latest and run Hybrid 3-Way Merge
       const getUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
       const getRes = await fetchFn(getUrl, {
         method: 'GET',
@@ -988,14 +1104,16 @@ export async function pushArticle(
       const remoteItem = (await getRes.json()) as Record<string, unknown>;
       const remoteParsed = apiResponseToLocal(remoteItem, options);
 
-      // Fetch remote taxonomy assignments because GET /content/{collection}/{id} does not include them!
-      const remoteTax = await fetchAssignedTaxonomies({
-        origin: options.origin,
-        token: options.token,
-        collection,
-        id,
-        fetchFn,
-      });
+      // Fetch remote taxonomy assignments (reuse remoteTaxAudit if available)
+      const remoteTax =
+        remoteTaxAudit ||
+        (await fetchAssignedTaxonomies({
+          origin: options.origin,
+          token: options.token,
+          collection,
+          id,
+          fetchFn,
+        }));
 
       if (!remoteParsed.frontmatter.taxonomies) {
         remoteParsed.frontmatter.taxonomies = {};
@@ -1099,25 +1217,41 @@ export async function pushArticle(
           mergeResult.body,
           options.candidates,
         );
+        let quarantineRel: string | null = null;
         // Only write conflict markers into the article body if body actually has conflicts
         if (!isTaxonomyOnlyConflict) {
+          const currentDisk = fs.readFileSync(fullPath, 'utf8');
+          quarantineRel = quarantineLocalCopy(
+            options.workspaceRoot,
+            collection,
+            targetFilePath,
+            currentDisk,
+            { isForce: false },
+          );
           fs.writeFileSync(fullPath, conflictedMarkdown, 'utf8');
         }
 
         const conflictedHash = calculateHash(conflictedMarkdown);
 
         // Update sync state:
-        // Do NOT overwrite localHash if taxonomy-only conflict, so `status` continues to report `modified`!
+        // Do NOT overwrite localHash with marker hash, so `status` remains clean when markers are cleaned up!
         options.cache.saveSyncState({
           id,
           localFilePath: targetFilePath,
-          localHash: isTaxonomyOnlyConflict ? syncState?.localHash || '' : conflictedHash,
+          localHash: syncState?.localHash || '',
           remoteRev: remoteParsed.rev,
           status: parsed.frontmatter.status,
           slug: parsed.frontmatter.slug,
           lastSyncedAt: Math.floor(Date.now() / 1000),
           conflictPending: 1,
           conflictCopyHash: conflictedHash,
+          conflictCopyPath: quarantineRel,
+          conflictAt: Math.floor(Date.now() / 1000),
+          remoteTaxonomyHash: computeTaxonomyHash(
+            remoteParsed.frontmatter.taxonomies?.categories,
+            remoteParsed.frontmatter.taxonomies?.tags,
+          ),
+          taxonomyApplyPending: 0,
         });
 
         options.cache.saveBaseSnapshot({
@@ -1210,7 +1344,8 @@ export async function pushArticle(
 
     // 4. Post-push updates & Path tracking
     // Sync taxonomies on updated article
-    await syncArticleTaxonomies(id);
+    const taxFailures = await syncArticleTaxonomies(id);
+    const hasTaxFailures = taxFailures.length > 0;
 
     const currentPrefix = extractDatePrefixFromPath(fullPath);
     const existingSync = options.cache.getSyncState(parsed.frontmatter.id);
@@ -1277,11 +1412,26 @@ export async function pushArticle(
     finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
     // Update Base snapshot
+    const savedFrontmatter: Frontmatter = { ...parsed.frontmatter };
+    if (hasTaxFailures && baseFm?.taxonomies) {
+      savedFrontmatter.taxonomies = { ...baseFm.taxonomies };
+    }
+
+    const finalTaxHash = hasTaxFailures
+      ? syncState?.remoteTaxonomyHash ||
+        (baseFm?.taxonomies
+          ? computeTaxonomyHash(baseFm.taxonomies.categories, baseFm.taxonomies.tags)
+          : null)
+      : computeTaxonomyHash(
+          parsed.frontmatter.taxonomies?.categories,
+          parsed.frontmatter.taxonomies?.tags,
+        );
+
     options.cache.saveBaseSnapshot({
       id,
       rev: finalRev,
       bodyMarkdown: parsed.body,
-      frontmatterYaml: JSON.stringify(parsed.frontmatter),
+      frontmatterYaml: JSON.stringify(savedFrontmatter),
       hash: newHash,
       savedAt: Math.floor(Date.now() / 1000),
     });
@@ -1295,9 +1445,24 @@ export async function pushArticle(
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
-      conflictPending: 0,
-      conflictCopyHash: null,
+      conflictPending: hasTaxFailures ? (syncState?.conflictPending ?? 0) : 0,
+      conflictCopyHash: hasTaxFailures ? syncState?.conflictCopyHash : null,
+      conflictCopyPath: hasTaxFailures ? syncState?.conflictCopyPath : null,
+      conflictAt: hasTaxFailures ? syncState?.conflictAt : null,
+      remoteTaxonomyHash: finalTaxHash,
+      taxonomyApplyPending: hasTaxFailures ? 1 : 0,
     });
+
+    if (hasTaxFailures) {
+      throw new ApiError({
+        endpoint: taxFailures[0].endpoint,
+        code: 'TAXONOMY_UPDATE_FAILED',
+        status: taxFailures[0].status || 400,
+        message: `Failed to update ${taxFailures.map((f) => f.taxonomy).join(', ')} terms on remote: ${taxFailures.map((f) => f.error).join('; ')}`,
+        suggestion:
+          'Run "emit pull-taxonomies" to update local definitions, verify taxonomy permissions, and retry push.',
+      });
+    }
 
     updateConfigSyncedVersion(options.workspaceRoot);
 

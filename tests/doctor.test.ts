@@ -33,10 +33,13 @@ import { runWorkspaceDoctor } from '../src/sync/doctor.js';
 describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   let tempDir: string;
   let cache: CacheDatabase;
+  let origHome: string | undefined;
   const articleId = '01M67DOCTOR000000000000001';
 
   beforeEach(() => {
+    origHome = process.env.HOME;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-doctor-test-'));
+    process.env.HOME = tempDir;
     initWorkspace(tempDir, {
       origin: 'https://aroooy.net',
       createdWithVersion: '0.1.9',
@@ -49,6 +52,11 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   afterEach(() => {
     cache.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
+    if (origHome !== undefined) {
+      process.env.HOME = origHome;
+    } else {
+      delete process.env.HOME;
+    }
   });
 
   function setupHealthyArticle() {

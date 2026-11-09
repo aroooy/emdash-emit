@@ -46,6 +46,7 @@ import { getPackageVersion } from '../utils/version.js';
 import { recordMcpHeartbeat } from './heartbeat.js';
 
 export interface CreateMcpServerOptions {
+  profile?: string;
   workspaceRoot?: string;
   cache?: CacheDatabase;
   /**
@@ -191,6 +192,12 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
       resolvedBy,
     };
 
+    recordMcpHeartbeat({
+      origin: resolution.origin,
+      profile: auth.profileName,
+      workspaceRoot,
+    });
+
     return {
       root: workspaceRoot,
       paths,
@@ -237,7 +244,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
  * Runs the MCP server via stdio transport.
  */
 export async function runMcpServer(options?: CreateMcpServerOptions): Promise<void> {
-  recordMcpHeartbeat();
+  recordMcpHeartbeat({ profile: options?.profile, workspaceRoot: options?.workspaceRoot });
   const server = createMcpServer(options);
   const transport = new StdioServerTransport();
   await server.connect(transport);

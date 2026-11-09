@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.13] - 2026-11-09
+
+### Added
+- **Pre-PUT Taxonomy Divergence Audit (R1 / EMIT-001)**:
+  - Audits remote taxonomy assignments (`GET /_emdash/api/content/:collection/:id/terms/{category,tag}`) prior to PUT when article defines taxonomies.
+  - Detects out-of-band remote taxonomy modifications independent of entry `_rev` and routes directly into 3-way merge / guards.
+  - Added schema v2 migration (`CURRENT_CACHE_SCHEMA_VERSION = 2`), adding `remote_taxonomy_hash` and `taxonomy_apply_pending` with `.bak-0.1.12-<timestamp>` WAL-checkpointed backup (3-generation retention).
+  - Added `--no-taxonomy-audit` and `--allow-unapplied-taxonomies` flags to CLI `emit push` and MCP `sync_push`.
+- **Partial Failure Handling for Taxonomy Sync (R2 / EMIT-002)**:
+  - Added Guard G17 (`TAXONOMY_APPLY_PENDING`): if body PUT succeeds but term POST fails, records `taxonomy_apply_pending = 1` and blocks bare re-push until resolved.
+  - Reverts baseline taxonomy terms and hash to prior values on partial failure without rolling back body changes.
+  - Automatically syncs taxonomies in single-article pull (`emit pull <id>` / MCP `sync_pull`) unless `postsOnly: true` is explicitly specified.
+- **Hierarchical Taxonomy Term Flattening (R5 / EMIT-008)**:
+  - Recursively traverses and flattens nested `children` terms in `pullTaxonomies` (`fetchTerms`), preserving `parentId` in `categories/<id>-<label>.yaml` and `tags/<id>-<label>.yaml` with visited-set cycle guard and depth limit (32).
+  - Unifies local taxonomy candidate indexing and slug-to-term ID resolution across hierarchical taxonomy trees.
+- **Quarantine, Doctor & MCP Enhancements (R3, R6, R8)**:
+  - Conflict copy deduplication: reuses canonical `.conflict.md` if unedited without incrementing numeric suffix.
+  - Added `.local-dropped` type recognition and `🛡️ [FORCE DROPPED]` reporting in `emit conflicts list`.
+  - Added `warnings` in MCP `sync_status` when unreviewed quarantine copies exist in `<collection>/conflicts/`.
+  - Added `prune` action with `olderThan`, `dryRun`, `allowOrphanRescues` to MCP `sync_conflicts`.
+  - Added `--strict-media` option to CLI `emit doctor` and MCP `sync_doctor`.
+  - Added `profile` and `workspaceRoot` to MCP heartbeat recording state.
+
+### Fixed
+- **Cache Schema Mismatch Presentation (R4 / EMIT-006)**:
+  - Wrapped `CacheDatabase` initialization in CLI context resolver so `[CACHE_SCHEMA_MISMATCH]` exits with exit code 1 and a clean message instead of printing raw Node stack traces.
+- **Deterministic Filename Resolution (R7 / EMIT-005)**:
+  - Symmetrically resolved date prefixes and titles between batch fast-path and full pull.
+- **3-State Taxonomy Evaluation**:
+  - Treated missing or malformed term lists as `unknown` (`null`) instead of `none` (`[]`), avoiding false divergence detection on unsupported or mock endpoints.
+
+### Notes & Migration
+- **Schema v2 Self-Healing for Existing Workspaces**:
+  - Articles synchronized prior to v0.1.12 will have `remote_taxonomy_hash` set to `NULL` in the SQLite cache upon upgrading to schema v2. The remote taxonomy hash is automatically calculated and saved on the article's first subsequent `emit push` or `emit pull`, after which out-of-band taxonomy divergence auditing is fully active.
+
+---
+
 ## [0.1.12] - 2026-11-09
 
 ### Added

@@ -30,6 +30,7 @@ import {
   loadLocalTaxonomyMaps,
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
+  flattenTaxonomyTerms,
 } from '../src/sync/taxonomies.js';
 
 describe('Taxonomies Sync Engine', () => {
@@ -259,5 +260,90 @@ describe('Taxonomies Sync Engine', () => {
     const summary = getLocalTaxonomiesSummary(tempDir);
     const hint = formatTaxonomiesHint(summary);
     expect(hint).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e" (未分類)');
+  });
+
+  it('flattens hierarchical taxonomy terms (children) and writes them into local YAML definitions (EMIT-008)', async () => {
+    const mockCategories = [
+      {
+        id: '01M6CATPARENT00000000000001',
+        slug: 'qa-cat-parent',
+        label: 'QA Parent Category',
+        count: 10,
+        children: [
+          {
+            id: '01M6CATB100000000000000002',
+            slug: 'qa-cat-b1',
+            label: 'QA Child Category B1',
+            count: 3,
+            children: [
+              {
+                id: '01M6CATB1GRAND0000000000003',
+                slug: 'qa-cat-b1-grand',
+                label: 'QA Grandchild Category',
+                count: 1,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/category/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: mockCategories } }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true, data: { terms: [] } }),
+      });
+    });
+
+    const res = await pullTaxonomies({
+      workspaceRoot: tempDir,
+      origin: 'https://test.example.com',
+      token: 'test-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.categoriesCount).toBe(3); // parent + child + grandchild
+    expect(res.categoriesFailed).toBe(false);
+
+    // Verify all 3 YAML files exist
+    const catDir = path.join(tempDir, 'categories');
+    expect(fs.readdirSync(catDir)).toHaveLength(3);
+
+    // Check child YAML content has parentId
+    const childFile = path.join(catDir, '01M6CATB100000000000000002-QA-Child-Category-B1.yaml');
+    expect(fs.existsSync(childFile)).toBe(true);
+    const childYaml = fs.readFileSync(childFile, 'utf8');
+    expect(childYaml).toContain('parentId: 01M6CATPARENT00000000000001');
+    expect(childYaml).toContain('slug: qa-cat-b1');
+
+    // Check grandchild YAML content has child as parentId
+    const grandFile = path.join(catDir, '01M6CATB1GRAND0000000000003-QA-Grandchild-Category.yaml');
+    expect(fs.existsSync(grandFile)).toBe(true);
+    const grandYaml = fs.readFileSync(grandFile, 'utf8');
+    expect(grandYaml).toContain('parentId: 01M6CATB100000000000000002');
+
+    // Verify loadLocalTaxonomyMaps indexes both parent, child, and grandchild
+    const maps = loadLocalTaxonomyMaps(tempDir);
+    expect(maps.slugToId.category['qa-cat-parent']).toBe('01M6CATPARENT00000000000001');
+    expect(maps.slugToId.category['qa-cat-b1']).toBe('01M6CATB100000000000000002');
+    expect(maps.slugToId.category['qa-cat-b1-grand']).toBe('01M6CATB1GRAND0000000000003');
+  });
+
+  it('guards against circular references in hierarchical taxonomy children', () => {
+    const termA: any = { id: 'term-a', slug: 'term-a', name: 'Term A' };
+    const termB: any = { id: 'term-b', slug: 'term-b', name: 'Term B' };
+    // Introduce circular reference: A -> B -> A
+    termA.children = [termB];
+    termB.children = [termA];
+
+    const flattened = flattenTaxonomyTerms([termA]);
+    expect(flattened).toHaveLength(2);
+    expect(flattened.map((t) => t.id)).toEqual(['term-a', 'term-b']);
   });
 });

@@ -20,6 +20,18 @@
  * SOFTWARE.
  */
 
+import crypto from 'node:crypto';
+
+/**
+ * Computes deterministic SHA-256 hash for taxonomy assignments.
+ * Format: sha256(sorted(categorySlugs).join(',') + '|' + sorted(tagSlugs).join(','))
+ */
+export function computeTaxonomyHash(categories?: string[] | null, tags?: string[] | null): string {
+  const sortedCats = [...(categories || [])].sort().join(',');
+  const sortedTags = [...(tags || [])].sort().join(',');
+  return crypto.createHash('sha256').update(`${sortedCats}|${sortedTags}`).digest('hex');
+}
+
 /**
  * Fetches the terms currently assigned to an article for one taxonomy.
  *
@@ -51,11 +63,20 @@ export async function fetchAssignedTerms(options: {
       },
     });
     if (!termsRes.ok) return null;
-    const termsJson = (await termsRes.json()) as {
+    const termsJson = (await termsRes.json().catch(() => ({}))) as {
       data?: { terms?: Array<{ slug?: string; id?: string }> };
+      terms?: Array<{ slug?: string; id?: string }>;
     };
-    const assigned = termsJson.data?.terms || [];
-    return assigned.map((t) => t.slug || t.id).filter((s): s is string => Boolean(s));
+    const termsList =
+      termsJson.data && Array.isArray(termsJson.data.terms)
+        ? termsJson.data.terms
+        : Array.isArray(termsJson.terms)
+          ? termsJson.terms
+          : null;
+    if (termsList === null) {
+      return null;
+    }
+    return termsList.map((t) => t.slug || t.id).filter((s): s is string => Boolean(s));
   } catch {
     return null;
   }

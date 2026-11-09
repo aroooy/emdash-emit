@@ -139,8 +139,24 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     const deletedFileName = `20261108_${deletedId}-deleted-rescue-article.deleted.md`;
     fs.writeFileSync(path.join(conflictsDir, deletedFileName), deletedContent, 'utf8');
 
+    // 3. Create a .local-dropped.md rescue file from pull --force
+    const droppedId = '01M67DROPPED00000000000001';
+    const droppedFm: Frontmatter = {
+      id: droppedId,
+      slug: 'forced-dropped-article',
+      title: 'Dropped Title',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const droppedContent = serializeMarkdown(droppedFm, 'Dropped Body Content\n');
+    const droppedFileName = `20261108_${droppedId}-forced-dropped-article.local-dropped.md`;
+    fs.writeFileSync(path.join(conflictsDir, droppedFileName), droppedContent, 'utf8');
+
     const list = listConflicts(tempDir);
-    expect(list).toHaveLength(2);
+    expect(list).toHaveLength(3);
 
     const conflictItem = list.find((i) => i.type === 'conflict');
     expect(conflictItem).toBeDefined();
@@ -153,6 +169,11 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(deletedItem?.fileName).toBe(deletedFileName);
     expect(deletedItem?.title).toBe('Deleted Title');
     expect(deletedItem?.canonicalPath).toBeNull();
+
+    const droppedItem = list.find((i) => i.type === 'dropped');
+    expect(droppedItem).toBeDefined();
+    expect(droppedItem?.fileName).toBe(droppedFileName);
+    expect(droppedItem?.title).toBe('Dropped Title');
   });
 
   it('computes line-by-line diff against canonical article', () => {

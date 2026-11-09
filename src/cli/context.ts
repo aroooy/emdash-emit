@@ -227,7 +227,17 @@ export function createCliContextResolver(): CliContextResolver {
     }
 
     const paths = getWorkspacePaths(workspaceRoot);
-    const cache = new CacheDatabase(paths.dbPath);
+    let cache: CacheDatabase;
+    try {
+      cache = new CacheDatabase(paths.dbPath);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[CACHE_SCHEMA_MISMATCH]')) {
+        console.error(`\n❌ Error: ${msg}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
     const config =
       preConfig && preResolvedWorkspace === workspaceRoot ? preConfig : loadConfig(workspaceRoot);
     const configuredOrigin = config.origin !== DEFAULT_ORIGIN ? config.origin : undefined;

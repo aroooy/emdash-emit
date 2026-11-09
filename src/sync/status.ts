@@ -44,6 +44,7 @@ export interface ArticleStatusItem {
   conflictPending?: boolean;
   deletePending?: boolean;
   orphan?: boolean;
+  taxonomyApplyPending?: boolean;
 }
 
 export interface WorkspaceStatusResult {
@@ -61,6 +62,7 @@ export interface WorkspaceStatusResult {
       conflictPending: number;
       orphan: number;
       deletePending: number;
+      taxonomyApplyPending: number;
     };
   };
 }
@@ -154,9 +156,10 @@ export function getWorkspaceStatus(
         let syncStatus: 'synced' | 'modified' | 'untracked' = 'untracked';
         const conflictPending = syncState?.conflictPending === 1;
         const deletePending = syncState?.deletePending === 1;
+        const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
 
         if (syncState) {
-          if (syncState.localHash === currentHash && !conflictPending) {
+          if (syncState.localHash === currentHash && !conflictPending && !taxonomyApplyPending) {
             syncStatus = 'synced';
           } else {
             syncStatus = 'modified';
@@ -173,6 +176,7 @@ export function getWorkspaceStatus(
           rev: syncState?.remoteRev,
           conflictPending: conflictPending || undefined,
           deletePending: deletePending || undefined,
+          taxonomyApplyPending: taxonomyApplyPending || undefined,
         });
       } catch (err: unknown) {
         const fallbackId = extractUlidFromFilename(file) || 'unknown';
@@ -213,6 +217,7 @@ export function getWorkspaceStatus(
       conflictPending: items.filter((i) => i.conflictPending).length,
       orphan: items.filter((i) => i.orphan).length,
       deletePending: items.filter((i) => i.deletePending).length,
+      taxonomyApplyPending: items.filter((i) => i.taxonomyApplyPending).length,
     },
   };
 

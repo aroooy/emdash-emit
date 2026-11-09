@@ -81,9 +81,11 @@ export function registerConflictsCommand(
           const typeLabel =
             item.type === 'conflict'
               ? '⚠️  [SYNC CONFLICT]'
-              : item.type === 'deleted'
-                ? '🗑️  [DELETED RESCUE]'
-                : '❓ [UNKNOWN]';
+              : item.type === 'dropped'
+                ? '🛡️  [FORCE DROPPED]'
+                : item.type === 'deleted'
+                  ? '🗑️  [DELETED RESCUE]'
+                  : '❓ [UNKNOWN]';
           const titleStr = item.title ? ` - "${item.title}"` : '';
           const canonicalStr = item.canonicalPath
             ? ` (canonical: ${item.canonicalPath})`

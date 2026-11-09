@@ -52,6 +52,14 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .describe(
           'Explicit confirmation required when wiping all existing remote taxonomy assignments',
         ),
+      allowUnappliedTaxonomies: z
+        .boolean()
+        .optional()
+        .describe('Allow push even if previous taxonomy sync failed (bypasses Guard G17)'),
+      noTaxonomyAudit: z
+        .boolean()
+        .optional()
+        .describe('Skip remote taxonomy pre-audit check before pushing'),
       revive: z
         .boolean()
         .optional()
@@ -81,6 +89,8 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           allowPublish: args.allowPublish,
           resolveTaxonomy: args.resolveTaxonomy,
           allowWipeTaxonomies: args.allowWipeTaxonomies,
+          allowUnappliedTaxonomies: args.allowUnappliedTaxonomies,
+          noTaxonomyAudit: args.noTaxonomyAudit,
           revive: args.revive,
           force: args.force,
         });

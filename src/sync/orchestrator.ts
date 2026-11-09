@@ -287,13 +287,13 @@ export interface PushAllResult {
   skippedItems?: Array<{
     slug: string;
     filePath: string;
-    reason: 'conflict_pending' | 'delete_pending';
+    reason: 'conflict_pending' | 'delete_pending' | 'taxonomy_apply_pending';
   }>;
 }
 
 /**
  * Orchestrates pushing all modified/untracked files in the workspace.
- * Excludes synced, conflict_pending, delete_pending, and invalid (YAML parse error) files.
+ * Excludes synced, conflict_pending, delete_pending, taxonomy_apply_pending, and invalid (YAML parse error) files.
  * Reusable across CLI and MCP servers.
  */
 export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
@@ -305,7 +305,7 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
   const skippedItems: Array<{
     slug: string;
     filePath: string;
-    reason: 'conflict_pending' | 'delete_pending';
+    reason: 'conflict_pending' | 'delete_pending' | 'taxonomy_apply_pending';
   }> = [];
   const toPush = eligibleItems.filter((i) => {
     if (i.deletePending) {
@@ -314,6 +314,10 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
     }
     if (i.conflictPending) {
       skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'conflict_pending' });
+      return false;
+    }
+    if (i.taxonomyApplyPending) {
+      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'taxonomy_apply_pending' });
       return false;
     }
     return true;

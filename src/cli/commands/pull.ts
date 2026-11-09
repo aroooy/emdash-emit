@@ -201,7 +201,15 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             );
           }
         } else {
-          // Single article mode: articles only (no taxonomy/media overhead)
+          // Single article mode: pull article and synchronize taxonomies (unless --posts-only)
+          if (!options.postsOnly) {
+            await pullTaxonomies({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+            }).catch(() => null);
+          }
           const res = await pullArticle(collection, id, {
             workspaceRoot: ctx.root,
             cache: ctx.cache,

@@ -27,7 +27,7 @@ import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontm
 import { computeContextDiff } from './diff.js';
 import { calculateHash } from './pull.js';
 
-export type ConflictFileType = 'conflict' | 'deleted' | 'unknown';
+export type ConflictFileType = 'conflict' | 'dropped' | 'deleted' | 'unknown';
 
 export interface ConflictItem {
   filePath: string;
@@ -175,9 +175,11 @@ export function listConflicts(workspaceRoot: string, collection = 'posts'): Conf
     const fullPath = path.join(conflictsDir, fileName);
 
     let type: ConflictFileType = 'unknown';
-    if (fileName.endsWith('.deleted.md')) {
+    if (/\.deleted(-\d+)?\.md$/i.test(fileName)) {
       type = 'deleted';
-    } else if (fileName.endsWith('.conflict.md')) {
+    } else if (/\.local-dropped(-\d+)?\.md$/i.test(fileName)) {
+      type = 'dropped';
+    } else if (/\.conflict(-\d+)?\.md$/i.test(fileName)) {
       type = 'conflict';
     }
 
@@ -298,9 +300,11 @@ export function diffConflict(options: {
 
   const conflictContent = fs.readFileSync(fullPath, 'utf8');
   let type: ConflictFileType = 'unknown';
-  if (fileName.endsWith('.deleted.md')) {
+  if (/\.deleted(-\d+)?\.md$/i.test(fileName)) {
     type = 'deleted';
-  } else if (fileName.endsWith('.conflict.md')) {
+  } else if (/\.local-dropped(-\d+)?\.md$/i.test(fileName)) {
+    type = 'dropped';
+  } else if (/\.conflict(-\d+)?\.md$/i.test(fileName)) {
     type = 'conflict';
   }
 

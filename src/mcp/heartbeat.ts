@@ -30,6 +30,8 @@ export interface McpHeartbeatState {
   version: string;
   startedAt: string;
   origin?: string;
+  profile?: string;
+  workspaceRoot?: string;
 }
 
 export interface McpProcessCheckResult {
@@ -58,15 +60,26 @@ export function getPackageVersion(): string {
 /**
  * Records heartbeat metadata to ~/.config/emit/mcp_state.json with restricted 0600 permissions.
  */
-export function recordMcpHeartbeat(origin?: string): void {
+export function recordMcpHeartbeat(
+  metadata?:
+    | string
+    | {
+        origin?: string;
+        profile?: string;
+        workspaceRoot?: string;
+      },
+): void {
   try {
     const filePath = getMcpStateFilePath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const metaObj = typeof metadata === 'string' ? { origin: metadata } : metadata || {};
     const payload: McpHeartbeatState = {
       pid: process.pid,
       version: getPackageVersion(),
       startedAt: new Date().toISOString(),
-      ...(origin ? { origin } : {}),
+      ...(metaObj.origin ? { origin: metaObj.origin } : {}),
+      ...(metaObj.profile ? { profile: metaObj.profile } : {}),
+      ...(metaObj.workspaceRoot ? { workspaceRoot: metaObj.workspaceRoot } : {}),
     };
     fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   } catch {

@@ -117,6 +117,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
       conflictCopyHash: null,
       conflictCopyPath: null,
       conflictAt: null,
+      remoteTaxonomyHash: null,
+      taxonomyApplyPending: 0,
     };
 
     cache.saveSyncState(state);
@@ -249,7 +251,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // Verify backup was created (timestamped bak file)
     const dbDir = path.dirname(legacyDbPath);
     const dbBase = path.basename(legacyDbPath);
-    const bakFiles = fs.readdirSync(dbDir).filter((f) => f.startsWith(`${dbBase}.bak-0.1.11`));
+    const bakFiles = fs.readdirSync(dbDir).filter((f) => f.startsWith(`${dbBase}.bak-`));
     expect(bakFiles.length).toBeGreaterThan(0);
 
     // Verify existing data is preserved and new columns are accessible
@@ -259,6 +261,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(state?.conflictPending).toBe(0);
     expect(state?.deletePending).toBe(0);
     expect(state?.conflictCopyHash).toBeNull();
+    expect(state?.remoteTaxonomyHash).toBeNull();
+    expect(state?.taxonomyApplyPending).toBe(0);
 
     // Update with new columns
     migratedCache.setConflictPending('test-id', true, 'copyhash123');

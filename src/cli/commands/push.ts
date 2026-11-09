@@ -40,6 +40,11 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
       'Resolve taxonomy conflict during 3-way merge: "union", "local", or "remote"',
     )
     .option('--allow-wipe-taxonomies', 'Explicitly confirm wiping all remote taxonomy assignments')
+    .option(
+      '--allow-unapplied-taxonomies',
+      'Allow push even if previous taxonomy sync failed (bypasses Guard G17)',
+    )
+    .option('--no-taxonomy-audit', 'Skip remote taxonomy pre-audit check before pushing')
     .option('--revive', 'Intentionally revive and push a delete-pending article')
     .option('-f, --force', 'Force push and overwrite conflicting taxonomy states')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
@@ -65,7 +70,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
 
           if (pushResult.skippedItems && pushResult.skippedItems.length > 0) {
             console.warn(
-              `⚠️ Skipped ${pushResult.skippedItems.length} article(s) with pending flags (conflict_pending or delete_pending):`,
+              `⚠️ Skipped ${pushResult.skippedItems.length} article(s) with pending flags (conflict_pending, delete_pending, or taxonomy_apply_pending):`,
             );
             for (const item of pushResult.skippedItems) {
               console.warn(`   - ${item.filePath} (${item.reason})`);
@@ -124,6 +129,8 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           allowPublish: options.allowPublish,
           resolveTaxonomy: options.resolveTaxonomy,
           allowWipeTaxonomies: options.allowWipeTaxonomies,
+          allowUnappliedTaxonomies: options.allowUnappliedTaxonomies,
+          noTaxonomyAudit: options.taxonomyAudit === false || Boolean(options.noTaxonomyAudit),
           revive: options.revive,
           force: options.force,
         });

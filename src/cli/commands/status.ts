@@ -137,11 +137,23 @@ export function registerStatusInitCommands(
         status.summary.flags &&
         (status.summary.flags.conflictPending > 0 ||
           status.summary.flags.orphan > 0 ||
-          status.summary.flags.deletePending > 0)
+          status.summary.flags.deletePending > 0 ||
+          status.summary.flags.taxonomyApplyPending > 0)
       ) {
-        console.log(
-          `Flags: ${status.summary.flags.conflictPending} conflict pending, ${status.summary.flags.orphan} orphan, ${status.summary.flags.deletePending} delete pending\n`,
-        );
+        const parts: string[] = [];
+        if (status.summary.flags.conflictPending > 0) {
+          parts.push(`${status.summary.flags.conflictPending} conflict pending`);
+        }
+        if (status.summary.flags.orphan > 0) {
+          parts.push(`${status.summary.flags.orphan} orphan`);
+        }
+        if (status.summary.flags.deletePending > 0) {
+          parts.push(`${status.summary.flags.deletePending} delete pending`);
+        }
+        if (status.summary.flags.taxonomyApplyPending > 0) {
+          parts.push(`${status.summary.flags.taxonomyApplyPending} taxonomy apply pending`);
+        }
+        console.log(`Flags: ${parts.join(', ')}\n`);
       }
       if (status.summary.invalid > 0) {
         const uncachedInvalid = status.items.filter(

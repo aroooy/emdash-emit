@@ -37,6 +37,37 @@ export interface TaxonomyTerm {
   parentId?: string | null;
   count?: number;
   locale?: string;
+  children?: TaxonomyTerm[];
+}
+
+/**
+ * Recursively flattens hierarchical taxonomy terms (parent terms with nested children)
+ * preserving parentId for each child.
+ */
+export function flattenTaxonomyTerms(
+  rawTerms: TaxonomyTerm[],
+  inheritedParentId: string | null = null,
+  visited: Set<string> = new Set<string>(),
+  depth = 0,
+): TaxonomyTerm[] {
+  if (depth > 32) return [];
+  const result: TaxonomyTerm[] = [];
+  for (const term of rawTerms) {
+    if (!term || !term.id) continue;
+    if (visited.has(term.id)) continue;
+    visited.add(term.id);
+
+    const parentId = term.parentId || inheritedParentId || null;
+    const { children, ...rest } = term;
+    result.push({
+      ...rest,
+      parentId,
+    });
+    if (Array.isArray(children) && children.length > 0) {
+      result.push(...flattenTaxonomyTerms(children, term.id, visited, depth + 1));
+    }
+  }
+  return result;
 }
 
 import { ApiError } from '../client/error.js';
@@ -95,7 +126,7 @@ export async function pullTaxonomies(
     const rawTerms = (
       Array.isArray(data.terms) ? data.terms : Array.isArray(data) ? data : []
     ) as TaxonomyTerm[];
-    return rawTerms;
+    return flattenTaxonomyTerms(rawTerms);
   };
 
   const [categories, tags] = await Promise.all([
@@ -213,6 +244,7 @@ export interface LocalTaxonomyItem {
   id: string;
   slug: string;
   name: string;
+  parentId?: string | null;
   count?: number;
 }
 
@@ -247,6 +279,7 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
             id: data.id,
             slug: data.slug,
             name: typeof data.name === 'string' ? data.name : data.slug,
+            parentId: typeof data.parentId === 'string' ? data.parentId : null,
             count: typeof data.count === 'number' ? data.count : undefined,
           });
         }

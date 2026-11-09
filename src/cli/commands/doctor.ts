@@ -44,6 +44,10 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
     )
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .option(
+      '--strict-media',
+      'Enforce strict media verification (fail on unpromoted or unverified references)',
+    )
     .action(async (options) => {
       try {
         const ctx = resolveContext(options.profile, { optionalAuth: true });
@@ -56,6 +60,7 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
           profileName: ctx.auth?.profileName,
           profileOrigin: ctx.auth?.origin,
           collection,
+          strictMedia: Boolean(options.strictMedia),
         });
 
         console.log(`🩺 Emit Workspace Doctor`);

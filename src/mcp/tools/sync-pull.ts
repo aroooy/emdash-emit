@@ -98,6 +98,14 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       if (targetId) {
         let res: PullResult;
         try {
+          if (!args.postsOnly) {
+            await pullTaxonomies({
+              workspaceRoot: ctx.root,
+              origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+            }).catch(() => null);
+          }
           res = await pullArticle(collection, targetId, {
             workspaceRoot: ctx.root,
             cache: ctx.cache,

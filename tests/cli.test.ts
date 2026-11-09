@@ -525,6 +525,20 @@ describe('Emit CLI (Commander)', () => {
       expect(pushErr).toContain('Error:');
       expect(pushErr).not.toContain('    at ');
       expect(pushErr).not.toContain('file://');
+
+      // 5. emit status on future schema database must report clean [CACHE_SCHEMA_MISMATCH] (EMIT-006 / R4)
+      const dbPath = path.join(tempDir, '.emit', 'cache.db');
+      const { DatabaseSync } = await import('node:sqlite');
+      const rawDb = new DatabaseSync(dbPath);
+      rawDb.exec('PRAGMA user_version = 999;');
+      rawDb.close();
+
+      await runCli(['status']);
+      expect(exitCode).toBe(1);
+      const schemaErr = errLines.join('\n');
+      expect(schemaErr).toContain('[CACHE_SCHEMA_MISMATCH]');
+      expect(schemaErr).not.toContain('    at ');
+      expect(schemaErr).not.toContain('file://');
     } finally {
       vi.unstubAllGlobals();
       console.error = originalError;
