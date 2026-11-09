@@ -144,11 +144,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
               } else if (item.healed) {
                 console.log(
-                  `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved)`,
+                  `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved). Push the file to apply changes to the server.`,
                 );
               } else if (item.localEditsPreserved) {
                 console.log(
-                  `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath})`,
+                  `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath}; remote changes NOT applied)`,
                 );
               } else if (!item.skipped) {
                 console.log(`  [${current}/${total}] ✅ Pulled ${item.slug} -> ${item.filePath}`);
@@ -216,12 +216,15 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             console.log(
               `🛠️ Repaired frontmatter syntax for ${res.slug} (${res.filePath}; unpushed local body was strictly preserved).`,
             );
+            console.log(
+              `   Push the file to apply changes to the server: "emit push ${res.filePath}"`,
+            );
           } else if (res.localEditsPreserved) {
             console.log(
-              `🛡️ Kept your local edits for ${res.slug} (${res.filePath}); remote changes were NOT applied.`,
+              `🛡️ Kept 1 local edit(s); 1 remote change(s) NOT applied (${res.filePath}).`,
             );
             console.log(
-              `   Push them with "emit push ${res.filePath}", or re-run with --force to accept the remote version.`,
+              `   Push them with "emit push ${res.filePath}", or re-run with --force to accept remote.`,
             );
           } else if (res.skipped) {
             console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);

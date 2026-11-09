@@ -53,6 +53,11 @@ export interface SyncState {
   status: string;
   slug: string;
   lastSyncedAt: number;
+  conflictPending?: number;
+  deletePending?: number;
+  conflictCopyHash?: string | null;
+  conflictCopyPath?: string | null;
+  conflictAt?: number | null;
 }
 
 export interface BylineRecord {
@@ -76,12 +81,16 @@ export interface MediaStateRecord {
   uploadedAt?: number | null;
 }
 
+export const CURRENT_CACHE_SCHEMA_VERSION = 1;
+
 export class CacheDatabase {
   private db: DatabaseSync;
+  private dbPath: string;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     const parentDir = path.dirname(dbPath);
-    if (!fs.existsSync(parentDir)) {
+    if (dbPath !== ':memory:' && !fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
     }
     this.db = new DatabaseSync(dbPath);
@@ -130,7 +139,12 @@ export class CacheDatabase {
         remote_rev TEXT NOT NULL,
         status TEXT NOT NULL,
         slug TEXT NOT NULL,
-        last_synced_at INTEGER NOT NULL
+        last_synced_at INTEGER NOT NULL,
+        conflict_pending INTEGER NOT NULL DEFAULT 0,
+        delete_pending INTEGER NOT NULL DEFAULT 0,
+        conflict_copy_hash TEXT,
+        conflict_copy_path TEXT,
+        conflict_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_sync_state_file_path ON sync_state (local_file_path);
     `);
@@ -162,6 +176,106 @@ export class CacheDatabase {
       CREATE INDEX IF NOT EXISTS idx_media_state_media_id ON media_state (media_id);
       CREATE INDEX IF NOT EXISTS idx_media_state_status ON media_state (status);
     `);
+
+    // Run schema migrations for existing databases
+    this.runMigrations();
+
+    // Create indexes that depend on migrated columns
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sync_state_conflict ON sync_state (conflict_pending);
+    `);
+  }
+
+  private runMigrations(): void {
+    const versionRow = this.db.prepare('PRAGMA user_version;').get() as
+      Record<string, unknown> | undefined;
+    const currentVersion = Number(versionRow?.user_version || 0);
+
+    // Guard against opening a database created by a newer version of emdash-emit
+    if (currentVersion > CURRENT_CACHE_SCHEMA_VERSION) {
+      throw new Error(
+        `[CACHE_SCHEMA_MISMATCH] Cache database at ${this.dbPath} was created with schema version ${currentVersion}, but current emit supports up to ${CURRENT_CACHE_SCHEMA_VERSION}. Please upgrade emdash-emit.`,
+      );
+    }
+
+    if (currentVersion < CURRENT_CACHE_SCHEMA_VERSION) {
+      // 1. Flush WAL completely to main database file before backing up
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch {
+        // Ignore checkpoint failure in in-memory or constrained environments
+      }
+
+      // 2. Backup database before running migration if physical file exists (keep up to 3 recent backups)
+      if (this.dbPath !== ':memory:' && fs.existsSync(this.dbPath)) {
+        try {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const bakPath = `${this.dbPath}.bak-0.1.11-${timestamp}`;
+          fs.copyFileSync(this.dbPath, bakPath);
+
+          // Prune backups: retain only 3 newest .bak-* files
+          const dbDir = path.dirname(this.dbPath);
+          const dbBase = path.basename(this.dbPath);
+          const backupFiles = fs
+            .readdirSync(dbDir)
+            .filter((f) => f.startsWith(`${dbBase}.bak-`))
+            .map((f) => path.join(dbDir, f))
+            .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+          if (backupFiles.length > 3) {
+            for (const oldBak of backupFiles.slice(3)) {
+              try {
+                fs.unlinkSync(oldBak);
+              } catch {
+                // Ignore unlink errors
+              }
+            }
+          }
+        } catch {
+          // Ignore backup copy failure in constrained test environments
+        }
+      }
+
+      // Migration 1: add conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at to sync_state if missing
+      const columns = this.db.prepare("PRAGMA table_info('sync_state');").all() as Array<
+        Record<string, unknown>
+      >;
+      const columnNames = new Set(columns.map((c) => String(c.name)));
+
+      if (!columnNames.has('conflict_pending')) {
+        this.db.exec(
+          'ALTER TABLE sync_state ADD COLUMN conflict_pending INTEGER NOT NULL DEFAULT 0;',
+        );
+      }
+      if (!columnNames.has('delete_pending')) {
+        this.db.exec(
+          'ALTER TABLE sync_state ADD COLUMN delete_pending INTEGER NOT NULL DEFAULT 0;',
+        );
+      }
+      if (!columnNames.has('conflict_copy_hash')) {
+        this.db.exec('ALTER TABLE sync_state ADD COLUMN conflict_copy_hash TEXT;');
+      }
+      if (!columnNames.has('conflict_copy_path')) {
+        this.db.exec('ALTER TABLE sync_state ADD COLUMN conflict_copy_path TEXT;');
+      }
+      if (!columnNames.has('conflict_at')) {
+        this.db.exec('ALTER TABLE sync_state ADD COLUMN conflict_at INTEGER;');
+      }
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_sync_state_conflict ON sync_state (conflict_pending);',
+      );
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_sync_state_delete ON sync_state (delete_pending);',
+      );
+
+      this.db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);
+    }
+  }
+
+  public getSchemaVersion(): number {
+    const row = this.db.prepare('PRAGMA user_version;').get() as
+      Record<string, unknown> | undefined;
+    return Number(row?.user_version || 0);
   }
 
   // --- entries operations ---
@@ -297,15 +411,20 @@ export class CacheDatabase {
 
   public saveSyncState(state: SyncState): void {
     const stmt = this.db.prepare(`
-      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at, conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         local_file_path = excluded.local_file_path,
         local_hash = excluded.local_hash,
         remote_rev = excluded.remote_rev,
         status = excluded.status,
         slug = excluded.slug,
-        last_synced_at = excluded.last_synced_at
+        last_synced_at = excluded.last_synced_at,
+        conflict_pending = excluded.conflict_pending,
+        delete_pending = excluded.delete_pending,
+        conflict_copy_hash = excluded.conflict_copy_hash,
+        conflict_copy_path = excluded.conflict_copy_path,
+        conflict_at = excluded.conflict_at
     `);
     stmt.run(
       state.id,
@@ -315,7 +434,36 @@ export class CacheDatabase {
       state.status,
       state.slug,
       state.lastSyncedAt,
+      state.conflictPending ?? 0,
+      state.deletePending ?? 0,
+      state.conflictCopyHash ?? null,
+      state.conflictCopyPath ?? null,
+      state.conflictAt ?? null,
     );
+  }
+
+  public setConflictPending(
+    id: string,
+    pending: boolean,
+    copyHash?: string | null,
+    copyPath?: string | null,
+  ): void {
+    if (pending) {
+      const stmt = this.db.prepare(
+        'UPDATE sync_state SET conflict_pending = 1, conflict_copy_hash = ?, conflict_copy_path = ?, conflict_at = ? WHERE id = ?',
+      );
+      stmt.run(copyHash ?? null, copyPath ?? null, Math.floor(Date.now() / 1000), id);
+    } else {
+      const stmt = this.db.prepare(
+        'UPDATE sync_state SET conflict_pending = 0, conflict_copy_hash = NULL, conflict_copy_path = NULL, conflict_at = NULL WHERE id = ?',
+      );
+      stmt.run(id);
+    }
+  }
+
+  public setDeletePending(id: string, pending: boolean): void {
+    const stmt = this.db.prepare('UPDATE sync_state SET delete_pending = ? WHERE id = ?');
+    stmt.run(pending ? 1 : 0, id);
   }
 
   public getSyncState(id: string): SyncState | null {
@@ -330,6 +478,11 @@ export class CacheDatabase {
       status: String(row.status),
       slug: String(row.slug),
       lastSyncedAt: Number(row.last_synced_at),
+      conflictPending: Number(row.conflict_pending || 0),
+      deletePending: Number(row.delete_pending || 0),
+      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
+      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
+      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
     };
   }
 
@@ -345,6 +498,11 @@ export class CacheDatabase {
       status: String(row.status),
       slug: String(row.slug),
       lastSyncedAt: Number(row.last_synced_at),
+      conflictPending: Number(row.conflict_pending || 0),
+      deletePending: Number(row.delete_pending || 0),
+      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
+      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
+      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
     };
   }
 
@@ -360,6 +518,11 @@ export class CacheDatabase {
       status: String(row.status),
       slug: String(row.slug),
       lastSyncedAt: Number(row.last_synced_at),
+      conflictPending: Number(row.conflict_pending || 0),
+      deletePending: Number(row.delete_pending || 0),
+      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
+      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
+      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
     };
   }
 
@@ -379,6 +542,11 @@ export class CacheDatabase {
       status: String(row.status),
       slug: String(row.slug),
       lastSyncedAt: Number(row.last_synced_at),
+      conflictPending: Number(row.conflict_pending || 0),
+      deletePending: Number(row.delete_pending || 0),
+      conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
+      conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
+      conflictAt: row.conflict_at ? Number(row.conflict_at) : null,
     }));
   }
 
@@ -529,6 +697,10 @@ export class CacheDatabase {
   }
 
   public close(): void {
-    this.db.close();
+    try {
+      this.db.close();
+    } catch {
+      // Ignore if already closed
+    }
   }
 }

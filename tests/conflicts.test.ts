@@ -32,6 +32,7 @@ import {
   listConflicts,
   diffConflict,
   resolveConflict,
+  pruneConflicts,
   extractBaseArticleName,
   CanonicalHasUnpushedEditsError,
   QuarantinedPathRequiredError,
@@ -359,5 +360,70 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(res.success).toBe(true);
     expect(res.warnings).toBeDefined();
     expect(res.warnings?.[0]).toContain('no valid ULID');
+  });
+
+  it('pruneConflicts cleans up eligible files while guarding canonical edits and orphan rescues (acceptance condition 7)', () => {
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    // 1. Conflict copy with canonical article that has unpushed edits
+    const { fullCanonical } = setupArticleFixture();
+    fs.appendFileSync(fullCanonical, '\nNew unpushed paragraph');
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const fullConflict = path.join(conflictsDir, conflictFileName);
+    fs.writeFileSync(fullConflict, 'Quarantined Content\n', 'utf8');
+    const relConflict = `posts/conflicts/${conflictFileName}`;
+
+    // 2. Orphan rescue copy (.deleted.md) without canonical article
+    const orphanFile = '20261108_01M67ORPHANRESCUE000000001-deleted.deleted.md';
+    const orphanFull = path.join(conflictsDir, orphanFile);
+    fs.writeFileSync(orphanFull, '---\nid: 01M67ORPHANRESCUE000000001\n---\nOrphan body');
+
+    // 3. Normal conflict copy whose canonical article has NO unpushed edits
+    const cleanId = '01M67CLEANARTICLE0000000001';
+    const cleanCanonicalRel = `posts/draft/20261109_${cleanId}-clean.md`;
+    const cleanCanonicalFull = path.join(tempDir, cleanCanonicalRel);
+    const cleanContent = `---\nid: ${cleanId}\nslug: clean\ntitle: Clean\nstatus: draft\nlocale: ja\n---\nClean body\n`;
+    fs.writeFileSync(cleanCanonicalFull, cleanContent);
+    const cleanHash = calculateHash(cleanContent);
+    cache.saveSyncState({
+      id: cleanId,
+      localFilePath: cleanCanonicalRel,
+      localHash: cleanHash,
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'clean',
+      lastSyncedAt: 1000,
+    });
+    const cleanConflictFile = `20261109_${cleanId}-clean.conflict.md`;
+    const cleanConflictFull = path.join(conflictsDir, cleanConflictFile);
+    fs.writeFileSync(cleanConflictFull, cleanContent);
+
+    // Initial prune without allowOrphanRescues
+    const res1 = pruneConflicts({
+      workspaceRoot: tempDir,
+      cache,
+    });
+
+    // Clean conflict copy should be pruned
+    expect(res1.pruned).toContain(`posts/conflicts/${cleanConflictFile}`);
+    expect(fs.existsSync(cleanConflictFull)).toBe(false);
+
+    // Conflict with unpushed canonical edits must be skipped
+    expect(res1.skipped.some((s) => s.filePath === relConflict)).toBe(true);
+    expect(fs.existsSync(fullConflict)).toBe(true);
+
+    // Orphan rescue without allowOrphanRescues must be skipped
+    expect(res1.skipped.some((s) => s.filePath === `posts/conflicts/${orphanFile}`)).toBe(true);
+    expect(fs.existsSync(orphanFull)).toBe(true);
+
+    // Second prune with allowOrphanRescues
+    const res2 = pruneConflicts({
+      workspaceRoot: tempDir,
+      cache,
+      allowOrphanRescues: true,
+    });
+    expect(res2.pruned).toContain(`posts/conflicts/${orphanFile}`);
+    expect(fs.existsSync(orphanFull)).toBe(false);
   });
 });

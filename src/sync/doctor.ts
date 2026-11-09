@@ -30,6 +30,8 @@ import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontm
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { scanArticleMediaReferences } from './delete.js';
+import { calculateHash } from './pull.js';
+import { checkMcpProcess } from '../mcp/heartbeat.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
 
@@ -57,6 +59,81 @@ export interface RunWorkspaceDoctorOptions {
   profileName?: string;
   profileOrigin?: string;
   collection?: string;
+  strictMedia?: boolean;
+}
+
+export interface ScannedMediaReferences {
+  normalRefs: string[];
+  informationalRefs: string[];
+}
+
+/**
+ * Scans article markdown to separate standard body image references from
+ * informational references (code blocks, inline code, HTML comments, or placeholder URLs).
+ */
+export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaReferences {
+  const normalRefs = new Set<string>();
+  const informationalRefs = new Set<string>();
+
+  const lines = bodyMarkdown.split('\n');
+  let inFence = false;
+  let fenceDelimiter = '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Note: Doctor treats both backticks and tildes (~~~) as fences for diagnostic
+    // reporting to avoid false warnings on code examples, whereas push guards (G5/G11)
+    // strictly exempt only backtick fences per AGENTS.md.
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      if (!inFence) {
+        inFence = true;
+        fenceDelimiter = trimmed.slice(0, 3);
+        continue;
+      } else if (trimmed.startsWith(fenceDelimiter)) {
+        inFence = false;
+        continue;
+      }
+    }
+
+    // Markdown image syntax: ![alt](url)
+    const mdRegex = /!\[.*?\]\(([^)\s]+)(?:\s+["'].*?["'])?\)/g;
+    let match: RegExpExecArray | null;
+    while ((match = mdRegex.exec(line)) !== null) {
+      const url = match[1].trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+        const isPlaceholder = url.includes('<') && url.includes('>');
+        const isInlineCode =
+          line.includes('`' + match[0]) ||
+          (line.indexOf('`') !== -1 &&
+            line.indexOf('`') < match.index &&
+            match.index < line.lastIndexOf('`'));
+        if (inFence || isInlineCode || isPlaceholder) {
+          informationalRefs.add(url);
+        } else {
+          normalRefs.add(url);
+        }
+      }
+    }
+
+    // HTML img tags: <img src="...">
+    const htmlRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+    while ((match = htmlRegex.exec(line)) !== null) {
+      const url = match[1].trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+        const isPlaceholder = url.includes('<') && url.includes('>');
+        if (inFence || isPlaceholder || line.includes('<!--')) {
+          informationalRefs.add(url);
+        } else {
+          normalRefs.add(url);
+        }
+      }
+    }
+  }
+
+  return {
+    normalRefs: Array.from(normalRefs).sort(),
+    informationalRefs: Array.from(informationalRefs).sort(),
+  };
 }
 
 /**
@@ -178,6 +255,48 @@ export async function runWorkspaceDoctor(
     });
   }
 
+  // 4b. Taxonomy Conflict Pending Alignment
+  const allStates = options.cache.getAllSyncStates();
+  const pendingStates = allStates.filter((s) => s.conflictPending === 1);
+  const autoClearedSlugs: string[] = [];
+  const manualResolutionRequired: string[] = [];
+
+  for (const state of pendingStates) {
+    const hasConflictCopy = conflictItems.some((c) => c.id === state.id || c.slug === state.slug);
+    const fullPath = path.join(options.workspaceRoot, state.localFilePath);
+    let hasDivergence = true;
+    if (fs.existsSync(fullPath)) {
+      const diskHash = calculateHash(fs.readFileSync(fullPath, 'utf8'));
+      hasDivergence = diskHash !== state.localHash;
+    }
+    if (!hasConflictCopy && !hasDivergence) {
+      // Auto-clear: no conflict copy and no divergence
+      options.cache.setConflictPending(state.id, false);
+      autoClearedSlugs.push(state.slug);
+    } else {
+      manualResolutionRequired.push(state.slug);
+    }
+  }
+
+  if (autoClearedSlugs.length > 0) {
+    checks.push({
+      id: 'conflict_pending_autoclear',
+      name: 'Conflict Pending Auto-Clear',
+      status: 'ok',
+      message: `Automatically cleared stale conflict_pending flag for ${autoClearedSlugs.length} article(s) (no conflict copies and no divergence).`,
+      details: autoClearedSlugs,
+    });
+  }
+  if (manualResolutionRequired.length > 0) {
+    checks.push({
+      id: 'conflict_pending_manual',
+      name: 'Taxonomy Conflict Pending',
+      status: 'warning',
+      message: `${manualResolutionRequired.length} article(s) have pending taxonomy conflicts with existing rescue copies or unpushed edits. Run "emit push <file> --resolve-taxonomy=union|local|remote" to resolve.`,
+      details: manualResolutionRequired,
+    });
+  }
+
   // 5. Sync Status & Pending Modifications Check
   const wsStatus = getWorkspaceStatus(options.workspaceRoot, options.cache, collection);
   if (wsStatus.summary.modified > 0 || wsStatus.summary.untracked > 0) {
@@ -244,6 +363,7 @@ export async function runWorkspaceDoctor(
   }
 
   const missingMedia: string[] = [];
+  const informationalUnresolved: string[] = [];
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
     if (!fs.existsSync(dir)) continue;
@@ -252,29 +372,34 @@ export async function runWorkspaceDoctor(
     for (const file of files) {
       try {
         const content = fs.readFileSync(path.join(dir, file), 'utf8');
-        const refs = scanArticleMediaReferences(content);
-        for (const ref of refs) {
+        const detailed = scanArticleMediaDetailed(content);
+
+        const checkRef = (ref: string): boolean => {
           // Check 1: EmDash public storageKey route: /_emdash/api/media/file/<storageKey>
           const storageKeyMatch = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
           if (storageKeyMatch) {
             const key = storageKeyMatch[1];
-            if (!knownStorageKeys.has(key)) {
-              missingMedia.push(
-                `${ref} (storageKey '${key}' not found in media/*.yaml, referenced by ${path.join(collection, status, file)})`,
-              );
-            }
-            continue;
+            return knownStorageKeys.has(key);
           }
-
           // Check 2: Direct relative or local filesystem path
           const cleanRef = ref.replace(/^[./]+/, '');
           const directFull = path.isAbsolute(ref) ? ref : path.join(options.workspaceRoot, ref);
-          if (
-            !fs.existsSync(directFull) &&
-            !knownLocalFiles.has(ref) &&
-            !knownLocalFiles.has(cleanRef)
-          ) {
+          return (
+            fs.existsSync(directFull) || knownLocalFiles.has(ref) || knownLocalFiles.has(cleanRef)
+          );
+        };
+
+        for (const ref of detailed.normalRefs) {
+          if (!checkRef(ref)) {
             missingMedia.push(`${ref} (referenced by ${path.join(collection, status, file)})`);
+          }
+        }
+
+        for (const ref of detailed.informationalRefs) {
+          if (!checkRef(ref)) {
+            informationalUnresolved.push(
+              `${ref} (code-example/placeholder in ${path.join(collection, status, file)})`,
+            );
           }
         }
       } catch {
@@ -291,12 +416,44 @@ export async function runWorkspaceDoctor(
       message: `${missingMedia.length} referenced media file(s) are missing from disk.`,
       details: missingMedia,
     });
+  } else if (options.strictMedia && informationalUnresolved.length > 0) {
+    checks.push({
+      id: 'media_references',
+      name: 'Media References',
+      status: 'warning',
+      message: `${informationalUnresolved.length} informational media reference(s) missing from disk (--strict-media mode).`,
+      details: informationalUnresolved,
+    });
   } else {
+    const infoNote =
+      informationalUnresolved.length > 0
+        ? ` (${informationalUnresolved.length} informational/placeholder reference(s) ignored)`
+        : '';
     checks.push({
       id: 'media_references',
       name: 'Media References',
       status: 'ok',
-      message: 'All referenced local media files exist on disk.',
+      message: `All referenced local media files exist on disk.${infoNote}`,
+      ...(informationalUnresolved.length > 0 ? { details: informationalUnresolved } : {}),
+    });
+  }
+
+  // 7. MCP Process Check
+  const mcpCheck = checkMcpProcess();
+  if (mcpCheck.isOutdated) {
+    checks.push({
+      id: 'mcp_process',
+      name: 'MCP Server Process',
+      status: 'warning',
+      message: mcpCheck.message || 'An MCP server process is running with an outdated version.',
+      details: mcpCheck.state ? { ...mcpCheck.state } : undefined,
+    });
+  } else if (mcpCheck.status === 'alive') {
+    checks.push({
+      id: 'mcp_process',
+      name: 'MCP Server Process',
+      status: 'ok',
+      message: `MCP server process is running healthy (PID ${mcpCheck.state?.pid}, v${mcpCheck.state?.version}).`,
     });
   }
 

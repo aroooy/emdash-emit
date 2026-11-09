@@ -284,18 +284,40 @@ export interface PushAllResult {
   skipped: number;
   invalid: number;
   results: PushResult[];
+  skippedItems?: Array<{
+    slug: string;
+    filePath: string;
+    reason: 'conflict_pending' | 'delete_pending';
+  }>;
 }
 
 /**
  * Orchestrates pushing all modified/untracked files in the workspace.
- * Excludes synced and invalid (YAML parse error) files so invalid files do not crash batch push.
+ * Excludes synced, conflict_pending, delete_pending, and invalid (YAML parse error) files.
  * Reusable across CLI and MCP servers.
  */
 export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
   const status = getWorkspaceStatus(options.workspaceRoot, options.cache, options.collection);
-  const toPush = status.items.filter(
+  const eligibleItems = status.items.filter(
     (i) => i.syncStatus === 'modified' || i.syncStatus === 'untracked',
   );
+
+  const skippedItems: Array<{
+    slug: string;
+    filePath: string;
+    reason: 'conflict_pending' | 'delete_pending';
+  }> = [];
+  const toPush = eligibleItems.filter((i) => {
+    if (i.deletePending) {
+      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'delete_pending' });
+      return false;
+    }
+    if (i.conflictPending) {
+      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'conflict_pending' });
+      return false;
+    }
+    return true;
+  });
 
   const results: PushResult[] = [];
   let pushed = 0;
@@ -320,5 +342,6 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
     skipped: status.items.length - toPush.length,
     invalid: status.summary.invalid,
     results,
+    ...(skippedItems.length > 0 ? { skippedItems } : {}),
   };
 }

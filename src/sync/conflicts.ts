@@ -478,3 +478,139 @@ export function resolveConflict(options: {
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
+
+export interface PruneConflictsOptions {
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  collection?: string;
+  olderThan?: string;
+  dryRun?: boolean;
+  allowOrphanRescues?: boolean;
+}
+
+export interface PruneConflictsResult {
+  pruned: string[];
+  skipped: Array<{ filePath: string; reason: string }>;
+  dryRun: boolean;
+}
+
+function parseDurationMs(durationStr?: string): number {
+  if (!durationStr) return 0;
+  const match = durationStr.trim().match(/^(\d+)([smhdwy])$/i);
+  if (!match) return 0;
+  const val = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  switch (unit) {
+    case 's':
+      return val * 1000;
+    case 'm':
+      return val * 60 * 1000;
+    case 'h':
+      return val * 60 * 60 * 1000;
+    case 'd':
+      return val * 24 * 60 * 60 * 1000;
+    case 'w':
+      return val * 7 * 24 * 60 * 60 * 1000;
+    case 'y':
+      return val * 365 * 24 * 60 * 60 * 1000;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Prunes quarantined conflict copies and deletion backups under <collection>/conflicts/.
+ * Guarded against data loss:
+ * - Refuses to prune if the canonical article has unpushed local modifications.
+ * - Refuses to prune orphan rescue copies (e.g. .deleted.md) without explicit allowOrphanRescues: true.
+ * - Respects olderThan age cutoff.
+ */
+export function pruneConflicts(options: PruneConflictsOptions): PruneConflictsResult {
+  const collection = options.collection || 'posts';
+  const items = listConflicts(options.workspaceRoot, collection);
+  const cutoffMs = parseDurationMs(options.olderThan);
+  const now = Date.now();
+
+  const pruned: string[] = [];
+  const skipped: Array<{ filePath: string; reason: string }> = [];
+
+  for (const item of items) {
+    const fullPath = path.join(options.workspaceRoot, item.filePath);
+    if (!fs.existsSync(fullPath)) continue;
+
+    const stat = fs.statSync(fullPath);
+    if (cutoffMs > 0 && now - stat.mtimeMs < cutoffMs) {
+      skipped.push({
+        filePath: item.filePath,
+        reason: `File is newer than cutoff (${options.olderThan})`,
+      });
+      continue;
+    }
+
+    const baseName = extractBaseArticleName(path.basename(item.filePath));
+    const canonicalRel = findCanonicalArticlePath(
+      options.workspaceRoot,
+      baseName,
+      item.id,
+      collection,
+    );
+
+    if (canonicalRel) {
+      // Check if canonical file has unpushed edits
+      const canonicalFull = path.join(options.workspaceRoot, canonicalRel);
+      if (fs.existsSync(canonicalFull)) {
+        const canonicalContent = fs.readFileSync(canonicalFull, 'utf8');
+        const canonicalHash = calculateHash(canonicalContent);
+        let resolvedId = item.id;
+        if (!resolvedId) {
+          try {
+            const parsedCan = parseMarkdown(canonicalContent);
+            resolvedId = parsedCan.frontmatter.id;
+          } catch {
+            // ignore parse failure
+          }
+        }
+        const syncState = resolvedId
+          ? options.cache.getSyncState(resolvedId)
+          : options.cache.getSyncStateByPath(canonicalRel);
+        if (syncState && syncState.localHash !== canonicalHash) {
+          skipped.push({
+            filePath: item.filePath,
+            reason: `Canonical article ${canonicalRel} has unpushed modifications; rescue copy preserved`,
+          });
+          continue;
+        }
+      }
+    } else {
+      // Orphan rescue copy (no canonical article exists, e.g. .deleted.md)
+      if (!options.allowOrphanRescues) {
+        skipped.push({
+          filePath: item.filePath,
+          reason:
+            'No canonical article exists for this rescue backup; pass --allow-orphan-rescues to prune',
+        });
+        continue;
+      }
+    }
+
+    if (!options.dryRun) {
+      try {
+        fs.unlinkSync(fullPath);
+      } catch (err: unknown) {
+        skipped.push({
+          filePath: item.filePath,
+          reason: `Failed to delete file: ${(err as Error).message}`,
+        });
+        continue;
+      }
+    }
+
+    pruned.push(item.filePath);
+  }
+
+  return {
+    pruned,
+    skipped,
+    dryRun: Boolean(options.dryRun),
+  };
+}

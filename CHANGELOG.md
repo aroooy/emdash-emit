@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.12] - 2026-11-09
+
+### Added
+- **Phase 0: SQLite Schema Migration & WAL Safety**:
+  - Implemented schema versioning via `PRAGMA user_version` (`CURRENT_CACHE_SCHEMA_VERSION = 1`).
+  - Added safe migration with `PRAGMA wal_checkpoint(TRUNCATE)` before backup and 3-generation backup retention (`.bak-0.1.11-<timestamp>`).
+  - Added new columns: `conflict_pending`, `delete_pending`, `conflict_copy_hash`, `conflict_copy_path`, and `conflict_at`.
+  - Added future schema mismatch guard (`[CACHE_SCHEMA_MISMATCH]`) to prevent database corruption when running older binaries.
+- **Phase 3 & 4: Strict Set-Algebraic Taxonomy 3-Way Merge & Push Guards**:
+  - Replaced ambiguous dispute logic with strict set-algebraic 3-way taxonomy merge: mutual deletions and clean single-side edits are non-conflicting.
+  - Automatic clean union of remote taxonomy additions with explicit logging: `🏷️ Merged remote taxonomy change(s)`.
+  - Added `DESTRUCTIVE_TAXONOMY_WIPE` guard requiring `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`) when wiping existing remote terms with an empty array.
+  - Added `TAXONOMY_UNION_REJECTED` error handling when server rejects a merged union (e.g. single category constraint), guiding user to `--resolve-taxonomy=local|remote`.
+  - Added `TAXONOMY_CONFLICT_PENDING` push block: re-pushing an unresolved taxonomy conflict requires `--resolve-taxonomy` or `--force`.
+  - Added `DELETE_PENDING_ARTICLE` push block: pushing delete-pending articles requires `--revive` (or `--force`).
+- **Phase 6: Conflict Pruning & MCP Heartbeat**:
+  - Added `emit conflicts prune` (`--older-than <duration>`, `--dry-run`, `--allow-orphan-rescues`) with unpushed edit safety guards.
+  - Added MCP Heartbeat state recording (`~/.config/emit/mcp_state.json` mode 0600) and stale process detection in `emit doctor` / `sync_doctor` (`ESRCH` cleanup, `EPERM` tolerance, and `mtime` outdating check).
+  - Maintained complete backward compatibility in `emit status` by omitting the `Flags:` line when all flags are 0.
+
+### Fixed
+- **Phase 1: Revision Normalization & Heal Symmetry**:
+  - Fixed false-positive unpushed edits quarantine caused by Base64 token vs numeric revision formats (`normalizeRev()`).
+  - Kept raw opaque tokens strictly unchanged for server `_rev` PUT transmission and storage.
+- **Phase 2: Remote Delete Verification**:
+  - Added exponential backoff GET verification with `Cache-Control: no-cache` and `_cb=<timestamp>` to prevent false-success deletion races.
+  - Treated HTTP 404 and HTTP 410 (Gone) as confirmed deletion.
+  - Protected unpushed local edits on remote delete as `orphan: true` instead of discarding local files.
+- **Phase 5: Doctor Informational Media Classification**:
+  - Classified code-fence, inline-code, and placeholder media references as `informationalRefs` (Info level).
+  - Only unresolved normal body image references trigger warnings, allowing clean workspaces with sample code to report Overall PASS (exit 0).
+
+---
+
 ## [0.1.11] - 2026-11-09
 
 ### Fixed

@@ -117,3 +117,41 @@ export function extractRev(raw: unknown, fallback = '1'): string {
 
   return rev ? String(rev) : fallback;
 }
+
+/**
+ * Normalizes revision representation (pure number, base64-encoded token, or colon-delimited)
+ * to its canonical numeric string when possible, allowing reliable parity comparisons.
+ * e.g. "1", "1:2026-10-31...", "MToyMDI2LTEwLTMxVDAwOjE2OjI4Ljk1MFo=" all normalize to "1".
+ */
+export function normalizeRev(rev: unknown): string {
+  if (rev === null || rev === undefined) return '1';
+  const s = String(rev).trim();
+  if (!s) return '1';
+
+  // If already pure digits
+  if (/^\d+$/.test(s)) {
+    return s;
+  }
+
+  // Check if string contains colon directly (e.g. "1:2026-10-31...")
+  const colonMatch = s.match(/^(\d+):/);
+  if (colonMatch) {
+    return colonMatch[1];
+  }
+
+  // Check if Base64 encoded (e.g. "MToyMDI2...")
+  try {
+    const decoded = Buffer.from(s, 'base64').toString('utf8');
+    const decodedColon = decoded.match(/^(\d+):/);
+    if (decodedColon) {
+      return decodedColon[1];
+    }
+    if (/^\d+$/.test(decoded)) {
+      return decoded;
+    }
+  } catch {
+    // Ignore decode failure
+  }
+
+  return s;
+}

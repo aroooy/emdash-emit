@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pushAll } from '../src/sync/orchestrator.js';
+import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
 import { hybrid3WayMerge } from '../src/sync/merge.js';
 import { calculateHash, pullArticle } from '../src/sync/pull.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
@@ -1490,5 +1490,357 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(mergeResult.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
     expect(mergeResult.frontmatter.taxonomies?.tags).toEqual(['travel', 'japan']);
     expect(mergeResult.body.trim()).toBe('Local valuable body edits.');
+  });
+
+  it('preserves local unpushed edits across rev formats (Base64 token vs numeric rev)', async () => {
+    const articleId = '01M6TESTB64REV000000000001';
+    const relPath = 'posts/draft/20261109_01M6TESTB64REV000000000001-test.md';
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Local content with unpushed edits
+    const localContent = `---
+id: ${articleId}
+slug: test
+title: test
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+---
+
+My valuable unpushed local edits
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    // Simulate previous push or single pull that saved Base64 encoded rev token ("1:...")
+    const b64Rev = Buffer.from('1:2026-10-31T00:16:28.950Z').toString('base64');
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-of-original', // differs from localContent hash (unpushed edits)
+      remoteRev: b64Rev,
+      status: 'draft',
+      slug: 'test',
+      lastSyncedAt: 1000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: b64Rev,
+      bodyMarkdown: 'Original body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'test',
+        title: 'test',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+      }),
+      hash: 'hash-of-original',
+      savedAt: 1000,
+    });
+
+    // Mock API returning numeric rev ("1")
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/posts?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              {
+                id: articleId,
+                slug: 'test',
+                status: 'draft',
+                title: 'test',
+                _rev: '1',
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    const res = await pullBatch({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      collection: 'posts',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    const itemRes = res.items.find((r) => r.id === articleId);
+    expect(itemRes).toBeDefined();
+    expect(itemRes?.localEditsPreserved).toBe(true);
+
+    // Verify canonical file still has local edits and conflicts/ is empty
+    expect(fs.readFileSync(fullPath, 'utf8')).toBe(localContent);
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    const conflictFiles = fs.existsSync(conflictsDir) ? fs.readdirSync(conflictsDir) : [];
+    expect(conflictFiles).toHaveLength(0);
+  });
+
+  it('single pull preserves local unpushed edits when rev is Base64 token on disk and numeric on remote', async () => {
+    const articleId = '01M6TESTSNGLPULLB640000001';
+    const relPath = 'posts/draft/20261109_01M6TESTSNGLPULLB640000001-test.md';
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: test
+title: test
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+---
+
+Valuable local unpushed content for single pull
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    const b64Rev = Buffer.from('1:2026-10-31T00:16:28.950Z').toString('base64');
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-of-original',
+      remoteRev: b64Rev,
+      status: 'draft',
+      slug: 'test',
+      lastSyncedAt: 1000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: b64Rev,
+      bodyMarkdown: 'Original body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'test',
+        title: 'test',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+      }),
+      hash: 'hash-of-original',
+      savedAt: 1000,
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes(`/posts/${articleId}`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: articleId,
+            slug: 'test',
+            status: 'draft',
+            title: 'test',
+            _rev: '1',
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    const res = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.localEditsPreserved).toBe(true);
+    expect(fs.readFileSync(fullPath, 'utf8')).toBe(localContent);
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    const conflictFiles = fs.existsSync(conflictsDir) ? fs.readdirSync(conflictsDir) : [];
+    expect(conflictFiles).toHaveLength(0);
+  });
+
+  it('pushArticle blocks with DELETE_PENDING_ARTICLE when article has delete_pending: 1 unless revive: true is passed', async () => {
+    const articleId = '01M6TESTDELPEND00000000001';
+    const relPath = `posts/draft/20261109_${articleId}-del-pending.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const content = `---
+id: ${articleId}
+slug: del-pending
+title: Delete Pending
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+---
+
+Content
+`;
+    fs.writeFileSync(fullPath, content, 'utf8');
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(content),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'del-pending',
+      lastSyncedAt: 1000,
+      deletePending: 1,
+    });
+
+    // Push without revive or force should be blocked
+    await expect(
+      pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        fetchFn: (async () => ({})) as unknown as typeof fetch,
+      }),
+    ).rejects.toThrowError(/is marked as delete-pending/);
+
+    // Push with revive: true should pass the guard
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: articleId, _rev: '2' }),
+      };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      revive: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    const updatedSync = cache.getSyncState(articleId);
+    expect(updatedSync?.deletePending).toBe(0);
+  });
+
+  it('pushArticle converts server 400/422 on taxonomy union into TAXONOMY_UNION_REJECTED', async () => {
+    const articleId = '01M6TESTUNIONREJ0000000001';
+    const relPath = `posts/draft/20261109_${articleId}-union-reject.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: union-reject
+title: Union Reject
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+    - cat-local
+---
+
+Shared Body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'hash-orig',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'union-reject',
+      lastSyncedAt: 1000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: 'Shared Body',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'union-reject',
+        title: 'Union Reject',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        taxonomies: { categories: ['news'] },
+      }),
+      hash: 'hash-orig',
+      savedAt: 1000,
+    });
+
+    // Mock API: PUT initially returns 409 conflict
+    // GET returns remote with different category (e.g. ['tech'])
+    // Retried PUT returns 422 (e.g. single category limit)
+    let putAttempts = 0;
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        putAttempts++;
+        if (putAttempts === 1) {
+          return {
+            ok: false,
+            status: 409,
+            statusText: 'Conflict',
+            text: async () => 'Revision mismatch',
+            json: async () => ({ message: 'Revision mismatch' }),
+          };
+        }
+        return {
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () => 'Only one category allowed per post',
+          json: async () => ({ message: 'Only one category allowed per post' }),
+        };
+      }
+      if (url.includes(`/content/posts/${articleId}`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: articleId,
+            slug: 'union-reject',
+            status: 'draft',
+            title: 'Union Reject',
+            _rev: '2',
+            data: { title: 'Union Reject', body: 'Shared Body' },
+          }),
+        };
+      }
+      if (url.includes(`/terms/category`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [{ id: 'cat2', slug: 'tech' }] },
+          }),
+        };
+      }
+      if (url.includes(`/terms/tag`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [] },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrowError(/Remote server rejected the merged taxonomy union/);
   });
 });

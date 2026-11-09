@@ -26,6 +26,7 @@ import {
   listConflicts,
   diffConflict,
   resolveConflict,
+  pruneConflicts,
   CanonicalHasUnpushedEditsError,
   QuarantinedPathRequiredError,
 } from '../../sync/conflicts.js';
@@ -177,6 +178,59 @@ export function registerConflictsCommand(
         if (result.warnings && result.warnings.length > 0) {
           for (const w of result.warnings) {
             console.log(`⚠️ Warning: ${w}`);
+          }
+        }
+      } catch (err) {
+        reportActionFailure(err);
+      }
+    });
+
+  // emit conflicts prune
+  conflicts
+    .command('prune')
+    .description(
+      'Clean up old quarantined conflict copies and deletion backups in posts/conflicts/',
+    )
+    .option('--older-than <duration>', 'Prune copies older than specified duration (e.g. 7d, 24h)')
+    .option('--dry-run', 'Preview files that would be pruned without deleting')
+    .option('-y, --yes', 'Confirm pruning without interactive prompt')
+    .option(
+      '--allow-orphan-rescues',
+      'Allow pruning orphan rescue backups that have no canonical article (e.g. .deleted.md)',
+    )
+    .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
+    .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .action(async (options) => {
+      try {
+        const ctx = resolveContext(options.profile, { optionalAuth: true });
+        const collection = options.collection || ctx.config.defaultCollection || 'posts';
+
+        const result = pruneConflicts({
+          workspaceRoot: ctx.root,
+          cache: ctx.cache,
+          collection,
+          olderThan: options.olderThan,
+          dryRun: options.dryRun,
+          allowOrphanRescues: options.allowOrphanRescues,
+        });
+
+        const prefix = result.dryRun ? '🔍 [DRY-RUN] Would prune' : '🗑️  Pruned';
+        if (result.pruned.length === 0 && result.skipped.length === 0) {
+          console.log(`✅ No conflict copies found to prune in ${collection}/conflicts/.`);
+          return;
+        }
+
+        if (result.pruned.length > 0) {
+          console.log(`${prefix} ${result.pruned.length} quarantined file(s):`);
+          for (const f of result.pruned) {
+            console.log(`   - ${f}`);
+          }
+        }
+
+        if (result.skipped.length > 0) {
+          console.log(`\n🛡️  Skipped ${result.skipped.length} quarantined file(s) for safety:`);
+          for (const s of result.skipped) {
+            console.log(`   - ${s.filePath}: ${s.reason}`);
           }
         }
       } catch (err) {

@@ -105,7 +105,10 @@ export function registerStatusInitCommands(
       for (const item of displayItems) {
         let icon = '🟢';
         let label = 'synced  ';
-        if (item.syncStatus === 'modified') {
+        if (item.conflictPending) {
+          icon = '⚠️ ';
+          label = 'conflict';
+        } else if (item.syncStatus === 'modified') {
           icon = '🟡';
           label = 'modified';
         } else if (item.syncStatus === 'untracked') {
@@ -130,6 +133,16 @@ export function registerStatusInitCommands(
       console.log(
         `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix})\n`,
       );
+      if (
+        status.summary.flags &&
+        (status.summary.flags.conflictPending > 0 ||
+          status.summary.flags.orphan > 0 ||
+          status.summary.flags.deletePending > 0)
+      ) {
+        console.log(
+          `Flags: ${status.summary.flags.conflictPending} conflict pending, ${status.summary.flags.orphan} orphan, ${status.summary.flags.deletePending} delete pending\n`,
+        );
+      }
       if (status.summary.invalid > 0) {
         const uncachedInvalid = status.items.filter(
           (i) => i.syncStatus === 'invalid' && i.cached === false,

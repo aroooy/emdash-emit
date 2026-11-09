@@ -219,10 +219,74 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
     }
 
     if (res.ok || res.status === 204) {
+      // Step 2: Verification GET with no-cache and timestamp query parameter
+      // Exponential backoff retries: 0ms, 500ms, 1500ms
+      const verifyUrl = new URL(`/_emdash/api/content/${collection}/${articleId}`, options.origin);
+      verifyUrl.searchParams.set('_cb', String(Date.now()));
+
+      let verifiedDeleted = false;
+      const retryDelays = [0, 500, 1500];
+
+      for (let attempt = 0; attempt < retryDelays.length; attempt++) {
+        if (retryDelays[attempt] > 0) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
+          verifyUrl.searchParams.set('_cb', String(Date.now()));
+        }
+
+        try {
+          const getRes = await fetchFn(verifyUrl.toString(), {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${options.token}`,
+              Accept: 'application/json',
+              'Cache-Control': 'no-cache',
+            },
+          });
+
+          if (getRes.status === 404 || getRes.status === 410) {
+            verifiedDeleted = true;
+            break;
+          } else if (getRes.status === 409) {
+            throw new ApiError({
+              endpoint: url.pathname,
+              code: 'ENTRY_LOCKED',
+              status: 409,
+              message: `Article ${articleId} is currently locked by another operation.`,
+              suggestion: 'Wait 7 minutes for distributed lease expiration or retry shortly.',
+            });
+          }
+        } catch (getErr) {
+          if (getErr instanceof ApiError) throw getErr;
+          // Ignore network errors during retry attempt
+        }
+      }
+
+      if (verifiedDeleted) {
+        remoteDeleted = true;
+      } else {
+        // Soft-fail: record delete_pending in cache to prevent desync, keep local file intact
+        options.cache.setDeletePending(articleId, true);
+        throw new ApiError({
+          endpoint: url.pathname,
+          code: 'REMOTE_DELETE_UNCONFIRMED',
+          status: 200,
+          message: `Remote DELETE returned status ${res.status}, but subsequent GET verification still returned 200 OK.`,
+          suggestion:
+            'Local file was kept intact and marked as delete_pending. Run "emit doctor" or "emit pull" later to verify remote status.',
+        });
+      }
+    } else if (res.status === 404 || res.status === 410) {
+      // Already absent or gone on remote server (e.g. deleted from another device).
+      // Idempotently treat as successful remote removal.
       remoteDeleted = true;
-    } else if (res.status === 404) {
-      // Already absent on remote server
-      remoteDeleted = false;
+    } else if (res.status === 409) {
+      throw new ApiError({
+        endpoint: url.pathname,
+        code: 'ENTRY_LOCKED',
+        status: 409,
+        message: `Article ${articleId} is currently locked by another operation.`,
+        suggestion: 'Wait 7 minutes for distributed lease expiration or retry shortly.',
+      });
     } else {
       // Remote deletion failed: abort before deleting local file or writing rescue to prevent desync
       const errText = await res.text().catch(() => '');

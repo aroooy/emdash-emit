@@ -34,6 +34,8 @@ export interface MergeResult {
    * are user intent and dropping either side is data loss.
    */
   taxonomyConflicts: string[];
+  autoMergedTaxonomies?: TaxonomyMergeItem[];
+  wipeWarnings?: TaxonomyWipeWarning[];
 }
 
 /** Order-insensitive normalization for a taxonomy term list (undefined stays undefined). */
@@ -42,17 +44,64 @@ function normalizeTermList(val: unknown): string[] | undefined {
   return [...new Set(val.map((v) => String(v)))].sort();
 }
 
+export interface TaxonomyMergeItem {
+  name: string;
+  remoteAdded: string[];
+  remoteRemoved: string[];
+}
+
+export interface TaxonomyWipeWarning {
+  name: string;
+  remoteTerms: string[];
+  remoteAdded: string[];
+}
+
+export interface TaxonomyMergeResult {
+  merged: Record<string, string[]>;
+  conflicts: string[];
+  autoMergedTaxonomies: TaxonomyMergeItem[];
+  wipeWarnings: TaxonomyWipeWarning[];
+}
+
+export interface TaxonomyMergeOptions {
+  strictRenameConflict?: boolean;
+}
+
 /**
- * Merges taxonomies per taxonomy name (categories / tags / custom) with set semantics,
- * so an edit to tags never collides with a remote edit to categories.
+ * 3-way merge for taxonomies frontmatter record (category, tag, etc.).
+ *
+ * Implements strict set-algebraic 3-way merge:
+ *   localRemoved  := base \ local
+ *   localAdded    := local \ base
+ *   remoteRemoved := base \ remote
+ *   remoteAdded   := remote \ base
+ *   localChanged  := (local ≠ base)
+ *   remoteChanged := (remote ≠ base)
+ *
+ * Evaluation order (strict):
+ * 1. localChanged = false  -> Keep remote (local did not touch this taxonomy)
+ * 2. remoteChanged = false -> Push local (clean single-side edit)
+ * 3. Both changed:
+ *    union := (base \ (localRemoved ∪ remoteRemoved)) ∪ localAdded ∪ remoteAdded
+ *    3a. union = local      -> Push local (remote changes are subsumed)
+ *    3b. local = ∅ & remote ≠ ∅ -> Destructive wipe guard
+ *    3c. union ≠ local      -> Automatically push union with explicit merge log.
+ *        Conflicts only if:
+ *        (i) Server rejects union (400/422)
+ *        (ii) Remote performed rename/replacement (remoteRemoved ≠ ∅ ∧ remoteAdded ≠ ∅) AND strictRenameConflict=true
+ *        (iii) Base snapshot is null (cannot compute 3-way)
  */
 export function mergeTaxonomies(
   local: Record<string, string[]> | undefined,
   base: Record<string, string[]> | undefined | null,
   remote: Record<string, string[]> | undefined,
-): { merged: Record<string, string[]>; conflicts: string[] } {
+  options?: TaxonomyMergeOptions,
+): TaxonomyMergeResult {
   const merged: Record<string, string[]> = {};
   const conflicts: string[] = [];
+  const autoMergedTaxonomies: TaxonomyMergeItem[] = [];
+  const wipeWarnings: TaxonomyWipeWarning[] = [];
+
   const names = new Set([
     ...Object.keys(local || {}),
     ...Object.keys(base || {}),
@@ -75,7 +124,7 @@ export function mergeTaxonomies(
       continue;
     }
 
-    // Case 2: Only local defined this taxonomy
+    // Case 2: Only local defined this taxonomy (remote omitted or deleted)
     if (lDefined && !rDefined) {
       if (!bDefined) {
         merged[name] = local![name];
@@ -95,7 +144,6 @@ export function mergeTaxonomies(
 
     // Case 3: Only remote defined this taxonomy (local omitted the field)
     if (!lDefined && rDefined) {
-      // Local didn't specify this taxonomy: accept remote state
       merged[name] = remote![name];
       continue;
     }
@@ -111,6 +159,7 @@ export function mergeTaxonomies(
       continue;
     }
 
+    // (iii) Base is null / missing: cannot compute 3-way -> conservative conflict
     if (!bDefined) {
       conflicts.push(name);
       merged[name] = lRaw;
@@ -127,30 +176,66 @@ export function mergeTaxonomies(
     const remoteAdded = r.filter((x) => !baseSet.has(x));
     const remoteRemoved = b.filter((x) => !remoteSet.has(x));
 
-    // If either side deleted terms, any disagreement is a conflict
-    if (localRemoved.length > 0 || remoteRemoved.length > 0) {
-      if (
-        !eq(localRemoved.sort(), remoteRemoved.sort()) ||
-        !eq(localAdded.sort(), remoteAdded.sort())
-      ) {
-        conflicts.push(name);
-        merged[name] = lRaw;
-        continue;
-      }
+    const localChanged = localAdded.length > 0 || localRemoved.length > 0;
+    const remoteChanged = remoteAdded.length > 0 || remoteRemoved.length > 0;
+
+    // 1. localChanged = false -> Keep remote (local untouched)
+    if (!localChanged) {
+      merged[name] = rRaw;
+      continue;
     }
 
-    // Neither side deleted terms (or both did identical deletion/addition):
-    // Perform clean set union of additions without conflict
+    // 2. remoteChanged = false -> Push local (clean single-side edit)
+    if (!remoteChanged) {
+      merged[name] = lRaw;
+      continue;
+    }
+
+    // 3. Both sides changed:
+    // union := (base \ (localRemoved ∪ remoteRemoved)) ∪ localAdded ∪ remoteAdded
     const allRemovals = new Set([...localRemoved, ...remoteRemoved]);
-    const mergedTerms = [
+    const union = [
       ...b.filter((x) => !allRemovals.has(x)),
       ...localAdded,
-      ...remoteAdded.filter((x) => !localSet.has(x)),
+      ...remoteAdded.filter((x) => !localAdded.includes(x)),
     ];
-    merged[name] = mergedTerms;
+
+    // 3a. union = local -> clean (remote changes are subsumed)
+    const unionSet = new Set(union);
+    const isUnionEqualLocal =
+      unionSet.size === localSet.size && [...unionSet].every((x) => localSet.has(x));
+    if (isUnionEqualLocal) {
+      merged[name] = lRaw;
+      continue;
+    }
+
+    // 3b. Destructive wipe guard: local = ∅ and remote ≠ ∅
+    if (l.length === 0 && r.length > 0) {
+      wipeWarnings.push({
+        name,
+        remoteTerms: r,
+        remoteAdded,
+      });
+    }
+
+    // 3c. union ≠ local: check for remote replacement under strictRenameConflict
+    const isRemoteReplacement = remoteRemoved.length > 0 && remoteAdded.length > 0;
+    if (isRemoteReplacement && options?.strictRenameConflict) {
+      conflicts.push(name);
+      merged[name] = lRaw;
+      continue;
+    }
+
+    // Default: auto-merge union and record change log
+    merged[name] = union;
+    autoMergedTaxonomies.push({
+      name,
+      remoteAdded,
+      remoteRemoved,
+    });
   }
 
-  return { merged, conflicts };
+  return { merged, conflicts, autoMergedTaxonomies, wipeWarnings };
 }
 
 /**
@@ -164,9 +249,18 @@ export function mergeFrontmatter(
   local: Frontmatter,
   base: Frontmatter | null,
   remote: Frontmatter,
-): { merged: Frontmatter; warnings: string[]; taxonomyConflicts: string[] } {
+  options?: TaxonomyMergeOptions,
+): {
+  merged: Frontmatter;
+  warnings: string[];
+  taxonomyConflicts: string[];
+  autoMergedTaxonomies?: TaxonomyMergeItem[];
+  wipeWarnings?: TaxonomyWipeWarning[];
+} {
   const warnings: string[] = [];
   let taxonomyConflicts: string[] = [];
+  let autoMergedTaxonomies: TaxonomyMergeItem[] | undefined;
+  let wipeWarnings: TaxonomyWipeWarning[] | undefined;
   const merged: Frontmatter = { ...remote };
 
   // Helper to check equality
@@ -190,9 +284,12 @@ export function mergeFrontmatter(
         local.taxonomies,
         base ? base.taxonomies : null,
         remote.taxonomies,
+        options,
       );
       merged.taxonomies = tax.merged;
       taxonomyConflicts = tax.conflicts;
+      autoMergedTaxonomies = tax.autoMergedTaxonomies;
+      wipeWarnings = tax.wipeWarnings;
       continue;
     }
 
@@ -230,7 +327,13 @@ export function mergeFrontmatter(
   merged.id = remote.id || local.id;
   merged.collection = remote.collection || local.collection;
 
-  return { merged, warnings, taxonomyConflicts };
+  return {
+    merged,
+    warnings,
+    taxonomyConflicts,
+    autoMergedTaxonomies,
+    wipeWarnings,
+  };
 }
 
 /**
@@ -266,12 +369,20 @@ export function hybrid3WayMerge(
   local: ParsedMarkdown,
   base: { frontmatter: Frontmatter; body: string } | null,
   remote: { frontmatter: Frontmatter; body: string },
+  options?: TaxonomyMergeOptions,
 ): MergeResult {
   const {
     merged: frontmatter,
     warnings,
     taxonomyConflicts,
-  } = mergeFrontmatter(local.frontmatter, base ? base.frontmatter : null, remote.frontmatter);
+    autoMergedTaxonomies,
+    wipeWarnings,
+  } = mergeFrontmatter(
+    local.frontmatter,
+    base ? base.frontmatter : null,
+    remote.frontmatter,
+    options,
+  );
 
   const baseBody = base ? base.body : '';
   const { mergedBody: body, hasConflict } = mergeBody(local.body, baseBody, remote.body);
@@ -282,5 +393,7 @@ export function hybrid3WayMerge(
     body,
     warnings,
     taxonomyConflicts,
+    autoMergedTaxonomies,
+    wipeWarnings,
   };
 }

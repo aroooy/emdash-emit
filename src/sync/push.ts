@@ -61,6 +61,8 @@ import {
 } from '../client/media.js';
 import { promoteDraftMediaFile } from './media.js';
 
+export type TaxonomyResolutionStrategy = 'union' | 'local' | 'remote';
+
 export interface PushOptions extends MapperOptions {
   workspaceRoot: string;
   cache: CacheDatabase;
@@ -70,6 +72,10 @@ export interface PushOptions extends MapperOptions {
   fetchFn?: typeof fetch;
   candidates?: TaxonomyCandidates;
   knownTaxonomies?: Record<string, string[]>;
+  resolveTaxonomy?: TaxonomyResolutionStrategy;
+  allowWipeTaxonomies?: boolean;
+  revive?: boolean;
+  force?: boolean;
 }
 
 export interface ResolvedTaxonomyItem {
@@ -86,6 +92,7 @@ export interface PushResult {
   previousId?: string;
   previousFilePath?: string;
   conflict: boolean;
+  taxonomyConflict?: boolean;
   warnings: string[];
   errors?: PreflightError[];
   resolvedTaxonomies?: {
@@ -625,6 +632,28 @@ export async function pushArticle(
   }
 
   // 1. Run Preflight Guards G2 - G11
+  // Guard against blind re-push when article is marked delete_pending (unconfirmed remote deletion)
+  if (syncState?.deletePending === 1 && !options.revive && !options.force) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'DELETE_PENDING_ARTICLE',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) is marked as delete-pending (previous remote deletion was unconfirmed).`,
+      suggestion: `To intentionally revive and push this article to remote, pass --revive (or --force): "emit push ${targetFilePath} --revive"`,
+    });
+  }
+
+  // Guard against blind re-push when previous taxonomy conflict is still pending
+  if (syncState?.conflictPending === 1 && !options.resolveTaxonomy && !options.force) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'TAXONOMY_CONFLICT_PENDING',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) has an unresolved taxonomy conflict from a previous sync.`,
+      suggestion: `Pass --resolve-taxonomy=union|local|remote (or --force) to explicitly resolve and confirm: "emit push ${targetFilePath} --resolve-taxonomy=union"`,
+    });
+  }
+
   const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
@@ -698,6 +727,29 @@ export async function pushArticle(
             .filter((tid): tid is string => Boolean(tid)),
         ),
       );
+
+      if (resolvedTermIds.length === 0) {
+        // Check if remote previously had assignments in baseline
+        const baseFm = baseSnapshot?.frontmatterYaml
+          ? (JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter)
+          : null;
+        const prevTerms =
+          taxonomyName === 'category' ? baseFm?.taxonomies?.categories : baseFm?.taxonomies?.tags;
+        if (prevTerms && prevTerms.length > 0) {
+          if (!options.allowWipeTaxonomies && !options.force) {
+            throw new ApiError({
+              endpoint: `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
+              code: 'DESTRUCTIVE_TAXONOMY_WIPE',
+              status: 400,
+              message: `Local article specified empty array for ${taxonomyName}, which would remove ${prevTerms.length} existing remote assignment(s).`,
+              suggestion: `Pass --allow-wipe-taxonomies (or --force) to confirm wiping all ${taxonomyName} assignments.`,
+            });
+          }
+          warnings.push(
+            `🏷️ Cleared all ${prevTerms.length} ${taxonomyName} assignment(s) from remote (local specified empty array).`,
+          );
+        }
+      }
 
       const termsUrl = new URL(
         `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
@@ -846,6 +898,8 @@ export async function pushArticle(
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
+      conflictPending: 0,
+      conflictCopyHash: null,
     });
 
     return {
@@ -978,33 +1032,92 @@ export async function pushArticle(
 
       warnings.push(...mergeResult.warnings);
 
-      // If taxonomy conflict occurred, treat as conflict to prevent silent data loss (D2)
+      // Check destructive taxonomy wipe guard during 3-way merge
+      if (mergeResult.wipeWarnings && mergeResult.wipeWarnings.length > 0) {
+        if (!options.allowWipeTaxonomies && !options.force) {
+          const details = mergeResult.wipeWarnings
+            .map((w) => `${w.name}: clearing ${w.remoteTerms.length} assignment(s)`)
+            .join(', ');
+          throw new ApiError({
+            endpoint: `/_emdash/api/content/${collection}/${id}`,
+            code: 'DESTRUCTIVE_TAXONOMY_WIPE',
+            status: 400,
+            message: `Local article specified empty array for taxonomies (${details}), which would wipe existing remote assignments.`,
+            suggestion: `Pass --allow-wipe-taxonomies (or --force) to confirm clearing: "emit push ${targetFilePath} --allow-wipe-taxonomies"`,
+          });
+        }
+      }
+
+      // Log clean auto-merged taxonomy changes
+      if (mergeResult.autoMergedTaxonomies && mergeResult.autoMergedTaxonomies.length > 0) {
+        for (const item of mergeResult.autoMergedTaxonomies) {
+          const parts: string[] = [];
+          if (item.remoteAdded.length > 0) parts.push(`+${item.remoteAdded.join(', ')}`);
+          if (item.remoteRemoved.length > 0) parts.push(`-${item.remoteRemoved.join(', ')}`);
+          warnings.push(`🏷️ Merged remote taxonomy change(s) for ${item.name}: ${parts.join(' ')}`);
+        }
+      }
+
+      // If taxonomy conflict occurred, check if resolveTaxonomy strategy was explicitly provided
       if (mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0) {
-        mergeResult.hasConflict = true;
-        warnings.push(
-          `Conflict on taxonomies (${mergeResult.taxonomyConflicts.join(', ')}): local and remote changes could not be cleanly merged. Push aborted to prevent data loss.`,
-        );
+        if (options.resolveTaxonomy || options.force) {
+          const strategy = options.resolveTaxonomy || 'union';
+          if (strategy === 'local') {
+            mergeResult.frontmatter.taxonomies = parsed.frontmatter.taxonomies;
+          } else if (strategy === 'remote') {
+            mergeResult.frontmatter.taxonomies = remoteParsed.frontmatter.taxonomies;
+          } else {
+            // 'union'
+            const unionTaxonomies: Record<string, string[]> = {};
+            const allTaxNames = new Set([
+              ...Object.keys(parsed.frontmatter.taxonomies || {}),
+              ...Object.keys(remoteParsed.frontmatter.taxonomies || {}),
+            ]);
+            for (const tName of allTaxNames) {
+              const lTerms = parsed.frontmatter.taxonomies?.[tName] || [];
+              const rTerms = remoteParsed.frontmatter.taxonomies?.[tName] || [];
+              unionTaxonomies[tName] = Array.from(new Set([...lTerms, ...rTerms]));
+            }
+            mergeResult.frontmatter.taxonomies = unionTaxonomies;
+          }
+          warnings.push(`Resolved taxonomy conflicts using strategy '${strategy}'.`);
+        } else {
+          mergeResult.hasConflict = true;
+          warnings.push(
+            `Conflict on taxonomies (${mergeResult.taxonomyConflicts.join(', ')}): local and remote changes could not be cleanly merged. Push aborted to prevent data loss.`,
+          );
+        }
       }
 
       if (mergeResult.hasConflict) {
-        // Unresolvable conflict in body: write conflict markers to local file for AI/human resolution
+        const isTaxonomyOnlyConflict =
+          Boolean(mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0) &&
+          !mergeResult.body.includes('<<<<<<< local');
+
         const conflictedMarkdown = serializeMarkdown(
           mergeResult.frontmatter,
           mergeResult.body,
           options.candidates,
         );
-        fs.writeFileSync(fullPath, conflictedMarkdown, 'utf8');
+        // Only write conflict markers into the article body if body actually has conflicts
+        if (!isTaxonomyOnlyConflict) {
+          fs.writeFileSync(fullPath, conflictedMarkdown, 'utf8');
+        }
 
-        // Update sync state with latest remoteRev and update base snapshot to remote state
-        // so that once conflict markers are resolved, the subsequent push sends the correct _rev
+        const conflictedHash = calculateHash(conflictedMarkdown);
+
+        // Update sync state:
+        // Do NOT overwrite localHash if taxonomy-only conflict, so `status` continues to report `modified`!
         options.cache.saveSyncState({
           id,
           localFilePath: targetFilePath,
-          localHash: calculateHash(conflictedMarkdown),
+          localHash: isTaxonomyOnlyConflict ? syncState?.localHash || '' : conflictedHash,
           remoteRev: remoteParsed.rev,
           status: parsed.frontmatter.status,
           slug: parsed.frontmatter.slug,
           lastSyncedAt: Math.floor(Date.now() / 1000),
+          conflictPending: 1,
+          conflictCopyHash: conflictedHash,
         });
 
         options.cache.saveBaseSnapshot({
@@ -1024,6 +1137,7 @@ export async function pushArticle(
           rev: remoteParsed.rev,
           filePath: targetFilePath,
           conflict: true,
+          taxonomyConflict: isTaxonomyOnlyConflict,
           warnings,
         };
       }
@@ -1053,6 +1167,22 @@ export async function pushArticle(
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
+        // Check if server rejected the merged taxonomy union (e.g. single category limit)
+        if (
+          (res.status === 400 || res.status === 422) &&
+          mergeResult.autoMergedTaxonomies &&
+          mergeResult.autoMergedTaxonomies.length > 0
+        ) {
+          throw new ApiError({
+            message: `Remote server rejected the merged taxonomy union (HTTP ${res.status}): ${errText || res.statusText}`,
+            code: 'TAXONOMY_UNION_REJECTED',
+            status: res.status,
+            endpoint: putUrl,
+            suggestion:
+              'The server may enforce constraints such as a single category per post. Pass --resolve-taxonomy=local or --resolve-taxonomy=remote to choose one side explicitly.',
+          });
+        }
+
         throw new ApiError({
           message: `Retry push after auto-merge failed: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
           code: 'PUSH_RETRY_FAILED',
@@ -1165,6 +1295,8 @@ export async function pushArticle(
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
+      conflictPending: 0,
+      conflictCopyHash: null,
     });
 
     updateConfigSyncedVersion(options.workspaceRoot);

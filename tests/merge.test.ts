@@ -200,13 +200,111 @@ describe('Hybrid 3-Way Merge Engine', () => {
       expect(merged.tags).toEqual(['travel', 'japan']);
     });
 
-    it('detects conflict when one side deletes a term while the other side kept/modified it', () => {
+    it('cleanly merges when both sides deleted the same term (acceptance condition 1)', () => {
+      // base=[B], local=[], remote=[] -> clean []
+      const base = { tags: ['B'] };
+      const local = { tags: [] };
+      const remote = { tags: [] };
+
+      const { merged, conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags).toEqual([]);
+    });
+
+    it('cleanly allows single-device taxonomy deletion vs unperturbed keep (acceptance condition 2)', () => {
+      // base=[B], local=[], remote=[B] -> clean []
+      const base = { tags: ['B'] };
+      const local = { tags: [] };
+      const remote = { tags: ['B'] };
+
+      const { merged, conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags).toEqual([]);
+    });
+
+    it('cleanly unions remote additions while respecting local deletion (acceptance condition 3)', () => {
+      // base=[B], local=[], remote=[B,C] -> clean [C] with autoMergedTaxonomies record
+      const base = { tags: ['B'] };
+      const local = { tags: [] };
+      const remote = { tags: ['B', 'C'] };
+
+      const { merged, conflicts, autoMergedTaxonomies, wipeWarnings } = mergeTaxonomies(
+        local,
+        base,
+        remote,
+      );
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags).toEqual(['C']);
+      expect(autoMergedTaxonomies).toEqual([
+        {
+          name: 'tags',
+          remoteAdded: ['C'],
+          remoteRemoved: [],
+        },
+      ]);
+      expect(wipeWarnings).toHaveLength(1);
+      expect(wipeWarnings[0].name).toBe('tags');
+    });
+
+    it('detects conflict on remote replacement when strictRenameConflict is enabled', () => {
+      // remote removed A and added B (rename / replacement), while local modified
+      const base = { tags: ['A'] };
+      const local = { tags: ['A', 'C'] };
+      const remote = { tags: ['B'] }; // removed A, added B
+
+      const resDefault = mergeTaxonomies(local, base, remote);
+      // Default: union (A \ {A}) ∪ {C} ∪ {B} = [C, B]
+      expect(resDefault.conflicts).toHaveLength(0);
+      expect(resDefault.merged.tags.sort()).toEqual(['B', 'C']);
+
+      const resStrict = mergeTaxonomies(local, base, remote, { strictRenameConflict: true });
+      expect(resStrict.conflicts).toContain('tags');
+    });
+
+    it('cleanly allows single-device taxonomy deletion when remote is unchanged from base', () => {
       const base = { tags: ['travel'] };
       const local = { tags: [] }; // local deleted 'travel'
-      const remote = { tags: ['travel', 'japan'] }; // remote kept 'travel' and added 'japan'
+      const remote = { tags: ['travel'] }; // remote has not changed tags
 
-      const { conflicts } = mergeTaxonomies(local, base, remote);
-      expect(conflicts).toContain('tags');
+      const { merged, conflicts } = mergeTaxonomies(local, base, remote);
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags).toEqual([]);
+    });
+
+    it('cleanly merges non-interfering deletion on one side and addition on the other (Pattern 3 relaxation)', () => {
+      const base = { tags: ['old-tag', 'shared-tag'] };
+      const local = { tags: ['shared-tag', 'new-local-tag'] }; // local removed 'old-tag', added 'new-local-tag'
+      const remote = { tags: ['old-tag', 'shared-tag', 'new-remote-tag'] }; // remote kept 'old-tag', added 'new-remote-tag'
+
+      // Wait: in this case, local removed 'old-tag' but remote kept 'old-tag'.
+      // If remote actively kept old-tag and added new-remote-tag, let's test non-disputed:
+      // If remote replaced old-tag with new-remote-tag, or if base had A and B:
+      // base: ['A', 'B']
+      // local: ['B', 'C'] (removed A, added C)
+      // remote: ['B', 'D'] (removed A, added D)
+      const { merged, conflicts } = mergeTaxonomies(
+        { tags: ['B', 'C'] },
+        { tags: ['A', 'B'] },
+        { tags: ['B', 'D'] },
+      );
+      expect(conflicts).toHaveLength(0);
+      expect(merged.tags.sort()).toEqual(['B', 'C', 'D']);
+    });
+
+    it('satisfies algebraic 3-way merge idempotency properties', () => {
+      const base = { tags: ['alpha', 'beta'] };
+      const local = { tags: ['alpha', 'gamma'] };
+      const remote = { tags: ['alpha', 'delta'] };
+
+      // Idempotency: merge(base, local, base) === local
+      const resLocal = mergeTaxonomies(local, base, base);
+      expect(resLocal.conflicts).toHaveLength(0);
+      expect(resLocal.merged.tags).toEqual(local.tags);
+
+      // merge(base, base, remote) === remote
+      const resRemote = mergeTaxonomies(base, base, remote);
+      expect(resRemote.conflicts).toHaveLength(0);
+      expect(resRemote.merged.tags).toEqual(remote.tags);
     });
 
     it('detects conflict when both sides assign different terms without a common base', () => {

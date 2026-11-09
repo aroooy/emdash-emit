@@ -43,6 +43,7 @@ import { registerSyncDeleteTool } from './tools/sync-delete.js';
 import { registerSyncConflictsTool } from './tools/sync-conflicts.js';
 import { registerSyncDoctorTool } from './tools/sync-doctor.js';
 import { getPackageVersion } from '../utils/version.js';
+import { recordMcpHeartbeat } from './heartbeat.js';
 
 export interface CreateMcpServerOptions {
   workspaceRoot?: string;
@@ -236,6 +237,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
  * Runs the MCP server via stdio transport.
  */
 export async function runMcpServer(options?: CreateMcpServerOptions): Promise<void> {
+  recordMcpHeartbeat();
   const server = createMcpServer(options);
   const transport = new StdioServerTransport();
   await server.connect(transport);

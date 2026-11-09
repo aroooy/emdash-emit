@@ -152,6 +152,23 @@ These rules are enforced at the code level via Preflight Guards (G1–G14):
 - **Quarantined Path Restriction (Guard G14 / `QUARANTINED_PATH_REQUIRED`)**:
   - `emit conflicts resolve` and `diff` strictly validate that target files are located within `<collection>/conflicts/`. Arbitrary workspace paths are rejected before any unlink or write operation.
 
+### 9. Taxonomy Conflict Management, Wipe Guard & Revive (G15 / G16)
+
+- **Taxonomy Conflict Pending Guard (`TAXONOMY_CONFLICT_PENDING`)**:
+  - If a 3-way merge encounters diverged taxonomy assignments and cannot cleanly union them, `conflict_pending: 1` is recorded in `sync_state`. Re-pushing without specifying resolution is strictly blocked.
+  - Pass `--resolve-taxonomy=union|local|remote` (or MCP `resolveTaxonomy: "union"`) or `-f, --force` to confirm resolution.
+- **Destructive Taxonomy Wipe Guard (`DESTRUCTIVE_TAXONOMY_WIPE`)**:
+  - Pushing an empty taxonomy array (`categories: []` or `tags: []`) that would wipe existing remote terms requires explicit confirmation via `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`).
+- **Delete-Pending Article Revival Guard (`DELETE_PENDING_ARTICLE`)**:
+  - If an article was previously deleted but unconfirmed on remote (`delete_pending: 1`), pushing is blocked to prevent accidental zombie re-publication. Pass `--revive` (or `--force`) to intentionally resurrect and push the article.
+
+### 10. Quarantined Copy Pruning (`emit conflicts prune`)
+
+- Quarantined copies in `<collection>/conflicts/` can be pruned via `emit conflicts prune` (with `--older-than <duration>` such as `7d` or `24h`, `--dry-run`).
+- Pruning strictly respects safety boundaries:
+  - If a canonical article contains unpushed local edits, its rescue copy is skipped.
+  - Deletion backups (`.deleted.md`) that have no canonical article require `--allow-orphan-rescues` to be pruned.
+
 ---
 
 ## 5. Development & Code Quality Standards

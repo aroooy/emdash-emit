@@ -40,6 +40,26 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .boolean()
         .optional()
         .describe('Explicit confirmation required to change status from draft to published'),
+      resolveTaxonomy: z
+        .enum(['union', 'local', 'remote'])
+        .optional()
+        .describe(
+          'Taxonomy conflict resolution strategy: "union" (combine terms), "local" (keep local terms), or "remote" (keep remote terms)',
+        ),
+      allowWipeTaxonomies: z
+        .boolean()
+        .optional()
+        .describe(
+          'Explicit confirmation required when wiping all existing remote taxonomy assignments',
+        ),
+      revive: z
+        .boolean()
+        .optional()
+        .describe('Intentionally revive and push a delete-pending article'),
+      force: z
+        .boolean()
+        .optional()
+        .describe('Force push and overwrite conflicting taxonomy states'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -59,18 +79,37 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
           allowPublish: args.allowPublish,
+          resolveTaxonomy: args.resolveTaxonomy,
+          allowWipeTaxonomies: args.allowWipeTaxonomies,
+          revive: args.revive,
+          force: args.force,
         });
 
         if (res.conflict) {
+          const conflictDetails = res.taxonomyConflict
+            ? [
+                '⚠️ Taxonomy conflict detected: local and remote categories/tags diverged.',
+                'Article body was cleanly merged without conflict markers.',
+                'To resolve, call sync_push again with resolveTaxonomy="union" (recommended), "local", or "remote".',
+              ]
+            : [
+                '⚠️ Conflict detected and could not be resolved automatically.',
+                `Conflict markers (<<<<<<< LOCAL ... ======= ... >>>>>>> REMOTE) have been inserted into "${res.filePath}".`,
+                'Please resolve the conflicting lines in the file and retry sync_push.',
+              ];
+
+          if (res.warnings && res.warnings.length > 0) {
+            conflictDetails.push('', 'Warnings:');
+            for (const w of res.warnings) {
+              conflictDetails.push(`- ${w}`);
+            }
+          }
+
           return {
             content: [
               {
                 type: 'text',
-                text: [
-                  '⚠️ Conflict detected and could not be resolved automatically.',
-                  `Conflict markers (<<<<<<< LOCAL ... ======= ... >>>>>>> REMOTE) have been inserted into "${res.filePath}".`,
-                  'Please resolve the conflicting lines in the file and retry sync_push.',
-                ].join('\n'),
+                text: conflictDetails.join('\n'),
               },
             ],
           };

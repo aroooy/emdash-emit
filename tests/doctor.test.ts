@@ -256,4 +256,69 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('ok');
     expect(mCheck?.message).toContain('All referenced local media files exist on disk');
   });
+
+  it('classifies code-span, code-fence, and placeholder media references as informational without triggering warnings (Phase 5)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-code-examples-post',
+      title: 'Media Code Examples Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    // Content with placeholder and code-fenced references
+    const body = [
+      'Here is an explanation of media URLs:',
+      'Inline code: `![alt](/_emdash/api/media/file/<id>.png)`',
+      'Placeholder: `/_emdash/api/media/file/<storageKey>`',
+      '',
+      '```markdown',
+      '![Fenced image](../../media/drafts/sample-shot.jpg)',
+      '```',
+    ].join('\n');
+
+    const content = serializeMarkdown(frontmatter, body);
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-code-examples-post.md`),
+      content,
+      'utf8',
+    );
+
+    const hash = calculateHash(content);
+    const relPath = `posts/draft/20261108_${articleId}-media-code-examples-post.md`;
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: hash,
+      remoteRev: 'rev-1',
+      status: 'draft',
+      slug: 'media-code-examples-post',
+      lastSyncedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: 'rev-1',
+      frontmatterYaml: JSON.stringify(frontmatter),
+      bodyMarkdown: body,
+      hash,
+      savedAt: 1700000000,
+    });
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    expect(mCheck?.message).toContain('informational/placeholder reference(s) ignored');
+    expect(report.overallStatus).toBe('healthy');
+  });
 });

@@ -41,6 +41,9 @@ export interface ArticleStatusItem {
   rev?: string;
   cached?: boolean;
   error?: string;
+  conflictPending?: boolean;
+  deletePending?: boolean;
+  orphan?: boolean;
 }
 
 export interface WorkspaceStatusResult {
@@ -53,6 +56,12 @@ export interface WorkspaceStatusResult {
     invalid: number;
     /** Preserved divergent local copies stored in `<collection>/conflicts/` by a pull. */
     conflicts: number;
+    /** Extended state flags preserving backward compatibility of the main 4 summary counts */
+    flags?: {
+      conflictPending: number;
+      orphan: number;
+      deletePending: number;
+    };
   };
 }
 
@@ -143,8 +152,11 @@ export function getWorkspaceStatus(
         const syncState = cache.getSyncState(parsed.frontmatter.id);
 
         let syncStatus: 'synced' | 'modified' | 'untracked' = 'untracked';
+        const conflictPending = syncState?.conflictPending === 1;
+        const deletePending = syncState?.deletePending === 1;
+
         if (syncState) {
-          if (syncState.localHash === currentHash) {
+          if (syncState.localHash === currentHash && !conflictPending) {
             syncStatus = 'synced';
           } else {
             syncStatus = 'modified';
@@ -159,6 +171,8 @@ export function getWorkspaceStatus(
           syncStatus,
           filePath: relPath,
           rev: syncState?.remoteRev,
+          conflictPending: conflictPending || undefined,
+          deletePending: deletePending || undefined,
         });
       } catch (err: unknown) {
         const fallbackId = extractUlidFromFilename(file) || 'unknown';
@@ -195,6 +209,11 @@ export function getWorkspaceStatus(
     untracked: items.filter((i) => i.syncStatus === 'untracked').length,
     invalid: items.filter((i) => i.syncStatus === 'invalid').length,
     conflicts: countQuarantinedCopies(workspaceRoot, collection),
+    flags: {
+      conflictPending: items.filter((i) => i.conflictPending).length,
+      orphan: items.filter((i) => i.orphan).length,
+      deletePending: items.filter((i) => i.deletePending).length,
+    },
   };
 
   return { items, summary };

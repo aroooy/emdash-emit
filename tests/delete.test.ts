@@ -232,10 +232,14 @@ describe('deleteArticle & sync_delete (§4)', () => {
       let capturedAuth = '';
 
       const mockFetch = async (input: string | URL, init?: RequestInit) => {
-        capturedUrl = String(input);
-        capturedMethod = init?.method || '';
-        capturedAuth = (init?.headers as Record<string, string>)?.Authorization || '';
-        return new Response(null, { status: 204 });
+        if (init?.method === 'DELETE') {
+          capturedUrl = String(input);
+          capturedMethod = init?.method || '';
+          capturedAuth = (init?.headers as Record<string, string>)?.Authorization || '';
+          return new Response(null, { status: 204 });
+        }
+        // Verification GET returns 404
+        return new Response(null, { status: 404 });
       };
 
       const res = await deleteArticle({
@@ -320,6 +324,84 @@ describe('deleteArticle & sync_delete (§4)', () => {
         expect(files).toHaveLength(0);
       }
     });
+
+    it('detects false success when remote DELETE returns 200/204 but GET still returns 200 (REMOTE_DELETE_UNCONFIRMED)', async () => {
+      const { fullPath } = setupArticle({ status: 'draft' });
+
+      const fakeSuccessFetch = async (_url: string | URL, init?: RequestInit) => {
+        if (init?.method === 'DELETE') {
+          return new Response(null, { status: 204 });
+        }
+        // Verification GET returns 200 OK (server failed to actually delete)
+        return new Response(JSON.stringify({ id: articleId }), { status: 200 });
+      };
+
+      try {
+        await deleteArticle({
+          workspaceRoot: tempDir,
+          cache,
+          id: articleId,
+          origin: 'https://aroooy.net',
+          token: 'test-token-123',
+          fetchFn: fakeSuccessFetch as unknown as typeof fetch,
+        });
+        expect.unreachable('Should have thrown ApiError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ApiError);
+        expect((err as ApiError).code).toBe('REMOTE_DELETE_UNCONFIRMED');
+      }
+
+      // Local file must be preserved and marked as delete_pending
+      expect(fs.existsSync(fullPath)).toBe(true);
+      const state = cache.getSyncState(articleId);
+      expect(state).not.toBeNull();
+      expect(state?.deletePending).toBe(1);
+    });
+
+    it('treats 410 Gone verification as valid remote deletion', async () => {
+      const { fullPath } = setupArticle({ status: 'draft' });
+
+      const goneFetch = async (_url: string | URL, init?: RequestInit) => {
+        if (init?.method === 'DELETE') {
+          return new Response(null, { status: 204 });
+        }
+        return new Response(null, { status: 410 });
+      };
+
+      const res = await deleteArticle({
+        workspaceRoot: tempDir,
+        cache,
+        id: articleId,
+        origin: 'https://aroooy.net',
+        token: 'test-token-123',
+        fetchFn: goneFetch as unknown as typeof fetch,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.remoteDeleted).toBe(true);
+      expect(fs.existsSync(fullPath)).toBe(false);
+    });
+
+    it('handles 409 ENTRY_LOCKED with actionable suggestion', async () => {
+      setupArticle({ status: 'draft' });
+
+      const lockedFetch = async () => new Response('Locked', { status: 409 });
+
+      try {
+        await deleteArticle({
+          workspaceRoot: tempDir,
+          cache,
+          id: articleId,
+          origin: 'https://aroooy.net',
+          token: 'test-token-123',
+          fetchFn: lockedFetch as unknown as typeof fetch,
+        });
+        expect.unreachable('Should have thrown ApiError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ApiError);
+        expect((err as ApiError).code).toBe('ENTRY_LOCKED');
+      }
+    });
   });
 
   describe('MCP sync_delete tool', () => {
@@ -339,7 +421,12 @@ describe('deleteArticle & sync_delete (§4)', () => {
       );
       vi.stubGlobal(
         'fetch',
-        vi.fn(async () => new Response(null, { status: 204 })),
+        vi.fn(async (_url, init) => {
+          if (init?.method === 'DELETE') {
+            return new Response(null, { status: 204 });
+          }
+          return new Response(null, { status: 404 });
+        }),
       );
     });
 

@@ -27,7 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
-import { unwrapEnvelope, extractRev } from '../client/api.js';
+import { unwrapEnvelope, extractRev, normalizeRev } from '../client/api.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
@@ -62,6 +62,7 @@ export interface PullResult {
   updated: boolean;
   skipped?: boolean;
   deleted?: boolean;
+  orphan?: boolean;
   title?: string;
   /** True when the local file has unpushed edits and Emit kept them instead of applying remote changes. */
   localEditsPreserved?: boolean;
@@ -189,16 +190,41 @@ export function quarantineLocalCopy(
   collection: string,
   sourceRelPath: string,
   content: string,
+  options?: {
+    isForce?: boolean;
+    existingCopyHash?: string | null;
+  },
 ): string | null {
   const conflictsDir = path.join(workspaceRoot, collection, CONFLICTS_SUBDIR);
   const baseName = path.basename(sourceRelPath).replace(/\.md$/i, '');
-  let quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}.conflict.md`);
+  const suffixExt = options?.isForce ? '.local-dropped.md' : '.conflict.md';
+  let quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}${suffixExt}`);
+  const quarantineFull = path.join(workspaceRoot, quarantineRel);
 
   try {
     fs.mkdirSync(conflictsDir, { recursive: true });
+
+    // Deduplication check: if canonical conflict file exists and is unedited, overwrite without incrementing
+    if (!options?.isForce && fs.existsSync(quarantineFull)) {
+      const existingDiskHash = calculateHash(fs.readFileSync(quarantineFull, 'utf8'));
+      if (
+        (options?.existingCopyHash && existingDiskHash === options.existingCopyHash) ||
+        existingDiskHash === calculateHash(content)
+      ) {
+        fs.writeFileSync(quarantineFull, content, 'utf8');
+        return quarantineRel;
+      }
+    }
+
     let suffix = 2;
     while (fs.existsSync(path.join(workspaceRoot, quarantineRel))) {
-      quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}.conflict-${suffix}.md`);
+      quarantineRel = path.join(
+        collection,
+        CONFLICTS_SUBDIR,
+        options?.isForce
+          ? `${baseName}.local-dropped-${suffix}.md`
+          : `${baseName}.conflict-${suffix}.md`,
+      );
       suffix += 1;
       if (suffix > 100) return null;
     }
@@ -220,6 +246,7 @@ function quarantineDivergentLocalCopies(
   localRelPaths: Set<string>,
   baselineHash: string | undefined,
   canonicalContent: string,
+  existingCopyHash?: string | null,
 ): QuarantinedLocalCopy[] {
   const quarantined: QuarantinedLocalCopy[] = [];
 
@@ -244,6 +271,10 @@ function quarantineDivergentLocalCopies(
       collection,
       localRel,
       localContent,
+      {
+        isForce: Boolean(options.force),
+        existingCopyHash,
+      },
     );
     if (quarantineRel) {
       quarantined.push({
@@ -481,9 +512,15 @@ export async function pullArticle(
   const tryFastPathOrHeal = async (item: Record<string, unknown>): Promise<PullResult | null> => {
     if (options.force) return null;
     const existingSync = options.cache.getSyncState(id);
-    const remoteRev = String(item._rev || item.rev || item.version || '1');
+    const rawObj = (item.rawItem || item) as Record<string, unknown>;
+    const rawRevCandidate = String(item._rev || item.rev || item.version || rawObj._rev || '');
+    const remoteRev = extractRev(rawObj, rawRevCandidate);
 
-    if (!existingSync || existingSync.remoteRev !== remoteRev) {
+    if (
+      !existingSync ||
+      !remoteRev ||
+      normalizeRev(existingSync.remoteRev) !== normalizeRev(remoteRev)
+    ) {
       return null;
     }
 
@@ -498,13 +535,20 @@ export async function pullArticle(
 
       // Check if file path matches current naming standard
       const existingPrefix = extractDatePrefixFromPath(existingSync.localFilePath);
-      const rawData = (item.data || {}) as Record<string, unknown>;
-      const rawTitle = String(rawData.title || item.title || item.slug || '');
+      const rawData = ((rawObj.data || rawObj.item || {}) as Record<string, unknown>) || {};
+      const rawTitle = String(
+        rawData.title || rawObj.title || item.title || rawObj.slug || item.slug || '',
+      );
       const articleDate =
-        (item.publishedAt as string) || existingPrefix || (item.createdAt as string) || null;
+        (rawObj.publishedAt as string) ||
+        (item.publishedAt as string) ||
+        existingPrefix ||
+        (rawObj.createdAt as string) ||
+        (item.createdAt as string) ||
+        null;
       const expectedRelPath = computeArticleRelativePath(
         collection,
-        String(item.status || 'draft'),
+        String(rawObj.status || item.status || 'draft'),
         id,
         rawTitle,
         articleDate,
@@ -550,7 +594,7 @@ export async function pullArticle(
               ...options,
               bylineIdToSlug: resolvedBylineMap,
             };
-            const remoteLocal = apiResponseToLocal(item, effectiveOptions);
+            const remoteLocal = apiResponseToLocal(rawObj, effectiveOptions);
             const [categoriesTerms, tagsTerms] = await Promise.all([
               fetchAssignedTerms('category'),
               fetchAssignedTerms('tag'),
@@ -635,8 +679,8 @@ export async function pullArticle(
     });
 
     if (!res.ok) {
-      if (res.status === 404) {
-        // Remote article was deleted (404)
+      if (res.status === 404 || res.status === 410) {
+        // Remote article was deleted (404/410)
         const existingSync = options.cache.getSyncState(id);
         if (existingSync) {
           const fullPath = path.join(options.workspaceRoot, existingSync.localFilePath);
@@ -658,6 +702,17 @@ export async function pullArticle(
                 filePath: existingSync.localFilePath,
                 updated: false,
                 deleted: true,
+              };
+            } else {
+              // Local file has unpushed edits: preserve as orphan!
+              return {
+                id,
+                slug: existingSync.slug,
+                status: existingSync.status,
+                filePath: existingSync.localFilePath,
+                updated: false,
+                orphan: true,
+                localEditsPreserved: true,
               };
             }
           }
@@ -760,6 +815,7 @@ export async function pullArticle(
     staleRelPaths,
     existingSync?.localHash,
     markdownContent,
+    existingSync?.conflictCopyHash,
   );
 
   for (const staleRel of staleRelPaths) {
@@ -796,6 +852,7 @@ export async function pullArticle(
     status: frontmatter.status,
     slug: frontmatter.slug,
     lastSyncedAt: Math.floor(Date.now() / 1000),
+    ...(options.force ? { conflictPending: 0, conflictCopyHash: null } : {}),
   });
 
   // Update entries cache

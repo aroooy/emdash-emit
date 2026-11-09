@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CacheDatabase,
+  CURRENT_CACHE_SCHEMA_VERSION,
   type BaseSnapshot,
   type CachedEntry,
   type SyncState,
@@ -111,6 +112,11 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
       status: 'draft',
       slug: 'my-post',
       lastSyncedAt: 1730550200,
+      conflictPending: 0,
+      deletePending: 0,
+      conflictCopyHash: null,
+      conflictCopyPath: null,
+      conflictAt: null,
     };
 
     cache.saveSyncState(state);
@@ -211,5 +217,66 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
     cache.deleteMediaState(localHash);
     expect(cache.getMediaState(localHash)).toBeNull();
+  });
+
+  it('runs schema migration 0 -> 1 on legacy database and creates WAL-check件付き backup', () => {
+    cache.close();
+
+    // Create a legacy v0 database manually
+    const legacyDbPath = path.join(tempDir, '.emit', 'legacy.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(legacyDbPath);
+    rawDb.exec('PRAGMA journal_mode = WAL;');
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY,
+        local_file_path TEXT NOT NULL,
+        local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL,
+        status TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL
+      );
+      INSERT INTO sync_state VALUES ('test-id', 'posts/draft/test.md', 'hash1', '1', 'draft', 'test', 12345);
+      PRAGMA user_version = 0;
+    `);
+    rawDb.close();
+
+    // Opening with CacheDatabase triggers migration to version 1
+    const migratedCache = new CacheDatabase(legacyDbPath);
+    expect(migratedCache.getSchemaVersion()).toBe(CURRENT_CACHE_SCHEMA_VERSION);
+
+    // Verify backup was created (timestamped bak file)
+    const dbDir = path.dirname(legacyDbPath);
+    const dbBase = path.basename(legacyDbPath);
+    const bakFiles = fs.readdirSync(dbDir).filter((f) => f.startsWith(`${dbBase}.bak-0.1.11`));
+    expect(bakFiles.length).toBeGreaterThan(0);
+
+    // Verify existing data is preserved and new columns are accessible
+    const state = migratedCache.getSyncState('test-id');
+    expect(state).not.toBeNull();
+    expect(state?.id).toBe('test-id');
+    expect(state?.conflictPending).toBe(0);
+    expect(state?.deletePending).toBe(0);
+    expect(state?.conflictCopyHash).toBeNull();
+
+    // Update with new columns
+    migratedCache.setConflictPending('test-id', true, 'copyhash123');
+    const updated = migratedCache.getSyncState('test-id');
+    expect(updated?.conflictPending).toBe(1);
+    expect(updated?.conflictCopyHash).toBe('copyhash123');
+
+    migratedCache.close();
+  });
+
+  it('rejects database created by newer schema version (future schema guard)', () => {
+    cache.close();
+    const futureDbPath = path.join(tempDir, '.emit', 'future.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(futureDbPath);
+    rawDb.exec('PRAGMA user_version = 999;');
+    rawDb.close();
+
+    expect(() => new CacheDatabase(futureDbPath)).toThrow(/\[CACHE_SCHEMA_MISMATCH\]/);
   });
 });

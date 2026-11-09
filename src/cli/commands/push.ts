@@ -35,6 +35,13 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     )
     .option('--allow-publish', 'Confirm publishing live to remote')
     .option('--all', 'Push all modified files in workspace')
+    .option(
+      '--resolve-taxonomy <strategy>',
+      'Resolve taxonomy conflict during 3-way merge: "union", "local", or "remote"',
+    )
+    .option('--allow-wipe-taxonomies', 'Explicitly confirm wiping all remote taxonomy assignments')
+    .option('--revive', 'Intentionally revive and push a delete-pending article')
+    .option('-f, --force', 'Force push and overwrite conflicting taxonomy states')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (file, options) => {
       const ctx = resolveContext(options.profile);
@@ -54,6 +61,15 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             console.warn(
               `⚠️ Skipped ${pushResult.invalid} file(s) with invalid YAML frontmatter (run "emit status" or "emit pull" to inspect/repair).`,
             );
+          }
+
+          if (pushResult.skippedItems && pushResult.skippedItems.length > 0) {
+            console.warn(
+              `⚠️ Skipped ${pushResult.skippedItems.length} article(s) with pending flags (conflict_pending or delete_pending):`,
+            );
+            for (const item of pushResult.skippedItems) {
+              console.warn(`   - ${item.filePath} (${item.reason})`);
+            }
           }
 
           if (pushResult.total === 0) {
@@ -106,14 +122,43 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
           allowPublish: options.allowPublish,
+          resolveTaxonomy: options.resolveTaxonomy,
+          allowWipeTaxonomies: options.allowWipeTaxonomies,
+          revive: options.revive,
+          force: options.force,
         });
 
         if (res.conflict) {
           console.warn(`\n⚠️ Conflict encountered!`);
-          console.warn(`   Conflict markers have been written to ${res.filePath}.`);
-          console.warn(
-            `   Please resolve the conflict manually or let AI resolve it, then re-push.`,
-          );
+          if (res.warnings && res.warnings.length > 0) {
+            console.warn(`   Warnings:`);
+            for (const w of res.warnings) {
+              console.warn(`     👉 ${w}`);
+            }
+          }
+          if (res.taxonomyConflict) {
+            console.warn(
+              `\n   Taxonomy conflict encountered: local and remote categories/tags diverged.`,
+            );
+            console.warn(
+              `   No conflict markers were written into the article body because the body was cleanly merged.`,
+            );
+            console.warn(`   💡 To resolve and push, choose a resolution strategy:`);
+            console.warn(
+              `      emit push ${file} --resolve-taxonomy=union    (clean union of all terms)`,
+            );
+            console.warn(
+              `      emit push ${file} --resolve-taxonomy=local    (accept your local terms)`,
+            );
+            console.warn(
+              `      emit push ${file} --resolve-taxonomy=remote   (accept remote terms)`,
+            );
+          } else {
+            console.warn(`   Conflict markers have been written to ${res.filePath}.`);
+            console.warn(
+              `   Please resolve the conflict manually or let AI resolve it, then re-push.`,
+            );
+          }
         } else {
           console.log(`✅ Successfully pushed ${res.id} -> ${res.filePath} (rev: ${res.rev})`);
           if (res.previousId) {

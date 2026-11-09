@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { unwrapEnvelope, unwrapItem, extractRev } from '../src/client/api.js';
+import { unwrapEnvelope, unwrapItem, extractRev, normalizeRev } from '../src/client/api.js';
 
 describe('api unwrap utils', () => {
   it('unwraps data envelope when wrapped in { data: ... }', () => {
@@ -67,5 +67,20 @@ describe('api unwrap utils', () => {
       },
     };
     expect(extractRev(responseWithFallback)).toBe('42');
+  });
+
+  it('normalizes rev tokens (pure number, base64 encoded, colon delimited)', () => {
+    expect(normalizeRev('1')).toBe('1');
+    expect(normalizeRev(5)).toBe('5');
+    expect(normalizeRev('1:2026-10-31T00:16:28.950Z')).toBe('1');
+    // "1:2026-10-31T00:16:28.950Z" in Base64 is "MToyMDI2LTEwLTMxVDAwOjE2OjI4Ljk1MFo="
+    expect(normalizeRev('MToyMDI2LTEwLTMxVDAwOjE2OjI4Ljk1MFo=')).toBe('1');
+    // "5:2026-11-09T08:00:00.000Z" in Base64
+    const b64Rev5 = Buffer.from('5:2026-11-09T08:00:00.000Z').toString('base64');
+    expect(normalizeRev(b64Rev5)).toBe('5');
+    // Opaque fallback
+    expect(normalizeRev('custom-opaque-rev')).toBe('custom-opaque-rev');
+    expect(normalizeRev(null)).toBe('1');
+    expect(normalizeRev('')).toBe('1');
   });
 });
