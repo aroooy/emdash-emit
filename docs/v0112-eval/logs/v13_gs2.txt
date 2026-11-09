@@ -1,0 +1,11 @@
+2:############ W0 restore tags {qa-t1,qa-t2}
+8:############ W1 EMIT-003 regression: bare push with tags: [] -> EXPECT DESTRUCTIVE_TAXONOMY_WIPE, exit!=0, remote unchanged
+21:############ W2 explicit wipe: --allow-wipe-taxonomies -> EXPECT success + cleared warning
+33:############ U1 EMIT-002 regression: local def exists but term deleted remotely
+51:############ U2 next bare push after unapplied taxonomy -> EXPECT Guard G17 block (exit!=0)
+64:############ U3 escape hatch --allow-unapplied-taxonomies
+77:############ U4 recovery: remove unknown slug from frontmatter then push -> EXPECT clean
+90:############ U5 --resolve-taxonomy local (divergence: remote +qa-t4 vs local without)
+103:############ U6 --resolve-taxonomy remote (divergence: remote +qa-t3 vs local qa-t2)
+116:############ U7 --no-taxonomy-audit (skip pre-audit) with remote-only addition -> risk of silent overwrite?
+129:############ U8 force flag

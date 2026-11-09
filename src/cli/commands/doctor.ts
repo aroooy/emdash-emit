@@ -77,6 +77,9 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
                 ? '⚠️  [WARN]'
                 : '❌ [FAIL]';
           console.log(`  ${badge} ${check.name}: ${check.message}`);
+          if (check.suggestion) {
+            console.log(`       💡 Suggestion: ${check.suggestion}`);
+          }
         }
 
         console.log('');

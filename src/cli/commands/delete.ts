@@ -41,6 +41,10 @@ export function registerDeleteCommand(program: Command, resolveContext: CliConte
     .command('delete <target>')
     .description('Safely delete an article from both local workspace and remote EmDash server')
     .option('--allow-delete-published', 'Explicitly confirm deletion of a live published article')
+    .option(
+      '--discard-local-edits',
+      'Confirm deleting local article even with unpushed modifications',
+    )
     .option('--dry-run', 'Preview deletion metadata without deleting anything')
     .option('-y, --yes', 'Confirm deletion without interactive prompt')
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
@@ -58,6 +62,7 @@ export function registerDeleteCommand(program: Command, resolveContext: CliConte
           id: !target.endsWith('.md') && !target.includes('/') ? target : undefined,
           collection,
           allowDeletePublished: Boolean(options.allowDeletePublished),
+          discardLocalEdits: Boolean(options.discardLocalEdits),
           dryRun: isDryRun,
           origin: ctx.origin,
           token: ctx.auth?.token,

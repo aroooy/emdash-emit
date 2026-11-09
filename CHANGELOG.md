@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.14] - 2026-11-10
+
+### Added
+- **Taxonomy Strategy Enforcement (R1 / P1)**:
+  - Made `mergeTaxonomies` in `src/sync/merge.ts` the single authoritative decision point for 3-way merge resolution, strictly honoring `--resolve-taxonomy local|remote` (CLI and MCP).
+  - Extended strategy adoption to Case 2 (remote deleted vs local modified) and Case 4 (both modified), recording `strategyAdoptions` in merge warnings and returning discarded terms.
+  - Clarified destructive single-side adoption semantics (ours/theirs): explicit `--resolve-taxonomy` bypasses `DESTRUCTIVE_TAXONOMY_WIPE` guard without requiring `--allow-wipe-taxonomies`.
+  - Extended `TAXONOMY_UNION_REJECTED` guidance when server constraints (e.g. single category limit) reject strategy-adopted taxonomy assignments.
+- **Body & Taxonomy Conflict Pending Separation (R2 / P2)**:
+  - Upgraded SQLite cache schema to version 3 (`CURRENT_CACHE_SCHEMA_VERSION = 3`), adding dedicated `body_conflict_pending` and `taxonomy_conflict_pending` columns to `sync_state`.
+  - Maintained `conflict_pending = MAX(body_conflict_pending, taxonomy_conflict_pending)` for full backward compatibility.
+  - Re-ordered push guards: evaluated preflight Guard G6 (`UNRESOLVED_CONFLICT_MARKERS`) before G15 (`TAXONOMY_CONFLICT_PENDING`) to eliminate misleading taxonomy flags and circular suggestions when body conflict markers remain.
+- **Remote-Deleted Article Deadlock Resolution (R3 / P3)**:
+  - Unified HTTP 404/410 detection across initial PUT, conflict remote GET, and auto-merge retry PUT into actionable `[REMOTE_ARTICLE_DELETED]` with 3 clear escape routes.
+  - Added `emit pull <id> --force` unpushed edits preservation: safely moves divergent local files to `<collection>/conflicts/*.local-dropped.md`, unlinks canonical article, deletes DB tracking record, and returns `deleted: true, quarantined: true`.
+  - Added `--discard-local-edits` to CLI `emit delete` and MCP `sync_delete` to allow purging local and DB state on remote 404 while preserving unpushed modifications in `.deleted.md`.
+- **Conflict Metadata Consistency & Lifecycle (R4 / P4)**:
+  - Updated `saveSyncState` UPSERT to clear `conflict_copy_path`, `conflict_copy_hash`, and `conflict_at` to `NULL` only when all conflict pendings are 0, preserving recovery links if only one conflict type is resolved.
+  - Added `clearConflictsByKind(id, kind: 'body' | 'taxonomy' | 'all')`.
+  - Updated `emit conflicts resolve --accept-canonical` to call `clearConflictsByKind(id, 'body')`, unblocking subsequent bare pushes.
+  - Updated `accept-local` to explicitly pass zeroed conflict fields to `saveSyncState`.
+- **Doctor Diagnostic Coverage (R5 / P5)**:
+  - Added checks for `taxonomy_apply_pending = 1` (with actionable remote term/permission verification suggestion) and `delete_pending = 1` (with local cleanup / `--revive` suggestions).
+  - Separated body vs taxonomy conflict pending warnings in `emit doctor` and auto-cleared resolved flags on a per-kind basis when no divergence or conflict copies exist.
+- **SQLite Native `VACUUM INTO` Backups (R6 / P6)**:
+  - Replaced manual filesystem copy with SQLite native `prepare('VACUUM INTO ?').run(bakPath)`, producing clean atomic backups from WAL databases.
+  - Derived backup filenames dynamically from `package.json` version (`.bak-<version>-<timestamp>`).
+  - Implemented unconditional sweep of 0-byte backup files during `pruneBackups`.
+
+---
+
 ## [0.1.13] - 2026-11-09
 
 ### Added

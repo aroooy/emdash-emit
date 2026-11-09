@@ -40,6 +40,7 @@ export interface DoctorCheckResult {
   name: string;
   status: CheckStatus;
   message: string;
+  suggestion?: string;
   details?: Record<string, unknown> | Array<unknown>;
 }
 
@@ -255,45 +256,121 @@ export async function runWorkspaceDoctor(
     });
   }
 
-  // 4b. Taxonomy Conflict Pending Alignment
+  // 4b. Conflict Pending Alignment & Auditing
   const allStates = options.cache.getAllSyncStates();
-  const pendingStates = allStates.filter((s) => s.conflictPending === 1);
-  const autoClearedSlugs: string[] = [];
-  const manualResolutionRequired: string[] = [];
+  const autoClearedBodySlugs: string[] = [];
+  const autoClearedTaxSlugs: string[] = [];
+  const manualBodySlugs: string[] = [];
+  const manualTaxSlugs: string[] = [];
+  const conflictMarkerRegex = /^<{7}\s|^={7}$|^>{7}\s/m;
 
-  for (const state of pendingStates) {
-    const hasConflictCopy = conflictItems.some((c) => c.id === state.id || c.slug === state.slug);
+  for (const state of allStates) {
     const fullPath = path.join(options.workspaceRoot, state.localFilePath);
+    let diskContent: string | null = null;
     let hasDivergence = true;
+    let hasBodyMarkers = false;
+
     if (fs.existsSync(fullPath)) {
-      const diskHash = calculateHash(fs.readFileSync(fullPath, 'utf8'));
+      diskContent = fs.readFileSync(fullPath, 'utf8');
+      const diskHash = calculateHash(diskContent);
       hasDivergence = diskHash !== state.localHash;
+      hasBodyMarkers = conflictMarkerRegex.test(diskContent);
     }
-    if (!hasConflictCopy && !hasDivergence) {
-      // Auto-clear: no conflict copy and no divergence
-      options.cache.setConflictPending(state.id, false);
-      autoClearedSlugs.push(state.slug);
-    } else {
-      manualResolutionRequired.push(state.slug);
+
+    // Check body conflict pending
+    if (state.bodyConflictPending === 1) {
+      const hasConflictCopy = conflictItems.some(
+        (c) =>
+          (c.id === state.id || c.slug === state.slug) &&
+          (c.type === 'conflict' ||
+            c.type === 'dropped' ||
+            c.filePath.endsWith('.conflict.md') ||
+            c.filePath.endsWith('.local-dropped.md')),
+      );
+      if (!hasConflictCopy && !hasDivergence && !hasBodyMarkers) {
+        options.cache.clearConflictsByKind(state.id, 'body');
+        autoClearedBodySlugs.push(state.slug);
+      } else {
+        manualBodySlugs.push(state.slug);
+      }
+    }
+
+    // Check taxonomy conflict pending
+    if (state.taxonomyConflictPending === 1) {
+      const hasConflictCopy = conflictItems.some((c) => c.id === state.id || c.slug === state.slug);
+      if (!hasConflictCopy && !hasDivergence) {
+        options.cache.clearConflictsByKind(state.id, 'taxonomy');
+        autoClearedTaxSlugs.push(state.slug);
+      } else {
+        manualTaxSlugs.push(state.slug);
+      }
     }
   }
 
-  if (autoClearedSlugs.length > 0) {
+  const totalAutoCleared = autoClearedBodySlugs.length + autoClearedTaxSlugs.length;
+  if (totalAutoCleared > 0) {
     checks.push({
       id: 'conflict_pending_autoclear',
       name: 'Conflict Pending Auto-Clear',
       status: 'ok',
-      message: `Automatically cleared stale conflict_pending flag for ${autoClearedSlugs.length} article(s) (no conflict copies and no divergence).`,
-      details: autoClearedSlugs,
+      message: `Automatically cleared stale conflict_pending flag for ${totalAutoCleared} pending record(s) (no conflict copies and no divergence).`,
+      details: [...new Set([...autoClearedBodySlugs, ...autoClearedTaxSlugs])],
     });
   }
-  if (manualResolutionRequired.length > 0) {
+
+  if (manualBodySlugs.length > 0) {
+    checks.push({
+      id: 'body_conflict_pending_manual',
+      name: 'Body Conflict Pending',
+      status: 'warning',
+      message: `${manualBodySlugs.length} article(s) have pending body conflicts. Resolve conflict markers in the file or run "emit conflicts diff / resolve".`,
+      details: manualBodySlugs,
+    });
+  }
+
+  if (manualTaxSlugs.length > 0) {
     checks.push({
       id: 'conflict_pending_manual',
       name: 'Taxonomy Conflict Pending',
       status: 'warning',
-      message: `${manualResolutionRequired.length} article(s) have pending taxonomy conflicts with existing rescue copies or unpushed edits. Run "emit push <file> --resolve-taxonomy=union|local|remote" to resolve.`,
-      details: manualResolutionRequired,
+      message: `${manualTaxSlugs.length} article(s) have pending taxonomy conflicts with existing rescue copies or unpushed edits. Run "emit push <file> --resolve-taxonomy=union|local|remote" to resolve.`,
+      details: manualTaxSlugs,
+    });
+  }
+
+  // 4c. Taxonomy Apply Pending Check
+  const taxApplyPendingStates = allStates.filter((s) => s.taxonomyApplyPending === 1);
+  if (taxApplyPendingStates.length > 0) {
+    checks.push({
+      id: 'taxonomy_apply_pending',
+      name: 'Taxonomy Apply Pending',
+      status: 'warning',
+      message: `${taxApplyPendingStates.length} article(s) have unapplied taxonomy terms from a previous failed sync.`,
+      suggestion:
+        'Run "emit pull-taxonomies", verify the terms exist on remote (missing terms or permission errors must be fixed there first), then "emit push <file>".',
+      details: taxApplyPendingStates.map((s) => ({
+        id: s.id,
+        slug: s.slug,
+        filePath: s.localFilePath,
+      })),
+    });
+  }
+
+  // 4d. Delete Pending Check
+  const deletePendingStates = allStates.filter((s) => s.deletePending === 1);
+  if (deletePendingStates.length > 0) {
+    checks.push({
+      id: 'delete_pending',
+      name: 'Delete Pending Articles',
+      status: 'warning',
+      message: `${deletePendingStates.length} article(s) are marked as delete_pending (unconfirmed remote deletion).`,
+      suggestion:
+        'Confirm the remote deletion, then "emit delete <file>" to finish local cleanup, or "emit push <file> --revive" to intentionally revive.',
+      details: deletePendingStates.map((s) => ({
+        id: s.id,
+        slug: s.slug,
+        filePath: s.localFilePath,
+      })),
     });
   }
 

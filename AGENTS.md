@@ -151,24 +151,34 @@ These rules are enforced at the code level via Preflight Guards (G1–G17):
   - To discard canonical edits and force overwrite, explicitly pass `-f, --force` (or MCP `force: true`).
 - **Quarantined Path Restriction (Guard G14 / `QUARANTINED_PATH_REQUIRED`)**:
   - `emit conflicts resolve` and `diff` strictly validate that target files are located within `<collection>/conflicts/`. Arbitrary workspace paths are rejected before any unlink or write operation.
-- **Conflict Pending Preservation across Pulls**: `conflict_pending = 1` is preserved across normal pulls via UPSERT COALESCE semantics so unreviewed conflicts cannot be silently forgotten. It is cleared only through explicit resolution (`emit conflicts resolve` / `--resolve-taxonomy`), auto-cleared by `emit doctor` when neither conflict copy nor divergence exists, or cleared via `--force`.
+- **Pending Conflict Separation & Alignment (Schema v3)**:
+  - Cache schema v3 separates `body_conflict_pending` and `taxonomy_conflict_pending` in `sync_state`, with `conflict_pending = MAX(body_conflict_pending, taxonomy_conflict_pending)`.
+  - Push guards strictly evaluate preflight Guard **G6 (`UNRESOLVED_CONFLICT_MARKERS`)** before Guard **G15 (`TAXONOMY_CONFLICT_PENDING`)**, ensuring that files with unresolved conflict markers are halted with body-marker instructions rather than taxonomy guidance.
+  - Resolving a conflict via `accept-canonical` dispatches `cache.clearConflictsByKind(id, 'body')`, unblocking subsequent bare pushes.
+  - Conflict copy columns (`conflict_copy_path`, `conflict_copy_hash`, `conflict_at`) are cleared to `NULL` only when both `body_conflict_pending` and `taxonomy_conflict_pending` are 0.
 
 ### 9. Taxonomy Conflict Management, Wipe Guard & Revive (G15 / G16)
 
 - **Taxonomy Conflict Pending Guard (`TAXONOMY_CONFLICT_PENDING`)**:
-  - If a 3-way merge encounters diverged taxonomy assignments and cannot cleanly union them, `conflict_pending: 1` is recorded in `sync_state`. Re-pushing without specifying resolution is strictly blocked.
+  - If a 3-way merge encounters diverged taxonomy assignments and cannot cleanly union them, `taxonomy_conflict_pending = 1` is recorded in `sync_state`. Re-pushing without specifying resolution is strictly blocked.
   - Pass `--resolve-taxonomy=union|local|remote` (or MCP `resolveTaxonomy: "union"`) or `-f, --force` to confirm resolution.
+  - **Single-Side Adoption (ours/theirs) Semantics**: Passing explicit `--resolve-taxonomy local|remote` strictly adopts the chosen side. If the adopted side specifies an empty taxonomy (wipe), Guard G18 (`DESTRUCTIVE_TAXONOMY_WIPE`) is bypassed because the explicit user strategy intent is unambiguous.
 - **Destructive Taxonomy Wipe Guard (`DESTRUCTIVE_TAXONOMY_WIPE`)**:
-  - Pushing an empty taxonomy array (`categories: []` or `tags: []`) that would wipe existing remote terms requires explicit confirmation via `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`).
+  - Pushing an empty taxonomy array (`categories: []` or `tags: []`) that would wipe existing remote terms requires explicit confirmation via `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`), unless an explicit `--resolve-taxonomy` strategy was passed.
 - **Delete-Pending Article Revival Guard (`DELETE_PENDING_ARTICLE`)**:
   - If an article was previously deleted but unconfirmed on remote (`delete_pending: 1`), pushing is blocked to prevent accidental zombie re-publication. Pass `--revive` (or `--force`) to intentionally resurrect and push the article.
 
-### 10. Quarantined Copy Pruning (`emit conflicts prune`)
+### 10. Quarantined Copy Pruning & Remote-Deleted Article Escape (R3)
 
-- Quarantined copies in `<collection>/conflicts/` can be pruned via `emit conflicts prune` (with `--older-than <duration>` such as `7d` or `24h`, `--dry-run`).
-- Pruning strictly respects safety boundaries:
+- **Quarantined Copy Pruning (`emit conflicts prune`)**:
+  - Quarantined copies in `<collection>/conflicts/` can be pruned via `emit conflicts prune` (with `--older-than <duration>` such as `7d` or `24h`, `--dry-run`).
   - If a canonical article contains unpushed local edits, its rescue copy is skipped.
   - Deletion backups (`.deleted.md`) that have no canonical article require `--allow-orphan-rescues` to be pruned.
+- **Remote-Deleted Article Deadlock Escape (`[REMOTE_ARTICLE_DELETED]`)**:
+  - When remote article returns 404/410 during push (PUT, conflict GET, or retry PUT), Emit halts with `[REMOTE_ARTICLE_DELETED]` (404) and offers 3 clean escape options:
+    1. Recreate as new article: remove `id:` from frontmatter and `emit push <file>`.
+    2. Discard local edits and untrack: `emit pull <id> --force` moves local edits to `<collection>/conflicts/*.local-dropped.md`, unlinks canonical article, and clears cache.
+    3. Delete with rescue backup: `emit delete <file> --discard-local-edits` deletes remote/cache and saves unpushed edits to `<collection>/conflicts/*.deleted.md`.
 
 ### 11. Taxonomy Partial Failure Guard (Guard G17 / `TAXONOMY_APPLY_PENDING`)
 

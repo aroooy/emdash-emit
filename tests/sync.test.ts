@@ -2174,4 +2174,699 @@ Partial body
     expect(resBypass.success).toBe(true);
     expect(cache.getSyncState(articleId)?.taxonomyApplyPending).toBe(0);
   });
+
+  // --- v0.1.14 Specific Test Cases (R1, R2, R3) ---
+
+  it('T1-1 & T1-2: pushArticle honors resolveTaxonomy local and remote during 409 conflict', async () => {
+    const articleId = '01M6TESTSTRAT0000000000001';
+    const relPath = `posts/draft/20261109_${articleId}-strategy.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Local content: categories: [local-cat]
+    const localContent = `---
+id: ${articleId}
+slug: strat-test
+title: Strategy Test
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - local-cat
+---
+
+Local body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(localContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'strat-test',
+      lastSyncedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'strat-test',
+        title: 'Strategy Test',
+        collection: 'posts',
+        status: 'draft',
+        taxonomies: { categories: ['base-cat'] },
+      }),
+      bodyMarkdown: 'Base body\n',
+      hash: calculateHash(localContent),
+      savedAt: 1700000000,
+    });
+
+    let putPayloadCaptured: any = null;
+    let putCount = 0;
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        putCount++;
+        if (putCount === 1) {
+          // Trigger 409 conflict on first PUT
+          return {
+            ok: false,
+            status: 409,
+            statusText: 'Conflict',
+            json: async () => ({ error: 'Revision conflict' }),
+          };
+        }
+        putPayloadCaptured = JSON.parse(String(init?.body || '{}'));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      if (
+        method === 'GET' &&
+        url.includes(`/content/posts/${articleId}`) &&
+        !url.includes('/terms/')
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: articleId,
+            slug: 'strat-test',
+            status: 'draft',
+            title: 'Strategy Test',
+            _rev: 'remote-rev',
+            data: {
+              title: 'Strategy Test',
+              body: 'Base body\n',
+              categories: [{ id: 'cat-remote', slug: 'remote-cat' }],
+            },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      resolveTaxonomy: 'local',
+      noTaxonomyAudit: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    const updatedBase = cache.getBaseSnapshot(articleId);
+    expect(updatedBase).not.toBeNull();
+    const baseFm = JSON.parse(updatedBase!.frontmatterYaml);
+    // With resolveTaxonomy: 'local', only local-cat is in base snapshot categories
+    expect(baseFm.taxonomies.categories).toEqual(['local-cat']);
+  });
+
+  it('T1-5: TAXONOMY_UNION_REJECTED provides strategy-tailored guidance when strategy is used', async () => {
+    const articleId = '01M6TESTSTRATREJ0000000001';
+    const relPath = `posts/draft/20261109_${articleId}-strategy-rej.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: strat-rej
+title: Strategy Rejection
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - local-cat
+---
+
+Body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(localContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'strat-rej',
+      lastSyncedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'strat-rej',
+        title: 'Strategy Rejection',
+        collection: 'posts',
+        status: 'draft',
+        taxonomies: { categories: ['base-cat'] },
+      }),
+      bodyMarkdown: 'Base body\n',
+      hash: calculateHash(localContent),
+      savedAt: 1700000000,
+    });
+
+    let putCount = 0;
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        putCount++;
+        if (putCount === 1) {
+          return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({}) };
+        }
+        // Server rejects with 422
+        return {
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () => 'Constraint error',
+        };
+      }
+      if (
+        method === 'GET' &&
+        url.includes(`/content/posts/${articleId}`) &&
+        !url.includes('/terms/')
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: articleId,
+            slug: 'strat-rej',
+            status: 'draft',
+            title: 'Strategy Rejection',
+            _rev: 'remote-rev',
+            data: {
+              title: 'Strategy Rejection',
+              body: 'Base body\n',
+            },
+          }),
+        };
+      }
+      if (method === 'GET' && url.includes('/terms/category')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [{ id: 'cat-remote', slug: 'remote-cat' }] },
+          }),
+        };
+      }
+      if (method === 'GET' && url.includes('/terms/tag')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { terms: [] },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        resolveTaxonomy: 'local',
+        noTaxonomyAudit: true,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      expect.fail('Expected TAXONOMY_UNION_REJECTED error');
+    } catch (err: any) {
+      expect(err.code).toBe('TAXONOMY_UNION_REJECTED');
+      expect(err.suggestion).toContain(
+        'The remote server rejected the taxonomy adopted by your strategy',
+      );
+    }
+  });
+
+  it('T1-6: explicit resolveTaxonomy bypasses DESTRUCTIVE_TAXONOMY_WIPE guard', async () => {
+    const articleId = '01M6TESTWIPESTRAT000000001';
+    const relPath = `posts/draft/20261109_${articleId}-wipe-strat.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Local content with empty categories
+    const localContent = `---
+id: ${articleId}
+slug: wipe-strat
+title: Wipe Strategy
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories: []
+---
+
+Body
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(localContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'wipe-strat',
+      lastSyncedAt: 1700000000,
+    });
+    // Remote has existing categories
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 'wipe-strat',
+        title: 'Wipe Strategy',
+        collection: 'posts',
+        status: 'draft',
+        taxonomies: { categories: ['cat1', 'cat2'] },
+      }),
+      bodyMarkdown: 'Body\n',
+      hash: calculateHash(localContent),
+      savedAt: 1700000000,
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    // Pushing with resolveTaxonomy: 'local' succeeds without DESTRUCTIVE_TAXONOMY_WIPE
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      resolveTaxonomy: 'local',
+      noTaxonomyAudit: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it('T2-1: conflict markers trigger UNRESOLVED_CONFLICT_MARKERS (G6) before G15 taxonomy conflict check', async () => {
+    const articleId = '01M6TESTG6FIRST00000000001';
+    const relPath = `posts/draft/20261109_${articleId}-g6-first.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // File with conflict markers AND taxonomyConflictPending = 1 in cache
+    const conflictedContent = `---
+id: ${articleId}
+slug: g6-first
+title: G6 First
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+---
+
+<<<<<<< LOCAL
+Local line
+=======
+Remote line
+>>>>>>> REMOTE
+`;
+    fs.writeFileSync(fullPath, conflictedContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(conflictedContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'g6-first',
+      lastSyncedAt: 1700000000,
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: 1,
+    });
+
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        noTaxonomyAudit: true,
+      });
+      expect.fail('Expected Preflight PushValidationError');
+    } catch (err: any) {
+      expect(err.errors).toBeDefined();
+      expect(err.errors.some((e: any) => e.code === 'UNRESOLVED_CONFLICT_MARKERS')).toBe(true);
+    }
+  });
+
+  it('T2-2: manual body marker cleanup allows bare push and clears bodyConflictPending while retaining taxonomyConflictPending', async () => {
+    const articleId = '01M6TESTT22CLEAN0000000001';
+    const relPath = `posts/draft/20261109_${articleId}-t22.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Cleaned body (no markers)
+    const cleanedContent = `---
+id: ${articleId}
+slug: t22-clean
+title: T22 Clean
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+---
+
+Resolved clean body
+`;
+    fs.writeFileSync(fullPath, cleanedContent, 'utf8');
+
+    // Initially bodyConflictPending = 1 and taxonomyConflictPending = 0
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(cleanedContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 't22-clean',
+      lastSyncedAt: 1700000000,
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: 0,
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      noTaxonomyAudit: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    const updated = cache.getSyncState(articleId);
+    expect(updated?.bodyConflictPending).toBe(0);
+    expect(updated?.conflictPending).toBe(0);
+  });
+
+  it('T2-4: taxonomy-only conflict triggers G15 TAXONOMY_CONFLICT_PENDING on bare push', async () => {
+    const articleId = '01M6TESTT24TAXONLY00000001';
+    const relPath = `posts/draft/20261109_${articleId}-t24.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const cleanContent = `---
+id: ${articleId}
+slug: t24-tax-only
+title: T24 Tax Only
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+---
+
+Clean body with no markers
+`;
+    fs.writeFileSync(fullPath, cleanContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(cleanContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 't24-tax-only',
+      lastSyncedAt: 1700000000,
+      conflictPending: 1,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 1,
+    });
+
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        noTaxonomyAudit: true,
+      });
+      expect.fail('Expected TAXONOMY_CONFLICT_PENDING error');
+    } catch (err: any) {
+      expect(err.code).toBe('TAXONOMY_CONFLICT_PENDING');
+    }
+  });
+
+  it('T2-composite: composite conflict (body + taxonomy) halts at G15 when markers are clean until resolve-taxonomy is passed', async () => {
+    const articleId = '01M6TESTCOMPOSITE000000001';
+    const relPath = `posts/draft/20261109_${articleId}-composite.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Cleaned body (no conflict markers), but taxonomy divergence remains pending
+    const cleanContent = `---
+id: ${articleId}
+slug: composite-test
+title: Composite Test
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies:
+  categories:
+    - news
+---
+
+Clean body after manual marker resolution
+`;
+    fs.writeFileSync(fullPath, cleanContent, 'utf8');
+
+    // Both body_conflict_pending and taxonomy_conflict_pending are 1
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(cleanContent),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'composite-test',
+      lastSyncedAt: 1700000000,
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: 1,
+    });
+
+    // 1. Bare push without resolveTaxonomy must halt at Guard G15 (TAXONOMY_CONFLICT_PENDING)
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        noTaxonomyAudit: true,
+      });
+      expect.fail('Expected TAXONOMY_CONFLICT_PENDING error');
+    } catch (err: any) {
+      expect(err.code).toBe('TAXONOMY_CONFLICT_PENDING');
+      expect(err.suggestion).toContain('--resolve-taxonomy');
+    }
+
+    // 2. Re-push with resolveTaxonomy: 'local' succeeds and clears both conflict pendings
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: articleId, _rev: '2' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    const res = await pushArticle(relPath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://test.emdash.local',
+      token: 'test-token',
+      resolveTaxonomy: 'local',
+      noTaxonomyAudit: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.success).toBe(true);
+    const updated = cache.getSyncState(articleId);
+    expect(updated?.conflictPending).toBe(0);
+    expect(updated?.bodyConflictPending).toBe(0);
+    expect(updated?.taxonomyConflictPending).toBe(0);
+  });
+
+  it('T3-1: initial PUT 404 throws REMOTE_ARTICLE_DELETED with 3 escape suggestions', async () => {
+    const articleId = '01M6TESTT31DEL000000000001';
+    const relPath = `posts/draft/20261109_${articleId}-t31.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const content = `---
+id: ${articleId}
+slug: t31-deleted
+title: T31 Deleted
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies: {}
+---
+
+Body
+`;
+    fs.writeFileSync(fullPath, content, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(content),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 't31-deleted',
+      lastSyncedAt: 1700000000,
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/lock')) {
+        return { ok: true, status: 200, json: async () => ({ success: true }) };
+      }
+      if (method === 'PUT') {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => 'Article not found',
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        noTaxonomyAudit: true,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      expect.fail('Expected REMOTE_ARTICLE_DELETED error');
+    } catch (err: any) {
+      expect(err.code).toBe('REMOTE_ARTICLE_DELETED');
+      expect(err.status).toBe(404);
+      expect(err.suggestion).toContain('emit pull');
+      expect(err.suggestion).toContain('emit delete');
+      expect(err.suggestion).toContain('emit push');
+    }
+  });
+
+  it('T3-4 & T3-5: 404 in conflict fetch or retry PUT translates to REMOTE_ARTICLE_DELETED', async () => {
+    const articleId = '01M6TESTT34DEL000000000001';
+    const relPath = `posts/draft/20261109_${articleId}-t34.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const content = `---
+id: ${articleId}
+slug: t34-deleted
+title: T34 Deleted
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies: {}
+---
+
+Body
+`;
+    fs.writeFileSync(fullPath, content, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(content),
+      remoteRev: '1',
+      status: 'draft',
+      slug: 't34-deleted',
+      lastSyncedAt: 1700000000,
+    });
+
+    // 1st PUT returns 409, then GET returns 404
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'PUT') {
+        return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({}) };
+      }
+      if (method === 'GET') {
+        return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'Gone' };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://test.emdash.local',
+        token: 'test-token',
+        noTaxonomyAudit: true,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      expect.fail('Expected REMOTE_ARTICLE_DELETED error');
+    } catch (err: any) {
+      expect(err.code).toBe('REMOTE_ARTICLE_DELETED');
+    }
+  });
 });

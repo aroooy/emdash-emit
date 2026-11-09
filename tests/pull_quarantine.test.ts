@@ -259,6 +259,19 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
       fs.readFileSync(path.join(tempDir, res.quarantined![0].quarantineFilePath), 'utf8'),
     ).toBe(edited);
     expect(fs.existsSync(staleFull)).toBe(false);
+
+    // A rescue copy now holds unpushed writing: body_conflict_pending must stay 1 and point at it.
+    const syncState = cache.getSyncState(ulid);
+    expect(syncState?.bodyConflictPending).toBe(1);
+    expect(syncState?.conflictPending).toBe(1);
+    expect(syncState?.conflictCopyPath).toBe(
+      res.quarantined![res.quarantined!.length - 1].quarantineFilePath,
+    );
+    expect(fs.existsSync(path.join(tempDir, syncState?.conflictCopyPath ?? ''))).toBe(true);
+    // Every quarantined copy in this pull must remain reachable from disk while pending is set.
+    for (const q of res.quarantined!) {
+      expect(fs.existsSync(path.join(tempDir, q.quarantineFilePath))).toBe(true);
+    }
   });
 
   it('quarantines an uncached divergent local copy during batch pull and counts it in the summary', async () => {
@@ -384,5 +397,164 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     expect(fs.readFileSync(path.join(tempDir, res.filePath), 'utf8')).toBe(canonicalBefore);
     expect(fs.existsSync(brokenFullPath)).toBe(false);
     expect(countQuarantinedCopies(tempDir)).toBe(1);
+  });
+
+  it('T3-2: pull <id> --force quarantines unpushed local edits to .local-dropped.md on remote 404', async () => {
+    const articleId = '01M6TESTT32FORCE0000000001';
+    const relPath = `posts/draft/20261109_${articleId}-t32.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const localContent = `---
+id: ${articleId}
+slug: t32-test
+title: T32 Test
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+taxonomies: {}
+---
+
+Unpushed edits to be preserved
+`;
+    fs.writeFileSync(fullPath, localContent, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: 'baseline_hash',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 't32-test',
+      lastSyncedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      frontmatterYaml: JSON.stringify({
+        id: articleId,
+        slug: 't32-test',
+        title: 'T32 Test',
+        collection: 'posts',
+        status: 'draft',
+        taxonomies: {},
+      }),
+      bodyMarkdown: 'Baseline body\n',
+      hash: 'baseline_hash',
+      savedAt: 1700000000,
+    });
+
+    const mockFetch404 = vi.fn().mockImplementation(async () => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => 'Not Found',
+    }));
+
+    // 1. Without force: local edits preserved, returns orphan
+    const resNoForce = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: mockFetch404 as unknown as typeof fetch,
+    });
+    expect(resNoForce.orphan).toBe(true);
+    expect(resNoForce.localEditsPreserved).toBe(true);
+    expect(fs.existsSync(fullPath)).toBe(true);
+    expect(cache.getSyncState(articleId)).not.toBeNull();
+
+    // 2. With force: true: moves to .local-dropped.md, unlinks canonical, deletes cache entry
+    const resForce = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      force: true,
+      fetchFn: mockFetch404 as unknown as typeof fetch,
+    });
+
+    expect(resForce.deleted).toBe(true);
+    expect(resForce.quarantined).toBeDefined();
+    expect(resForce.quarantineFilePath).toBeDefined();
+    expect(resForce.quarantineFilePath).toContain('.local-dropped.md');
+
+    // Canonical file removed
+    expect(fs.existsSync(fullPath)).toBe(false);
+    // Cache entry removed
+    expect(cache.getSyncState(articleId)).toBeNull();
+
+    // Quarantined file exists with localContent
+    const quarantinedFull = path.join(tempDir, resForce.quarantineFilePath!);
+    expect(fs.existsSync(quarantinedFull)).toBe(true);
+    expect(fs.readFileSync(quarantinedFull, 'utf8')).toBe(localContent);
+  });
+
+  it('pull records body_conflict_pending = 1 and keeps conflict copy metadata when divergent local copy is quarantined (P4/R4)', async () => {
+    const baselineContent = serializeMarkdown(
+      {
+        id: ulid,
+        slug: 'broken-title',
+        title: 'Broken Title',
+        collection: 'posts',
+        status: 'published',
+        publishedAt: '2019-04-05T00:00:00.000Z',
+        locale: 'ja',
+        taxonomies: {},
+        bylines: [],
+      },
+      'Original remote body.',
+    );
+    const staleRelPath = `posts/published/20190405_${ulid}-Broken-Title.md`;
+    const staleFull = path.join(tempDir, staleRelPath);
+    fs.mkdirSync(path.dirname(staleFull), { recursive: true });
+    fs.writeFileSync(staleFull, baselineContent, 'utf8');
+
+    cache.saveSyncState({
+      id: ulid,
+      localFilePath: staleRelPath,
+      localHash: calculateHash(baselineContent),
+      remoteRev: 'rev_remote_202',
+      status: 'published',
+      slug: 'broken-title',
+      lastSyncedAt: 1700000000,
+    });
+
+    // Write unpushed local edits that diverge from cache baseline
+    fs.writeFileSync(
+      staleFull,
+      `${baselineContent}\n\nDIVERGENT CONTENT THAT CAUSES QUARANTINE`,
+      'utf8',
+    );
+
+    const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      if (url.pathname.endsWith('/terms/category')) {
+        return Promise.resolve(termsResponse('category'));
+      }
+      if (url.pathname.endsWith('/terms/tag')) {
+        return Promise.resolve(termsResponse('tag'));
+      }
+      return Promise.resolve({ ok: true, json: async () => remoteItem() });
+    }) as unknown as typeof fetch;
+
+    const res = await pullArticle('posts', ulid, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      bylineIdToSlug: {},
+    });
+
+    expect(res.quarantined).toBeDefined();
+    expect(res.quarantined!.length).toBeGreaterThan(0);
+
+    // Verify cache has body_conflict_pending = 1 and conflictCopyPath matching the quarantined copy
+    const syncState = cache.getSyncState(ulid);
+    expect(syncState).not.toBeNull();
+    expect(syncState?.bodyConflictPending).toBe(1);
+    expect(syncState?.conflictPending).toBe(1);
+    expect(syncState?.conflictCopyPath).toBe(res.quarantined![0].quarantineFilePath);
   });
 });

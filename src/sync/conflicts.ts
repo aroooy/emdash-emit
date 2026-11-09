@@ -377,6 +377,49 @@ export function resolveConflict(options: {
   );
 
   if (options.strategy === 'accept-canonical') {
+    // Try to extract article ID to clear conflict flags in cache
+    let id: string | null = null;
+    try {
+      const conflictContent = fs.readFileSync(fullPath, 'utf8');
+      const idMatch = conflictContent.match(/^id:\s*['"]?([^\s\r\n'"]+)['"]?/m);
+      if (idMatch && idMatch[1] && idMatch[1] !== 'unknown') {
+        id = idMatch[1].trim();
+      }
+    } catch {
+      // Ignore read error
+    }
+
+    if (!id) {
+      const baseName = extractBaseArticleName(fileName);
+      const match = baseName.match(/_([0-9A-Za-z]{26})-/);
+      if (match) {
+        id = match[1];
+      } else {
+        const canonicalRel = findCanonicalArticlePath(
+          options.workspaceRoot,
+          baseName,
+          undefined,
+          collection,
+        );
+        if (canonicalRel) {
+          try {
+            const canContent = fs.readFileSync(
+              path.join(options.workspaceRoot, canonicalRel),
+              'utf8',
+            );
+            const canMatch = canContent.match(/^id:\s*['"]?([^\s\r\n'"]+)['"]?/m);
+            if (canMatch) id = canMatch[1].trim();
+          } catch {
+            // Ignore read error
+          }
+        }
+      }
+    }
+
+    if (id) {
+      options.cache.clearConflictsByKind(id, 'body');
+    }
+
     // Discard the quarantined copy
     fs.unlinkSync(fullPath);
     return {
@@ -467,6 +510,14 @@ export function resolveConflict(options: {
       status,
       slug,
       lastSyncedAt: existingSync?.lastSyncedAt || Math.floor(Date.now() / 1000),
+      conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
+      conflictCopyHash: null,
+      conflictCopyPath: null,
+      conflictAt: null,
+      remoteTaxonomyHash: existingSync?.remoteTaxonomyHash ?? null,
+      taxonomyApplyPending: existingSync?.taxonomyApplyPending ?? 0,
     });
   }
 

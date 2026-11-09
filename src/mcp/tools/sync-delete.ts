@@ -42,6 +42,10 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
         .boolean()
         .optional()
         .describe('Explicit confirmation required to delete a published live article'),
+      discardLocalEdits: z
+        .boolean()
+        .optional()
+        .describe('Confirm deleting article even if local unpushed modifications exist'),
       dryRun: z
         .boolean()
         .optional()
@@ -75,6 +79,7 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
           id: args.id,
           collection,
           allowDeletePublished: args.allowDeletePublished,
+          discardLocalEdits: args.discardLocalEdits,
           dryRun: args.dryRun,
           origin: ctx.origin,
           token: ctx.auth?.token,

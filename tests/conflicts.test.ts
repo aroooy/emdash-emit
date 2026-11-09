@@ -447,4 +447,141 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(res2.pruned).toContain(`posts/conflicts/${orphanFile}`);
     expect(fs.existsSync(orphanFull)).toBe(false);
   });
+
+  it('T4-2: resolveConflict accept-canonical clears cache conflict pending flag and metadata', () => {
+    const { relCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const fullConflict = path.join(conflictsDir, conflictFileName);
+    const relConflict = `posts/conflicts/${conflictFileName}`;
+    fs.writeFileSync(
+      fullConflict,
+      `---\nid: ${articleId}\nslug: sample-conflict-article\n---\nQuarantined\n`,
+      'utf8',
+    );
+
+    // Set conflict pending in cache
+    cache.setConflictPending(articleId, 'body', true, 'somehash', relConflict);
+    const before = cache.getSyncState(articleId);
+    expect(before?.conflictPending).toBe(1);
+    expect(before?.bodyConflictPending).toBe(1);
+    expect(before?.conflictCopyPath).toBe(relConflict);
+
+    // Resolve with accept-canonical
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relConflict,
+      strategy: 'accept-canonical',
+    });
+
+    expect(res.success).toBe(true);
+    expect(fs.existsSync(fullConflict)).toBe(false);
+
+    // Cache should have conflict pending and copy path cleared
+    const after = cache.getSyncState(articleId);
+    expect(after?.conflictPending).toBe(0);
+    expect(after?.bodyConflictPending).toBe(0);
+    expect(after?.conflictCopyPath).toBeNull();
+  });
+
+  it('T4-2b: resolveConflict accept-canonical extracts ULID from filename fallback when frontmatter is missing in quarantined file and clears cache', () => {
+    const { relCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    // Quarantined file has NO frontmatter at all (corrupted or body-only)
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const fullConflict = path.join(conflictsDir, conflictFileName);
+    const relConflict = `posts/conflicts/${conflictFileName}`;
+    fs.writeFileSync(fullConflict, 'Just raw corrupted body without any frontmatter\n', 'utf8');
+
+    // Set conflict pending in cache
+    cache.setConflictPending(articleId, 'body', true, 'somehash', relConflict);
+    const before = cache.getSyncState(articleId);
+    expect(before?.conflictPending).toBe(1);
+    expect(before?.bodyConflictPending).toBe(1);
+    expect(before?.conflictCopyPath).toBe(relConflict);
+
+    // Resolve with accept-canonical
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relConflict,
+      strategy: 'accept-canonical',
+    });
+
+    expect(res.success).toBe(true);
+    expect(fs.existsSync(fullConflict)).toBe(false);
+
+    // Cache should have conflict pending and copy path cleared via filename ULID fallback
+    const after = cache.getSyncState(articleId);
+    expect(after?.conflictPending).toBe(0);
+    expect(after?.bodyConflictPending).toBe(0);
+    expect(after?.conflictCopyPath).toBeNull();
+  });
+
+  it('T4-3: resolveConflict accept-local explicitly clears all conflict flags and copy columns', () => {
+    const { fullCanonical, relCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const fullConflict = path.join(conflictsDir, conflictFileName);
+    const relConflict = `posts/conflicts/${conflictFileName}`;
+    const restoredContent = `---\nid: ${articleId}\nslug: sample-conflict-article\ntitle: Sample Canonical Title\nstatus: draft\nlocale: ja\ntaxonomies:\n  categories: [tech]\nbylines: []\n---\nRestored from local\n`;
+    fs.writeFileSync(fullConflict, restoredContent, 'utf8');
+
+    cache.setConflictPending(articleId, 'body', true, 'somehash', relConflict);
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relConflict,
+      strategy: 'accept-local',
+    });
+
+    expect(res.success).toBe(true);
+    expect(fs.existsSync(fullConflict)).toBe(false);
+
+    const after = cache.getSyncState(articleId);
+    expect(after?.conflictPending).toBe(0);
+    expect(after?.bodyConflictPending).toBe(0);
+    expect(after?.taxonomyConflictPending).toBe(0);
+    expect(after?.conflictCopyPath).toBeNull();
+    expect(after?.conflictCopyHash).toBeNull();
+    expect(after?.conflictAt).toBeNull();
+  });
+
+  it('T3-6: observing accept-canonical effect on local conflict state and confirming escape behavior', () => {
+    const { relCanonical } = setupArticleFixture();
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    fs.mkdirSync(conflictsDir, { recursive: true });
+
+    const conflictFileName = `20261108_${articleId}-sample-conflict-article.conflict.md`;
+    const fullConflict = path.join(conflictsDir, conflictFileName);
+    const relConflict = `posts/conflicts/${conflictFileName}`;
+    fs.writeFileSync(
+      fullConflict,
+      `---\nid: ${articleId}\nslug: sample-conflict-article\n---\nQuarantined\n`,
+      'utf8',
+    );
+
+    cache.setConflictPending(articleId, 'body', true, 'somehash', relConflict);
+
+    // Accept canonical clears the quarantined copy and cache state
+    resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relConflict,
+      strategy: 'accept-canonical',
+    });
+
+    const state = cache.getSyncState(articleId);
+    expect(state?.conflictPending).toBe(0);
+    // Quarantined copy is removed
+    expect(fs.existsSync(fullConflict)).toBe(false);
+  });
 });

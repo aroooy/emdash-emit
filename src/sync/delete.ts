@@ -104,6 +104,7 @@ export interface DeleteArticleOptions {
   id?: string;
   collection?: string;
   allowDeletePublished?: boolean;
+  discardLocalEdits?: boolean;
   dryRun?: boolean;
   origin?: string;
   token?: string;
@@ -162,7 +163,7 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
   // Safety Guard 1: Unpushed Modifications Protection
   const syncState = options.cache.getSyncState(articleId);
   const currentHash = calculateHash(rawContent);
-  if (syncState && syncState.localHash !== currentHash) {
+  if (syncState && syncState.localHash !== currentHash && !options.discardLocalEdits) {
     throw new UnpushedModificationsError({ filePath: targetFile, id: articleId });
   }
 

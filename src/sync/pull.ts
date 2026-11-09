@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { CacheDatabase } from '../db/cache.js';
+import type { CacheDatabase, SyncState } from '../db/cache.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
@@ -72,6 +72,8 @@ export interface PullResult {
   meaningChanged?: boolean;
   /** Local copies that diverged from the last synced baseline and were preserved in `<collection>/conflicts/`. */
   quarantined?: QuarantinedLocalCopy[];
+  quarantineFilePath?: string;
+  suggestion?: string;
 }
 
 /**
@@ -664,6 +666,12 @@ export async function pullArticle(
                 remoteLocal.frontmatter.taxonomies?.tags,
               ),
               taxonomyApplyPending: 0,
+              conflictPending: existingSync.conflictPending,
+              bodyConflictPending: existingSync.bodyConflictPending,
+              taxonomyConflictPending: existingSync.taxonomyConflictPending,
+              conflictCopyPath: existingSync.conflictCopyPath,
+              conflictCopyHash: existingSync.conflictCopyHash,
+              conflictAt: existingSync.conflictAt,
             });
 
             return {
@@ -728,6 +736,38 @@ export async function pullArticle(
                 updated: false,
                 deleted: true,
               };
+            } else if (options.force) {
+              const quarantineRel = quarantineLocalCopy(
+                options.workspaceRoot,
+                collection,
+                existingSync.localFilePath,
+                diskContent,
+                { isForce: true },
+              );
+              try {
+                fs.unlinkSync(fullPath);
+              } catch {
+                // Ignore unlink error
+              }
+              options.cache.deleteEntry(id);
+              return {
+                id,
+                slug: existingSync.slug,
+                status: existingSync.status,
+                filePath: existingSync.localFilePath,
+                updated: false,
+                deleted: true,
+                quarantined: quarantineRel
+                  ? [
+                      {
+                        sourceFilePath: existingSync.localFilePath,
+                        quarantineFilePath: quarantineRel,
+                        reason: 'diverged-from-baseline',
+                      },
+                    ]
+                  : undefined,
+                quarantineFilePath: quarantineRel ?? undefined,
+              };
             } else {
               // Local file has unpushed edits: preserve as orphan!
               return {
@@ -738,6 +778,8 @@ export async function pullArticle(
                 updated: false,
                 orphan: true,
                 localEditsPreserved: true,
+                suggestion:
+                  'Pass --force to preserve your edits under posts/conflicts/ and remove tracking.',
               };
             }
           }
@@ -866,7 +908,77 @@ export async function pullArticle(
     savedAt: Math.floor(Date.now() / 1000),
   });
 
-  // Update sync state
+  // Update sync state with explicit conflict pending preservation
+  let conflictInfo: Partial<SyncState> = {};
+  // Take the most recently quarantined divergent copy: `quarantineDivergentLocalCopies` walks
+  // every stale path for this ULID, so find() would point conflict metadata at an arbitrary
+  // (often already-superseded) rescue file when a canonical path change coincides with edits.
+  const divergedQuarantines = !options.force
+    ? (quarantined ?? []).filter((q) => q.reason === 'diverged-from-baseline')
+    : [];
+  const divergedQuarantine = divergedQuarantines[divergedQuarantines.length - 1];
+
+  if (divergedQuarantine) {
+    // Preserve the most recently written divergent copy so conflict metadata always points at
+    // an existing rescue file, even when several stale paths were quarantined in one pull.
+    const qFull = path.join(options.workspaceRoot, divergedQuarantine.quarantineFilePath);
+    let qHash: string | null = null;
+    if (fs.existsSync(qFull)) {
+      qHash = calculateHash(fs.readFileSync(qFull, 'utf8'));
+    }
+    conflictInfo = {
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: existingSync?.taxonomyConflictPending ?? 0,
+      conflictCopyPath: divergedQuarantine.quarantineFilePath,
+      conflictCopyHash: qHash,
+      conflictAt: Math.floor(Date.now() / 1000),
+    };
+  } else if (!options.force && existingSync?.conflictCopyPath) {
+    // Keep existing conflict state if conflict copy still exists on disk
+    const existingFull = path.join(options.workspaceRoot, existingSync.conflictCopyPath);
+    if (fs.existsSync(existingFull)) {
+      conflictInfo = {
+        conflictPending: existingSync.conflictPending,
+        bodyConflictPending: existingSync.bodyConflictPending,
+        taxonomyConflictPending: existingSync.taxonomyConflictPending,
+        conflictCopyPath: existingSync.conflictCopyPath,
+        conflictCopyHash: existingSync.conflictCopyHash,
+        conflictAt: existingSync.conflictAt,
+      };
+    } else {
+      // Conflict copy was removed, clear body conflict while keeping taxonomy conflict
+      const taxPending = existingSync.taxonomyConflictPending ?? 0;
+      conflictInfo = {
+        conflictPending: taxPending,
+        bodyConflictPending: 0,
+        taxonomyConflictPending: taxPending,
+        conflictCopyPath: null,
+        conflictCopyHash: null,
+        conflictAt: null,
+      };
+    }
+  } else if (options.force) {
+    conflictInfo = {
+      conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
+      conflictCopyPath: null,
+      conflictCopyHash: null,
+      conflictAt: null,
+    };
+  } else {
+    const taxPending = existingSync?.taxonomyConflictPending ?? 0;
+    conflictInfo = {
+      conflictPending: taxPending,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: taxPending,
+      conflictCopyPath: null,
+      conflictCopyHash: null,
+      conflictAt: null,
+    };
+  }
+
   options.cache.saveSyncState({
     id: frontmatter.id,
     localFilePath: relPath,
@@ -880,7 +992,7 @@ export async function pullArticle(
       frontmatter.taxonomies?.tags,
     ),
     taxonomyApplyPending: 0,
-    ...(options.force ? { conflictPending: 0, conflictCopyHash: null } : {}),
+    ...conflictInfo,
   });
 
   // Update entries cache

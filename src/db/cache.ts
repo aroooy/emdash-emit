@@ -23,6 +23,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getPackageVersion } from '../utils/version.js';
 
 export interface CachedEntry {
   id: string;
@@ -54,6 +55,8 @@ export interface SyncState {
   slug: string;
   lastSyncedAt: number;
   conflictPending?: number;
+  bodyConflictPending?: number;
+  taxonomyConflictPending?: number;
   deletePending?: number;
   conflictCopyHash?: string | null;
   conflictCopyPath?: string | null;
@@ -83,7 +86,7 @@ export interface MediaStateRecord {
   uploadedAt?: number | null;
 }
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 2;
+export const CURRENT_CACHE_SCHEMA_VERSION = 3;
 
 export class CacheDatabase {
   private db: DatabaseSync;
@@ -143,6 +146,8 @@ export class CacheDatabase {
         slug TEXT NOT NULL,
         last_synced_at INTEGER NOT NULL,
         conflict_pending INTEGER NOT NULL DEFAULT 0,
+        body_conflict_pending INTEGER NOT NULL DEFAULT 0,
+        taxonomy_conflict_pending INTEGER NOT NULL DEFAULT 0,
         delete_pending INTEGER NOT NULL DEFAULT 0,
         conflict_copy_hash TEXT,
         conflict_copy_path TEXT,
@@ -203,44 +208,23 @@ export class CacheDatabase {
     }
 
     if (currentVersion < CURRENT_CACHE_SCHEMA_VERSION) {
-      // 1. Flush WAL completely to main database file before backing up
-      try {
-        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
-      } catch {
-        // Ignore checkpoint failure in in-memory or constrained environments
-      }
-
-      // 2. Backup database before running migration if physical file exists (keep up to 3 recent backups)
+      // 1. Backup database before running migration via SQLite native VACUUM INTO
       if (this.dbPath !== ':memory:' && fs.existsSync(this.dbPath)) {
         try {
+          const version = getPackageVersion();
+          const versionStr = version !== 'unknown' ? version : CURRENT_CACHE_SCHEMA_VERSION;
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const bakPath = `${this.dbPath}.bak-0.1.12-${timestamp}`;
-          fs.copyFileSync(this.dbPath, bakPath);
-
-          // Prune backups: retain only 3 newest .bak-* files
-          const dbDir = path.dirname(this.dbPath);
-          const dbBase = path.basename(this.dbPath);
-          const backupFiles = fs
-            .readdirSync(dbDir)
-            .filter((f) => f.startsWith(`${dbBase}.bak-`))
-            .map((f) => path.join(dbDir, f))
-            .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-
-          if (backupFiles.length > 3) {
-            for (const oldBak of backupFiles.slice(3)) {
-              try {
-                fs.unlinkSync(oldBak);
-              } catch {
-                // Ignore unlink errors
-              }
-            }
-          }
+          const bakPath = `${this.dbPath}.bak-${versionStr}-${timestamp}`;
+          this.db.prepare('VACUUM INTO ?').run(bakPath);
         } catch {
-          // Ignore backup copy failure in constrained test environments
+          // Ignore in-memory or constrained test environments
         }
       }
 
-      // Migration 1: add conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at to sync_state if missing
+      // Unconditionally sweep 0-byte or excess backups
+      this.pruneBackups();
+
+      // Migration 1 & 2: schema columns from v1 and v2 if missing
       const columns = this.db.prepare("PRAGMA table_info('sync_state');").all() as Array<
         Record<string, unknown>
       >;
@@ -273,8 +257,45 @@ export class CacheDatabase {
           'ALTER TABLE sync_state ADD COLUMN taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0;',
         );
       }
+
+      // Migration 3 (v3): separate body and taxonomy conflict pending flags
+      if (!columnNames.has('body_conflict_pending')) {
+        this.db.exec(
+          'ALTER TABLE sync_state ADD COLUMN body_conflict_pending INTEGER NOT NULL DEFAULT 0;',
+        );
+      }
+      if (!columnNames.has('taxonomy_conflict_pending')) {
+        this.db.exec(
+          'ALTER TABLE sync_state ADD COLUMN taxonomy_conflict_pending INTEGER NOT NULL DEFAULT 0;',
+        );
+      }
+
+      // Existing rows allocation rule when upgrading to v3
+      if (currentVersion < 3) {
+        this.db.exec(`
+          UPDATE sync_state
+          SET body_conflict_pending = CASE
+            WHEN conflict_pending = 1 AND conflict_copy_path LIKE '%.conflict.md' THEN 1
+            WHEN conflict_pending = 1 AND remote_taxonomy_hash IS NOT NULL AND (conflict_copy_path IS NULL OR conflict_copy_path NOT LIKE '%.conflict.md') THEN 0
+            WHEN conflict_pending = 1 THEN 1
+            ELSE 0 END,
+          taxonomy_conflict_pending = CASE
+            WHEN conflict_pending = 1 AND conflict_copy_path LIKE '%.conflict.md' THEN 0
+            WHEN conflict_pending = 1 AND remote_taxonomy_hash IS NOT NULL THEN 1
+            WHEN conflict_pending = 1 THEN 1
+            ELSE 0 END
+          WHERE conflict_pending = 1;
+        `);
+      }
+
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_sync_state_conflict ON sync_state (conflict_pending);',
+      );
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_sync_state_body_conflict ON sync_state (body_conflict_pending);',
+      );
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_sync_state_tax_conflict ON sync_state (taxonomy_conflict_pending);',
       );
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_sync_state_delete ON sync_state (delete_pending);',
@@ -284,6 +305,56 @@ export class CacheDatabase {
       );
 
       this.db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);
+    }
+  }
+
+  private pruneBackups(): void {
+    if (this.dbPath === ':memory:') return;
+    try {
+      const dbDir = path.dirname(this.dbPath);
+      const dbBase = path.basename(this.dbPath);
+      if (!fs.existsSync(dbDir)) return;
+
+      const backupFiles = fs
+        .readdirSync(dbDir)
+        .filter((f) => f.startsWith(`${dbBase}.bak-`))
+        .map((f) => path.join(dbDir, f));
+
+      // 1. Unconditionally purge 0-byte backup files
+      const validBackups: string[] = [];
+      for (const bak of backupFiles) {
+        try {
+          const stat = fs.statSync(bak);
+          if (stat.size === 0) {
+            fs.unlinkSync(bak);
+          } else {
+            validBackups.push(bak);
+          }
+        } catch {
+          // Ignore stat/unlink errors
+        }
+      }
+
+      // 2. Retain up to 3 newest valid backups
+      validBackups.sort((a, b) => {
+        try {
+          return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+        } catch {
+          return 0;
+        }
+      });
+
+      if (validBackups.length > 3) {
+        for (const oldBak of validBackups.slice(3)) {
+          try {
+            fs.unlinkSync(oldBak);
+          } catch {
+            // Ignore unlink errors
+          }
+        }
+      }
+    } catch {
+      // Ignore backup prune errors
     }
   }
 
@@ -425,6 +496,13 @@ export class CacheDatabase {
   // --- sync_state operations ---
 
   private rowToSyncState(row: Record<string, unknown>): SyncState {
+    const bodyConflictPending = Number(row.body_conflict_pending || 0);
+    const taxonomyConflictPending = Number(row.taxonomy_conflict_pending || 0);
+    const conflictPending = Math.max(
+      Number(row.conflict_pending || 0),
+      bodyConflictPending,
+      taxonomyConflictPending,
+    );
     return {
       id: String(row.id),
       localFilePath: String(row.local_file_path),
@@ -433,7 +511,9 @@ export class CacheDatabase {
       status: String(row.status),
       slug: String(row.slug),
       lastSyncedAt: Number(row.last_synced_at),
-      conflictPending: Number(row.conflict_pending || 0),
+      conflictPending,
+      bodyConflictPending,
+      taxonomyConflictPending,
       deletePending: Number(row.delete_pending || 0),
       conflictCopyHash: row.conflict_copy_hash ? String(row.conflict_copy_hash) : null,
       conflictCopyPath: row.conflict_copy_path ? String(row.conflict_copy_path) : null,
@@ -444,13 +524,24 @@ export class CacheDatabase {
   }
 
   public saveSyncState(state: SyncState): void {
+    const bodyConflictPending =
+      state.bodyConflictPending ?? (state.conflictPending === 0 ? 0 : (state.conflictPending ?? 0));
+    const taxonomyConflictPending =
+      state.taxonomyConflictPending ?? (state.conflictPending === 0 ? 0 : 0);
+    const conflictPending = Math.max(
+      state.conflictPending ?? 0,
+      bodyConflictPending,
+      taxonomyConflictPending,
+    );
+
     const stmt = this.db.prepare(`
       INSERT INTO sync_state (
         id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at,
-        conflict_pending, delete_pending, conflict_copy_hash, conflict_copy_path, conflict_at,
+        conflict_pending, body_conflict_pending, taxonomy_conflict_pending, delete_pending,
+        conflict_copy_hash, conflict_copy_path, conflict_at,
         remote_taxonomy_hash, taxonomy_apply_pending
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         local_file_path = excluded.local_file_path,
         local_hash = excluded.local_hash,
@@ -458,11 +549,19 @@ export class CacheDatabase {
         status = excluded.status,
         slug = excluded.slug,
         last_synced_at = excluded.last_synced_at,
-        conflict_pending = excluded.conflict_pending,
+        body_conflict_pending = excluded.body_conflict_pending,
+        taxonomy_conflict_pending = excluded.taxonomy_conflict_pending,
+        conflict_pending = MAX(excluded.body_conflict_pending, excluded.taxonomy_conflict_pending),
         delete_pending = excluded.delete_pending,
-        conflict_copy_hash = CASE WHEN excluded.conflict_copy_hash IS NOT NULL THEN excluded.conflict_copy_hash ELSE sync_state.conflict_copy_hash END,
-        conflict_copy_path = CASE WHEN excluded.conflict_copy_path IS NOT NULL THEN excluded.conflict_copy_path ELSE sync_state.conflict_copy_path END,
-        conflict_at = CASE WHEN excluded.conflict_at IS NOT NULL THEN excluded.conflict_at ELSE sync_state.conflict_at END,
+        conflict_copy_hash = CASE WHEN excluded.conflict_copy_path IS NOT NULL THEN excluded.conflict_copy_hash
+                                  WHEN COALESCE(excluded.body_conflict_pending, 0) + COALESCE(excluded.taxonomy_conflict_pending, 0) = 0 THEN NULL
+                                  ELSE sync_state.conflict_copy_hash END,
+        conflict_copy_path = CASE WHEN excluded.conflict_copy_path IS NOT NULL THEN excluded.conflict_copy_path
+                                  WHEN COALESCE(excluded.body_conflict_pending, 0) + COALESCE(excluded.taxonomy_conflict_pending, 0) = 0 THEN NULL
+                                  ELSE sync_state.conflict_copy_path END,
+        conflict_at        = CASE WHEN excluded.conflict_copy_path IS NOT NULL THEN excluded.conflict_at
+                                  WHEN COALESCE(excluded.body_conflict_pending, 0) + COALESCE(excluded.taxonomy_conflict_pending, 0) = 0 THEN NULL
+                                  ELSE sync_state.conflict_at END,
         remote_taxonomy_hash = CASE WHEN excluded.remote_taxonomy_hash IS NOT NULL THEN excluded.remote_taxonomy_hash ELSE sync_state.remote_taxonomy_hash END,
         taxonomy_apply_pending = excluded.taxonomy_apply_pending
     `);
@@ -474,7 +573,9 @@ export class CacheDatabase {
       state.status,
       state.slug,
       state.lastSyncedAt,
-      state.conflictPending ?? 0,
+      conflictPending,
+      bodyConflictPending,
+      taxonomyConflictPending,
       state.deletePending ?? 0,
       state.conflictCopyHash ?? null,
       state.conflictCopyPath ?? null,
@@ -486,21 +587,96 @@ export class CacheDatabase {
 
   public setConflictPending(
     id: string,
+    kind: 'body' | 'taxonomy' | 'all',
     pending: boolean,
     copyHash?: string | null,
     copyPath?: string | null,
   ): void {
-    if (pending) {
-      const stmt = this.db.prepare(
-        'UPDATE sync_state SET conflict_pending = 1, conflict_copy_hash = ?, conflict_copy_path = ?, conflict_at = ? WHERE id = ?',
-      );
-      stmt.run(copyHash ?? null, copyPath ?? null, Math.floor(Date.now() / 1000), id);
-    } else {
-      const stmt = this.db.prepare(
-        'UPDATE sync_state SET conflict_pending = 0, conflict_copy_hash = NULL, conflict_copy_path = NULL, conflict_at = NULL WHERE id = ?',
-      );
-      stmt.run(id);
+    if (!pending) {
+      this.clearConflictsByKind(id, kind);
+      return;
     }
+
+    const actualHash = copyHash ?? null;
+    const actualPath = copyPath ?? null;
+    const now = Math.floor(Date.now() / 1000);
+
+    if (kind === 'all') {
+      const stmt = this.db.prepare(`
+        UPDATE sync_state
+        SET conflict_pending = 1,
+            body_conflict_pending = 1,
+            taxonomy_conflict_pending = 1,
+            conflict_copy_hash = CASE WHEN ? IS NOT NULL THEN ? ELSE conflict_copy_hash END,
+            conflict_copy_path = CASE WHEN ? IS NOT NULL THEN ? ELSE conflict_copy_path END,
+            conflict_at = CASE WHEN (? IS NOT NULL OR ? IS NOT NULL) THEN ? ELSE conflict_at END
+        WHERE id = ?
+      `);
+      stmt.run(actualHash, actualHash, actualPath, actualPath, actualHash, actualPath, now, id);
+      return;
+    }
+
+    const col = kind === 'body' ? 'body_conflict_pending' : 'taxonomy_conflict_pending';
+    const stmt = this.db.prepare(`
+      UPDATE sync_state
+      SET ${col} = 1,
+          conflict_pending = 1,
+          conflict_copy_hash = CASE WHEN ? IS NOT NULL THEN ? ELSE conflict_copy_hash END,
+          conflict_copy_path = CASE WHEN ? IS NOT NULL THEN ? ELSE conflict_copy_path END,
+          conflict_at = CASE WHEN (? IS NOT NULL OR ? IS NOT NULL) THEN ? ELSE conflict_at END
+      WHERE id = ?
+    `);
+    stmt.run(actualHash, actualHash, actualPath, actualPath, actualHash, actualPath, now, id);
+  }
+
+  public clearConflictsByKind(id: string, kind: 'body' | 'taxonomy' | 'all'): void {
+    if (kind === 'all') {
+      this.db
+        .prepare(
+          `
+        UPDATE sync_state
+        SET conflict_pending = 0,
+            body_conflict_pending = 0,
+            taxonomy_conflict_pending = 0,
+            conflict_copy_hash = NULL,
+            conflict_copy_path = NULL,
+            conflict_at = NULL
+        WHERE id = ?
+      `,
+        )
+        .run(id);
+      return;
+    }
+
+    const current = this.getSyncState(id);
+    if (!current) return;
+
+    const newBody = kind === 'body' ? 0 : (current.bodyConflictPending ?? 0);
+    const newTax = kind === 'taxonomy' ? 0 : (current.taxonomyConflictPending ?? 0);
+    const bothCleared = newBody === 0 && newTax === 0;
+
+    this.db
+      .prepare(
+        `
+      UPDATE sync_state
+      SET body_conflict_pending = ?,
+          taxonomy_conflict_pending = ?,
+          conflict_pending = ?,
+          conflict_copy_hash = CASE WHEN ? = 1 THEN NULL ELSE conflict_copy_hash END,
+          conflict_copy_path = CASE WHEN ? = 1 THEN NULL ELSE conflict_copy_path END,
+          conflict_at = CASE WHEN ? = 1 THEN NULL ELSE conflict_at END
+      WHERE id = ?
+    `,
+      )
+      .run(
+        newBody,
+        newTax,
+        bothCleared ? 0 : 1,
+        bothCleared ? 1 : 0,
+        bothCleared ? 1 : 0,
+        bothCleared ? 1 : 0,
+        id,
+      );
   }
 
   public setDeletePending(id: string, pending: boolean): void {

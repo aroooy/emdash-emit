@@ -523,6 +523,25 @@ async function uploadAndRewriteDraftImages(
   return { body: rewrittenBody, uploadedByAbsPath };
 }
 
+function throwRemoteArticleDeleted(
+  collection: string,
+  id: string,
+  targetFilePath: string,
+  endpoint: string,
+): never {
+  throw new ApiError({
+    endpoint,
+    code: 'REMOTE_ARTICLE_DELETED',
+    status: 404,
+    message: `Article ${id} (${targetFilePath}) was deleted on the remote server.`,
+    suggestion: [
+      '1. Keep your edits and re-create as a new article: remove the `id:` field from frontmatter, then "emit push <file>".',
+      `2. Discard local edits and untrack: "emit pull ${id} --force"   (local copy is preserved under posts/conflicts/)`,
+      `3. Delete with rescue backup: "emit delete ${targetFilePath} --discard-local-edits"`,
+    ].join('\n  '),
+  });
+}
+
 /**
  * Pushes a local markdown article to remote EmDash with full preflight guards,
  * two-tier lock lease protection, and automatic 3-way merge on conflict.
@@ -638,8 +657,7 @@ export async function pushArticle(
     }
   }
 
-  // 1. Run Preflight Guards G2 - G11
-  // Guard against blind re-push when article is marked delete_pending (unconfirmed remote deletion)
+  // 1. Guard against blind re-push when article is marked delete_pending (G16)
   if (syncState?.deletePending === 1 && !options.revive && !options.force) {
     throw new ApiError({
       endpoint: `/_emdash/api/content/${collection}/${id}`,
@@ -650,32 +668,8 @@ export async function pushArticle(
     });
   }
 
-  // Guard against blind re-push when previous taxonomy conflict is still pending
-  if (syncState?.conflictPending === 1 && !options.resolveTaxonomy && !options.force) {
-    throw new ApiError({
-      endpoint: `/_emdash/api/content/${collection}/${id}`,
-      code: 'TAXONOMY_CONFLICT_PENDING',
-      status: 409,
-      message: `Article ${id} (${targetFilePath}) has an unresolved taxonomy conflict from a previous sync.`,
-      suggestion: `Pass --resolve-taxonomy=union|local|remote (or --force) to explicitly resolve and confirm: "emit push ${targetFilePath} --resolve-taxonomy=union"`,
-    });
-  }
-
-  // Guard against blind re-push when previous taxonomy update failed (unapplied remote terms)
-  if (
-    syncState?.taxonomyApplyPending === 1 &&
-    !options.allowUnappliedTaxonomies &&
-    !options.force
-  ) {
-    throw new ApiError({
-      endpoint: `/_emdash/api/content/${collection}/${id}`,
-      code: 'TAXONOMY_APPLY_PENDING',
-      status: 409,
-      message: `Article ${id} (${targetFilePath}) has an unconfirmed taxonomy assignment from a previous failed update.`,
-      suggestion: `Run "emit pull-taxonomies" to synchronize taxonomy definitions, then re-push (or pass --allow-unapplied-taxonomies / --force).`,
-    });
-  }
-
+  // 2. Preflight Guards (including G6: UNRESOLVED_CONFLICT_MARKERS)
+  // Evaluated before taxonomy conflict pending so markers in markdown body are caught first
   const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
     knownTaxonomies,
@@ -694,6 +688,37 @@ export async function pushArticle(
 
   // Update parsed with cleaned body (e.g. trimmed duplicate heading)
   parsed.body = preflight.cleanedBody;
+
+  // 3. Guard against blind re-push when taxonomy conflict is still pending (G15)
+  const isTaxConflictPending =
+    syncState?.taxonomyConflictPending !== undefined
+      ? syncState.taxonomyConflictPending === 1
+      : syncState?.conflictPending === 1 && (syncState?.bodyConflictPending ?? 0) === 0;
+
+  if (isTaxConflictPending && !options.resolveTaxonomy && !options.force) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'TAXONOMY_CONFLICT_PENDING',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) has an unresolved taxonomy conflict from a previous sync.`,
+      suggestion: `Pass --resolve-taxonomy=union|local|remote (or --force) to explicitly resolve and confirm: "emit push ${targetFilePath} --resolve-taxonomy=union"`,
+    });
+  }
+
+  // 4. Guard against blind re-push when previous taxonomy update failed (G17)
+  if (
+    syncState?.taxonomyApplyPending === 1 &&
+    !options.allowUnappliedTaxonomies &&
+    !options.force
+  ) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'TAXONOMY_APPLY_PENDING',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) has an unconfirmed taxonomy assignment from a previous failed update.`,
+      suggestion: `Run "emit pull-taxonomies" to synchronize taxonomy definitions, then re-push (or pass --allow-unapplied-taxonomies / --force).`,
+    });
+  }
 
   const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
   const warnings = [...preflight.warnings];
@@ -762,7 +787,7 @@ export async function pushArticle(
         const prevTerms =
           taxonomyName === 'category' ? baseFm?.taxonomies?.categories : baseFm?.taxonomies?.tags;
         if (prevTerms && prevTerms.length > 0) {
-          if (!options.allowWipeTaxonomies && !options.force) {
+          if (!options.allowWipeTaxonomies && !options.force && !options.resolveTaxonomy) {
             throw new ApiError({
               endpoint: `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
               code: 'DESTRUCTIVE_TAXONOMY_WIPE',
@@ -940,7 +965,11 @@ export async function pushArticle(
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
       conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
       conflictCopyHash: null,
+      conflictCopyPath: null,
+      conflictAt: null,
       remoteTaxonomyHash: finalTaxHash,
       taxonomyApplyPending: hasTaxFailures ? 1 : 0,
     });
@@ -1063,6 +1092,10 @@ export async function pushArticle(
           body: JSON.stringify(payload),
         });
 
+    if (!taxonomyDivergenceDetected && (res.status === 404 || res.status === 410)) {
+      throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+    }
+
     // 3. Handle 409 Conflict
     if (res.status === 409) {
       const errJson = (await res.json().catch(() => ({}))) as {
@@ -1092,6 +1125,9 @@ export async function pushArticle(
       });
 
       if (!getRes.ok) {
+        if (getRes.status === 404 || getRes.status === 410) {
+          throwRemoteArticleDeleted(collection, id, targetFilePath, getUrl);
+        }
         throw new ApiError({
           message: `Failed to fetch latest remote version during conflict resolution: ${getRes.statusText}`,
           code: 'CONFLICT_REMOTE_FETCH_FAILED',
@@ -1143,15 +1179,26 @@ export async function pushArticle(
           }
         : null;
 
-      const mergeResult = hybrid3WayMerge(parsed, baseInfo, {
-        frontmatter: remoteParsed.frontmatter,
-        body: remoteParsed.body,
-      });
+      const mergeResult = hybrid3WayMerge(
+        parsed,
+        baseInfo,
+        {
+          frontmatter: remoteParsed.frontmatter,
+          body: remoteParsed.body,
+        },
+        {
+          strategy: options.resolveTaxonomy,
+        },
+      );
 
       warnings.push(...mergeResult.warnings);
 
-      // Check destructive taxonomy wipe guard during 3-way merge
-      if (mergeResult.wipeWarnings && mergeResult.wipeWarnings.length > 0) {
+      // Check destructive taxonomy wipe guard during 3-way merge (exempt if strategy is explicitly specified)
+      if (
+        !options.resolveTaxonomy &&
+        mergeResult.wipeWarnings &&
+        mergeResult.wipeWarnings.length > 0
+      ) {
         if (!options.allowWipeTaxonomies && !options.force) {
           const details = mergeResult.wipeWarnings
             .map((w) => `${w.name}: clearing ${w.remoteTerms.length} assignment(s)`)
@@ -1176,28 +1223,36 @@ export async function pushArticle(
         }
       }
 
-      // If taxonomy conflict occurred, check if resolveTaxonomy strategy was explicitly provided
-      if (mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0) {
-        if (options.resolveTaxonomy || options.force) {
-          const strategy = options.resolveTaxonomy || 'union';
-          if (strategy === 'local') {
-            mergeResult.frontmatter.taxonomies = parsed.frontmatter.taxonomies;
-          } else if (strategy === 'remote') {
-            mergeResult.frontmatter.taxonomies = remoteParsed.frontmatter.taxonomies;
-          } else {
-            // 'union'
-            const unionTaxonomies: Record<string, string[]> = {};
-            const allTaxNames = new Set([
-              ...Object.keys(parsed.frontmatter.taxonomies || {}),
-              ...Object.keys(remoteParsed.frontmatter.taxonomies || {}),
-            ]);
-            for (const tName of allTaxNames) {
-              const lTerms = parsed.frontmatter.taxonomies?.[tName] || [];
-              const rTerms = remoteParsed.frontmatter.taxonomies?.[tName] || [];
-              unionTaxonomies[tName] = Array.from(new Set([...lTerms, ...rTerms]));
-            }
-            mergeResult.frontmatter.taxonomies = unionTaxonomies;
+      // Log strategy adoptions
+      if (mergeResult.strategyAdoptions && mergeResult.strategyAdoptions.length > 0) {
+        for (const item of mergeResult.strategyAdoptions) {
+          const parts: string[] = [];
+          if (item.discardedAdded.length > 0) parts.push(`+${item.discardedAdded.join(', ')}`);
+          if (item.discardedRemoved.length > 0) parts.push(`-${item.discardedRemoved.join(', ')}`);
+          const discardedStr = parts.length > 0 ? `: discarded ${parts.join(' ')}` : '';
+          warnings.push(`🏷️ Resolved '${item.name}' with strategy '${item.side}'${discardedStr}.`);
+        }
+      }
+
+      // Fallback post-merge resolution only if strategy was NOT specified and taxonomy conflicts occurred
+      if (
+        !options.resolveTaxonomy &&
+        mergeResult.taxonomyConflicts &&
+        mergeResult.taxonomyConflicts.length > 0
+      ) {
+        if (options.force) {
+          const strategy = 'union';
+          const unionTaxonomies: Record<string, string[]> = {};
+          const allTaxNames = new Set([
+            ...Object.keys(parsed.frontmatter.taxonomies || {}),
+            ...Object.keys(remoteParsed.frontmatter.taxonomies || {}),
+          ]);
+          for (const tName of allTaxNames) {
+            const lTerms = parsed.frontmatter.taxonomies?.[tName] || [];
+            const rTerms = remoteParsed.frontmatter.taxonomies?.[tName] || [];
+            unionTaxonomies[tName] = Array.from(new Set([...lTerms, ...rTerms]));
           }
+          mergeResult.frontmatter.taxonomies = unionTaxonomies;
           warnings.push(`Resolved taxonomy conflicts using strategy '${strategy}'.`);
         } else {
           mergeResult.hasConflict = true;
@@ -1208,9 +1263,13 @@ export async function pushArticle(
       }
 
       if (mergeResult.hasConflict) {
-        const isTaxonomyOnlyConflict =
-          Boolean(mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0) &&
-          !mergeResult.body.includes('<<<<<<< local');
+        const isTaxonomyConflict = Boolean(
+          mergeResult.taxonomyConflicts && mergeResult.taxonomyConflicts.length > 0,
+        );
+        const hasBodyConflict = Boolean(
+          mergeResult.body.includes('<<<<<<< LOCAL') || mergeResult.body.includes('<<<<<<< local'),
+        );
+        const isTaxonomyOnlyConflict = isTaxonomyConflict && !hasBodyConflict;
 
         const conflictedMarkdown = serializeMarkdown(
           mergeResult.frontmatter,
@@ -1244,6 +1303,8 @@ export async function pushArticle(
           slug: parsed.frontmatter.slug,
           lastSyncedAt: Math.floor(Date.now() / 1000),
           conflictPending: 1,
+          bodyConflictPending: hasBodyConflict ? 1 : 0,
+          taxonomyConflictPending: isTaxonomyConflict ? 1 : 0,
           conflictCopyHash: conflictedHash,
           conflictCopyPath: quarantineRel,
           conflictAt: Math.floor(Date.now() / 1000),
@@ -1300,20 +1361,27 @@ export async function pushArticle(
       });
 
       if (!res.ok) {
+        if (res.status === 404 || res.status === 410) {
+          throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+        }
+
         const errText = await res.text().catch(() => '');
-        // Check if server rejected the merged taxonomy union (e.g. single category limit)
+        // Check if server rejected the merged taxonomy union or strategy (e.g. single category limit)
         if (
           (res.status === 400 || res.status === 422) &&
-          mergeResult.autoMergedTaxonomies &&
-          mergeResult.autoMergedTaxonomies.length > 0
+          ((mergeResult.autoMergedTaxonomies && mergeResult.autoMergedTaxonomies.length > 0) ||
+            (mergeResult.strategyAdoptions && mergeResult.strategyAdoptions.length > 0))
         ) {
+          const wasStrategy =
+            mergeResult.strategyAdoptions && mergeResult.strategyAdoptions.length > 0;
           throw new ApiError({
             message: `Remote server rejected the merged taxonomy union (HTTP ${res.status}): ${errText || res.statusText}`,
             code: 'TAXONOMY_UNION_REJECTED',
             status: res.status,
             endpoint: putUrl,
-            suggestion:
-              'The server may enforce constraints such as a single category per post. Pass --resolve-taxonomy=local or --resolve-taxonomy=remote to choose one side explicitly.',
+            suggestion: wasStrategy
+              ? 'The remote server rejected the taxonomy adopted by your strategy (e.g. single-category constraint). Switch strategy with "--resolve-taxonomy=remote" or edit the frontmatter manually before pushing.'
+              : 'The remote server enforces constraints that reject combining local and remote taxonomy terms (e.g. single-category constraint). Resolve by explicitly choosing a side: "emit push <file> --resolve-taxonomy=local" (or remote), or edit the frontmatter manually.',
           });
         }
 
@@ -1329,6 +1397,9 @@ export async function pushArticle(
     }
 
     if (!res.ok) {
+      if (res.status === 404 || res.status === 410) {
+        throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+      }
       const errText = await res.text().catch(() => '');
       throw new ApiError({
         message: `Push failed: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
@@ -1446,6 +1517,8 @@ export async function pushArticle(
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
       conflictPending: hasTaxFailures ? (syncState?.conflictPending ?? 0) : 0,
+      bodyConflictPending: hasTaxFailures ? (syncState?.bodyConflictPending ?? 0) : 0,
+      taxonomyConflictPending: hasTaxFailures ? (syncState?.taxonomyConflictPending ?? 0) : 0,
       conflictCopyHash: hasTaxFailures ? syncState?.conflictCopyHash : null,
       conflictCopyPath: hasTaxFailures ? syncState?.conflictCopyPath : null,
       conflictAt: hasTaxFailures ? syncState?.conflictAt : null,

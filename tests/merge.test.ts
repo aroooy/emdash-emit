@@ -314,5 +314,78 @@ describe('Hybrid 3-Way Merge Engine', () => {
       const { conflicts } = mergeTaxonomies(local, null, remote);
       expect(conflicts).toContain('categories');
     });
+
+    // --- T1-1 ~ T1-4: Taxonomy Resolution Strategies (R1) ---
+
+    it('T1-1: strictly honors --resolve-taxonomy local discarding remote additions and retentions', () => {
+      const base = { tags: ['t1', 't2'] };
+      const local = { tags: ['t1'] }; // removed t2
+      const remote = { tags: ['t1', 't2', 't3'] }; // added t3, kept t2
+
+      const res = mergeTaxonomies(local, base, remote, { strategy: 'local' });
+      expect(res.conflicts).toHaveLength(0);
+      expect(res.merged.tags).toEqual(['t1']);
+      expect(res.strategyAdoptions).toBeDefined();
+      expect(res.strategyAdoptions?.[0]).toEqual({
+        name: 'tags',
+        side: 'local',
+        discardedAdded: ['t3'],
+        discardedRemoved: [],
+      });
+    });
+
+    it('T1-2: strictly honors --resolve-taxonomy remote discarding local deletions', () => {
+      const base = { tags: ['t1', 't2'] };
+      const local = { tags: ['t1'] }; // removed t2
+      const remote = { tags: ['t1', 't2', 't3'] }; // added t3, kept t2
+
+      const res = mergeTaxonomies(local, base, remote, { strategy: 'remote' });
+      expect(res.conflicts).toHaveLength(0);
+      expect(res.merged.tags.sort()).toEqual(['t1', 't2', 't3']);
+      expect(res.strategyAdoptions).toBeDefined();
+      expect(res.strategyAdoptions?.[0]).toEqual({
+        name: 'tags',
+        side: 'remote',
+        discardedAdded: [],
+        discardedRemoved: ['t2'],
+      });
+    });
+
+    it('T1-3: maintains exact union set algebra when strategy is union or undefined', () => {
+      const base = { tags: ['t1', 't2'] };
+      const local = { tags: ['t1'] };
+      const remote = { tags: ['t1', 't2', 't3'] };
+
+      const resDefault = mergeTaxonomies(local, base, remote);
+      expect(resDefault.conflicts).toHaveLength(0);
+      // ({t1, t2} \ {t2} \ {}) ∪ {} ∪ {t3} = {t1, t3}
+      expect(resDefault.merged.tags.sort()).toEqual(['t1', 't3']);
+      expect(resDefault.strategyAdoptions).toEqual([]);
+
+      const resUnion = mergeTaxonomies(local, base, remote, { strategy: 'union' });
+      expect(resUnion.merged.tags.sort()).toEqual(['t1', 't3']);
+    });
+
+    it('T1-4: Case 2 (remote deleted taxonomy vs local modified) respects local, remote, and union strategies', () => {
+      const base = { tags: ['t1'] };
+      const local = { tags: ['t1', 't2'] };
+      const remote: Record<string, string[]> = {}; // tags completely removed remotely
+
+      // strategy: 'local' adopts local tags cleanly
+      const resLocal = mergeTaxonomies(local, base, remote, { strategy: 'local' });
+      expect(resLocal.conflicts).toHaveLength(0);
+      expect(resLocal.merged.tags).toEqual(['t1', 't2']);
+      expect(resLocal.strategyAdoptions?.[0]?.side).toBe('local');
+
+      // strategy: 'remote' adopts remote empty taxonomy cleanly
+      const resRemote = mergeTaxonomies(local, base, remote, { strategy: 'remote' });
+      expect(resRemote.conflicts).toHaveLength(0);
+      expect(resRemote.merged.tags || []).toEqual([]);
+      expect(resRemote.strategyAdoptions?.[0]?.side).toBe('remote');
+
+      // default/union flags conflict
+      const resUnion = mergeTaxonomies(local, base, remote);
+      expect(resUnion.conflicts).toContain('tags');
+    });
   });
 });

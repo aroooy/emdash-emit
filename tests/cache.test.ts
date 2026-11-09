@@ -113,6 +113,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
       slug: 'my-post',
       lastSyncedAt: 1730550200,
       conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
       deletePending: 0,
       conflictCopyHash: null,
       conflictCopyPath: null,
@@ -221,7 +223,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(cache.getMediaState(localHash)).toBeNull();
   });
 
-  it('runs schema migration 0 -> 1 on legacy database and creates WAL-check件付き backup', () => {
+  it('runs schema migration 0 -> 1 on legacy database and creates atomic backup', () => {
     cache.close();
 
     // Create a legacy v0 database manually
@@ -265,7 +267,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(state?.taxonomyApplyPending).toBe(0);
 
     // Update with new columns
-    migratedCache.setConflictPending('test-id', true, 'copyhash123');
+    migratedCache.setConflictPending('test-id', 'all', true, 'copyhash123');
     const updated = migratedCache.getSyncState('test-id');
     expect(updated?.conflictPending).toBe(1);
     expect(updated?.conflictCopyHash).toBe('copyhash123');
@@ -282,5 +284,193 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     rawDb.close();
 
     expect(() => new CacheDatabase(futureDbPath)).toThrow(/\[CACHE_SCHEMA_MISMATCH\]/);
+  });
+
+  // --- v0.1.14 Specific Test Cases (R4, R6) ---
+
+  it('T4-1: saveSyncState clears conflict copy columns when both body and taxonomy conflict pendings are 0', () => {
+    const id = '01M67TESTT41000000000000000';
+    // Initially set conflict pending and copy metadata
+    cache.saveSyncState({
+      id,
+      localFilePath: 'posts/draft/test.md',
+      localHash: 'hash1',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'test',
+      lastSyncedAt: 1000,
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: 0,
+      conflictCopyPath: 'posts/conflicts/test.conflict.md',
+      conflictCopyHash: 'copyhash',
+      conflictAt: 1000,
+    });
+
+    const before = cache.getSyncState(id);
+    expect(before?.conflictCopyPath).toBe('posts/conflicts/test.conflict.md');
+
+    // Save with pending = 0
+    cache.saveSyncState({
+      id,
+      localFilePath: 'posts/draft/test.md',
+      localHash: 'hash2',
+      remoteRev: '2',
+      status: 'draft',
+      slug: 'test',
+      lastSyncedAt: 2000,
+      conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
+    });
+
+    const after = cache.getSyncState(id);
+    expect(after?.conflictPending).toBe(0);
+    expect(after?.bodyConflictPending).toBe(0);
+    expect(after?.taxonomyConflictPending).toBe(0);
+    expect(after?.conflictCopyPath).toBeNull();
+    expect(after?.conflictCopyHash).toBeNull();
+    expect(after?.conflictAt).toBeNull();
+  });
+
+  it('T4-4: maintains 3-value set consistency for conflict copy metadata columns', () => {
+    const id = '01M67TESTT44000000000000000';
+    cache.saveSyncState({
+      id,
+      localFilePath: 'posts/draft/test.md',
+      localHash: 'hash1',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'test',
+      lastSyncedAt: 1000,
+    });
+
+    cache.setConflictPending(id, 'body', true, 'hash123', 'posts/conflicts/t.conflict.md');
+    const state = cache.getSyncState(id);
+    expect(state?.conflictCopyPath).toBe('posts/conflicts/t.conflict.md');
+    expect(state?.conflictCopyHash).toBe('hash123');
+    expect(state?.conflictAt).toBeGreaterThan(0);
+
+    // Clear by kind
+    cache.clearConflictsByKind(id, 'body');
+    const cleared = cache.getSyncState(id);
+    expect(cleared?.conflictCopyPath).toBeNull();
+    expect(cleared?.conflictCopyHash).toBeNull();
+    expect(cleared?.conflictAt).toBeNull();
+  });
+
+  it('T4-5: schema v2 to v3 migration allocates existing conflict rows accurately', () => {
+    const v2DbPath = path.join(tempDir, '.emit', 'v2.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(v2DbPath);
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY,
+        local_file_path TEXT NOT NULL,
+        local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL,
+        status TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL,
+        conflict_pending INTEGER DEFAULT 0,
+        delete_pending INTEGER DEFAULT 0,
+        conflict_copy_hash TEXT,
+        conflict_copy_path TEXT,
+        conflict_at INTEGER,
+        remote_taxonomy_hash TEXT,
+        taxonomy_apply_pending INTEGER DEFAULT 0
+      );
+      -- Row 1: has conflict_copy_path ending in .conflict.md (body conflict)
+      INSERT INTO sync_state VALUES ('id-body', 'posts/draft/b.md', 'h1', '1', 'draft', 'b', 1000, 1, 0, 'h', 'posts/conflicts/b.conflict.md', 1000, NULL, 0);
+      -- Row 2: conflict_pending = 1 but no copy path and has remote_taxonomy_hash (taxonomy conflict)
+      INSERT INTO sync_state VALUES ('id-tax', 'posts/draft/t.md', 'h2', '1', 'draft', 't', 1000, 1, 0, NULL, NULL, NULL, 'taxhash', 0);
+      -- Row 3: normal clean row
+      INSERT INTO sync_state VALUES ('id-clean', 'posts/draft/c.md', 'h3', '1', 'draft', 'c', 1000, 0, 0, NULL, NULL, NULL, NULL, 0);
+      PRAGMA user_version = 2;
+    `);
+    rawDb.close();
+
+    const migrated = new CacheDatabase(v2DbPath);
+    expect(migrated.getSchemaVersion()).toBe(3);
+
+    const rowBody = migrated.getSyncState('id-body');
+    expect(rowBody?.bodyConflictPending).toBe(1);
+    expect(rowBody?.taxonomyConflictPending).toBe(0);
+    expect(rowBody?.conflictPending).toBe(1);
+
+    const rowTax = migrated.getSyncState('id-tax');
+    expect(rowTax?.bodyConflictPending).toBe(0);
+    expect(rowTax?.taxonomyConflictPending).toBe(1);
+    expect(rowTax?.conflictPending).toBe(1);
+
+    const rowClean = migrated.getSyncState('id-clean');
+    expect(rowClean?.bodyConflictPending).toBe(0);
+    expect(rowClean?.taxonomyConflictPending).toBe(0);
+    expect(rowClean?.conflictPending).toBe(0);
+
+    migrated.close();
+  });
+
+  it('T6-1 & T6-4: VACUUM INTO backup creates valid SQLite DB containing sync_state and version in filename', () => {
+    const freshDbPath = path.join(tempDir, '.emit', 'fresh.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(freshDbPath);
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY,
+        local_file_path TEXT NOT NULL,
+        local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL,
+        status TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL
+      );
+      PRAGMA user_version = 0;
+    `);
+    rawDb.close();
+
+    const db = new CacheDatabase(freshDbPath);
+    expect(db.getSchemaVersion()).toBe(3);
+    db.close();
+
+    const dbDir = path.dirname(freshDbPath);
+    const dbBase = path.basename(freshDbPath);
+    const bakFiles = fs.readdirSync(dbDir).filter((f) => f.startsWith(`${dbBase}.bak-`));
+    expect(bakFiles.length).toBe(1);
+
+    // T6-4: Filename contains package.json version
+    expect(bakFiles[0]).toContain('.bak-0.1.14-');
+
+    // T6-1: Verify backup is valid SQLite with sync_state table
+    const bakFull = path.join(dbDir, bakFiles[0]);
+    const bakRaw = new DatabaseSync(bakFull);
+    const tbl = bakRaw
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_state'")
+      .get();
+    expect(tbl).toBeDefined();
+    bakRaw.close();
+  });
+
+  it('T6-3: pruneBackups sweeps 0-byte backup files unconditionally', () => {
+    const sweepDbPath = path.join(tempDir, '.emit', 'sweep.db');
+    const dbDir = path.dirname(sweepDbPath);
+    fs.mkdirSync(dbDir, { recursive: true });
+
+    // Plant 0-byte backup files
+    const zeroBak1 = path.join(dbDir, 'sweep.db.bak-0.1.14-001');
+    const zeroBak2 = path.join(dbDir, 'sweep.db.bak-0.1.14-002');
+    fs.writeFileSync(zeroBak1, '');
+    fs.writeFileSync(zeroBak2, '');
+
+    expect(fs.existsSync(zeroBak1)).toBe(true);
+    expect(fs.existsSync(zeroBak2)).toBe(true);
+
+    // Initializing CacheDatabase triggers runMigrations and pruneBackups
+    const db = new CacheDatabase(sweepDbPath);
+    db.close();
+
+    // 0-byte backups must be swept
+    expect(fs.existsSync(zeroBak1)).toBe(false);
+    expect(fs.existsSync(zeroBak2)).toBe(false);
   });
 });

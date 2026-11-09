@@ -492,5 +492,45 @@ describe('deleteArticle & sync_delete (§4)', () => {
       expect(parsed.error).toBe('PUBLISHED_ARTICLE_PROTECTION');
       expect(parsed.suggestion).toContain('allowDeletePublished');
     });
+
+    it('T3-3: deleteArticle with discardLocalEdits: true allows deleting unpushed edits on remote 404', async () => {
+      const art = setupArticle({ status: 'draft', isModified: true });
+
+      // Remote returns 404
+      const mockFetch404 = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/lock')) return { ok: true, status: 200, json: async () => ({}) };
+        return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'Not Found' };
+      });
+
+      // 1. Without discardLocalEdits: throws UnpushedModificationsError
+      await expect(
+        deleteArticle({
+          workspaceRoot: tempDir,
+          cache,
+          filePath: art.relPath,
+          origin: 'https://example.com',
+          token: 'token',
+          fetchFn: mockFetch404 as unknown as typeof fetch,
+        }),
+      ).rejects.toThrowError(/unpushed local modifications/i);
+
+      // 2. With discardLocalEdits: true: succeeds, creates .deleted.md rescue copy, deletes canonical and cache
+      const res = await deleteArticle({
+        workspaceRoot: tempDir,
+        cache,
+        filePath: art.relPath,
+        origin: 'https://example.com',
+        token: 'token',
+        discardLocalEdits: true,
+        fetchFn: mockFetch404 as unknown as typeof fetch,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.rescueFilePath).toBeDefined();
+      expect(res.rescueFilePath).toContain('.deleted.md');
+      expect(fs.existsSync(art.fullPath)).toBe(false);
+      expect(cache.getSyncState(articleId)).toBeNull();
+    });
   });
 });

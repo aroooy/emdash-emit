@@ -1,0 +1,10 @@
+cache.db 3584000
+cache.db-shm 32768
+cache.db-wal 0
+cache.db.bak-0.1.11-2026-11-09T09-43-03-832Z 0
+cache.db.bak-0.1.11-2026-11-09T09-43-03-832Z-shm 32768
+cache.db.bak-0.1.11-2026-11-09T09-43-03-832Z-wal 0
+cache.db.bak-0.1.12-2026-11-09T12-51-15-508Z 3584000
+cache.db.bak-0.1.12-2026-11-09T12-51-15-508Z-shm 32768
+cache.db.bak-0.1.12-2026-11-09T12-51-15-508Z-wal 0
+config.json 230

@@ -329,4 +329,69 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.message).toContain('informational/placeholder reference(s) ignored');
     expect(report.overallStatus).toBe('healthy');
   });
+
+  // --- v0.1.14 Specific Test Cases (R5) ---
+
+  it('T5-1: detects taxonomy_apply_pending = 1 with remote check suggestion', async () => {
+    const art = setupHealthyArticle();
+    cache.setTaxonomyApplyPending(articleId, true);
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    const check = report.checks.find((c) => c.id === 'taxonomy_apply_pending');
+    expect(check).toBeDefined();
+    expect(check?.status).toBe('warning');
+    expect(check?.message).toContain('unapplied taxonomy terms');
+    expect(check?.suggestion).toContain('verify the terms exist on remote');
+    expect(check?.suggestion).toContain('permission errors');
+  });
+
+  it('T5-2: detects delete_pending = 1 with cleanup and revive suggestions', async () => {
+    const art = setupHealthyArticle();
+    cache.setDeletePending(articleId, true);
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    const check = report.checks.find((c) => c.id === 'delete_pending');
+    expect(check).toBeDefined();
+    expect(check?.status).toBe('warning');
+    expect(check?.message).toContain('marked as delete_pending');
+    expect(check?.suggestion).toContain('emit delete');
+    expect(check?.suggestion).toContain('--revive');
+  });
+
+  it('T5-3: auto-clears taxonomy pending by kind when rescue copy is removed manually and no divergence exists', async () => {
+    const art = setupHealthyArticle();
+    // Initially pending taxonomy conflict
+    cache.setConflictPending(articleId, 'taxonomy', true);
+
+    const beforeState = cache.getSyncState(articleId);
+    expect(beforeState?.taxonomyConflictPending).toBe(1);
+    expect(beforeState?.conflictPending).toBe(1);
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    const autoclearCheck = report.checks.find((c) => c.id === 'conflict_pending_autoclear');
+    expect(autoclearCheck).toBeDefined();
+    expect(autoclearCheck?.status).toBe('ok');
+
+    const afterState = cache.getSyncState(articleId);
+    expect(afterState?.taxonomyConflictPending).toBe(0);
+    expect(afterState?.conflictPending).toBe(0);
+  });
 });

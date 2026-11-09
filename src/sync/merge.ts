@@ -35,6 +35,7 @@ export interface MergeResult {
    */
   taxonomyConflicts: string[];
   autoMergedTaxonomies?: TaxonomyMergeItem[];
+  strategyAdoptions?: TaxonomyStrategyAdoption[];
   wipeWarnings?: TaxonomyWipeWarning[];
 }
 
@@ -50,6 +51,13 @@ export interface TaxonomyMergeItem {
   remoteRemoved: string[];
 }
 
+export interface TaxonomyStrategyAdoption {
+  name: string;
+  side: 'local' | 'remote';
+  discardedAdded: string[];
+  discardedRemoved: string[];
+}
+
 export interface TaxonomyWipeWarning {
   name: string;
   remoteTerms: string[];
@@ -60,11 +68,14 @@ export interface TaxonomyMergeResult {
   merged: Record<string, string[]>;
   conflicts: string[];
   autoMergedTaxonomies: TaxonomyMergeItem[];
+  strategyAdoptions: TaxonomyStrategyAdoption[];
   wipeWarnings: TaxonomyWipeWarning[];
 }
 
 export interface TaxonomyMergeOptions {
   strictRenameConflict?: boolean;
+  /** Single decision point for diverged taxonomies. Absent = v0.1.13 union algebra. */
+  strategy?: 'union' | 'local' | 'remote';
 }
 
 /**
@@ -100,6 +111,7 @@ export function mergeTaxonomies(
   const merged: Record<string, string[]> = {};
   const conflicts: string[] = [];
   const autoMergedTaxonomies: TaxonomyMergeItem[] = [];
+  const strategyAdoptions: TaxonomyStrategyAdoption[] = [];
   const wipeWarnings: TaxonomyWipeWarning[] = [];
 
   const names = new Set([
@@ -134,9 +146,28 @@ export function mergeTaxonomies(
         if (eq(l, b)) {
           // Local didn't change it, remote deleted it
         } else {
-          // Local changed it, remote deleted it -> Conflict
-          conflicts.push(name);
-          merged[name] = local![name];
+          // Local changed it, remote deleted it
+          if (options?.strategy === 'local') {
+            merged[name] = local![name];
+            strategyAdoptions.push({
+              name,
+              side: 'local',
+              discardedAdded: [],
+              discardedRemoved: b || [],
+            });
+          } else if (options?.strategy === 'remote') {
+            // Remote deleted it -> adopt remote deletion
+            strategyAdoptions.push({
+              name,
+              side: 'remote',
+              discardedAdded: l || [],
+              discardedRemoved: [],
+            });
+          } else {
+            // strategy === 'union' or undefined -> Conflict
+            conflicts.push(name);
+            merged[name] = local![name];
+          }
         }
       }
       continue;
@@ -191,7 +222,29 @@ export function mergeTaxonomies(
       continue;
     }
 
-    // 3. Both sides changed:
+    // (a) Explicit strategy takes precedence before union evaluation
+    if (options?.strategy === 'local') {
+      merged[name] = lRaw;
+      strategyAdoptions.push({
+        name,
+        side: 'local',
+        discardedAdded: remoteAdded,
+        discardedRemoved: remoteRemoved,
+      });
+      continue;
+    }
+    if (options?.strategy === 'remote') {
+      merged[name] = rRaw;
+      strategyAdoptions.push({
+        name,
+        side: 'remote',
+        discardedAdded: localAdded,
+        discardedRemoved: localRemoved,
+      });
+      continue;
+    }
+
+    // (b) Undefined or 'union': v0.1.13 union algebra
     // union := (base \ (localRemoved ∪ remoteRemoved)) ∪ localAdded ∪ remoteAdded
     const allRemovals = new Set([...localRemoved, ...remoteRemoved]);
     const union = [
@@ -235,7 +288,7 @@ export function mergeTaxonomies(
     });
   }
 
-  return { merged, conflicts, autoMergedTaxonomies, wipeWarnings };
+  return { merged, conflicts, autoMergedTaxonomies, strategyAdoptions, wipeWarnings };
 }
 
 /**
@@ -255,11 +308,13 @@ export function mergeFrontmatter(
   warnings: string[];
   taxonomyConflicts: string[];
   autoMergedTaxonomies?: TaxonomyMergeItem[];
+  strategyAdoptions?: TaxonomyStrategyAdoption[];
   wipeWarnings?: TaxonomyWipeWarning[];
 } {
   const warnings: string[] = [];
   let taxonomyConflicts: string[] = [];
   let autoMergedTaxonomies: TaxonomyMergeItem[] | undefined;
+  let strategyAdoptions: TaxonomyStrategyAdoption[] | undefined;
   let wipeWarnings: TaxonomyWipeWarning[] | undefined;
   const merged: Frontmatter = { ...remote };
 
@@ -289,6 +344,7 @@ export function mergeFrontmatter(
       merged.taxonomies = tax.merged;
       taxonomyConflicts = tax.conflicts;
       autoMergedTaxonomies = tax.autoMergedTaxonomies;
+      strategyAdoptions = tax.strategyAdoptions;
       wipeWarnings = tax.wipeWarnings;
       continue;
     }
@@ -332,6 +388,7 @@ export function mergeFrontmatter(
     warnings,
     taxonomyConflicts,
     autoMergedTaxonomies,
+    strategyAdoptions,
     wipeWarnings,
   };
 }
@@ -376,6 +433,7 @@ export function hybrid3WayMerge(
     warnings,
     taxonomyConflicts,
     autoMergedTaxonomies,
+    strategyAdoptions,
     wipeWarnings,
   } = mergeFrontmatter(
     local.frontmatter,
@@ -394,6 +452,7 @@ export function hybrid3WayMerge(
     warnings,
     taxonomyConflicts,
     autoMergedTaxonomies,
+    strategyAdoptions,
     wipeWarnings,
   };
 }
