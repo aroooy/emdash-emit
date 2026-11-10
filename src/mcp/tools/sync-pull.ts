@@ -31,6 +31,7 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
+import { formatOrphanMediaWarning } from '../../cli/commands/pull.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';
@@ -295,7 +296,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references whose media record does not exist on remote are reported as orphanStorageKeys and never downloaded.',
     {
       article: z
         .string()
@@ -331,27 +332,33 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         });
 
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
+        const orphanWarning = formatOrphanMediaWarning(res.orphanStorageKeys);
         if (args.article) {
           const failedMsg = res.failed ? `, ${res.failed} failed` : '';
           const idsList =
             res.mediaIds && res.mediaIds.length > 0
               ? `\nMedia IDs: ${res.mediaIds.join(', ')}`
               : '';
+          const keysList =
+            res.orphanStorageKeys && res.orphanStorageKeys.length > 0
+              ? `\nOrphan Storage Keys (no media record): ${res.orphanStorageKeys.join(', ')}`
+              : '';
           return {
             content: [
               {
                 type: 'text',
-                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${idsList}${metaSuffix}`,
+                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${idsList}${keysList}${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
               },
             ],
           };
         }
 
+        const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
         return {
           content: [
             {
               type: 'text',
-              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).${metaSuffix}`,
+              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${metaSuffix}`,
             },
           ],
         };

@@ -42,6 +42,12 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         .describe(
           'Enforce strict media verification (fail on unpromoted or unverified references)',
         ),
+      checkMediaUrls: z
+        .boolean()
+        .optional()
+        .describe(
+          'Probe the remote media file route (HEAD /_emdash/api/media/file/<key>) for references with no local mirror; legacy assets still served remotely are downgraded to informational notes',
+        ),
     },
     async (args) => {
       let ctx: ServerContext;
@@ -61,6 +67,7 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
           profileOrigin: ctx.auth.origin,
           collection,
           strictMedia: Boolean(args.strictMedia),
+          checkMediaUrls: Boolean(args.checkMediaUrls),
         });
 
         return formatToolSuccess(report as unknown as Record<string, unknown>, ctx.meta);

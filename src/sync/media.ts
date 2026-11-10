@@ -160,6 +160,73 @@ function cleanupDuplicateMediaFilesForId(
   }
 }
 
+/** A body image reference whose media record could not be resolved. */
+export interface OrphanMediaDescriptor {
+  /** The storageKey taken from the article body URL `/_emdash/api/media/file/<storageKey>`. */
+  storageKey: string;
+  /** ULID segment(s) found inside the storageKey, uppercased, in document order. */
+  ulids: string[];
+  ext: string;
+}
+
+/** True when the storageKey is ULID-segment based and carries a known image extension. */
+const ORPHAN_STORAGE_KEY_PATTERN =
+  /^[0-9A-HJ-NP-Z]{26}(?:\.[0-9A-HJ-NP-Z]{26})*\.(?:jpg|jpeg|png|gif|webp|avif|svg)$/i;
+
+/** Builds a descriptor from a ULID-segment storageKey, defaulting to `.jpg` when no extension is present. */
+function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor {
+  const extMatch = storageKey.match(/\.[a-z]+$/i);
+  return {
+    storageKey,
+    ext: extMatch ? extMatch[0].toLowerCase() : '.jpg',
+    ulids: Array.from(storageKey.matchAll(/[0-9A-HJ-NP-Z]{26}/gi), (m) => m[0].toUpperCase()),
+  };
+}
+
+/** Collapses descriptors that name the same storageKey, keeping one entry per key. */
+function dedupeDescriptorsByStorageKey(
+  descriptors: OrphanMediaDescriptor[],
+): OrphanMediaDescriptor[] {
+  const byKey = new Map<string, OrphanMediaDescriptor>();
+  for (const descriptor of descriptors) {
+    if (!byKey.has(descriptor.storageKey)) byKey.set(descriptor.storageKey, descriptor);
+  }
+  return Array.from(byKey.values()).sort((a, b) => a.storageKey.localeCompare(b.storageKey));
+}
+
+/**
+ * Extracts every media file storageKey referenced by an article (markdown images, HTML img tags,
+ * opaque custom-block fences, and legacy container lines such as `[dimage url="..." control=true]`).
+ * A storageKey must be ULID-segment based with a known image extension, so template placeholders
+ * (`<storageKey>`) and prose never produce descriptors. The media record id is deliberately NOT
+ * inferred from it: for migrated WordPress assets the file route serves `<storageKey>` while the
+ * record id returns 404, so only the storageKey can be reported to the user.
+ */
+export function collectArticleStorageKeys(content: string): OrphanMediaDescriptor[] {
+  const keys = new Set<string>();
+  const keyPattern =
+    /(?:^|\/)media\/file\/([0-9A-HJ-NP-Z]{26}(?:\.[0-9A-HJ-NP-Z]{26})*\.(?:jpg|jpeg|png|gif|webp|avif|svg))/gi;
+
+  const harvest = (text: string): void => {
+    let match: RegExpExecArray | null;
+    keyPattern.lastIndex = 0;
+    while ((match = keyPattern.exec(text)) !== null) {
+      keys.add(match[1]);
+    }
+  };
+
+  // scanArticleMediaReferences covers markdown images and HTML img tags anywhere in the body,
+  // including inside opaque fences and legacy container lines where doctor stays quiet by design.
+  harvest(scanArticleMediaReferences(content).join('\n'));
+  harvest(content);
+
+  const descriptors: OrphanMediaDescriptor[] = [];
+  for (const storageKey of keys) {
+    descriptors.push(descriptorFromStorageKey(storageKey));
+  }
+  return dedupeDescriptorsByStorageKey(descriptors);
+}
+
 /**
  * Promotes a local draft image from media/drafts/<name> into the canonical
  * media/<yyyyMMdd>_<mediaId>-<sanitizedName>.<ext> location alongside its .yaml metadata.
@@ -316,10 +383,15 @@ async function syncSingleMediaItem(options: {
       existingMeta = null;
     }
   } else {
-    // Check if an older or differently-dated YAML for the same item.id exists
+    // Check if an older or differently-dated YAML for the same item.id exists. A leftover
+    // `legacy_<storageKey>.yaml` from the removed file-route fallback also embeds this ULID, so it
+    // must never be read as a real record's metadata.
     const existingFiles = fs.readdirSync(mediaDir);
     const matchingYaml = existingFiles.find(
-      (f) => f.endsWith('.yaml') && (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
+      (f) =>
+        f.endsWith('.yaml') &&
+        !f.startsWith('legacy_') &&
+        (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
     );
     if (matchingYaml) {
       try {
@@ -438,6 +510,8 @@ export interface PullMediaResult {
   failed?: number;
   articleId?: string;
   mediaIds?: string[];
+  /** Body storageKeys that no media record could resolve, reported so the user can fix them on remote. */
+  orphanStorageKeys?: string[];
 }
 
 /**
@@ -521,7 +595,8 @@ export async function pullArticleMedia(options: {
     const item = (data.item || data) as Record<string, unknown>;
     articleId = (item.id as string) || options.article;
 
-    // Build synthesized content string from remote representation
+    // Build a content string from the remote representation so references can be collected even when
+    // no local file exists yet.
     const remoteFi = item.featured_image || item.featuredImage;
     const fiId = extractMediaUlid(remoteFi);
     const fiPart = fiId ? `featuredImage: ${fiId}\n` : '';
@@ -533,7 +608,17 @@ export async function pullArticleMedia(options: {
   }
 
   const mediaIds = collectArticleReferencedMediaIds(articleContent);
-  if (mediaIds.length === 0) {
+  // Body storageKeys are the only handle available for migrated WordPress assets whose media record
+  // is missing: their file route still serves the image while `GET /_emdash/api/media/{id}` fails, so
+  // Emit cannot mirror them and reports them as orphan references instead.
+  const storageKeyDescriptors = collectArticleStorageKeys(articleContent);
+  const descriptorsByKey = new Map<string, OrphanMediaDescriptor>();
+  for (const descriptor of storageKeyDescriptors) {
+    descriptorsByKey.set(descriptor.storageKey, descriptor);
+  }
+  const allKeys = Array.from(descriptorsByKey.keys()).sort();
+
+  if (mediaIds.length === 0 && allKeys.length === 0) {
     return {
       total: 0,
       downloaded: 0,
@@ -541,13 +626,16 @@ export async function pullArticleMedia(options: {
       failed: 0,
       articleId,
       mediaIds: [],
+      orphanStorageKeys: [],
     };
   }
 
   let downloadedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
+  const recoveredStorageKeys = new Set<string>();
 
+  // 1. Canonical path: resolve each referenced media record id and mirror it normally.
   for (const mId of mediaIds) {
     try {
       const mediaUrl = new URL(`/_emdash/api/media/${mId}`, options.origin);
@@ -578,18 +666,25 @@ export async function pullArticleMedia(options: {
 
       if (result.downloaded) downloadedCount++;
       else if (result.skipped) skippedCount++;
+      if (item.storageKey) recoveredStorageKeys.add(item.storageKey);
     } catch {
       failedCount++;
     }
   }
 
+  // 2. Orphan detection: a body storageKey that no media record mirrored is reported, never fetched.
+  //    The asset lives only on the public file route (an orphaned R2 object with no D1 record), and
+  //    registering it is EmDash's responsibility, not Emit's.
+  const orphanStorageKeys = allKeys.filter((key) => !recoveredStorageKeys.has(key));
+
   return {
-    total: mediaIds.length,
+    total: mediaIds.length + orphanStorageKeys.length,
     downloaded: downloadedCount,
     skipped: skippedCount,
     failed: failedCount,
     articleId,
     mediaIds,
+    orphanStorageKeys,
   };
 }
 
@@ -663,6 +758,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     ) as EmDashMediaItem[];
 
     if (rawItems.length === 0) {
+      // An empty page ends the listing regardless of any cursor the server echoes back.
       break;
     }
 
@@ -706,6 +802,9 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   if ((options.prune || options.all) && fs.existsSync(mediaDir)) {
     const files = fs.readdirSync(mediaDir);
     for (const file of files) {
+      // Leftover `legacy_*` mirrors from the removed file-route fallback are never matched by the
+      // mediaId pattern below, so they survive pruning and must be deleted by hand.
+      if (file.startsWith('legacy_')) continue;
       // Check if file is related to any active media ID
       const match = file.replace(/^\d{8}_/, '').match(/^([0-9A-Z]{26})/);
       if (match) {

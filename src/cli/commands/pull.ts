@@ -32,8 +32,31 @@ import { pullMedia } from '../../sync/media.js';
 import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
+/** Prints the orphan media warning when a pull reported unresolvable body storageKeys. */
+function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void {
+  const warning = formatOrphanMediaWarning(orphanStorageKeys);
+  if (warning) console.warn(warning);
+}
+
 export function formatPullWindowLabel(status: string | undefined, limit: number): string {
   return status === 'all' ? `${limit}/status` : `${limit}`;
+}
+
+/**
+ * Reports body image references whose EmDash media record could not be resolved. Such an asset is an
+ * orphaned object that the public file route still serves while `GET /_emdash/api/media/{id}` fails,
+ * and Emit deliberately never mirrors or re-registers it: creating the missing record belongs to
+ * EmDash (admin UI) or Wrangler. This is a warning, not an error, so healthy assets still sync.
+ */
+export function formatOrphanMediaWarning(orphanStorageKeys: string[] | undefined): string {
+  if (!orphanStorageKeys || orphanStorageKeys.length === 0) return '';
+  const keyList = orphanStorageKeys.join(', ');
+  return (
+    `⚠️ [ORPHAN_MEDIA_ASSET] ${orphanStorageKeys.length} storageKey(s) referenced in article bodies ` +
+    `have no EmDash media record and were not mirrored: ${keyList}. ` +
+    `The files may still be served by /_emdash/api/media/file/<storageKey>. Register the missing ` +
+    `media records on EmDash (admin UI or wrangler) — Emit does not repair server data.`
+  );
 }
 
 export function formatPullStatusBreakdown(
@@ -321,7 +344,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     )
     .option('-l, --limit <number>', 'Maximum media items to fetch (default: 300 or config)')
     .option('--all', 'Fetch ALL media files from remote')
-    .option('--prune', 'Prune local media files that no longer exist on remote')
+    .option(
+      '--prune',
+      'Prune local media files that no longer exist on remote (legacy_* residue is never touched)',
+    )
     .option('--metadata-only', 'Do not download binary files, only metadata YAML')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (options) => {
@@ -349,6 +375,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           console.log(
             `✅ Media sync for article '${res.articleId || options.article}' complete: ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).`,
           );
+          reportOrphanStorageKeys(res.orphanStorageKeys);
           return;
         }
 

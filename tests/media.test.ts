@@ -28,8 +28,10 @@ import {
   pullMedia,
   promoteDraftMediaFile,
   collectArticleReferencedMediaIds,
+  collectArticleStorageKeys,
   pullArticleMedia,
 } from '../src/sync/media.js';
+import { formatOrphanMediaWarning } from '../src/cli/commands/pull.js';
 
 describe('Media Sync Engine', () => {
   let tempDir: string;
@@ -317,7 +319,7 @@ featuredImage: 01M67TARGET000000000000001
 ---
 
 Body with targeted image:
-![Inline](/_emdash/api/media/file/01M67TARGET000000000000002.jpg)
+![Inline](/_emdash/api/media/file/01M67TARGET000000000000002-inline-chart.png)
 `,
       'utf8',
     );
@@ -385,6 +387,9 @@ Body with targeted image:
     expect(res.downloaded).toBe(2);
     expect(res.articleId).toBe('01M67ART000000000000000001');
     expect(res.mediaIds).toEqual(['01M67TARGET000000000000001', '01M67TARGET000000000000002']);
+    // Both records resolved and mirrored, so nothing is reported as orphan. A body URL that carries
+    // the media record id instead of a storageKey is not a storageKey and is never collected.
+    expect(res.orphanStorageKeys).toEqual([]);
 
     const mediaDir = path.join(tempDir, 'media');
     expect(
@@ -396,5 +401,412 @@ Body with targeted image:
     expect(
       fs.existsSync(path.join(mediaDir, '20261108_01M67TARGET000000000000002-inline-chart.png')),
     ).toBe(true);
+  });
+
+  it('collects ULID-based storageKeys from bodies including legacy containers and opaque fences', () => {
+    const body = [
+      '![ok](/_emdash/api/media/file/01M67LEGACYX00000000000001.jpg)',
+      '[dimage url="/_emdash/api/media/file/01M67LEGACYX00000000000002.png" control=true]',
+      '<!--ec:block {"type":"custom","src":"/_emdash/api/media/file/01M67LEGACYX00000000000003.webp"} -->',
+      '![tpl](/_emdash/api/media/file/${item.storageKey})',
+      '<img src="/_emdash/api/media/file/01M67LEGACYX00000000000004.01M67LEGACYX00000000000005.jpeg">',
+    ].join('\n');
+
+    const keys = collectArticleStorageKeys(body);
+    expect(keys.map((k) => k.storageKey)).toEqual([
+      '01M67LEGACYX00000000000001.jpg',
+      '01M67LEGACYX00000000000002.png',
+      '01M67LEGACYX00000000000003.webp',
+      '01M67LEGACYX00000000000004.01M67LEGACYX00000000000005.jpeg',
+    ]);
+    expect(keys[3].ulids).toEqual(['01M67LEGACYX00000000000004', '01M67LEGACYX00000000000005']);
+  });
+
+  it('reports an orphan storageKey when the media record lookup fails (legacy WP assets)', async () => {
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ART000000000000000009-legacy.md'),
+      `---
+id: 01M67ART000000000000000009
+title: Legacy Asset Article
+collection: posts
+status: draft
+locale: ja
+---
+
+![legacy](/_emdash/api/media/file/01M67LEGACYX0000000000000A.jpg)
+`,
+      'utf8',
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67LEGACYX0000000000000A')) {
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000009',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    // The reference is detected and reported. Emit never downloads it and never invents a media record.
+    expect(res.total).toBe(2);
+    expect(res.failed).toBe(1);
+    expect(res.orphanStorageKeys).toEqual(['01M67LEGACYX0000000000000A.jpg']);
+    expect(res.downloaded).toBe(0);
+    expect(res.skipped).toBe(0);
+
+    const mediaDir = path.join(tempDir, 'media');
+    expect(
+      fs.readdirSync(mediaDir).filter((f) => f.includes('01M67LEGACYX0000000000000A')),
+    ).toEqual([]);
+
+    // The file route is never probed by a pull; only doctor may probe it, and only when asked.
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContain(
+      'https://example.com/_emdash/api/media/file/01M67LEGACYX0000000000000A.jpg',
+    );
+  });
+
+  it('mirrors a healthy asset whose record reports the body storageKey without orphan reporting', async () => {
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ART000000000000000010-healthy.md'),
+      `---
+id: 01M67ART000000000000000010
+title: Healthy Asset Article
+featuredImage: 01M67HEALTHYX000000000000B
+collection: posts
+status: draft
+locale: ja
+---
+
+![ok](/_emdash/api/media/file/01M67HEALTHYX000000000000B.jpg)
+`,
+      'utf8',
+    );
+
+    const fakeImageBuffer = Buffer.from('healthy image bytes');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67HEALTHYX000000000000B')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67HEALTHYX000000000000B',
+                filename: 'hero-photo.jpg',
+                mimeType: 'image/jpeg',
+                size: fakeImageBuffer.length,
+                storageKey: '01M67HEALTHYX000000000000B.jpg',
+                url: '/_emdash/api/media/file/01M67HEALTHYX000000000000B.jpg',
+                createdAt: '2021-06-20T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/01M67HEALTHYX000000000000B.jpg')) {
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () =>
+            fakeImageBuffer.buffer.slice(
+              fakeImageBuffer.byteOffset,
+              fakeImageBuffer.byteOffset + fakeImageBuffer.byteLength,
+            ),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000010',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(1);
+    expect(res.downloaded).toBe(1);
+    expect(res.failed).toBe(0);
+    expect(res.orphanStorageKeys).toEqual([]);
+    expect(
+      fs.existsSync(
+        path.join(tempDir, 'media', '20210620_01M67HEALTHYX000000000000B-hero-photo.jpg'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reports a body storageKey as orphan when the resolved record reports a different storageKey', async () => {
+    // A media record can exist and mirror fine while its own storageKey differs from the key baked
+    // into the migrated body, so the body asset is still unreachable and must be reported.
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ART000000000000000012-mismatch.md'),
+      `---
+id: 01M67ART000000000000000012
+title: Mismatched Storage Key Article
+collection: posts
+status: draft
+locale: ja
+---
+
+![mismatch](/_emdash/api/media/file/01M67MSMATCHX000000000000E.jpg)
+`,
+      'utf8',
+    );
+
+    const fakeImageBuffer = Buffer.from('other bytes');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67MSMATCHX000000000000E')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67MSMATCHX000000000000E',
+                filename: 'other-name.jpg',
+                mimeType: 'image/jpeg',
+                size: fakeImageBuffer.length,
+                storageKey: '01M67THERKEYX000000000000F.jpg',
+                url: '/_emdash/api/media/file/01M67THERKEYX000000000000F.jpg',
+                createdAt: '2021-06-20T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/01M67THERKEYX000000000000F.jpg')) {
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () =>
+            fakeImageBuffer.buffer.slice(
+              fakeImageBuffer.byteOffset,
+              fakeImageBuffer.byteOffset + fakeImageBuffer.byteLength,
+            ),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000012',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(2);
+    expect(res.downloaded).toBe(1);
+    expect(res.orphanStorageKeys).toEqual(['01M67MSMATCHX000000000000E.jpg']);
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContain(
+      'https://example.com/_emdash/api/media/file/01M67MSMATCHX000000000000E.jpg',
+    );
+  });
+
+  it('never prunes leftover legacy_* files but still prunes stale real media records', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    // Residue from the removed file-route fallback: Emit no longer writes these and does not delete
+    // them either, so a human must clean them up by hand (announced in the release notes).
+    fs.writeFileSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.jpg'), 'legacy bytes');
+    fs.writeFileSync(
+      path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.yaml'),
+      ['id: null', 'storageKey: 01M67LEGACYX0000000000000C.jpg', 'synthesized: true', ''].join(
+        '\n',
+      ),
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67GONEAAAAAAAAAAAAAA0K5-stale.jpg'),
+      'stale bytes',
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { items: [], nextCursor: null } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      all: true,
+      prune: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.deleted).toBe(1);
+    expect(fs.existsSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.jpg'))).toBe(true);
+    expect(fs.existsSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.yaml'))).toBe(true);
+  });
+
+  it('does not re-download a mirrored asset whose storageKey is already local (idempotent pull)', async () => {
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ART000000000000000011-idempotent.md'),
+      `---
+id: 01M67ART000000000000000011
+title: Idempotent Pull Article
+featuredImage: 01M67HEALTHYX000000000000D
+collection: posts
+status: draft
+locale: ja
+---
+
+![ok](/_emdash/api/media/file/01M67HEALTHYX000000000000D.jpg)
+`,
+      'utf8',
+    );
+
+    const fakeImageBuffer = Buffer.from('already on disk');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67HEALTHYX000000000000D')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67HEALTHYX000000000000D',
+                filename: 'hero-photo.jpg',
+                mimeType: 'image/jpeg',
+                size: fakeImageBuffer.length,
+                storageKey: '01M67HEALTHYX000000000000D.jpg',
+                url: '/_emdash/api/media/file/01M67HEALTHYX000000000000D.jpg',
+                createdAt: '2021-06-20T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/01M67HEALTHYX000000000000D.jpg')) {
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () =>
+            fakeImageBuffer.buffer.slice(
+              fakeImageBuffer.byteOffset,
+              fakeImageBuffer.byteOffset + fakeImageBuffer.byteLength,
+            ),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const first = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000011',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(first.downloaded).toBe(1);
+
+    const second = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000011',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(second.skipped).toBe(1);
+    expect(second.downloaded).toBe(0);
+    expect(second.orphanStorageKeys).toEqual([]);
+  });
+
+  it('formats an actionable orphan media warning naming the storageKey', () => {
+    const warning = formatOrphanMediaWarning(['01M67LEGACYX0000000000000A.jpg']);
+    expect(warning).toContain('[ORPHAN_MEDIA_ASSET]');
+    expect(warning).toContain('01M67LEGACYX0000000000000A.jpg');
+    expect(warning).toContain('/_emdash/api/media/file/<storageKey>');
+    expect(warning).toContain('admin UI or wrangler');
+    expect(warning).toContain('Emit does not repair server data');
+
+    // No orphans means no warning line at all.
+    expect(formatOrphanMediaWarning([])).toBe('');
+    expect(formatOrphanMediaWarning(undefined)).toBe('');
+  });
+
+  it('mirrors a record whose storageKey differs from its id and reports nothing as orphan (ID-space regression)', async () => {
+    // Two distinct ID spaces: `GET /_emdash/api/media/{id}` keys on the D1 primary key, while the
+    // body URL carries the storageKey. A migrated WordPress import can store a record whose
+    // storageKey ULID is NOT its record id, so matching by "the first segment of the body URL" would
+    // hit no record and falsely report an existing asset as orphaned. The canonical path must resolve
+    // the real record and mirror it under that record's own filename.
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ARTICLEIDXY0000000123-mixed-id-space.md'),
+      `---
+id: 01M67ARTICLEIDXY0000000123
+title: Mixed ID Space Article
+collection: posts
+status: draft
+locale: ja
+---
+
+![mixed](/_emdash/api/media/file/01M67STRGKEYX0000000123456.jpg)
+`,
+      'utf8',
+    );
+
+    const imageBuffer = Buffer.from('mixed id space bytes');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67STRGKEYX0000000123456')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: '01M67ARTCLEDXY000000012345',
+                filename: 'wp-import-photo.jpg',
+                mimeType: 'image/jpeg',
+                size: imageBuffer.length,
+                storageKey: '01M67STRGKEYX0000000123456.jpg',
+                url: '/_emdash/api/media/file/01M67STRGKEYX0000000123456.jpg',
+                createdAt: '2021-06-20T12:00:00.000Z',
+              },
+            },
+          }),
+        });
+      }
+      if (url.includes('/_emdash/api/media/file/01M67STRGKEYX0000000123456.jpg')) {
+        return Promise.resolve({ ok: true, arrayBuffer: async () => imageBuffer.buffer });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ARTICLEIDXY0000000123',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(1);
+    expect(res.downloaded).toBe(1);
+    expect(res.failed).toBe(0);
+    // The asset is mirrored under the record's own id, never as a synthesized legacy_* pair.
+    const mediaFiles = fs.readdirSync(path.join(tempDir, 'media'));
+    expect(mediaFiles).toContain('20210620_01M67ARTCLEDXY000000012345-wp-import-photo.jpg');
+    expect(mediaFiles.some((f) => f.startsWith('legacy_'))).toBe(false);
   });
 });

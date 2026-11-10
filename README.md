@@ -884,8 +884,10 @@ emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune]
 * `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space.
 * `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
 * `--all`: Fetch all media items without limit.
-* `--prune`: Remove local media files that no longer exist on remote.
+* `--prune`: Remove local media files that no longer exist on remote. Leftover `media/legacy_*` residue written by older Emit versions is never pruned and must be deleted by hand.
 * `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
+
+> **Orphaned assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image whose EmDash media record does not exist (a common result of incomplete WordPress imports), Emit reports it as `⚠️ [ORPHAN_MEDIA_ASSET]` and mirrors nothing. Registering the missing media record is an EmDash/Wrangler task; once the record exists, a normal `emit pull-media` mirrors the asset normally.
 
 ---
 

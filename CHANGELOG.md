@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `emit doctor` reports leniently repairable frontmatter as a `warning` with an explicit `emit pull` instruction instead of silently passing, so `status`, `doctor`, and `pull` never disagree.
 - **Accurate Repair Hints (H3 / P3)**: CLI `emit status` and MCP `sync_status` distinguish healable from unrecoverable invalid files (`healableInvalid` / `unrecoverableInvalid` in the MCP payload) and describe the actual repair mechanism (local syntax-only re-quoting, no article fetch for cached unchanged revisions).
 
+### Removed
+- **Legacy Synthesized Media Fallback (`media/legacy_*` companions)**:
+  - Deleted `syncSynthesizedMediaItem` and every direct file-route fallback branch in `pullArticleMedia`: Emit no longer downloads `/_emdash/api/media/file/<storageKey>` assets that have no D1 media record, never invents a media record for them, and writes nothing into `media/`. Creating the missing record belongs to EmDash (admin UI) or Wrangler — Emit mirrors records and does not repair server data. This also eliminates the self-destruct bug where a synthesized pair was unlinked during cleanup because its `legacy_` base name never matched the referenced id.
+  - `pullArticleMedia` now collects every body storageKey via the new exported `collectArticleStorageKeys` (markdown images, HTML `img` tags, opaque fences, and legacy container lines) and reports the keys no media record could mirror as `orphanStorageKeys`, which CLI `emit pull-media --article` prints as `⚠️ [ORPHAN_MEDIA_ASSET] ... Register the missing media records on EmDash (admin UI or wrangler)` and MCP `sync_pull_media` returns both as an `Orphan Storage Keys` list and the same warning.
+  - `emit doctor` no longer recognizes `legacy_*` stems in its known-storageKey set, so leftover residue is reported as a missing reference instead of silently satisfying it; with `--check-media-urls` a key the origin still serves is downgraded to an informational "served by file route but no local mirror or media record" note, and the check's suggestion always points at the EmDash admin UI or wrangler rather than at `pull-media`.
+  - `emit pull-media --prune` explicitly skips `legacy_*` files (they match no media id) so existing residue is never deleted implicitly; it must be removed by hand after the remote record is registered. Media metadata lookup also refuses to read a `legacy_*.yaml` as a real record's metadata.
+
 ---
 
 ## [0.1.14] - 2026-11-10

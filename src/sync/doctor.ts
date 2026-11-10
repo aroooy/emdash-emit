@@ -61,6 +61,16 @@ export interface RunWorkspaceDoctorOptions {
   profileOrigin?: string;
   collection?: string;
   strictMedia?: boolean;
+  /**
+   * Probe the public media file route (`HEAD /_emdash/api/media/file/<storageKey>`) for body
+   * references that no local mirror, cache entry, or base snapshot can resolve. A reference that the
+   * origin still serves is downgraded from a missing-file warning to an informational note: migrated
+   * WordPress assets keep working in the browser while their media record returns 404, which is why
+   * `emit pull-media` cannot mirror them. Disabled by default so doctor stays offline.
+   */
+  checkMediaUrls?: boolean;
+  /** Optional fetch override used by the file-route probe (tests inject stubs here). */
+  fetchFn?: typeof fetch;
 }
 
 export interface ScannedMediaReferences {
@@ -484,6 +494,12 @@ export async function runWorkspaceDoctor(
     for (const f of mediaFiles) {
       knownLocalFiles.add(f);
       knownLocalFiles.add(path.posix.join('media', f));
+      if (f.startsWith('legacy_')) {
+        // Leftover mirrors from the removed file-route fallback must never feed the known-storageKey
+        // or known-media-id sets: they back no real media record, so a body referencing them stays a
+        // missing-file warning and `--check-media-urls` can still downgrade it to a served note.
+        continue;
+      }
       if (f.endsWith('.yaml')) {
         try {
           const doc = yaml.load(fs.readFileSync(path.join(mediaDir, f), 'utf8')) as Record<
@@ -502,7 +518,7 @@ export async function runWorkspaceDoctor(
           // ignore corrupted individual yaml
         }
       } else {
-        // media/<yyyyMMdd>_<mediaId>-<name>.<ext>: keep the "<name>.<ext>" tail
+        // media/<yyyyMMdd>_<mediaId>-<name>.<ext>: keep the "<name>.<ext>" tail.
         const dash = f.indexOf('-');
         if (dash !== -1) knownMediaFileSuffixes.add(f.slice(dash + 1));
       }
@@ -540,8 +556,20 @@ export async function runWorkspaceDoctor(
   }
 
   const missingMedia: string[] = [];
+  // Legacy assets whose media record is gone (404) but which are still served by the public file
+  // route. Verified only when --check-media-urls performs a live HEAD against the origin, so an
+  // offline doctor run keeps reporting them as missing exactly as before.
+  const verifiedFileRouteOnly: string[] = [];
+  const unreachableFileRoute: string[] = [];
   const informationalUnresolved: string[] = [];
   const invalidMediaRefs: string[] = [];
+  // Candidates that survived every local fallback; probed live only when checkMediaUrls is enabled.
+  const pendingRemoteProbes: Array<{ ref: string; key: string; source: string }> = [];
+  const probeKey = (ref: string): string | null => {
+    const m = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
+    if (!m) return null;
+    return VALID_MEDIA_FILE_KEY.test(m[1]) ? m[1] : null;
+  };
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
     if (!fs.existsSync(dir)) continue;
@@ -576,8 +604,13 @@ export async function runWorkspaceDoctor(
         };
 
         for (const ref of detailed.normalRefs) {
-          if (!checkRef(ref)) {
-            missingMedia.push(`${ref} (referenced by ${path.join(collection, status, file)})`);
+          if (checkRef(ref)) continue;
+          const source = path.join(collection, status, file);
+          const key = options.checkMediaUrls ? probeKey(ref) : null;
+          if (key) {
+            pendingRemoteProbes.push({ ref, key, source });
+          } else {
+            missingMedia.push(`${ref} (referenced by ${source})`);
           }
         }
 
@@ -600,6 +633,38 @@ export async function runWorkspaceDoctor(
     }
   }
 
+  // Live file-route probe: legacy migrated assets can still be served by /_emdash/api/media/file/
+  // even though their media record returns 404, so confirm them against the origin instead of
+  // reporting them as missing files that pull-media cannot fetch.
+  if (options.checkMediaUrls && pendingRemoteProbes.length > 0) {
+    const origin = options.profileOrigin || options.config.origin;
+    const probeFetch = options.fetchFn || globalThis.fetch;
+    const reachableByKey = new Map<string, boolean>();
+    for (const candidate of pendingRemoteProbes) {
+      if (reachableByKey.has(candidate.key)) continue;
+      let reachable = false;
+      try {
+        const url = new URL(`/_emdash/api/media/file/${candidate.key}`, origin).toString();
+        const res = await probeFetch(url, { method: 'HEAD' });
+        reachable = res.ok;
+      } catch {
+        reachable = false;
+      }
+      reachableByKey.set(candidate.key, reachable);
+    }
+    for (const candidate of pendingRemoteProbes) {
+      if (reachableByKey.get(candidate.key)) {
+        verifiedFileRouteOnly.push(
+          `${candidate.ref} (served by file route but no local mirror or media record; referenced by ${candidate.source})`,
+        );
+      } else {
+        unreachableFileRoute.push(`${candidate.ref} (referenced by ${candidate.source})`);
+      }
+    }
+  }
+
+  missingMedia.push(...unreachableFileRoute);
+
   if (missingMedia.length > 0) {
     checks.push({
       id: 'media_references',
@@ -609,6 +674,9 @@ export async function runWorkspaceDoctor(
         `${missingMedia.length} referenced media file(s) are missing from disk. ` +
         `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
         `configured mediaSyncLimit) to fetch them.`,
+      suggestion: options.checkMediaUrls
+        ? 'Assets served only by the file route have no EmDash media record (an orphaned object from an incomplete import). Register them on EmDash via the admin UI or wrangler; Emit mirrors records, never repairs server data.'
+        : undefined,
       details: missingMedia,
     });
   } else if (options.strictMedia && informationalUnresolved.length > 0) {
@@ -621,6 +689,11 @@ export async function runWorkspaceDoctor(
     });
   } else {
     const notes: string[] = [];
+    if (verifiedFileRouteOnly.length > 0) {
+      notes.push(
+        `${verifiedFileRouteOnly.length} reference(s) served by the remote file route without a media record`,
+      );
+    }
     if (informationalUnresolved.length > 0) {
       notes.push(
         `${informationalUnresolved.length} informational/custom-block reference(s) ignored`,
@@ -636,8 +709,10 @@ export async function runWorkspaceDoctor(
       name: 'Media References',
       status: 'ok',
       message: `All referenced local media files exist on disk.${notes.length ? ` (${notes.join('; ')})` : ''}`,
-      ...(informationalUnresolved.length > 0 || invalidMediaRefs.length > 0
-        ? { details: [...informationalUnresolved, ...invalidMediaRefs] }
+      ...(verifiedFileRouteOnly.length > 0 ||
+      informationalUnresolved.length > 0 ||
+      invalidMediaRefs.length > 0
+        ? { details: [...verifiedFileRouteOnly, ...informationalUnresolved, ...invalidMediaRefs] }
         : {}),
     });
   }

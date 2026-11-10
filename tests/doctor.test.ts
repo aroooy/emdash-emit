@@ -29,6 +29,7 @@ import { initWorkspace, loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { runWorkspaceDoctor, scanArticleMediaDetailed } from '../src/sync/doctor.js';
+import { collectArticleStorageKeys } from '../src/sync/media.js';
 
 describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   let tempDir: string;
@@ -600,6 +601,181 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     // A capture with no ULID at all is genuine garbage and must be reported as malformed
     const garbage = scanArticleMediaDetailed('![x](/_emdash/api/media/file/placeholder-key.png)\n');
     expect(garbage.invalidRefs).toContain('/_emdash/api/media/file/placeholder-key.png');
+  });
+
+  const writeLegacyArticle = (slug: string, key: string): void => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug,
+      title: 'Legacy File Route Article',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const body = `![legacy](/_emdash/api/media/file/${key})\n`;
+    fs.writeFileSync(
+      path.join(draftDir, `20210620_${articleId}-${slug}.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+  };
+
+  it('reports a legacy file-route-only asset as missing when doctor runs offline (C-1)', async () => {
+    writeLegacyArticle('legacy-offline', '01M67LEGACYX0000000000000D.jpg');
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('warning');
+    expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000D.jpg');
+  });
+
+  it('downgrades a legacy asset that the remote file route still serves to an ok note (C-2)', async () => {
+    writeLegacyArticle('legacy-online', '01M67LEGACYX0000000000000E.jpg');
+
+    const fetchCalls: string[] = [];
+    const fetchFn = async (url: string | URL) => {
+      fetchCalls.push(String(url));
+      return new Response(null, { status: 200 });
+    };
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+      profileOrigin: 'https://aroooy.net',
+      checkMediaUrls: true,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(fetchCalls).toContain(
+      'https://aroooy.net/_emdash/api/media/file/01M67LEGACYX0000000000000E.jpg',
+    );
+    expect(mCheck?.status).toBe('ok');
+    expect(mCheck?.message).toContain('served by the remote file route without a media record');
+    expect(JSON.stringify(mCheck?.details ?? '')).toContain(
+      'served by file route but no local mirror or media record',
+    );
+  });
+
+  it('keeps reporting a reference as missing when the remote file route also fails (C-3)', async () => {
+    writeLegacyArticle('legacy-dead', '01M67LEGACYX0000000000000F.jpg');
+
+    const fetchFn = async () => new Response(null, { status: 404 });
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+      profileOrigin: 'https://aroooy.net',
+      checkMediaUrls: true,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('warning');
+    expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000F.jpg');
+    // The suggestion must point at server-side remediation, never at a pull-media mirror.
+    expect(mCheck?.suggestion).toContain('admin UI or wrangler');
+    expect(mCheck?.suggestion).toContain('never repairs server data');
+    expect(mCheck?.suggestion ?? '').not.toContain('pull-media');
+  });
+
+  it('reports a leftover legacy_* mirror as missing because Emit no longer recognizes it (C-4)', async () => {
+    // The removed file-route fallback wrote media/legacy_<storageKey> pairs that never backed a real
+    // media record. A leftover pair must not silently satisfy the reference: doctor still reports it
+    // so the user can fix the missing record on EmDash and delete the residue. Recognition used to
+    // go through a `legacy_` stem in the known-storageKey set; that recognition is gone, so neither
+    // the YAML storageKey field nor the mirrored binary file may resolve the reference anymore.
+    writeLegacyArticle('legacy-residue', '01M67LEGACYX0000000000000H.jpg');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000H.jpg'), 'legacy bytes');
+    fs.writeFileSync(
+      path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000H.yaml'),
+      [
+        'id: null',
+        'filename: legacy_01M67LEGACYX0000000000000H.jpg',
+        'storageKey: 01M67LEGACYX0000000000000H.jpg',
+        'synthesized: true',
+        'source: direct-file-route',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('warning');
+    expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000H.jpg');
+  });
+
+  it('resolves a body storageKey that differs from the media record id (C-6)', async () => {
+    // Two distinct ID spaces, and they are not interchangeable: `GET /_emdash/api/media/{id}` keys on
+    // the D1 primary key while the body URL carries the storageKey. A migrated WordPress import can
+    // store a record whose storageKey ULID is NOT its record id, so such an asset must resolve
+    // through its canonical companion YAML (or media_state), never by guessing the first ULID segment
+    // of the body URL. Doctor must stay silent here: the reference is genuinely satisfied.
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    writeLegacyArticle('mixed-id-space', '01M67STRGKEYX0000000123456.jpg');
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67ARTCLEDXY000000012345-wp-import-photo.jpg'),
+      'binary',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67ARTCLEDXY000000012345-wp-import-photo.yaml'),
+      [
+        'id: 01M67ARTCLEDXY000000012345',
+        'filename: wp-import-photo.jpg',
+        'storageKey: 01M67STRGKEYX0000000123456.jpg',
+        'mimeType: image/jpeg',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    expect(JSON.stringify(mCheck?.details ?? '')).not.toContain('01M67STRGKEYX0000000123456.jpg');
+  });
+
+  it('collects real legacy workspace storageKeys from migrated article bodies (C-5)', async () => {
+    const wsRoot = '/Volumes/ext/github/emdash.aroooy.net';
+    if (!fs.existsSync(wsRoot)) return; // only runs on the developer machine that mirrors the live site
+
+    const body = fs.readFileSync(
+      path.join(
+        wsRoot,
+        'posts/published/20210620_01M67N0ZG3F9N0WH6D30EA3J5A-GoPro-Maxを一年くらい使ってみての雑なレビュー.md',
+      ),
+      'utf8',
+    );
+    const keys = collectArticleStorageKeys(body);
+    expect(keys.length).toBeGreaterThanOrEqual(2);
+    expect(keys.map((k) => k.storageKey)).toEqual([
+      '01M67NT2GZ9NRA7RS6PZ8D0VMQ.jpg',
+      '01M67NT2SM005Z6EZ32D7SR899.jpg',
+    ]);
   });
 
   // --- v0.1.14 Specific Test Cases (R5) ---

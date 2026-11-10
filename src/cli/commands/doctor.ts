@@ -48,6 +48,10 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
       '--strict-media',
       'Enforce strict media verification (fail on unpromoted or unverified references)',
     )
+    .option(
+      '--check-media-urls',
+      'Probe the remote media file route for references with no local mirror, downgrading legacy assets that are still served remotely to informational notes',
+    )
     .action(async (options) => {
       try {
         const ctx = resolveContext(options.profile, { optionalAuth: true });
@@ -61,6 +65,7 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
           profileOrigin: ctx.auth?.origin,
           collection,
           strictMedia: Boolean(options.strictMedia),
+          checkMediaUrls: Boolean(options.checkMediaUrls),
         });
 
         console.log(`🩺 Emit Workspace Doctor`);
