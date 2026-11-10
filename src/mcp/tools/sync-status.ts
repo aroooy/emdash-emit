@@ -148,10 +148,14 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           : {}),
         ...(status.summary.invalid > 0
           ? {
+              healableInvalid: status.summary.healableInvalid,
+              unrecoverableInvalid: status.summary.invalid - status.summary.healableInvalid,
               repairHint:
                 uncachedInvalid.length > 0
-                  ? `Run sync_pull to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
-                  : 'Run sync_pull (or "emit pull" in CLI) to automatically re-serialize and repair frontmatter syntax (local body is strictly preserved).',
+                  ? `Run sync_pull to automatically repair cached invalid frontmatter (syntax-only re-quoting; local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sliding window, run sync_pull with id: "${exampleUncachedId}" (or "emit pull ${exampleUncachedId}" in CLI).`
+                  : status.summary.healableInvalid === status.summary.invalid
+                    ? `Run sync_pull (or "emit pull" in CLI) to automatically repair all ${status.summary.invalid} invalid frontmatter file(s): cached articles whose remote revision is unchanged are healed locally with syntax-only re-quoting and no article fetch, so this stays fast even for large corpora. Healing changes only YAML quoting, not values, so the canonical file stays in sync and the remote content is left untouched.`
+                    : `Run sync_pull (or "emit pull" in CLI) to automatically repair ${status.summary.healableInvalid} of ${status.summary.invalid} invalid file(s) with syntax-only re-quoting; the remaining ${status.summary.invalid - status.summary.healableInvalid} file(s) have unrecoverable frontmatter and must be edited manually.`,
             }
           : {}),
         ...(status.summary.conflicts > 0

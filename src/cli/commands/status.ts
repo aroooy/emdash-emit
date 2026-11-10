@@ -115,8 +115,8 @@ export function registerStatusInitCommands(
           icon = '⚪';
           label = 'untracked';
         } else if (item.syncStatus === 'invalid') {
-          icon = '🔴';
-          label = 'invalid ';
+          icon = item.healable ? '🟠' : '🔴';
+          label = item.healable ? 'healable' : 'invalid ';
         }
 
         const titleDisplay = item.title ? ` (${item.title})` : '';
@@ -130,8 +130,10 @@ export function registerStatusInitCommands(
       }
 
       const invalidSuffix = status.summary.invalid > 0 ? `, ${status.summary.invalid} invalid` : '';
+      const healableSuffix =
+        status.summary.healableInvalid > 0 ? ` (${status.summary.healableInvalid} healable)` : '';
       console.log(
-        `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix})\n`,
+        `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix}${healableSuffix})\n`,
       );
       if (
         status.summary.flags &&
@@ -159,14 +161,22 @@ export function registerStatusInitCommands(
         const uncachedInvalid = status.items.filter(
           (i) => i.syncStatus === 'invalid' && i.cached === false,
         );
+        const unrecoverableInvalid = status.items.filter(
+          (i) => i.syncStatus === 'invalid' && !i.healable,
+        );
         if (uncachedInvalid.length > 0) {
           const exampleId = uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
           console.log(
             `💡 Hint: Run "emit pull" to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
           );
+        } else if (unrecoverableInvalid.length > 0) {
+          console.log(
+            `💡 Hint: ${status.summary.healableInvalid} invalid file(s) will be repaired automatically by "emit pull" (syntax-only re-quoting; local body is strictly preserved). ` +
+              `${unrecoverableInvalid.length} file(s) need manual frontmatter editing — "emit pull" cannot fix them.\n`,
+          );
         } else {
           console.log(
-            '💡 Hint: Run "emit pull" to automatically re-serialize and repair frontmatter syntax (local body is strictly preserved).\n',
+            '💡 Hint: Run "emit pull" to automatically repair invalid frontmatter syntax (syntax-only re-quoting; local body is strictly preserved). No network access is needed for cached articles whose remote revision is unchanged.\n',
           );
         }
       }

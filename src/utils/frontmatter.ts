@@ -247,6 +247,9 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
   const repairedLines: string[] = [];
   let inTaxonomiesBlock = false;
   let inSequenceBlock = false;
+  // Indentation level (leading spaces) of the taxonomy key line that opened the current
+  // sequence block, so nested sequences can be re-indented relative to their own parent key.
+  let sequenceParentIndent = 2;
 
   for (const line of lines) {
     let repairedLine = line;
@@ -259,14 +262,16 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
     } else if (/^bylines:\s*$/.test(line)) {
       inTaxonomiesBlock = false;
       inSequenceBlock = true;
+      sequenceParentIndent = 0;
       repairedLines.push(line);
       continue;
     } else if (/^\S/.test(line)) {
       // Any other top-level key leaves both taxonomies and bylines blocks
       inTaxonomiesBlock = false;
       inSequenceBlock = false;
-    } else if (inTaxonomiesBlock && /^\s{2}(categories|tags|[a-zA-Z0-9_-]+):\s*$/.test(line)) {
+    } else if (inTaxonomiesBlock && /^\s+(categories|tags|[a-zA-Z0-9_-]+):\s*$/.test(line)) {
       inSequenceBlock = true;
+      sequenceParentIndent = (line.match(/^\s*/) as RegExpMatchArray)[0].length;
       repairedLines.push(line);
       continue;
     }
@@ -288,8 +293,10 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
           value = JSON.stringify(value);
         }
 
-        // If indentation inside sequence block is slightly off (e.g. 2 or 3 spaces instead of 4)
-        const indent = inTaxonomiesBlock && leadingSpace.length < 4 ? '    ' : leadingSpace;
+        // Re-indent only when the item sits shallower than its parent key's indentation, which
+        // js-yaml rejects (legacy serialization emitted 2-space items under a 2-space taxonomy key).
+        const needsReindent = leadingSpace.length < sequenceParentIndent + 2;
+        const indent = needsReindent ? ' '.repeat(sequenceParentIndent + 2) : leadingSpace;
         repairedLine = `${indent}- ${value}${trailingComment}`;
         repairedLines.push(repairedLine);
         continue;
@@ -319,6 +326,10 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
   const candidateFull = `---${eol}${candidateYaml}${eol}---${bodyWithLeadingNewline}`;
 
   try {
+    const candidateData = matter(`---${eol}${candidateYaml}${eol}---`).data as unknown;
+    if (!candidateData || typeof candidateData !== 'object' || Array.isArray(candidateData)) {
+      return null;
+    }
     const reparsed = parseMarkdown(candidateFull);
     // Extra validation: verify that slug, IDs, taxonomies, and bylines were not corrupted by comments
     if (reparsed.frontmatter.slug.includes('#') || reparsed.frontmatter.id.includes('#')) {

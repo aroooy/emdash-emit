@@ -833,7 +833,9 @@ describe('Pull & Push Synchronization Engine', () => {
     const status = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(status.summary.total).toBe(1);
     expect(status.summary.invalid).toBe(1);
+    expect(status.summary.healableInvalid).toBe(1);
     expect(status.items[0].syncStatus).toBe('invalid');
+    expect(status.items[0].healable).toBe(true);
     expect(status.items[0].id).toBe(brokenId);
     expect(status.items[0].error).toBeDefined();
 
@@ -935,16 +937,153 @@ describe('Pull & Push Synchronization Engine', () => {
 
     expect(res.updated).toBe(true);
     expect(res.skipped).toBeUndefined();
+    expect(res.healed).toBe(true);
+    expect(res.meaningChanged).toBe(false);
 
     const healedContent = fs.readFileSync(fullPath, 'utf8');
     expect(healedContent).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
     const parsed = parseMarkdown(healedContent);
     expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
 
+    // Heal happens locally on the fast path: NO article/terms/bylines request is issued (H1)
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // The remote baseline stays untouched and sync_state re-tracks against the repaired hash, so the
+    // file keeps reading as synced: healing is syntax-only and never fabricates a phantom local edit.
+    const healedState = cache.getSyncState(brokenId)!;
+    expect(healedState.localHash).toBe(calculateHash(healedContent));
+    expect(cache.getBaseSnapshot(brokenId)).toBeNull();
+
     // Now getWorkspaceStatus sees it as synced (0 invalid)
     const status = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(status.summary.invalid).toBe(0);
     expect(status.summary.synced).toBe(1);
+
+    // A second pull is a clean no-op skip: the repaired file parses and its hash now matches
+    const res2 = await pullArticle('posts', brokenId, {
+      ...options,
+      workspaceRoot: tempDir,
+      cache,
+      rawItem,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(res2.skipped).toBe(true);
+    expect(res2.healed).toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('pullBatch heals many hash-matched invalid files with only the article-list request (H3)', async () => {
+    const brokenIds = ['01M6HEALBATCH000000000000A', '01M6HEALBATCH000000000000B'];
+    const relPaths: string[] = [];
+
+    for (const brokenId of brokenIds) {
+      const relPath = `posts/published/20261107_${brokenId}-Batch-Heal.md`;
+      const fullPath = path.join(tempDir, relPath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      const brokenMarkdown = [
+        '---',
+        `id: ${brokenId}`,
+        'slug: batch-heal',
+        'title: "Batch Heal"',
+        'collection: posts',
+        'status: published',
+        'publishedAt: "2026-11-07T00:00:00.000Z"',
+        'locale: ja',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+        '---',
+        '',
+        `Batch heal body for ${brokenId}.`,
+      ].join('\n');
+      fs.writeFileSync(fullPath, brokenMarkdown, 'utf8');
+      relPaths.push(relPath);
+
+      cache.saveSyncState({
+        id: brokenId,
+        localFilePath: relPath,
+        localHash: calculateHash(brokenMarkdown),
+        remoteRev: 'rev_1',
+        status: 'published',
+        slug: 'batch-heal',
+        lastSyncedAt: 1730500000,
+      });
+    }
+
+    const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusBefore.summary.invalid).toBe(2);
+    expect(statusBefore.summary.healableInvalid).toBe(2);
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/_emdash/api/mcp')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => JSON.stringify({ result: { content: [{ text: '{"items": []}' }] } }),
+        });
+      }
+      if (url.includes('/openapi.json')) {
+        return Promise.resolve({ ok: true, json: async () => ({ paths: {} }) });
+      }
+      if (url.includes('/content/posts?')) {
+        const requested = new URL(url);
+        const statusParam = requested.searchParams.get('status');
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items:
+              statusParam === 'published'
+                ? brokenIds.map((brokenId) => ({
+                    id: brokenId,
+                    slug: 'batch-heal',
+                    collection: 'posts',
+                    status: 'published',
+                    publishedAt: '2026-11-07T00:00:00.000Z',
+                    _rev: 'rev_1',
+                    data: { title: 'Batch Heal', body: `Batch heal body for ${brokenId}.` },
+                  }))
+                : [],
+          }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    const batchResult = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'test-token',
+      limit: 100,
+      status: 'all',
+      concurrency: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(batchResult.total).toBe(2);
+    expect(batchResult.skipped).toBe(0);
+
+    // Only the bylines sync, batch-limit probe, and paginated article-list requests happened;
+    // no per-article/terms fetches were issued for the 2 healed articles
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    const requestedUrls = mockFetch.mock.calls.map((call) => String(call[0]));
+    expect(requestedUrls.filter((u) => u.includes('/content/posts?'))).toHaveLength(2);
+    expect(requestedUrls.filter((u) => u.includes('/_emdash/api/mcp'))).toHaveLength(1);
+    expect(requestedUrls.filter((u) => u.includes('/openapi.json'))).toHaveLength(1);
+
+    for (const [index, brokenId] of brokenIds.entries()) {
+      const healedContent = fs.readFileSync(path.join(tempDir, relPaths[index]), 'utf8');
+      expect(healedContent).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+      expect(parseMarkdown(healedContent).body.trim()).toBe(`Batch heal body for ${brokenId}.`);
+      expect(cache.getSyncState(brokenId)!.localHash).toBe(calculateHash(healedContent));
+    }
+
+    const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusAfter.summary.invalid).toBe(0);
+    // Fast heal is a pure syntax re-quote: the file stays tracked against its own repaired hash,
+    // so it reports synced (no phantom "modified") and a bare push remains safely blocked.
+    expect(statusAfter.summary.synced).toBe(2);
+    expect(statusAfter.summary.modified).toBe(0);
   });
 
   it('pushArticle reports previousId and previousFilePath when initial POST assigns a new server ULID', async () => {

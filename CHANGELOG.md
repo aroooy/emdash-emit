@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Fast-Path Frontmatter Self-Healing (H1 / P1)**:
+  - `tryFastPathOrHeal` in `src/sync/pull.ts` now validates `parseMarkdown` even when the disk hash matches the cached baseline. Legacy files whose unquoted percent-encoded taxonomy slugs never parse were previously skipped forever, so `emit status` reported them invalid while `emit pull` did nothing.
+  - Such files are repaired locally by `lenientRepairMarkdownFrontmatter` and re-tracked against their own repaired hash; the `base_snapshot` is left untouched, values are never altered, and no per-article or taxonomy fetch is issued — batch pulls of large legacy corpora stay fast (verified: only list/bylines/openapi requests for healed articles).
+  - Only when local lenient repair fails does the pull fall through to the full remote re-serialization path (which preserves unpushed bodies and quarantines divergence as before).
+- **Lenient Repair Indentation Correctness**: `lenientRepairMarkdownFrontmatter` re-indents sequence items relative to their own parent taxonomy key (`sequenceParentIndent`) instead of hardcoding 4 spaces, so legacy 2-space sequences under a 2-space `categories:` key — the actual production corruption shape — are repaired correctly. Repaired candidates are additionally gated on gray-matter producing a plain object before schema validation.
+- **Status & Doctor Diagnostic Alignment (H2 / P2)**:
+  - `getWorkspaceStatus` adds `healable` per invalid item and `summary.healableInvalid`, classifying exactly the set `emit doctor` can recover. `emit status` now shows `🟠 healable` vs `🔴 invalid` and reports `N invalid (M healable)`.
+  - `emit doctor` reports leniently repairable frontmatter as a `warning` with an explicit `emit pull` instruction instead of silently passing, so `status`, `doctor`, and `pull` never disagree.
+- **Accurate Repair Hints (H3 / P3)**: CLI `emit status` and MCP `sync_status` distinguish healable from unrecoverable invalid files (`healableInvalid` / `unrecoverableInvalid` in the MCP payload) and describe the actual repair mechanism (local syntax-only re-quoting, no article fetch for cached unchanged revisions).
+
+---
+
 ## [0.1.14] - 2026-11-10
 
 ### Added

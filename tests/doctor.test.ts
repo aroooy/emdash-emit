@@ -159,6 +159,44 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(cCheck?.message).toContain('1 quarantined file(s) found');
   });
 
+  it('reports healable frontmatter syntax errors as a pull-repairable warning', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+    // Legacy unquoted percent-encoded taxonomy slug: invalid YAML but leniently repairable
+    fs.writeFileSync(
+      path.join(draftDir, '20261108_01M67HEALABLE0000000000001-legacy.md'),
+      [
+        '---',
+        'id: 01M67HEALABLE0000000000001',
+        'slug: legacy-quoting',
+        'title: "Legacy Quoting"',
+        'collection: posts',
+        'status: draft',
+        'locale: ja',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+        '---',
+        '',
+        'Legacy body.',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+    });
+
+    expect(report.overallStatus).toBe('warnings');
+    const fCheck = report.checks.find((c) => c.id === 'frontmatter_integrity');
+    expect(fCheck?.status).toBe('warning');
+    expect(fCheck?.message).toContain('repair automatically');
+    expect(fCheck?.message).toContain('emit pull');
+  });
+
   it('detects unrecoverable frontmatter syntax errors as error', async () => {
     const draftDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });

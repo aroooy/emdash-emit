@@ -579,16 +579,56 @@ export async function pullArticle(
       // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML)
       if (existingSync.localFilePath === expectedRelPath) {
         if (currentDiskHash === existingSync.localHash) {
-          parseMarkdown(currentDiskContent);
-          return {
-            id,
-            slug: existingSync.slug,
-            status: existingSync.status,
-            filePath: existingSync.localFilePath,
-            updated: false,
-            skipped: true,
-            title: rawTitle,
-          };
+          try {
+            parseMarkdown(currentDiskContent);
+            return {
+              id,
+              slug: existingSync.slug,
+              status: existingSync.status,
+              filePath: existingSync.localFilePath,
+              updated: false,
+              skipped: true,
+              title: rawTitle,
+            };
+          } catch {
+            // Disk content is byte-identical to the cached baseline but its frontmatter no longer parses.
+            // Legacy serialization left unquoted %-prefixed (percent-encoded) taxonomy slugs, which js-yaml
+            // rejects as a directive indicator: such files stay hash-matched forever and would be skipped by
+            // every pull, so status reports them invalid while pull does nothing. Heal them in place with the
+            // syntax-only lenient repair instead of falling through to a full remote re-pull.
+            const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
+            if (repaired !== null) {
+              fs.writeFileSync(fullExistingPath, repaired, 'utf8');
+              const parsedRepaired = parseMarkdown(repaired);
+              const repairedHash = calculateHash(repaired);
+
+              // Re-track the repaired file against its own repaired hash so it reads as synced. The
+              // remote baseline stays untouched: healing only re-quotes frontmatter syntax, never values.
+              const healedAt = Math.floor(Date.now() / 1000);
+              options.cache.saveSyncState({
+                ...existingSync,
+                localFilePath: existingSync.localFilePath,
+                localHash: repairedHash,
+                remoteRev,
+                status: parsedRepaired.frontmatter.status,
+                slug: parsedRepaired.frontmatter.slug,
+                lastSyncedAt: healedAt,
+              });
+
+              return {
+                id,
+                slug: parsedRepaired.frontmatter.slug,
+                status: parsedRepaired.frontmatter.status,
+                filePath: existingSync.localFilePath,
+                updated: true,
+                healed: true,
+                meaningChanged: false,
+                title: rawTitle,
+              };
+            }
+            // Not healable locally: fall through to the full remote pull, which re-serializes canonical
+            // frontmatter from the API response and quarantines any body that diverged from the baseline.
+          }
         }
 
         // Local file has unpushed edits. Check if frontmatter parses cleanly.

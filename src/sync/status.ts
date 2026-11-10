@@ -23,7 +23,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
-import { formatFrontmatterParseError, parseMarkdown } from '../utils/frontmatter.js';
+import {
+  formatFrontmatterParseError,
+  lenientRepairMarkdownFrontmatter,
+  parseMarkdown,
+} from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './pull.js';
 import {
   compareArticleFilenameDesc,
@@ -41,6 +45,8 @@ export interface ArticleStatusItem {
   rev?: string;
   cached?: boolean;
   error?: string;
+  /** True when strict parsing failed but a syntax-only lenient repair would succeed (recoverable by `emit pull`). */
+  healable?: boolean;
   conflictPending?: boolean;
   deletePending?: boolean;
   orphan?: boolean;
@@ -55,6 +61,8 @@ export interface WorkspaceStatusResult {
     modified: number;
     untracked: number;
     invalid: number;
+    /** Invalid files that a syntax-only lenient repair can fix (subset of `invalid`). */
+    healableInvalid: number;
     /** Preserved divergent local copies stored in `<collection>/conflicts/` by a pull. */
     conflicts: number;
     /** Extended state flags preserving backward compatibility of the main 4 summary counts */
@@ -132,7 +140,15 @@ export function getWorkspaceStatus(
   if (!fs.existsSync(collectionDir)) {
     return {
       items: [],
-      summary: { total: 0, synced: 0, modified: 0, untracked: 0, invalid: 0, conflicts: 0 },
+      summary: {
+        total: 0,
+        synced: 0,
+        modified: 0,
+        untracked: 0,
+        invalid: 0,
+        healableInvalid: 0,
+        conflicts: 0,
+      },
     };
   }
 
@@ -187,6 +203,9 @@ export function getWorkspaceStatus(
             : baseWithoutDate;
         const syncState = fallbackId !== 'unknown' ? cache.getSyncState(fallbackId) : null;
         const errorMsg = formatFrontmatterParseError(err);
+        // Match `emit doctor`: distinguish files that a syntax-only lenient repair can recover from
+        // files with unrecoverable frontmatter, so status and doctor never disagree.
+        const healable = lenientRepairMarkdownFrontmatter(content) !== null;
 
         items.push({
           id: fallbackId,
@@ -197,6 +216,7 @@ export function getWorkspaceStatus(
           filePath: relPath,
           rev: syncState?.remoteRev,
           cached: Boolean(syncState),
+          healable: healable || undefined,
           error: errorMsg,
         });
       }
@@ -212,6 +232,7 @@ export function getWorkspaceStatus(
     modified: items.filter((i) => i.syncStatus === 'modified').length,
     untracked: items.filter((i) => i.syncStatus === 'untracked').length,
     invalid: items.filter((i) => i.syncStatus === 'invalid').length,
+    healableInvalid: items.filter((i) => i.syncStatus === 'invalid' && i.healable).length,
     conflicts: countQuarantinedCopies(workspaceRoot, collection),
     flags: {
       conflictPending: items.filter((i) => i.conflictPending).length,

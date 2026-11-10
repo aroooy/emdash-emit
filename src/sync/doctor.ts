@@ -186,6 +186,7 @@ export async function runWorkspaceDoctor(
 
   // 3. Frontmatter Syntax & Schema Integrity Check
   const invalidFiles: string[] = [];
+  const healableFiles: string[] = [];
   let totalArticles = 0;
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
@@ -204,6 +205,7 @@ export async function runWorkspaceDoctor(
           const healed = lenientRepairMarkdownFrontmatter(content);
           if (healed) {
             parseMarkdown(healed);
+            healableFiles.push(path.join(collection, status, file));
           } else {
             throw new Error('Unrecoverable parse error');
           }
@@ -221,6 +223,14 @@ export async function runWorkspaceDoctor(
       status: 'error',
       message: `${invalidFiles.length} article(s) have unrecoverable frontmatter syntax errors.`,
       details: invalidFiles,
+    });
+  } else if (healableFiles.length > 0) {
+    checks.push({
+      id: 'frontmatter_integrity',
+      name: 'Frontmatter Integrity',
+      status: 'warning',
+      message: `${healableFiles.length} article(s) have invalid frontmatter YAML that Emit can repair automatically. Run "emit pull" (syntax-only re-quoting; local body is strictly preserved).`,
+      details: healableFiles,
     });
   } else {
     checks.push({
