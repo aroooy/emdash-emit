@@ -66,22 +66,65 @@ export interface RunWorkspaceDoctorOptions {
 export interface ScannedMediaReferences {
   normalRefs: string[];
   informationalRefs: string[];
+  /** References whose captured URL is malformed and therefore cannot name a real media asset. */
+  invalidRefs: string[];
+}
+
+/** A storageKey-style media file key: ULID segments joined by dots, plus a known image extension. */
+const VALID_MEDIA_FILE_KEY =
+  /^[0-9A-HJ-NP-Z]{26}(\.[0-9A-HJ-NP-Z]{26})*\.(jpg|jpeg|png|gif|webp|avif|svg)$/i;
+
+/** Any storageKey-style ULID appearing inside a media file URL. */
+const MEDIA_ULID_IN_URL = /[0-9A-HJ-NP-Z]{26}/g;
+
+/** True when the captured image markup sits inside an inline code span on the same line. */
+function isInlineCodeSpan(line: string, matchText: string, matchIndex: number): boolean {
+  if (line.includes('`' + matchText)) return true;
+  const first = line.indexOf('`');
+  return first !== -1 && first < matchIndex && matchIndex < line.lastIndexOf('`');
+}
+
+/**
+ * Classify a captured media URL. Anything that cannot name a real asset (template placeholders, or
+ * a key polluted by leaked markup) is reported separately so it never counts as missing media.
+ */
+function classifyMediaUrl(url: string): 'valid' | 'placeholder' | 'invalid' {
+  if (url.includes('<') || url.includes('>') || url.includes('${')) return 'placeholder';
+  const keyMatch = url.match(/(?:^|\/)media\/file\/([^?#]*)/);
+  if (!keyMatch) return 'valid'; // a plain local path: resolved by filesystem checks instead
+  if (VALID_MEDIA_FILE_KEY.test(keyMatch[1])) return 'valid';
+  // A ULID is present but the captured key is polluted by leaked markup, as in the real legacy
+  // body line `![alt](/_emdash/api/media/file/<ULID>.jpg" control=true)`. The asset itself still
+  // resolves through the ULID, so only the surrounding capture is treated as residue.
+  return MEDIA_ULID_IN_URL.test(keyMatch[1]) ? 'valid' : 'invalid';
 }
 
 /**
  * Scans article markdown to separate standard body image references from
- * informational references (code blocks, inline code, HTML comments, or placeholder URLs).
+ * informational references (code blocks, inline code, HTML comments, opaque custom-block fences,
+ * or placeholder URLs) and from structurally invalid captures.
  */
 export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaReferences {
   const normalRefs = new Set<string>();
   const informationalRefs = new Set<string>();
+  const invalidRefs = new Set<string>();
 
   const lines = bodyMarkdown.split('\n');
   let inFence = false;
   let fenceDelimiter = '';
+  // EmDash serializes unknown Portable Text blocks as single-line opaque fences
+  // (`<!--ec:block {...} -->`). Their embedded JSON may contain media URLs that belong to the
+  // remote block, not to editable markdown, so they must never be reported as missing.
+  let inOpaqueFence = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
+    if (/^<!--ec:block\s/.test(trimmed)) {
+      inOpaqueFence = !/^.*-->$/.test(trimmed);
+      continue;
+    }
+    if (inOpaqueFence) continue;
+
     // Note: Doctor treats both backticks and tildes (~~~) as fences for diagnostic
     // reporting to avoid false warnings on code examples, whereas push guards (G5/G11)
     // strictly exempt only backtick fences per AGENTS.md.
@@ -102,13 +145,14 @@ export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaRefe
     while ((match = mdRegex.exec(line)) !== null) {
       const url = match[1].trim();
       if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        const isPlaceholder = url.includes('<') && url.includes('>');
-        const isInlineCode =
-          line.includes('`' + match[0]) ||
-          (line.indexOf('`') !== -1 &&
-            line.indexOf('`') < match.index &&
-            match.index < line.lastIndexOf('`'));
-        if (inFence || isInlineCode || isPlaceholder) {
+        const kind = classifyMediaUrl(url);
+        if (kind === 'invalid') {
+          invalidRefs.add(url);
+        } else if (
+          inFence ||
+          isInlineCodeSpan(line, match[0], match.index) ||
+          kind === 'placeholder'
+        ) {
           informationalRefs.add(url);
         } else {
           normalRefs.add(url);
@@ -121,12 +165,26 @@ export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaRefe
     while ((match = htmlRegex.exec(line)) !== null) {
       const url = match[1].trim();
       if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        const isPlaceholder = url.includes('<') && url.includes('>');
-        if (inFence || isPlaceholder || line.includes('<!--')) {
+        const kind = classifyMediaUrl(url);
+        if (kind === 'invalid') {
+          invalidRefs.add(url);
+        } else if (inFence || kind === 'placeholder' || line.includes('<!--')) {
           informationalRefs.add(url);
         } else {
           normalRefs.add(url);
         }
+      }
+    }
+
+    // Legacy WordPress-derived custom container lines that survived the migration, e.g.
+    // `[dimage url="/_emdash/api/media/file/<ULID>.jpg" control=true]`. The URL is quoted inside
+    // the line, so the regexes above cannot capture it; a trailing attribute or bracket marks the
+    // capture as markup residue rather than a real asset reference.
+    const legacyContainerRegex = /\[([a-z]+)\s+url=["']?([^"'\s\]]+)["']?[^\]]*\]/gi;
+    while ((match = legacyContainerRegex.exec(line)) !== null) {
+      const url = match[2].trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+        informationalRefs.add(url);
       }
     }
   }
@@ -134,6 +192,7 @@ export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaRefe
   return {
     normalRefs: Array.from(normalRefs).sort(),
     informationalRefs: Array.from(informationalRefs).sort(),
+    invalidRefs: Array.from(invalidRefs).sort(),
   };
 }
 
@@ -410,11 +469,15 @@ export async function runWorkspaceDoctor(
   }
 
   // 6. Media References Integrity Check
-  // Index all local media companion YAMLs and files to resolve both local paths and storageKey URLs (D1)
+  // Index every local resolution source so a body URL can be matched even when the companion YAML
+  // is missing its storageKey field, which is common for legacy corpora (D1)
   const mediaDir = path.join(options.workspaceRoot, 'media');
   const knownStorageKeys = new Set<string>();
   const knownMediaIds = new Set<string>();
   const knownLocalFiles = new Set<string>();
+  // Filename-based fallback: "<name>.<ext>" suffixes of promoted media files, for bodies that
+  // reference a storageKey whose companion YAML never recorded the storageKey itself.
+  const knownMediaFileSuffixes = new Set<string>();
 
   if (fs.existsSync(mediaDir)) {
     const mediaFiles = fs.readdirSync(mediaDir);
@@ -438,6 +501,10 @@ export async function runWorkspaceDoctor(
         } catch {
           // ignore corrupted individual yaml
         }
+      } else {
+        // media/<yyyyMMdd>_<mediaId>-<name>.<ext>: keep the "<name>.<ext>" tail
+        const dash = f.indexOf('-');
+        if (dash !== -1) knownMediaFileSuffixes.add(f.slice(dash + 1));
       }
     }
     const draftsDir = path.join(mediaDir, 'drafts');
@@ -449,8 +516,32 @@ export async function runWorkspaceDoctor(
     }
   }
 
+  // Cache-backed fallbacks: media_state records the confirmed storageKey of every asset Emit
+  // uploaded, and base snapshots preserve the remote featured_image object (which carries
+  // meta.storageKey) for articles whose local frontmatter only holds the media record id.
+  for (const record of options.cache.listMediaStates()) {
+    if (record.storageKey) knownStorageKeys.add(record.storageKey);
+    if (record.mediaId) knownMediaIds.add(record.mediaId);
+  }
+  const knownFeaturedStorageKeys = new Set<string>();
+  for (const state of options.cache.getAllSyncStates()) {
+    const snapshot = options.cache.getBaseSnapshot(state.id);
+    if (!snapshot?.frontmatterYaml) continue;
+    try {
+      const fm = JSON.parse(snapshot.frontmatterYaml) as Record<string, unknown>;
+      const fi = fm.featuredImage ?? fm.featured_image;
+      const meta = (fi as Record<string, unknown> | null)?.meta as Record<string, unknown> | null;
+      if (typeof meta?.storageKey === 'string' && meta.storageKey) {
+        knownFeaturedStorageKeys.add(meta.storageKey);
+      }
+    } catch {
+      // baseline frontmatter is JSON-encoded by contract; ignore unreadable snapshots
+    }
+  }
+
   const missingMedia: string[] = [];
   const informationalUnresolved: string[] = [];
+  const invalidMediaRefs: string[] = [];
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
     if (!fs.existsSync(dir)) continue;
@@ -466,7 +557,15 @@ export async function runWorkspaceDoctor(
           const storageKeyMatch = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
           if (storageKeyMatch) {
             const key = storageKeyMatch[1];
-            return knownStorageKeys.has(key);
+            if (knownStorageKeys.has(key)) return true;
+            // The body URL may carry the media record id instead of the storageKey, or a legacy
+            // single-ULID key whose companion YAML lacks the field: resolve by ULID and filename tail.
+            const ulidMatch = key.match(/[0-9A-HJ-NP-Z]{26}/);
+            if (ulidMatch && knownMediaIds.has(ulidMatch[0].toUpperCase())) return true;
+            for (const suffix of knownMediaFileSuffixes) {
+              if (key.endsWith(suffix)) return true;
+            }
+            return knownFeaturedStorageKeys.has(key);
           }
           // Check 2: Direct relative or local filesystem path
           const cleanRef = ref.replace(/^[./]+/, '');
@@ -485,9 +584,15 @@ export async function runWorkspaceDoctor(
         for (const ref of detailed.informationalRefs) {
           if (!checkRef(ref)) {
             informationalUnresolved.push(
-              `${ref} (code-example/placeholder in ${path.join(collection, status, file)})`,
+              `${ref} (code-example/custom-block in ${path.join(collection, status, file)})`,
             );
           }
+        }
+
+        for (const ref of detailed.invalidRefs) {
+          invalidMediaRefs.push(
+            `${ref} (malformed reference in ${path.join(collection, status, file)})`,
+          );
         }
       } catch {
         // Skip unreadable files
@@ -500,7 +605,10 @@ export async function runWorkspaceDoctor(
       id: 'media_references',
       name: 'Media References',
       status: 'warning',
-      message: `${missingMedia.length} referenced media file(s) are missing from disk.`,
+      message:
+        `${missingMedia.length} referenced media file(s) are missing from disk. ` +
+        `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
+        `configured mediaSyncLimit) to fetch them.`,
       details: missingMedia,
     });
   } else if (options.strictMedia && informationalUnresolved.length > 0) {
@@ -512,16 +620,25 @@ export async function runWorkspaceDoctor(
       details: informationalUnresolved,
     });
   } else {
-    const infoNote =
-      informationalUnresolved.length > 0
-        ? ` (${informationalUnresolved.length} informational/placeholder reference(s) ignored)`
-        : '';
+    const notes: string[] = [];
+    if (informationalUnresolved.length > 0) {
+      notes.push(
+        `${informationalUnresolved.length} informational/custom-block reference(s) ignored`,
+      );
+    }
+    if (invalidMediaRefs.length > 0) {
+      notes.push(
+        `${invalidMediaRefs.length} malformed reference(s) skipped (not valid media file keys)`,
+      );
+    }
     checks.push({
       id: 'media_references',
       name: 'Media References',
       status: 'ok',
-      message: `All referenced local media files exist on disk.${infoNote}`,
-      ...(informationalUnresolved.length > 0 ? { details: informationalUnresolved } : {}),
+      message: `All referenced local media files exist on disk.${notes.length ? ` (${notes.join('; ')})` : ''}`,
+      ...(informationalUnresolved.length > 0 || invalidMediaRefs.length > 0
+        ? { details: [...informationalUnresolved, ...invalidMediaRefs] }
+        : {}),
     });
   }
 

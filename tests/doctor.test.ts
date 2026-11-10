@@ -28,7 +28,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace, loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/pull.js';
-import { runWorkspaceDoctor } from '../src/sync/doctor.js';
+import { runWorkspaceDoctor, scanArticleMediaDetailed } from '../src/sync/doctor.js';
 
 describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   let tempDir: string;
@@ -364,8 +364,242 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
 
     const mCheck = report.checks.find((c) => c.id === 'media_references');
     expect(mCheck?.status).toBe('ok');
-    expect(mCheck?.message).toContain('informational/placeholder reference(s) ignored');
+    expect(mCheck?.message).toContain('informational/custom-block reference(s) ignored');
     expect(report.overallStatus).toBe('healthy');
+  });
+
+  // --- Media diagnostic resolution fallbacks (Phase A) and fence classification (Phase B) ---
+
+  it('resolves a media file reference when the companion YAML lacks a storageKey field (A-1 filename tail)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    // Promoted asset whose YAML companion never recorded storageKey (legacy corpus shape)
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67MEDIA0000000000000AA-hero-shot.jpg'),
+      'binary',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67MEDIA0000000000000AA-hero-shot.yaml'),
+      ['id: 01M67MEDIA0000000000000AA', 'filename: hero-shot.jpg', 'mimeType: image/jpeg'].join(
+        '\n',
+      ),
+      'utf8',
+    );
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-yaml-no-storagekey',
+      title: 'Media YAML No StorageKey',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const body = '![Hero](/_emdash/api/media/file/01M67MEDIA0000000000000BB.hero-shot.jpg)\n';
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-yaml-no-storagekey.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+  });
+
+  it('resolves a media reference from a media_state record even with no local file (A-2)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    cache.saveMediaState({
+      localHash: 'c'.repeat(64),
+      mediaId: '01M67MEDIA0000000000000CC',
+      storageKey: '01M67MEDIDDD00000000000000.png',
+      url: '/_emdash/api/media/file/01M67MEDIDDD00000000000000.png',
+      workspacePath: null,
+      status: 'ready',
+      uploadedAt: 1700000000,
+    });
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-state-resolved',
+      title: 'Media State Resolved',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const body = '![State](/_emdash/api/media/file/01M67MEDIDDD00000000000000.png)\n';
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-state-resolved.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+  });
+
+  it('resolves a reference via featured_image meta.storageKey stored in the base snapshot (A-3)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    const body = '![Featured](/_emdash/api/media/file/01M67MEDIFEE00000000000000.jpg)\n';
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-featured-snapshot',
+      title: 'Media Featured Snapshot',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+      featuredImage: '01M67MEDIA0000000000000FF',
+    };
+    const content = serializeMarkdown(frontmatter, body);
+    const relPath = `posts/draft/20261108_${articleId}-media-featured-snapshot.md`;
+    fs.writeFileSync(path.join(tempDir, relPath), content, 'utf8');
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(content),
+      remoteRev: 'rev-1',
+      status: 'draft',
+      slug: 'media-featured-snapshot',
+      lastSyncedAt: 1700000000,
+    });
+    // The remote baseline preserves the full featured_image object including meta.storageKey
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: 'rev-1',
+      frontmatterYaml: JSON.stringify({
+        ...frontmatter,
+        featuredImage: {
+          id: '01M67MEDIA0000000000000FF',
+          provider: 'local',
+          meta: { storageKey: '01M67MEDIFEE00000000000000.jpg' },
+        },
+      }),
+      bodyMarkdown: body,
+      hash: calculateHash(content),
+      savedAt: 1700000000,
+    });
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+  });
+
+  it('never reports media URLs embedded in opaque custom-block fences as missing (B-1)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-opaque-fence',
+      title: 'Media Opaque Fence',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const body = [
+      'Text before.',
+      '<!--ec:block {"type":"custom","src":"/_emdash/api/media/file/01M67MEDIA0000000000000JJ.jpg"} -->',
+      'Text after.',
+    ].join('\n');
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-opaque-fence.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    // The opaque fence payload is not even attempted as a reference
+    expect(JSON.stringify(mCheck?.details ?? '')).not.toContain('01M67MEDIA0000000000000JJ');
+  });
+
+  it('classifies legacy WordPress container lines as informational without warning (B-2)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-legacy-container',
+      title: 'Media Legacy Container',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const body = [
+      '[dimage url="/_emdash/api/media/file/01M67MEDIA0000000000000KK.jpg" control=true]',
+      '![broken](/_emdash/api/media/file/01M67MEDIA0000000000000LL.jpg" control=true)',
+    ].join('\n');
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-legacy-container.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+
+    // Unit-level contract for the scanner itself. The legacy container line is captured as an
+    // informational reference, and a markdown image line polluted by leaked markup resolves through
+    // its ULID instead of being reported as a missing asset.
+    const scanned = scanArticleMediaDetailed(body);
+    expect(scanned.normalRefs).toEqual([]);
+    expect(scanned.informationalRefs).toContain(
+      '/_emdash/api/media/file/01M67MEDIA0000000000000KK.jpg',
+    );
+
+    // A markdown image line polluted by leaked markup is absorbed by the optional title group and
+    // therefore never captured as a reference at all: the real asset resolves through its ULID, so
+    // the line must not produce a missing-media warning either way.
+    const pollutedOnly = scanArticleMediaDetailed(
+      '![broken](/_emdash/api/media/file/01M67MEDIA0000000000000LL.jpg" control=true)\n',
+    );
+    expect(pollutedOnly.normalRefs).toEqual([]);
+    expect(pollutedOnly.invalidRefs).toEqual([]);
+
+    // A capture with no ULID at all is genuine garbage and must be reported as malformed
+    const garbage = scanArticleMediaDetailed('![x](/_emdash/api/media/file/placeholder-key.png)\n');
+    expect(garbage.invalidRefs).toContain('/_emdash/api/media/file/placeholder-key.png');
   });
 
   // --- v0.1.14 Specific Test Cases (R5) ---
