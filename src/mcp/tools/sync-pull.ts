@@ -296,7 +296,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references whose media record does not exist on remote are reported as orphanStorageKeys and never downloaded.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded; because body URLs carry the R2 storageKey while GET /_emdash/api/media/{id} keys on the record id, such a key is unverified rather than proven missing.',
     {
       article: z
         .string()
@@ -341,7 +341,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
               : '';
           const keysList =
             res.orphanStorageKeys && res.orphanStorageKeys.length > 0
-              ? `\nOrphan Storage Keys (no media record): ${res.orphanStorageKeys.join(', ')}`
+              ? `\nUnresolved Storage Keys (no matching record or local mirror): ${res.orphanStorageKeys.join(', ')}`
               : '';
           return {
             content: [

@@ -169,10 +169,6 @@ export interface OrphanMediaDescriptor {
   ext: string;
 }
 
-/** True when the storageKey is ULID-segment based and carries a known image extension. */
-const ORPHAN_STORAGE_KEY_PATTERN =
-  /^[0-9A-HJ-NP-Z]{26}(?:\.[0-9A-HJ-NP-Z]{26})*\.(?:jpg|jpeg|png|gif|webp|avif|svg)$/i;
-
 /** Builds a descriptor from a ULID-segment storageKey, defaulting to `.jpg` when no extension is present. */
 function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor {
   const extMatch = storageKey.match(/\.[a-z]+$/i);
@@ -181,6 +177,63 @@ function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor {
     ext: extMatch ? extMatch[0].toLowerCase() : '.jpg',
     ulids: Array.from(storageKey.matchAll(/[0-9A-HJ-NP-Z]{26}/gi), (m) => m[0].toUpperCase()),
   };
+}
+
+/**
+ * A locally mirrored asset that can be used to re-verify a body storageKey without inventing remote
+ * data: the media/ companion YAML already records both the record id and the confirmed storageKey.
+ */
+export interface LocalMediaMirrorCandidate {
+  /** Media record id read from the companion YAML (`id:`) or the canonical filename stem. */
+  mediaId: string;
+  /** The storageKey recorded by the companion YAML, when present. */
+  storageKey?: string;
+  /** Companion YAML file name relative to `media/`. */
+  metaFile: string;
+}
+
+/**
+ * Indexes every locally mirrored media asset (`media/<yyyyMMdd>_<mediaId>-<name>.yaml`) so a body
+ * storageKey that the canonical id lookup failed to resolve can be re-checked against confirmed local
+ * metadata instead of being declared missing. Leftover `legacy_*` residue is skipped because it backs
+ * no real record. The result maps each ULID found in a mirror (record id or storageKey) to its entry,
+ * which is what lets Emit tell "the record exists under a different id" apart from "no record exists".
+ */
+export function collectLocalMediaMirrorCandidates(
+  mediaDir: string,
+): Map<string, LocalMediaMirrorCandidate> {
+  const byUlid = new Map<string, LocalMediaMirrorCandidate>();
+  if (!fs.existsSync(mediaDir)) return byUlid;
+  for (const file of fs.readdirSync(mediaDir)) {
+    if (!file.endsWith('.yaml') || file.startsWith('legacy_')) continue;
+    let doc: Record<string, unknown> | null = null;
+    try {
+      doc = yaml.load(fs.readFileSync(path.join(mediaDir, file), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      continue;
+    }
+    if (!doc) continue;
+    const storageKey =
+      typeof doc.storageKey === 'string' && doc.storageKey ? doc.storageKey : undefined;
+    const stem = file.replace(/\.yaml$/, '');
+    const idMatch = stem.replace(/^\d{8}_/, '').match(/^([0-9A-HJ-NP-Z]{26})/i);
+    const docId =
+      typeof doc.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(doc.id.trim())
+        ? doc.id.trim().toUpperCase()
+        : undefined;
+    const mediaId = docId || (idMatch ? idMatch[1].toUpperCase() : '');
+    if (!mediaId) continue;
+    const candidate: LocalMediaMirrorCandidate = { mediaId, storageKey, metaFile: file };
+    if (!byUlid.has(mediaId)) byUlid.set(mediaId, candidate);
+    for (const ulid of storageKey?.matchAll(/[0-9A-HJ-NP-Z]{26}/gi) ?? []) {
+      const key = ulid[0].toUpperCase();
+      if (!byUlid.has(key)) byUlid.set(key, candidate);
+    }
+  }
+  return byUlid;
 }
 
 /** Collapses descriptors that name the same storageKey, keeping one entry per key. */
@@ -510,7 +563,13 @@ export interface PullMediaResult {
   failed?: number;
   articleId?: string;
   mediaIds?: string[];
-  /** Body storageKeys that no media record could resolve, reported so the user can fix them on remote. */
+  /**
+   * Body storageKeys confirmed by evidence Emit actually holds: the canonical lookup resolved a record
+   * under that ULID (its own storageKey may differ), or a local mirror companion already names it. Such
+   * a key is healthy and must never be escalated as missing.
+   */
+  verifiedStorageKeys?: string[];
+  /** Body storageKeys that neither a resolved record nor confirmed local metadata could match. */
   orphanStorageKeys?: string[];
 }
 
@@ -608,9 +667,9 @@ export async function pullArticleMedia(options: {
   }
 
   const mediaIds = collectArticleReferencedMediaIds(articleContent);
-  // Body storageKeys are the only handle available for migrated WordPress assets whose media record
-  // is missing: their file route still serves the image while `GET /_emdash/api/media/{id}` fails, so
-  // Emit cannot mirror them and reports them as orphan references instead.
+  // Body storageKeys are the only handle available when a migrated body bakes the R2 `storageKey`
+  // instead of the D1 record id. They must never be fed to `GET /_emdash/api/media/{id}` as if they
+  // were ids: that lookup keys on the primary key, so it returns 404 for a record that does exist.
   const storageKeyDescriptors = collectArticleStorageKeys(articleContent);
   const descriptorsByKey = new Map<string, OrphanMediaDescriptor>();
   for (const descriptor of storageKeyDescriptors) {
@@ -634,6 +693,9 @@ export async function pullArticleMedia(options: {
   let skippedCount = 0;
   let failedCount = 0;
   const recoveredStorageKeys = new Set<string>();
+  // Ids whose canonical lookup succeeded. A body key sharing one of these ULIDs is a confirmed match:
+  // the record exists, it simply carries a storageKey that differs from the one baked into the body.
+  const resolvedRecordIds = new Set<string>();
 
   // 1. Canonical path: resolve each referenced media record id and mirror it normally.
   for (const mId of mediaIds) {
@@ -666,24 +728,45 @@ export async function pullArticleMedia(options: {
 
       if (result.downloaded) downloadedCount++;
       else if (result.skipped) skippedCount++;
+      resolvedRecordIds.add(mId.toUpperCase());
       if (item.storageKey) recoveredStorageKeys.add(item.storageKey);
     } catch {
       failedCount++;
     }
   }
 
-  // 2. Orphan detection: a body storageKey that no media record mirrored is reported, never fetched.
-  //    The asset lives only on the public file route (an orphaned R2 object with no D1 record), and
-  //    registering it is EmDash's responsibility, not Emit's.
-  const orphanStorageKeys = allKeys.filter((key) => !recoveredStorageKeys.has(key));
+  // 2. Unresolved storageKeys: a body key that no canonical id lookup mirrored is NOT proof of a
+  //    missing record. The record can exist under a different primary key, so Emit re-checks the key
+  //    against confirmed evidence only — a record it just resolved under the same ULID, or the local
+  //    mirror metadata (companion YAML `id` + `storageKey`) — and reports what still fails as
+  //    unresolved. Emit never fetches such an asset and never registers a record for it.
+  const mirrorCandidates = collectLocalMediaMirrorCandidates(mediaDir);
+  const verifiedStorageKeys: string[] = [];
+  const orphanStorageKeys: string[] = [];
+  for (const key of allKeys) {
+    if (recoveredStorageKeys.has(key)) continue;
+    const ulids = (key.match(/[0-9A-HJ-NP-Z]{26}/gi) ?? []).map((u) => u.toUpperCase());
+    // Only two things count as evidence: a record Emit successfully fetched under this exact ULID, or
+    // confirmed local mirror metadata naming it. A body reference alone is never self-confirming — that
+    // is precisely the case where the asset must be reported instead of assumed healthy.
+    const confirmed = ulids.some(
+      (ulid) => resolvedRecordIds.has(ulid) || mirrorCandidates.has(ulid),
+    );
+    if (confirmed) {
+      verifiedStorageKeys.push(key);
+      continue;
+    }
+    orphanStorageKeys.push(key);
+  }
 
   return {
-    total: mediaIds.length + orphanStorageKeys.length,
+    total: mediaIds.length + verifiedStorageKeys.length + orphanStorageKeys.length,
     downloaded: downloadedCount,
     skipped: skippedCount,
     failed: failedCount,
     articleId,
     mediaIds,
+    verifiedStorageKeys,
     orphanStorageKeys,
   };
 }

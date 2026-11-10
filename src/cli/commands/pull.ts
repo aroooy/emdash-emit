@@ -32,7 +32,7 @@ import { pullMedia } from '../../sync/media.js';
 import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
-/** Prints the orphan media warning when a pull reported unresolvable body storageKeys. */
+/** Prints the unresolved media warning when a pull could not resolve body storageKeys locally. */
 function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void {
   const warning = formatOrphanMediaWarning(orphanStorageKeys);
   if (warning) console.warn(warning);
@@ -43,19 +43,23 @@ export function formatPullWindowLabel(status: string | undefined, limit: number)
 }
 
 /**
- * Reports body image references whose EmDash media record could not be resolved. Such an asset is an
- * orphaned object that the public file route still serves while `GET /_emdash/api/media/{id}` fails,
- * and Emit deliberately never mirrors or re-registers it: creating the missing record belongs to
- * EmDash (admin UI) or Wrangler. This is a warning, not an error, so healthy assets still sync.
+ * Reports body image references that neither a remote media record nor confirmed local mirror metadata
+ * could resolve. Emit only knows that *its* lookups failed; it never claims the D1 record is absent,
+ * because `GET /_emdash/api/media/{id}` keys on the primary key while the body URL carries the R2
+ * storageKey, so a real record can 404 here. The advice is therefore "verify before you write": inspect
+ * the media library by storageKey (or the migration mapping) and only then register anything, since a
+ * blind INSERT risks a duplicate registration. Emit mirrors records and never repairs server data.
  */
 export function formatOrphanMediaWarning(orphanStorageKeys: string[] | undefined): string {
   if (!orphanStorageKeys || orphanStorageKeys.length === 0) return '';
   const keyList = orphanStorageKeys.join(', ');
   return (
-    `⚠️ [ORPHAN_MEDIA_ASSET] ${orphanStorageKeys.length} storageKey(s) referenced in article bodies ` +
-    `have no EmDash media record and were not mirrored: ${keyList}. ` +
-    `The files may still be served by /_emdash/api/media/file/<storageKey>. Register the missing ` +
-    `media records on EmDash (admin UI or wrangler) — Emit does not repair server data.`
+    `⚠️ [UNRESOLVED_MEDIA_ASSET] ${orphanStorageKeys.length} storageKey(s) referenced in article bodies ` +
+    `could not be matched to a media record or a local mirror and were not downloaded: ${keyList}. ` +
+    `These keys are R2 storage keys, not media record ids — GET /_emdash/api/media/{id} searches the ` +
+    `primary key, so a 404 here does not prove the record is missing. Verify the library by storageKey ` +
+    `(admin UI or wrangler d1 SELECT on the media table) before registering anything: a blind INSERT can ` +
+    `create a duplicate. Emit mirrors records and never repairs server data.`
   );
 }
 

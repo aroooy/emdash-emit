@@ -81,7 +81,8 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 ## Media & Image Rules (Two Distinct ID Spaces)
 - Frontmatter featuredImage uses the 26-character media record id (e.g. "01M67P0MBMJQQXH2K95HHCYRYB") or null.
 - Markdown body images use the storageKey-based URL: ![alt](/_emdash/api/media/file/<storageKey>). Never put a media record id in /_emdash/api/media/file/.
-- For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media/.
+- For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media.
+- Never treat an unresolved body storageKey as proof that a media record is missing, and never create or register media records from Emit. GET /_emdash/api/media/{id} searches the record id, so querying it with a storageKey returns 401 without a bearer token and 404 for a record that does exist; verify by storageKey on the server side instead.
 
 ## AI Workflow (The Golden Path)
 1. [CHECK]: Use sync_status to inspect locally tracked articles. Returns a summary-first payload (actionRequired capped at 30 items, recentArticles 5 items). To locate specific articles across the full workspace, use search (title/slug/id/filePath) or slugFilter. If articles are already present locally, do NOT query remote CMS APIs (e.g. emdash MCP tools like content_list).

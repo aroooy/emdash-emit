@@ -64,9 +64,11 @@ export interface RunWorkspaceDoctorOptions {
   /**
    * Probe the public media file route (`HEAD /_emdash/api/media/file/<storageKey>`) for body
    * references that no local mirror, cache entry, or base snapshot can resolve. A reference that the
-   * origin still serves is downgraded from a missing-file warning to an informational note: migrated
-   * WordPress assets keep working in the browser while their media record returns 404, which is why
-   * `emit pull-media` cannot mirror them. Disabled by default so doctor stays offline.
+   * origin still serves is downgraded from a missing-file warning to an informational note: the image
+   * renders in the browser even though Emit could not match it to a record, which is why `emit
+   * pull-media` mirrors nothing for it. A served key never proves the D1 record is absent — body URLs
+   * carry the R2 storageKey while `GET /_emdash/api/media/{id}` keys on the record id. Disabled by
+   * default so doctor stays offline.
    */
   checkMediaUrls?: boolean;
   /** Optional fetch override used by the file-route probe (tests inject stubs here). */
@@ -556,9 +558,9 @@ export async function runWorkspaceDoctor(
   }
 
   const missingMedia: string[] = [];
-  // Legacy assets whose media record is gone (404) but which are still served by the public file
-  // route. Verified only when --check-media-urls performs a live HEAD against the origin, so an
-  // offline doctor run keeps reporting them as missing exactly as before.
+  // References that survived every local fallback yet are still served by the public file route. The
+  // live HEAD (only when --check-media-urls is set) proves the R2 object exists; it says nothing about
+  // whether a D1 record exists, because the probe addresses the storageKey and not the primary key.
   const verifiedFileRouteOnly: string[] = [];
   const unreachableFileRoute: string[] = [];
   const informationalUnresolved: string[] = [];
@@ -655,7 +657,7 @@ export async function runWorkspaceDoctor(
     for (const candidate of pendingRemoteProbes) {
       if (reachableByKey.get(candidate.key)) {
         verifiedFileRouteOnly.push(
-          `${candidate.ref} (served by file route but no local mirror or media record; referenced by ${candidate.source})`,
+          `${candidate.ref} (served by the file route but matched by no local mirror or record lookup; referenced by ${candidate.source})`,
         );
       } else {
         unreachableFileRoute.push(`${candidate.ref} (referenced by ${candidate.source})`);
@@ -675,7 +677,7 @@ export async function runWorkspaceDoctor(
         `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
         `configured mediaSyncLimit) to fetch them.`,
       suggestion: options.checkMediaUrls
-        ? 'Assets served only by the file route have no EmDash media record (an orphaned object from an incomplete import). Register them on EmDash via the admin UI or wrangler; Emit mirrors records, never repairs server data.'
+        ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. Confirm the record by storageKey (admin UI, or wrangler d1 SELECT on the media table) before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
         : undefined,
       details: missingMedia,
     });
@@ -691,7 +693,7 @@ export async function runWorkspaceDoctor(
     const notes: string[] = [];
     if (verifiedFileRouteOnly.length > 0) {
       notes.push(
-        `${verifiedFileRouteOnly.length} reference(s) served by the remote file route without a media record`,
+        `${verifiedFileRouteOnly.length} reference(s) served by the remote file route that no local mirror or record lookup matched`,
       );
     }
     if (informationalUnresolved.length > 0) {

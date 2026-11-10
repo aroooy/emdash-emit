@@ -659,9 +659,14 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       'https://aroooy.net/_emdash/api/media/file/01M67LEGACYX0000000000000E.jpg',
     );
     expect(mCheck?.status).toBe('ok');
-    expect(mCheck?.message).toContain('served by the remote file route without a media record');
+    // A file-route hit proves only that the R2 object is served; the note must never claim the media
+    // record is absent, because the probe addresses the storageKey and not the primary key.
+    expect(mCheck?.message).toContain(
+      'served by the remote file route that no local mirror or record lookup matched',
+    );
+    expect(mCheck?.message ?? '').not.toContain('without a media record');
     expect(JSON.stringify(mCheck?.details ?? '')).toContain(
-      'served by file route but no local mirror or media record',
+      'served by the file route but matched by no local mirror or record lookup',
     );
   });
 
@@ -681,8 +686,11 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     const mCheck = report.checks.find((c) => c.id === 'media_references');
     expect(mCheck?.status).toBe('warning');
     expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000F.jpg');
-    // The suggestion must point at server-side remediation, never at a pull-media mirror.
-    expect(mCheck?.suggestion).toContain('admin UI or wrangler');
+    // The suggestion must demand storageKey-based verification before any write, and must never imply
+    // that a missing record has been proven or instruct a blind INSERT.
+    expect(mCheck?.suggestion).toContain('admin UI');
+    expect(mCheck?.suggestion).toContain('wrangler d1 SELECT');
+    expect(mCheck?.suggestion).toContain('blind INSERT can duplicate an existing record');
     expect(mCheck?.suggestion).toContain('never repairs server data');
     expect(mCheck?.suggestion ?? '').not.toContain('pull-media');
   });

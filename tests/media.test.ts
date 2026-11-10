@@ -29,6 +29,7 @@ import {
   promoteDraftMediaFile,
   collectArticleReferencedMediaIds,
   collectArticleStorageKeys,
+  collectLocalMediaMirrorCandidates,
   pullArticleMedia,
 } from '../src/sync/media.js';
 import { formatOrphanMediaWarning } from '../src/cli/commands/pull.js';
@@ -459,6 +460,7 @@ locale: ja
     expect(res.total).toBe(2);
     expect(res.failed).toBe(1);
     expect(res.orphanStorageKeys).toEqual(['01M67LEGACYX0000000000000A.jpg']);
+    expect(res.verifiedStorageKeys).toEqual([]);
     expect(res.downloaded).toBe(0);
     expect(res.skipped).toBe(0);
 
@@ -545,9 +547,12 @@ locale: ja
     ).toBe(true);
   });
 
-  it('reports a body storageKey as orphan when the resolved record reports a different storageKey', async () => {
-    // A media record can exist and mirror fine while its own storageKey differs from the key baked
-    // into the migrated body, so the body asset is still unreachable and must be reported.
+  it('confirms a body storageKey when the record resolves under that id but reports another storageKey', async () => {
+    // The production ID-space shape: `collectArticleReferencedMediaIds` accepts a ULID found in a file
+    // route, so Emit fetches GET /_emdash/api/media/<storageKey-looking ULID> and the server answers
+    // with the real record whose own storageKey differs. The asset is mirrored under its true key; the
+    // body key must be reported as verified, never as missing, because a "missing" report invites a
+    // duplicate registration of a record that demonstrably exists.
     const postsDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
@@ -609,7 +614,11 @@ locale: ja
 
     expect(res.total).toBe(2);
     expect(res.downloaded).toBe(1);
-    expect(res.orphanStorageKeys).toEqual(['01M67MSMATCHX000000000000E.jpg']);
+    // The record was fetched successfully under its own primary key and mirrored, but the body baked a
+    // different storageKey. Emit records that key as verified — the ULID matched a real record it just
+    // resolved — and never as missing, because declaring it missing invites a duplicate registration.
+    expect(res.orphanStorageKeys).toEqual([]);
+    expect(res.verifiedStorageKeys).toEqual(['01M67MSMATCHX000000000000E.jpg']);
     expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContain(
       'https://example.com/_emdash/api/media/file/01M67MSMATCHX000000000000E.jpg',
     );
@@ -730,15 +739,20 @@ locale: ja
     expect(second.orphanStorageKeys).toEqual([]);
   });
 
-  it('formats an actionable orphan media warning naming the storageKey', () => {
+  it('formats an actionable unresolved-media warning that refuses to assume a missing record', () => {
     const warning = formatOrphanMediaWarning(['01M67LEGACYX0000000000000A.jpg']);
-    expect(warning).toContain('[ORPHAN_MEDIA_ASSET]');
+    expect(warning).toContain('[UNRESOLVED_MEDIA_ASSET]');
     expect(warning).toContain('01M67LEGACYX0000000000000A.jpg');
-    expect(warning).toContain('/_emdash/api/media/file/<storageKey>');
-    expect(warning).toContain('admin UI or wrangler');
-    expect(warning).toContain('Emit does not repair server data');
+    expect(warning).toContain('GET /_emdash/api/media/{id} searches the primary key');
+    expect(warning).toContain('does not prove the record is missing');
+    expect(warning).toContain('wrangler d1 SELECT');
+    expect(warning).toContain('blind INSERT can create a duplicate');
+    expect(warning).toContain('Emit mirrors records and never repairs server data');
+    // The warning must never assert that the record is absent, nor tell the user to insert it.
+    expect(warning).not.toContain('have no EmDash media record');
+    expect(warning).not.toContain('Register the missing media records');
 
-    // No orphans means no warning line at all.
+    // Nothing unresolved means no warning line at all.
     expect(formatOrphanMediaWarning([])).toBe('');
     expect(formatOrphanMediaWarning(undefined)).toBe('');
   });
@@ -808,5 +822,95 @@ locale: ja
     const mediaFiles = fs.readdirSync(path.join(tempDir, 'media'));
     expect(mediaFiles).toContain('20210620_01M67ARTCLEDXY000000012345-wp-import-photo.jpg');
     expect(mediaFiles.some((f) => f.startsWith('legacy_'))).toBe(false);
+  });
+
+  it('downgrades an unresolved body storageKey to verified when a local mirror already proves it', async () => {
+    // The canonical id lookup cannot resolve this key (it is a storageKey, not a record id), but the
+    // media/ companion YAML already records both ids for the same asset. A confirmed local match must
+    // downgrade the reference to verified instead of reporting it as unresolved, because declaring it
+    // missing would invite a duplicate registration of a record that exists under another primary key.
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, '20210620_01M67ART000000000000000013-mirror-proof.md'),
+      `---
+id: 01M67ART000000000000000013
+title: Mirror Proof Article
+collection: posts
+status: draft
+locale: ja
+---
+
+![mirror](/_emdash/api/media/file/01M67STRGKEYX0000000123456.jpg)
+`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67THERKEYX000000000000F-mirror-photo.jpg'),
+      'mirror bytes',
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67THERKEYX000000000000F-mirror-photo.yaml'),
+      [
+        'id: 01M67THERKEYX000000000000F',
+        'filename: mirror-photo.jpg',
+        'storageKey: 01M67STRGKEYX0000000123456.jpg',
+        'mimeType: image/jpeg',
+        '',
+      ].join('\n'),
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media/01M67STRGKEYX0000000123456')) {
+        // The exact failure mode the production investigation described: the record exists, but this
+        // endpoint searches the primary key and the body supplied a storageKey, so it 404s.
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      article: '01M67ART000000000000000013',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.failed).toBe(1);
+    expect(res.orphanStorageKeys).toEqual([]);
+    expect(res.verifiedStorageKeys).toEqual(['01M67STRGKEYX0000000123456.jpg']);
+  });
+
+  it('indexes local mirror companions by both record id and storageKey, ignoring legacy residue', () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67HEALTHYX000000000000B-indexed.jpg'),
+      'bytes',
+    );
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01M67HEALTHYX000000000000B-indexed.yaml'),
+      ['id: 01M67HEALTHYX000000000000B', 'storageKey: 01M67LEGACYX00000000000002.jpg', ''].join(
+        '\n',
+      ),
+    );
+    fs.writeFileSync(path.join(mediaDir, 'legacy_01M67LEGACYX00000000000003.jpg'), 'residue');
+    fs.writeFileSync(
+      path.join(mediaDir, 'legacy_01M67LEGACYX00000000000003.yaml'),
+      ['id: 01M67LEGACYX00000000000003', 'storageKey: 01M67LEGACYX00000000000003.jpg'].join('\n'),
+    );
+
+    const candidates = collectLocalMediaMirrorCandidates(mediaDir);
+    expect(candidates.get('01M67HEALTHYX000000000000B')?.storageKey).toBe(
+      '01M67LEGACYX00000000000002.jpg',
+    );
+    expect(candidates.get('01M67LEGACYX00000000000002')?.mediaId).toBe(
+      '01M67HEALTHYX000000000000B',
+    );
+    // Legacy residue backs no real record, so it must never be usable as verification evidence.
+    expect(candidates.has('01M67LEGACYX00000000000003')).toBe(false);
   });
 });

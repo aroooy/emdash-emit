@@ -1,0 +1,17 @@
+fix(media): never infer a missing record from a storageKey lookup failure
+
+Production audit proved the missing-D1-record premise was wrong: all 4,008
+records exist and every migrated WordPress storage_key is registered. The 401/404
+symptoms come from addressing GET /_emdash/api/media/{id} (D1 primary key) with
+an R2 storageKey, and from calling the authenticated admin API without a token.
+
+pullArticleMedia now grades each body storageKey by evidence: a record resolved
+under that ULID, or a media/*.yaml companion naming it, moves the key to the new
+PullMediaResult.verifiedStorageKeys. Only keys with no evidence stay in
+orphanStorageKeys. New collectLocalMediaMirrorCandidates indexes companions by
+record id and storageKey and excludes legacy_* residue from verification.
+
+CLI warning renamed UNRESOLVED_MEDIA_ASSET and rewritten to stay epistemic: a 404
+proves only a failed lookup, and remediation must verify by storageKey before
+registering anything because a blind INSERT can duplicate. doctor wording and the
+AGENTS/README/CHANGELOG/MCP guidance are aligned so nothing tells users to insert.
