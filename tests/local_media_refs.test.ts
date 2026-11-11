@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
-import { pushAll } from '../src/sync/orchestrator.js';
+import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
 import { pullArticle, calculateHash } from '../src/sync/pull.js';
 import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
@@ -271,6 +271,96 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
     const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(disk).toContain(`![LG 背面端子](${LOCAL_REF})`);
     expect(disk).not.toContain(CANONICAL_URL);
+
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.modified).toBe(0);
+    expect(status.summary.synced).toBe(1);
+  });
+
+  it('re-tracks the hash when a batch pull localizes an article after mirroring its asset', async () => {
+    // The batch pull writes articles in the canonical spelling first (no mirror exists yet), downloads the
+    // referenced binaries, and only then re-spells each body to `../../media/<storageKey>`. Rewriting the disk
+    // without re-tracking `sync_state.local_hash` left every freshly pulled article reporting a phantom edit —
+    // 17 "modified" for 60 untouched files — while `emit diff` showed nothing. The localize pass must move the
+    // tracked hash together with the bytes it just wrote.
+    const batchFetch = vi.fn(async (input: URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/_emdash/api/openapi.json') {
+        return new Response(
+          JSON.stringify({
+            paths: {
+              '/_emdash/api/content/{collection}': {
+                get: { parameters: [{ name: 'limit', schema: { maximum: 100 } }] },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === '/_emdash/api/media/file/' + STORAGE_KEY) {
+        return new Response(Buffer.from('img'));
+      }
+      if (url.pathname === '/_emdash/api/media') {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              items: [
+                {
+                  id: MEDIA_ID,
+                  filename: STORAGE_KEY,
+                  storageKey: STORAGE_KEY,
+                  url: CANONICAL_URL,
+                  status: 'ready',
+                },
+              ],
+              nextCursor: null,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === '/_emdash/api/content/posts') {
+        const status = url.searchParams.get('status');
+        // `listRemoteArticles` queries draft and published separately; the fixture article is a draft.
+        const items = status === 'draft' ? [remoteItem('rev_1')] : [];
+        return new Response(JSON.stringify({ success: true, data: { items, nextCursor: null } }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ success: true, data: { items: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const batch = await pullBatch({
+      workspaceRoot: tempDir,
+      cache,
+      collection: 'posts',
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 10,
+      localMediaRefs: true,
+      fetchFn: batchFetch,
+    });
+
+    expect(batch.updated).toBe(1);
+    const articleResult = batch.items.find((item) => !item.deleted)!;
+    const disk = fs.readFileSync(path.join(tempDir, articleResult.filePath), 'utf8');
+    expect(disk).toContain(`![LG 背面端子](${LOCAL_REF})`);
+    expect(cache.getSyncState(ARTICLE_ID)!.localHash).toBe(calculateHash(disk));
+
+    // The pass is idempotent: a second batch pull of the same revision skips and re-tracks nothing.
+    const repull = await pullBatch({
+      workspaceRoot: tempDir,
+      cache,
+      collection: 'posts',
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 10,
+      localMediaRefs: true,
+      fetchFn: batchFetch,
+    });
+    expect(repull.skipped).toBe(1);
+    expect(fs.readFileSync(path.join(tempDir, articleResult.filePath), 'utf8')).toBe(disk);
 
     const status = getWorkspaceStatus(tempDir, cache, 'posts');
     expect(status.summary.modified).toBe(0);

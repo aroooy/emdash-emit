@@ -347,7 +347,17 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
           fs,
           preferLegacyRef: carriesDepthFreeMediaRef(current),
         });
-        if (localized !== current) fs.writeFileSync(fullPath, localized, 'utf8');
+        if (localized === current) continue;
+        fs.writeFileSync(fullPath, localized, 'utf8');
+        // The pass rewrote the bytes on disk, so the tracked hash must follow them. `sync_state.local_hash`
+        // records exactly what the file carries, and a re-spelled article whose hash still describes the
+        // canonical form it held moments ago reports itself as an edit nobody made — every status pass would
+        // call it modified while diff shows nothing. Only a tracked article needs re-tracking: an untracked
+        // one has no baseline to stay honest with. Values are untouched; only the recorded hash advances.
+        const tracked = options.cache.getSyncState(res.id);
+        if (tracked) {
+          options.cache.saveSyncState({ ...tracked, localHash: calculateHash(localized) });
+        }
       }
     }
 
