@@ -20,13 +20,14 @@
  * SOFTWARE.
  */
 
+import { Command } from 'commander';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
-import { resolveInitPlan } from '../src/cli/commands/status.js';
+import { registerStatusInitCommands, resolveInitPlan } from '../src/cli/commands/status.js';
 import { resolveOriginPriority } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
 import { loadProfilesFile, setProfile } from '../src/utils/profile.js';
@@ -123,6 +124,31 @@ describe('Emit CLI (Commander)', () => {
   it('executes emit guide cleanly', () => {
     const guideCmd = program.commands.find((c) => c.name() === 'guide');
     expect(guideCmd).toBeDefined();
+  });
+
+  it('emit guide action prints the two media ID spaces and points at the specification document', async () => {
+    const cwd = process.cwd();
+    process.chdir(tempDir);
+    // Vitest's console spy records nothing for output produced inside a commander action, so capture
+    // by direct reassignment. A fresh probe program is required because commander caches parsed argv
+    // on the shared `program` instance, making a second parseAsync() a no-op.
+    let printed = '';
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      printed += args.map(String).join(' ') + '\n';
+    };
+    try {
+      const probe = new Command();
+      registerStatusInitCommands(probe, () => {
+        throw new Error('guide must not resolve a workspace context');
+      });
+      await probe.parseAsync(['node', 'emit', 'guide']);
+    } finally {
+      console.log = originalLog;
+      process.chdir(cwd);
+    }
+    expect(printed).toContain('docs/media-id-spaces.md');
+    expect(printed).toContain('storageKey');
   });
   it('formats profile command failures as one actionable line instead of a raw stack trace', async () => {
     // Profile subcommands read/write ~/.config/emit/profiles.yaml, so point HOME at a throwaway

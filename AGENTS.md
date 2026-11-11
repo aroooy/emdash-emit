@@ -17,6 +17,10 @@ This document defines the **official workflow rules (The Golden Path) and coding
   - ULID Generation: `ulidx` (26-character canonical ULID)
   - 3-Way Merge: `node-diff3`
 
+### Reference Documents
+
+- **`docs/media-id-spaces.md`** — the authoritative specification of EmDash's two media identifier spaces (D1 record `id` vs R2 `storageKey`), which endpoint accepts which, and how migrated corpora behave. Read it before debugging any missing or unresolved image.
+
 ---
 
 ## 2. Workspace Structure (Git-style)
@@ -28,7 +32,7 @@ This document defines the **official workflow rules (The Golden Path) and coding
 │   └── config.json                 <-- Instance connection and collection settings
 ├── categories/                     <-- Category definitions (<id>-<label>.yaml)
 ├── tags/                           <-- Tag definitions (<id>-<label>.yaml)
-├── media/                          <-- Media files & companion YAML (<yyyyMMdd>_<id>-<name>.<ext>)
+├── media/                          <-- Media files & companion YAML (<yyyyMMdd>_<id>-<name>.<ext>; the <id> is the media record id, NOT the storageKey used in body URLs — see docs/media-id-spaces.md)
 │   └── drafts/                     <-- Staging folder for offline draft images (auto-uploaded on push)
 └── posts/                          <-- [Local Markdown Files for Humans & AI]
     ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
@@ -121,7 +125,7 @@ These rules are enforced at the code level via Preflight Guards (G1–G17):
 - Canonical term ULIDs in frontmatter are transparently accepted and verified against local definitions; unknown or obsolete ULIDs not found locally are rejected as stale.
 
 ### 6. Media References, Two ID Spaces & Offline Draft Images
-- **Two distinct ID spaces (Critical):** EmDash separates **media record IDs** (`id`) from **storage keys** (`storageKey`). Never interchange them:
+- **Two distinct ID spaces (Critical):** EmDash separates **media record IDs** (`id`) from **storage keys** (`storageKey`). Never interchange them. The full specification — identifier matrix, endpoints, migrated-corpus behavior, and resolution order — is documented in `docs/media-id-spaces.md`; read it before debugging any media reference:
   - **Frontmatter `featuredImage`** uses the **26-character media record `id`** (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard **G10** rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
   - **Markdown body images `![alt](...)`** use the **`storageKey`-based public route** `/_emdash/api/media/file/<storageKey>` (where `<storageKey>` is `<ulid>.<ext>` or `<ulid1>.<ulid2>.<ext>`). Passing a media record `id` into `/_emdash/api/media/file/<id>.<ext>` returns **HTTP 404**.
 - **Offline draft image auto-upload (G5 / G11):**

@@ -250,6 +250,9 @@ export function registerStatusInitCommands(
 ■ Collaboration Rules with AI (AGENTS.md)
   - Strict prohibition against creating throwaway temporary files (e.g. temp.md).
   - Never manually rename (mv) cached files; update the frontmatter slug/status instead.
+  - Media uses two different ULIDs: featuredImage and media/ filenames use the media record id,
+    while body ![...](/_emdash/api/media/file/...) URLs use the storageKey. They never match —
+    see docs/media-id-spaces.md before debugging a missing image.
 ========================================================================
 `);
     });

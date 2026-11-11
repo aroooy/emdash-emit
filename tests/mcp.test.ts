@@ -75,6 +75,10 @@ describe('Emit MCP Server', () => {
     expect(instructions).toContain('The Golden Path');
     expect(instructions).toContain('posts/published');
     expect(instructions).toContain('taxonomies');
+    // The two media ID spaces are the most common source of agent confusion, so the instructions must
+    // name both identifiers and point at the standalone specification document.
+    expect(instructions).toContain('docs/media-id-spaces.md');
+    expect(instructions).toContain('storageKey');
 
     // Expected tools
     const expectedTools = [

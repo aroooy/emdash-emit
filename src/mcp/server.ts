@@ -79,6 +79,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - Never pass a posts/conflicts/ path to sync_push: it is refused with QUARANTINED_COPY_NOT_PUSHABLE because it would overwrite the canonical article with stale content.
 
 ## Media & Image Rules (Two Distinct ID Spaces)
+- Every EmDash asset has two unrelated ULIDs: the D1 media record id (used by GET /_emdash/api/media/{id}) and the R2 storageKey (served by /_emdash/api/media/file/{storageKey}). They never match for the same asset, so a local mirror named media/<yyyyMMdd>_<record-id>-<name> is never addressable by its own body URL. Full specification: docs/media-id-spaces.md in this repository.
 - Frontmatter featuredImage uses the 26-character media record id (e.g. "01M67P0MBMJQQXH2K95HHCYRYB") or null.
 - Markdown body images use the storageKey-based URL: ![alt](/_emdash/api/media/file/<storageKey>). Never put a media record id in /_emdash/api/media/file/.
 - For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media.
@@ -93,7 +94,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
 7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical'). Overwriting canonical files with unpushed edits requires force: true (G13).
 8. [DOCTOR]: Use sync_doctor to diagnose workspace health (version compatibility, origin consistency, frontmatter integrity, conflicts/quarantine, and media references).
-9. [MEDIA]: Use sync_pull_media to download media assets and companion YAML metadata into media/. Pass article: <ULID> to pull only media referenced by that specific article without downloading the whole media library.
+9. [MEDIA]: Use sync_pull_media to download media assets and companion YAML metadata into media/. Pass article: <ULID> to pull only media referenced by that specific article without downloading the whole media library. Media references resolve newest-first within mediaSyncLimit (default 300), so an unresolved old body storageKey usually means the asset was never mirrored, not that it is broken — check sync_doctor's media count first, and read docs/media-id-spaces.md before chasing a missing image.
 All tool responses include "_meta" context describing profile, workspace directory, origin, and resolution mechanism.
 `.trim();
 

@@ -252,6 +252,10 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     const mCheck = report.checks.find((c) => c.id === 'media_references');
     expect(mCheck?.status).toBe('warning');
     expect(mCheck?.message).toContain('missing from disk');
+    // A missing local mirror is not a broken reference: the warning must teach the two ID spaces and
+    // point at the standalone specification so neither humans nor agents chase a phantom data loss.
+    expect(mCheck?.message).toContain('docs/media-id-spaces.md');
+    expect(mCheck?.message).toContain('storage keys');
   });
 
   it('correctly resolves canonical storageKey media references against companion YAML (D1)', async () => {

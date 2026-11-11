@@ -26,6 +26,7 @@
   - [Multi-Site Management](#3-multi-site-management)
   - [Recommended `.gitignore`](#4-recommended-gitignore)
 - [📂 Directory Structure & Data Specifications](#-directory-structure--data-specifications)
+  - [Two Media ID Spaces: `id` vs `storageKey`](#two-media-id-spaces-id-vs-storagekey)
 - [📝 Markdown & YAML Frontmatter Specification](#-markdown--yaml-frontmatter-specification)
   - [Frontmatter Schema](#frontmatter-schema)
   - [Critical Content Rules](#critical-content-rules)
@@ -150,7 +151,7 @@ This division is a design stance, not a limitation to work around: Emit focuses 
 * **Hybrid 3-Way Merge Engine**: Resolves concurrent changes between remote and local versions like Git, independently merging YAML frontmatter and Markdown body.
 * **Distributed Mutual Exclusion Lock**: Acquires 7-minute leases via `POST /lock` with `try/finally` release semantics to eliminate race conditions during publishing.
 * **Opaque Block Preservation**: Preserves EmDash custom blocks (e.g., `core:gallery`) losslessly across AST roundtrips via `<!--ec:block ... -->` fences.
-* **Taxonomy & Media Synchronization**: Sync category/tag YAML schemas and download media assets with metadata.
+* **Taxonomy & Media Synchronization**: Sync category/tag YAML schemas and download media assets with metadata. EmDash identifies each asset by two separate ULIDs (record `id` for the API, `storageKey` for the file route), and Emit keeps them strictly separated — see [Two Media ID Spaces](#two-media-id-spaces-id-vs-storagekey).
 * **Zero Native Dependencies**: Completely eliminates native C++ builds (`node-gyp`) by leveraging Node.js 22+ built-in `node:sqlite`.
 
 ---
@@ -372,7 +373,19 @@ Emit maintains a local SQLite database via Node.js built-in `node:sqlite` (`src/
 | `base_snapshots` | Stores the baseline Markdown body and baseline frontmatter at the last synced revision to power Hybrid 3-Way Merge (`frontmatter_yaml` holds a **JSON-encoded** `Frontmatter` object, not YAML text) |
 | `sync_state` | Tracks each article's workspace-relative file path and SHA-256 content hash to detect local modifications (`synced` vs `modified` vs `untracked`, plus `invalid` when YAML frontmatter fails parsing; `invalid` files are excluded from `emit push --all`, cached `invalid` files are automatically self-healed on batch `emit pull` / `sync_pull`, and uncached `invalid` files outside the sliding window can be repaired via `emit pull <ULID>` or `sync_pull(id: "<ULID>")`) |
 | `bylines` | Caches remote author records (`id`, `slug`, `display_name`, `is_guest`) synced automatically via `/_emdash/api/mcp` (`byline_list`) on pull, enabling slug ⇔ ULID resolution and default author selection |
-| `media_state` | Tracks offline draft image uploads (`local_hash`, `media_id`, `storage_key`, `url`, `workspace_path`, `status`: `pending` \| `uploaded` \| `ready` \| `failed`) for idempotency, retry recovery, and cross-article asset reuse |
+| `media_state` | Tracks offline draft image uploads (`local_hash`, `media_id`, `storage_key`, `url`, `workspace_path`, `status`: `pending` \| `uploaded` \| `ready` \| `failed`) for idempotency, retry recovery, and cross-article asset reuse. Note the two ULIDs in one row: `media_id` is the D1 record id and `storage_key` is the R2 object key — see [Two Media ID Spaces](#two-media-id-spaces-id-vs-storagekey). |
+
+### Two Media ID Spaces: `id` vs `storageKey`
+
+Every EmDash asset carries **two unrelated 26-character ULIDs**: the D1 media record `id` (primary key, used by `GET /_emdash/api/media/{id}`) and the R2 object `storageKey` (the filename served by `/_emdash/api/media/file/{storageKey}`). They are generated independently, so for the same image the local mirror name `media/<yyyyMMdd>_<record-id>-<name>.<ext>` never matches the storageKey baked into its own body URL — and neither value is a typo of the other.
+
+Consequences worth internalizing before debugging media:
+
+* A record `id` on the file route returns **404**; a `storageKey` on `GET /_emdash/api/media/{id}` returns **401** (no bearer token) or **404**. Both codes describe the *lookup*, never the health of the asset.
+* Because a 404 proves only that one lookup failed, Emit never concludes a record is missing and never suggests inserting one — see `[UNRESOLVED_MEDIA_ASSET]` under [`emit pull-media`](#emit-pull-media).
+* An old article whose images do not render **locally** is usually an unmirrored asset (the media window is newest-first, `mediaSyncLimit` default 300) rather than a broken reference. `emit doctor` reports how many references have no local file.
+
+The full specification — identifier table, endpoint matrix, migrated-corpus behavior, resolution order (`verifiedStorageKeys` → `orphanStorageKeys`), and `legacy_*` residue rules — lives in **[docs/media-id-spaces.md](docs/media-id-spaces.md)**.
 
 ---
 
@@ -391,7 +404,7 @@ collection: posts                  # Target collection (defaults to "posts")
 status: draft                      # "draft" or "published" (defaults to "draft")
 publishedAt: null                  # ISO 8601 timestamp string (e.g. "2026-11-04T12:00:00.000Z") or null
 locale: ja                         # Locale code (defaults to "ja")
-featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB" # Optional: 26-char media ULID (uppercase-normalized) or null
+featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB" # Optional: 26-char media record ULID (uppercase-normalized) or null — NOT a storageKey
 taxonomies:                        # Map of taxonomy key -> array of term slugs (or canonical term ULIDs)
   categories:
     - tech
@@ -434,7 +447,7 @@ Markdown body begins here...
    - Emit automatically updates the remote state and moves the file from `posts/draft/` to `posts/published/`.
    - **Never move or rename files manually using `mv`**.
 4. **Featured Image References**:
-   - `featuredImage` must be a 26-character canonical media ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Emit normalizes the value to uppercase, so lowercase input is accepted and canonicalized on pull, merge, and push.
+   - `featuredImage` must be a 26-character canonical media **record** ULID (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null` — never a `storageKey`, which is a different ULID for the same asset ([Two Media ID Spaces](#two-media-id-spaces-id-vs-storagekey)). Emit normalizes the value to uppercase, so lowercase input is accepted and canonicalized on pull, merge, and push.
    - To remove the hero image, set `featuredImage: null`. Omitting the field leaves the remote value untouched.
    - When the referenced ULID matches the cached remote entry, Emit resends the original remote `featured_image` object verbatim (provider, `src`, `meta.storageKey`, dimensions, MIME type) so nothing is lost. When it does not match, Emit sends the bare `{ id: <ULID> }` and lets EmDash resolve the media record. **This contract is confirmed against a live EmDash instance:** `featured_image: { "id": "<ULID>" }` is accepted (HTTP 200) and the server stores the id and normalizes `"provider": "local"` itself.
    - Emit never fabricates media metadata from local `media/*.yaml` files: companion files are used only to cross-check a reference. In a workspace that mirrors media (`media/` exists and is non-empty), a missing or mismatched companion file is reported as a push warning — it means Emit could not confirm the media ID exists, not that the payload is invalid. Workspaces that do not mirror media produce no such warning.
@@ -887,7 +900,7 @@ emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune]
 * `--prune`: Remove local media files that no longer exist on remote. Leftover `media/legacy_*` residue written by older Emit versions is never pruned and must be deleted by hand.
 * `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
 
-> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a *lookup* failure, not proof that the record is missing: body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 here. Verify by storageKey (admin UI, or `wrangler d1 SELECT` on the media table) before registering anything — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally.
+> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a *lookup* failure, not proof that the record is missing: body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 here. Verify by storageKey (admin UI, or `wrangler d1 SELECT` on the media table) before registering anything — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
 
 ---
 
@@ -1049,6 +1062,12 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 **Cause**: Categories or tags in frontmatter do not exist in local definitions or remote database (or local cache is stale).
 
 **Solution**: Run `emit pull` or `sync_pull` (taxonomies are synced automatically), or use `emit pull-taxonomies` standalone to refresh your local category and tag list. Preflight Guard G4 will guide you with valid options.
+
+### Q: Images in an older article do not render in a local Markdown preview
+
+**Cause**: Two different things look identical here. (1) The asset was never mirrored locally: `emit pull-media` walks the remote library newest-first and stops at `mediaSyncLimit` (default 300), so images referenced by older articles have no file under `media/`. (2) You are trying to resolve a body URL against local filenames: body URLs carry the R2 `storageKey`, while `media/<yyyyMMdd>_<ULID>-<name>.<ext>` is named after the media record `id`, and those two ULIDs never match for the same image.
+
+**Solution**: Run `emit doctor` first — its `Media References` check reports how many references have no local file, which distinguishes "not mirrored" from "broken reference". Mirror more assets with `emit pull-media --all` (or a larger `--limit`), and resolve any specific asset by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
 
 ### Q: `[NETWORK_ERROR]`: Network request failed (`fetch failed`)
 

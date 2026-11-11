@@ -675,7 +675,9 @@ export async function runWorkspaceDoctor(
       message:
         `${missingMedia.length} referenced media file(s) are missing from disk. ` +
         `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
-        `configured mediaSyncLimit) to fetch them.`,
+        `configured mediaSyncLimit) to fetch them. Body URLs carry R2 storage keys while media/ files are ` +
+        `named after media record ids, so a missing local file is not a broken reference: see ` +
+        `docs/media-id-spaces.md.`,
       suggestion: options.checkMediaUrls
         ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. Confirm the record by storageKey (admin UI, or wrangler d1 SELECT on the media table) before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
         : undefined,
