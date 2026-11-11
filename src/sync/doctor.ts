@@ -38,6 +38,12 @@ import {
   storageKeyFromMediaMeta,
 } from './media.js';
 import { checkMcpProcess } from '../mcp/heartbeat.js';
+import {
+  VALID_MEDIA_FILE_KEY,
+  MEDIA_FILE_ROUTE_PREFIX,
+  FENCE_POLICY,
+  isCodeFenceDelimiter,
+} from '../utils/media-refs.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
 
@@ -98,10 +104,6 @@ export interface ScannedMediaReferences {
   /** References whose captured URL is malformed and therefore cannot name a real media asset. */
   invalidRefs: string[];
 }
-
-/** A storageKey-style media file key: ULID segments joined by dots, plus a known image extension. */
-const VALID_MEDIA_FILE_KEY =
-  /^[0-9A-HJ-NP-Z]{26}(\.[0-9A-HJ-NP-Z]{26})*\.(jpg|jpeg|png|gif|webp|avif|svg)$/i;
 
 /**
  * Counts the media assets this workspace actually mirrors: canonical binaries under `media/`, excluding
@@ -172,10 +174,11 @@ export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaRefe
     // Note: Doctor treats both backticks and tildes (~~~) as fences for diagnostic
     // reporting to avoid false warnings on code examples, whereas push guards (G5/G11)
     // strictly exempt only backtick fences per AGENTS.md.
-    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+    const delim = isCodeFenceDelimiter(trimmed, FENCE_POLICY.diagnostic);
+    if (delim) {
       if (!inFence) {
         inFence = true;
-        fenceDelimiter = trimmed.slice(0, 3);
+        fenceDelimiter = delim;
         continue;
       } else if (trimmed.startsWith(fenceDelimiter)) {
         inFence = false;
@@ -703,7 +706,7 @@ export async function runWorkspaceDoctor(
       if (reachableByKey.has(candidate.key)) continue;
       let reachable = false;
       try {
-        const url = new URL(`/_emdash/api/media/file/${candidate.key}`, origin).toString();
+        const url = new URL(`${MEDIA_FILE_ROUTE_PREFIX}${candidate.key}`, origin).toString();
         const res = await probeFetch(url, { method: 'HEAD' });
         reachable = res.ok;
       } catch {

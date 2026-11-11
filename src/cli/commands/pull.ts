@@ -29,7 +29,7 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { persistLocalMediaRefs } from '../../utils/config.js';
+import { persistLocalMediaRefs, DEFAULT_CONFIG } from '../../utils/config.js';
 import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -226,7 +226,8 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
 
           // 2. Pull articles (batch)
-          const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 30;
+          const limit =
+            ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
 
           const concurrency = options.concurrency
             ? parseInt(options.concurrency, 10)
@@ -312,7 +313,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
           // 3. Pull media (if --media)
           if (includeMedia) {
-            const mediaLimit = ctx.config.mediaSyncLimit || 300;
+            const mediaLimit = ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
             const downloadFiles = options.metadataOnly !== true;
             console.log(
               `\nPulling media from remote (limit: ${mediaLimit}${downloadFiles ? '' : ', metadata only'})...`,
@@ -464,7 +465,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         ? undefined
         : options.limit
           ? parseInt(options.limit, 10)
-          : ctx.config.mediaSyncLimit || 300;
+          : ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
 
       try {
         if (options.article) {

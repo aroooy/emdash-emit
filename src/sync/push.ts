@@ -482,7 +482,7 @@ async function uploadAndRewriteDraftImages(
         // Purge the stale local record so the next run does not keep reusing a dead URL
         const staleState = options.cache.getMediaStateByMediaId(promoted.mediaId);
         if (staleState) {
-          options.cache.deleteMediaState(staleState.localHash);
+          options.cache.deleteMediaState(staleState.storageKey);
         }
         throw new ApiError({
           message: `Image '${draftRef.filename}' was already promoted to '${promoted.promotedRelPath}' (media id ${promoted.mediaId}), but that media record no longer exists on remote.`,
@@ -667,7 +667,7 @@ export async function pushArticle(
     }
   }
 
-  // 1. Guard against blind re-push when article is marked delete_pending (G16)
+  // 1. Guard against blind re-push when article is marked delete_pending (G15)
   if (syncState?.deletePending === 1 && !options.revive && !options.force) {
     throw new ApiError({
       endpoint: `/_emdash/api/content/${collection}/${id}`,
@@ -699,7 +699,7 @@ export async function pushArticle(
   // Update parsed with cleaned body (e.g. trimmed duplicate heading)
   parsed.body = preflight.cleanedBody;
 
-  // 3. Guard against blind re-push when taxonomy conflict is still pending (G15)
+  // 3. Guard against blind re-push when taxonomy conflict is still pending (G16)
   const isTaxConflictPending =
     syncState?.taxonomyConflictPending !== undefined
       ? syncState.taxonomyConflictPending === 1

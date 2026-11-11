@@ -1,2 +1,0 @@
-backup  : {"rows":168,"digest":"87071f4ef2c52cd8"}
-current : {"rows":168,"digest":"87071f4ef2c52cd8"}

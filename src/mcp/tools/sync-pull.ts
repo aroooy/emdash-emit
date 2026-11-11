@@ -35,6 +35,7 @@ import { formatMediaCoverageLine, formatOrphanMediaWarning } from '../../cli/com
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';
+import { DEFAULT_CONFIG } from '../../utils/config.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
   // sync_pull: Pull remote article(s) and taxonomies
@@ -157,7 +158,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       }
 
       // Batch sync mode: taxonomies + articles (+ media if includeMedia)
-      const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 30;
+      const limit =
+        ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
       const shouldPrune = args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
       const postsOnly = args.postsOnly === true;
       const includeMedia = args.includeMedia === true;
@@ -244,7 +246,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           if (orphanWarning) mediaMsg += `\n${orphanWarning}`;
         }
         if (includeMedia) {
-          const mediaLimit = ctx.config.mediaSyncLimit || 300;
+          const mediaLimit = ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
           const mediaResult = await pullMedia({
             workspaceRoot: ctx.root,
             origin,
@@ -350,7 +352,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           refreshToken: ctx.auth.refreshToken,
           article: args.article,
           collection: args.collection || ctx.config.defaultCollection,
-          limit: args.limit || ctx.config.mediaSyncLimit || 300,
+          limit: args.limit || ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
           all: args.all,
           downloadFiles: args.downloadFiles,
           cache: ctx.cache,

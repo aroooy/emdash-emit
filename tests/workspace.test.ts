@@ -80,17 +80,29 @@ describe('Workspace Utils', () => {
     expect(paths.postsDir).toBe(path.join(tempDir, 'posts'));
   });
 
-  it('initWorkspace writes .emit/config.json and loadConfig(workspaceRoot) reads it back accurately', () => {
-    initWorkspace(tempDir, {
-      origin: 'https://aroooy.net',
-      postsSyncLimit: 250,
-    });
+  it('initWorkspace writes .emit/config.json with defaults and respects custom limits (L1)', () => {
+    // 1. Default configuration round-trip
+    initWorkspace(tempDir);
+    const defaultLoaded = loadConfig(tempDir);
+    expect(defaultLoaded.postsSyncLimit).toBe(30);
+    expect(defaultLoaded.mediaSyncLimit).toBe(300);
 
-    const loaded = loadConfig(tempDir);
-    expect(loaded.origin).toBe('https://aroooy.net');
-    expect(loaded.postsSyncLimit).toBe(250);
-    expect(loaded.defaultCollection).toBe('posts');
-    expect(DEFAULT_ORIGIN).toBe('https://example.com');
+    // 2. Custom configuration overrides
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-custom-test-'));
+    try {
+      initWorkspace(customDir, {
+        origin: 'https://aroooy.net',
+        postsSyncLimit: 250,
+      });
+
+      const loaded = loadConfig(customDir);
+      expect(loaded.origin).toBe('https://aroooy.net');
+      expect(loaded.postsSyncLimit).toBe(250);
+      expect(loaded.defaultCollection).toBe('posts');
+      expect(DEFAULT_ORIGIN).toBe('https://example.com');
+    } finally {
+      fs.rmSync(customDir, { recursive: true, force: true });
+    }
   });
 
   it('loadConfig keeps EMDASH_ORIGIN separate from the file value so diagnostics stay truthful', () => {

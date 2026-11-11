@@ -277,7 +277,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     // Verify media_state is committed as 'ready'
     const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
-    const mediaState = cache.getMediaState(localHash);
+    const mediaState = cache.getMediaStateByContentHash(localHash);
     expect(mediaState?.status).toBe('ready');
     expect(mediaState?.mediaId).toBe(mediaRecordId);
     expect(mediaState?.storageKey).toBe(confirmedStorageKey);
@@ -500,7 +500,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     // media_state holds status='uploaded' with the confirmed storageKey and URL
     const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
-    expect(cache.getMediaState(localHash)?.status).toBe('uploaded');
+    expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('uploaded');
 
     // 2nd push: article PUT succeeds; only 1 lightweight GET check is made (B-4), Phase A/B/C are skipped!
     shouldFailArticlePut = false;
@@ -516,7 +516,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     expect(res2.success).toBe(true);
     expect(mediaApiCalls).toBe(1);
     expect(fs.existsSync(draftImgPath)).toBe(false);
-    expect(cache.getMediaState(localHash)?.status).toBe('ready');
+    expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('ready');
     expect(fs.readFileSync(path.join(tempDir, res2.filePath), 'utf8')).toContain(
       `![Window](${confirmedUrl})`,
     );
@@ -1134,7 +1134,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     expect(stats.uploadUrlCalls).toBe(1);
     const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
-    expect(cache.getMediaState(localHash)?.status).toBe('uploaded');
+    expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('uploaded');
     // Nothing was promoted yet: draft file and local Markdown remain untouched
     expect(fs.existsSync(draftImgPath)).toBe(true);
     expect(fs.readFileSync(path.join(tempDir, relPath), 'utf8')).toContain(
@@ -1161,8 +1161,8 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     expect(fs.existsSync(draftImgPath)).toBe(false);
     const promotedRel = `media/${confirmedStorageKey}`;
     expect(fs.existsSync(path.join(tempDir, promotedRel))).toBe(true);
-    expect(cache.getMediaState(localHash)?.status).toBe('ready');
-    expect(cache.getMediaState(localHash)?.workspacePath).toBe(promotedRel);
+    expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('ready');
+    expect(cache.getMediaStateByContentHash(localHash)?.workspacePath).toBe(promotedRel);
 
     const diskMd = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(diskMd).toContain(`![Window test](${confirmedUrl})`);

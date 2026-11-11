@@ -11,11 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Workspace-Relative Local Media References (`localMediaRefs`)**:
-  - New workspace setting `.emit/config.json → localMediaRefs` (default `false`). When enabled, mirrored body images are written to disk as workspace-relative `media/<storageKey>` references so Markdown preview and local tooling resolve them offline, instead of the canonical `/_emdash/api/media/file/<storageKey>` URL.
-  - Round-trip symmetry is preserved: the **baseline snapshot and hash stay canonical**, so the 3-way merge, `sync_state.local_hash`, and the remote payload all keep the canonical URL, while only the file on disk carries the local spelling. Push localizes *after* preflight canonicalization, so an article that spells images locally still pushes the exact canonical body.
+- **Article-Relative Local Media References (`localMediaRefs`, default-ON)**:
+  - Workspace setting `.emit/config.json → localMediaRefs` (default `true`). Mirrored body images are written to disk as article-relative `../../media/<storageKey>` references so Markdown preview and local tooling resolve them offline from the article's own directory, instead of the canonical `/_emdash/api/media/file/<storageKey>` URL.
+  - Round-trip symmetry is preserved: the **baseline snapshot and hash stay canonical**, so the 3-way merge, `sync_state.local_hash`, and the remote payload all keep the canonical URL, while only the file on disk carries the local spelling. Push localizes _after_ preflight canonicalization, so an article that spells images locally still pushes the exact canonical body.
   - CLI flags `emit pull --local-media-refs` / `emit push --local-media-refs` enable the setting and persist it; `--no-local-media-refs` clears a remembered preference. MCP `sync_pull` / `sync_push` accept a `localMediaRefs` argument that overrides the stored setting, matching CLI precedence (explicit argument > remembered config).
   - `emit diff` renders the baseline in whichever spelling the disk already carries, so an untouched local-ref article never reports a phantom media rewrite and only a real edit shows up.
+
+- **Canonical Sliding Window Size (`postsSyncLimit: 30`)**:
+  - The default sliding window limit is canonicalized to `30` (fetching up to 30 `published` + up to 30 `draft` articles in parallel, for a maximum working set of 60 files on the staging desk), bounding local filesystem footprint and aligning with Cloudflare Workers / D1 execution limits. Single-article fetch (`emit pull <id>`) remains fully available for out-of-window posts.
 
 - **Fast-Path Frontmatter Self-Healing (H1 / P1)**:
   - `tryFastPathOrHeal` in `src/sync/pull.ts` now validates `parseMarkdown` even when the disk hash matches the cached baseline. Legacy files whose unquoted percent-encoded taxonomy slugs never parse were previously skipped forever, so `emit status` reported them invalid while `emit pull` did nothing.
@@ -26,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `getWorkspaceStatus` adds `healable` per invalid item and `summary.healableInvalid`, classifying exactly the set `emit doctor` can recover. `emit status` now shows `🟠 healable` vs `🔴 invalid` and reports `N invalid (M healable)`.
   - `emit doctor` reports leniently repairable frontmatter as a `warning` with an explicit `emit pull` instruction instead of silently passing, so `status`, `doctor`, and `pull` never disagree.
 - **Accurate Repair Hints (H3 / P3)**: CLI `emit status` and MCP `sync_status` distinguish healable from unrecoverable invalid files (`healableInvalid` / `unrecoverableInvalid` in the MCP payload) and describe the actual repair mechanism (local syntax-only re-quoting, no article fetch for cached unchanged revisions).
+
+- **Cache Schema v5 Migration (`media_state_v5`)**:
+  - Upgraded SQLite cache schema to version 5. Replaced `local_hash` PRIMARY KEY in `media_state` with `storage_key` PRIMARY KEY to model the immutable public address space accurately.
+  - Separated `local_content_hash` (local SHA-256 binary digest) and `remote_record_ref` (`media-record:<id>`), resolving the historical collision asymmetry. Added index `idx_media_state_content_hash`.
+  - Added dedicated methods `getMediaStateByContentHash` and `deleteMediaStateByContentHash` for upload recovery. Preserved the upload confirmation invariant where old temporary storageKey entries are cleanly deleted before committing confirmed double-ULID keys.
 
 ### Added
 

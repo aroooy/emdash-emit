@@ -141,25 +141,29 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
   it('tracks media_state records for local draft upload idempotency and orphan recovery', () => {
     const localHash = 'a'.repeat(64);
+    const initialKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
+    const confirmedKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
+
     cache.saveMediaState({
       localHash,
       mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.png',
-      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.png',
+      storageKey: initialKey,
+      url: `/_emdash/api/media/file/${initialKey}`,
       status: 'pending',
       uploadedAt: 1730550300,
     });
 
-    const pending = cache.getMediaState(localHash);
+    const pending = cache.getMediaStateByContentHash(localHash);
     expect(pending?.status).toBe('pending');
     expect(pending?.mediaId).toBe('01M6TF1XXBS2KC9EVYG6RBT0J0');
 
-    // Upsert on confirm (storageKey rewritten to double-ULID, status -> ready)
+    // Confirm transition in v5: old pending storageKey is purged, new confirmed storageKey is saved
+    cache.deleteMediaState(initialKey);
     cache.saveMediaState({
       localHash,
       mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
-      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      storageKey: confirmedKey,
+      url: `/_emdash/api/media/file/${confirmedKey}`,
       workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
       status: 'ready',
       uploadedAt: 1730550310,
@@ -167,23 +171,25 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
     const ready = cache.getMediaStateByMediaId('01M6TF1XXBS2KC9EVYG6RBT0J0');
     expect(ready?.status).toBe('ready');
-    expect(ready?.storageKey).toBe('01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png');
+    expect(ready?.storageKey).toBe(confirmedKey);
     expect(ready?.workspacePath).toBe('media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png');
 
     expect(cache.listMediaStates('ready')).toHaveLength(1);
     expect(cache.listMediaStates('pending')).toHaveLength(0);
 
-    cache.deleteMediaState(localHash);
-    expect(cache.getMediaState(localHash)).toBeNull();
+    cache.deleteMediaState(confirmedKey);
+    expect(cache.getMediaState(confirmedKey)).toBeNull();
+    expect(cache.getMediaStateByContentHash(localHash)).toBeNull();
   });
 
   it('keeps workspace_path when a later media_state upsert omits it (R-5)', () => {
     const localHash = 'b'.repeat(64);
+    const key = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
     cache.saveMediaState({
       localHash,
       mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
-      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      storageKey: key,
+      url: `/_emdash/api/media/file/${key}`,
       workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
       status: 'ready',
       uploadedAt: 1730550310,
@@ -195,13 +201,13 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     cache.saveMediaState({
       localHash,
       mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
-      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      storageKey: key,
+      url: `/_emdash/api/media/file/${key}`,
       status: 'uploaded',
       uploadedAt: 1730550400,
     });
 
-    const row = cache.getMediaState(localHash);
+    const row = cache.getMediaStateByContentHash(localHash);
     expect(row?.status).toBe('uploaded');
     expect(row?.workspacePath).toBe('media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png');
 
@@ -210,17 +216,17 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     cache.saveMediaState({
       localHash,
       mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
-      url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      storageKey: key,
+      url: `/_emdash/api/media/file/${key}`,
       workspacePath: null,
       status: 'uploaded',
     });
-    expect(cache.getMediaState(localHash)?.workspacePath).toBe(
+    expect(cache.getMediaStateByContentHash(localHash)?.workspacePath).toBe(
       'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
     );
 
-    cache.deleteMediaState(localHash);
-    expect(cache.getMediaState(localHash)).toBeNull();
+    cache.deleteMediaState(key);
+    expect(cache.getMediaState(key)).toBeNull();
   });
 
   it('records markdown_ref and resolves a mirror through the storage_key index', () => {
@@ -251,7 +257,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
       status: 'uploaded',
       uploadedAt: 1730550600,
     });
-    expect(cache.getMediaState(localHash)?.markdownRef).toBe('media/sample');
+    expect(cache.getMediaStateByContentHash(localHash)?.markdownRef).toBe('media/sample');
 
     // A record written without a mirror yet reports null rather than a fabricated path.
     cache.saveMediaState({
@@ -513,5 +519,112 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // 0-byte backups must be swept
     expect(fs.existsSync(zeroBak1)).toBe(false);
     expect(fs.existsSync(zeroBak2)).toBe(false);
+  });
+
+  it('migrates schema v4 to v5, separating local_content_hash and remote_record_ref with storage_key as PK', () => {
+    cache.close();
+    const v4DbPath = path.join(tempDir, '.emit', 'v4.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(v4DbPath);
+    rawDb.exec('PRAGMA journal_mode = WAL;');
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY,
+        local_file_path TEXT NOT NULL,
+        local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL,
+        status TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL
+      );
+      CREATE TABLE media_state (
+        local_hash TEXT PRIMARY KEY,
+        media_id TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        url TEXT NOT NULL,
+        workspace_path TEXT,
+        markdown_ref TEXT,
+        status TEXT NOT NULL,
+        uploaded_at INTEGER
+      );
+      -- Row 1: local draft image with SHA-256 hash
+      INSERT INTO media_state VALUES (
+        '1111111111111111111111111111111111111111111111111111111111111111',
+        '01M6MEDIA00000000000000001',
+        'key1.png',
+        '/_emdash/api/media/file/key1.png',
+        'media/key1.png',
+        'media/key1',
+        'ready',
+        1730000001
+      );
+      -- Row 2: remote mirrored item with 'media-record:<id>'
+      INSERT INTO media_state VALUES (
+        'media-record:01M6MEDIA00000000000000002',
+        '01M6MEDIA00000000000000002',
+        'key2.jpg',
+        '/_emdash/api/media/file/key2.jpg',
+        'media/key2.jpg',
+        'media/key2',
+        'ready',
+        1730000002
+      );
+      -- Row 3 & 4: duplicate storage_key (one local draft upload hash + one remote mirror record)
+      INSERT INTO media_state VALUES (
+        '3333333333333333333333333333333333333333333333333333333333333333',
+        '01M6MEDIA00000000000000003',
+        'shared.png',
+        '/_emdash/api/media/file/shared.png',
+        'media/shared.png',
+        'media/shared',
+        'ready',
+        1730000003
+      );
+      INSERT INTO media_state VALUES (
+        'media-record:01M6MEDIA00000000000000003',
+        '01M6MEDIA00000000000000003',
+        'shared.png',
+        '/_emdash/api/media/file/shared.png',
+        'media/shared.png',
+        'media/shared',
+        'ready',
+        1730000004
+      );
+      PRAGMA user_version = 4;
+    `);
+    rawDb.close();
+
+    const migrated = new CacheDatabase(v4DbPath);
+    expect(migrated.getSchemaVersion()).toBe(CURRENT_CACHE_SCHEMA_VERSION);
+
+    // Verify Row 1: local_content_hash separated
+    const row1 = migrated.getMediaStateByStorageKey('key1.png');
+    expect(row1).not.toBeNull();
+    expect(row1?.localContentHash).toBe(
+      '1111111111111111111111111111111111111111111111111111111111111111',
+    );
+    expect(row1?.remoteRecordRef).toBeNull();
+    expect(row1?.mediaId).toBe('01M6MEDIA00000000000000001');
+
+    // Verify Row 2: remote_record_ref separated
+    const row2 = migrated.getMediaStateByStorageKey('key2.jpg');
+    expect(row2).not.toBeNull();
+    expect(row2?.localContentHash).toBeNull();
+    expect(row2?.remoteRecordRef).toBe('media-record:01M6MEDIA00000000000000002');
+    expect(row2?.mediaId).toBe('01M6MEDIA00000000000000002');
+
+    // Verify Row 3 & 4: consolidated by storage_key with both hashes preserved
+    const row3 = migrated.getMediaStateByStorageKey('shared.png');
+    expect(row3).not.toBeNull();
+    expect(row3?.localContentHash).toBe(
+      '3333333333333333333333333333333333333333333333333333333333333333',
+    );
+    expect(row3?.remoteRecordRef).toBe('media-record:01M6MEDIA00000000000000003');
+    expect(row3?.uploadedAt).toBe(1730000004);
+
+    // Total unique storage_keys preserved (exactly 3)
+    expect(migrated.listMediaStates()).toHaveLength(3);
+
+    migrated.close();
   });
 });

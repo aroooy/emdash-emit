@@ -72,29 +72,14 @@ export class PublishedArticleDeletionForbiddenError extends Error {
 /**
  * Scans article Markdown body to detect referenced media files in media/.
  */
+import { scanRawMediaReferences } from '../utils/media-refs.js';
+
+/**
+ * Scans article markdown body for local or same-origin media references.
+ * Compatibility shim delegating to scanRawMediaReferences in utils/media-refs.ts.
+ */
 export function scanArticleMediaReferences(bodyMarkdown: string): string[] {
-  const references = new Set<string>();
-
-  // 1. Markdown image syntax: ![alt](url)
-  const mdRegex = /!\[.*?\]\(([^)\s]+)(?:\s+["'].*?["'])?\)/g;
-  let match: RegExpExecArray | null;
-  while ((match = mdRegex.exec(bodyMarkdown)) !== null) {
-    const url = match[1].trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-      references.add(url);
-    }
-  }
-
-  // 2. HTML <img> tags: <img src="...">
-  const htmlRegex = /<img[^>]+src=["']([^"']+)["']/gi;
-  while ((match = htmlRegex.exec(bodyMarkdown)) !== null) {
-    const url = match[1].trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-      references.add(url);
-    }
-  }
-
-  return Array.from(references).sort();
+  return scanRawMediaReferences(bodyMarkdown);
 }
 
 export interface DeleteArticleOptions {

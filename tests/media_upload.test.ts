@@ -173,7 +173,7 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(calls[1].headers['authorization']).toBe(`Bearer ${token}`);
 
     // Local media_state is recorded as 'uploaded'
-    const state = cache.getMediaState(res.localHash);
+    const state = cache.getMediaStateByContentHash(res.localHash);
     expect(state?.status).toBe('uploaded');
     expect(state?.storageKey).toBe(confirmedStorageKey);
   });
@@ -377,7 +377,7 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(res.deduplicated).toBe(false);
     expect(res.mediaId).toBe(mediaId);
     expect(res.storageKey).toBe(confirmedStorageKey);
-    expect(cache.getMediaState(localHash)?.mediaId).toBe(mediaId);
+    expect(cache.getMediaStateByContentHash(localHash)?.mediaId).toBe(mediaId);
   });
 
   it('cleans up expired upload-url target and re-requests a fresh one', async () => {
@@ -548,7 +548,7 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
 
     // Orphan pending record was deleted on server and cleaned from local media_state
     expect(deletedIds).toEqual([mediaId]);
-    expect(cache.getMediaState(localHash)).toBeNull();
+    expect(cache.getMediaStateByContentHash(localHash)).toBeNull();
   });
 
   it('records status="failed" in media_state and surfaces manual deletion guidance if DELETE compensation also fails', async () => {
@@ -608,7 +608,7 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(caught).toBeInstanceOf(ApiError);
     expect((caught as ApiError).suggestion).toContain(mediaId);
 
-    const failedState = cache.getMediaState(localHash);
+    const failedState = cache.getMediaStateByContentHash(localHash);
     expect(failedState?.status).toBe('failed');
     expect(failedState?.mediaId).toBe(mediaId);
   });

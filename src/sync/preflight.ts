@@ -256,7 +256,7 @@ function findAlreadyPromotedMedia(
       const canonicalUrl = rawUrl
         ? toRootRelativeMediaUrl(rawUrl, storageKey, 'https://example.com')
         : storageKey
-          ? `/_emdash/api/media/file/${storageKey}`
+          ? `${MEDIA_FILE_ROUTE_PREFIX}${storageKey}`
           : '';
       if (!canonicalUrl) continue;
 

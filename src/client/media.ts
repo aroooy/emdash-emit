@@ -27,6 +27,7 @@ import { unwrapEnvelope } from './api.js';
 import { ApiError } from './error.js';
 import { createAuthedFetch } from './http.js';
 import type { CacheDatabase } from '../db/cache.js';
+import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
 
 /**
  * Maximum media upload size allowed by EmDash OpenAPI 3.1.0 schema (MediaUploadUrlBody.size.maximum).
@@ -89,7 +90,7 @@ export function toRootRelativeMediaUrl(
       // Fall through to storageKey construction
     }
   }
-  return `/_emdash/api/media/file/${storageKey}`;
+  return `${MEDIA_FILE_ROUTE_PREFIX}${storageKey}`;
 }
 
 export interface MediaUploadUrlResponse {
@@ -372,7 +373,7 @@ async function requestUploadTarget(
       existing: true,
       mediaId: String(data.mediaId),
       storageKey: String(data.storageKey),
-      url: String(data.url || `/_emdash/api/media/file/${String(data.storageKey)}`),
+      url: String(data.url || `${MEDIA_FILE_ROUTE_PREFIX}${String(data.storageKey)}`),
     };
   }
 
@@ -427,7 +428,7 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
   // Check local media_state for recovery from the "upload succeeded -> article PUT failed" window,
   // verifying against GET /_emdash/api/media/{mediaId} that the record has not been deleted on remote (B-4).
   if (options.cache) {
-    const existingLocal = options.cache.getMediaState(localHash);
+    const existingLocal = options.cache.getMediaStateByContentHash(localHash);
     if (
       existingLocal &&
       (existingLocal.status === 'ready' || existingLocal.status === 'uploaded') &&
@@ -448,7 +449,7 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
           remoteCheck.item.status !== 'ready')
       ) {
         // Remote record was deleted or invalidated; purge stale local state and proceed to Phase A
-        options.cache.deleteMediaState(localHash);
+        options.cache.deleteMediaStateByContentHash(localHash);
       } else {
         const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
         const confirmedStorageKey = detail?.storageKey || existingLocal.storageKey;
@@ -685,8 +686,14 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
       options.origin,
     );
 
+    // Confirm transition: remove temporary initial storageKey entry when a new confirmed key is issued
+    if (options.cache && confirmedStorageKey !== initialStorageKey) {
+      options.cache.deleteMediaState(initialStorageKey);
+    }
+
     options.cache?.saveMediaState({
       localHash,
+      localContentHash: localHash,
       mediaId: confirmedMediaId,
       storageKey: confirmedStorageKey,
       url: confirmedUrl,
@@ -738,8 +745,12 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
         confirmedStorageKey,
         options.origin,
       );
+      if (options.cache && confirmedStorageKey !== initialStorageKey) {
+        options.cache.deleteMediaState(initialStorageKey);
+      }
       options.cache?.saveMediaState({
         localHash,
+        localContentHash: localHash,
         mediaId: confirmedMediaId,
         storageKey: confirmedStorageKey,
         url: confirmedUrl,
@@ -759,7 +770,8 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
     }
 
     if (comp.compensated) {
-      options.cache?.deleteMediaState(localHash);
+      options.cache?.deleteMediaState(initialStorageKey);
+      options.cache?.deleteMediaStateByContentHash(localHash);
     } else {
       options.cache?.saveMediaState({
         localHash,

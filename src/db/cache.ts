@@ -77,7 +77,13 @@ export interface BylineRecord {
 export type MediaStateStatus = 'pending' | 'ready' | 'failed' | 'uploaded';
 
 export interface MediaStateRecord {
-  localHash: string;
+  /**
+   * Primary local content hash (SHA-256) when mirrored from a local file/upload,
+   * or synthetic identifier for compatibility.
+   */
+  localHash?: string;
+  localContentHash?: string | null;
+  remoteRecordRef?: string | null;
   mediaId: string;
   storageKey: string;
   url: string;
@@ -92,7 +98,7 @@ export interface MediaStateRecord {
   uploadedAt?: number | null;
 }
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 4;
+export const CURRENT_CACHE_SCHEMA_VERSION = 5;
 
 export class CacheDatabase {
   private db: DatabaseSync;
@@ -177,14 +183,16 @@ export class CacheDatabase {
       CREATE INDEX IF NOT EXISTS idx_bylines_slug ON bylines (slug);
     `);
 
-    // 5. media_state table: local draft media upload tracking & idempotency
+    // 5. media_state table: local draft media upload tracking & idempotency (Schema v5)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS media_state (
-        local_hash TEXT PRIMARY KEY,
+        storage_key TEXT PRIMARY KEY,
         media_id TEXT NOT NULL,
-        storage_key TEXT NOT NULL,
+        local_content_hash TEXT,
+        remote_record_ref TEXT,
         url TEXT NOT NULL,
         workspace_path TEXT,
+        markdown_ref TEXT,
         status TEXT NOT NULL,
         uploaded_at INTEGER
       );
@@ -198,6 +206,7 @@ export class CacheDatabase {
     // Create indexes that depend on migrated columns
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_sync_state_conflict ON sync_state (conflict_pending);
+      CREATE INDEX IF NOT EXISTS idx_media_state_content_hash ON media_state (local_content_hash);
     `);
   }
 
@@ -310,10 +319,7 @@ export class CacheDatabase {
         'CREATE INDEX IF NOT EXISTS idx_sync_state_tax_apply ON sync_state (taxonomy_apply_pending);',
       );
 
-      // Migration 4 (v4): media mirrors are named after the storageKey, so the cache must be able to
-      // address a mirror by that key. `markdown_ref` records the workspace-relative path of the file a
-      // Markdown body URL resolves to; lookups and pruning read it instead of parsing filenames, because
-      // a migrated storageKey is an arbitrary path and carries no media record id at all.
+      // Migration 4 (v4): media mirrors are named after the storageKey
       const mediaColumns = this.db.prepare("PRAGMA table_info('media_state');").all() as Array<
         Record<string, unknown>
       >;
@@ -322,9 +328,79 @@ export class CacheDatabase {
         this.db.exec('ALTER TABLE media_state ADD COLUMN markdown_ref TEXT;');
       }
 
-      this.db.exec(
-        'CREATE INDEX IF NOT EXISTS idx_media_state_storage_key ON media_state (storage_key);',
-      );
+      // Migration 5 (v5): recreate media_state with storage_key as PRIMARY KEY,
+      // separating local_content_hash (SHA-256) and remote_record_ref (media-record:<id>).
+      if (currentVersion < 5) {
+        const mediaCols = this.db.prepare("PRAGMA table_info('media_state');").all() as Array<
+          Record<string, unknown>
+        >;
+        const mediaColNames = new Set(mediaCols.map((c) => String(c.name)));
+        const storageKeyCol = mediaCols.find((c) => String(c.name) === 'storage_key');
+        const isStorageKeyPk = storageKeyCol && Number(storageKeyCol.pk) > 0;
+
+        if (!isStorageKeyPk) {
+          this.db.exec('BEGIN TRANSACTION;');
+          try {
+            this.db.exec(`
+              CREATE TABLE IF NOT EXISTS media_state_v5 (
+                storage_key TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL,
+                local_content_hash TEXT,
+                remote_record_ref TEXT,
+                url TEXT NOT NULL,
+                workspace_path TEXT,
+                markdown_ref TEXT,
+                status TEXT NOT NULL,
+                uploaded_at INTEGER
+              );
+            `);
+
+            if (mediaColNames.has('local_hash')) {
+              const hasMarkdownRef = mediaColNames.has('markdown_ref');
+              this.db.exec(`
+                INSERT INTO media_state_v5 (
+                  storage_key,
+                  media_id,
+                  local_content_hash,
+                  remote_record_ref,
+                  url,
+                  workspace_path,
+                  markdown_ref,
+                  status,
+                  uploaded_at
+                )
+                SELECT
+                  COALESCE(
+                    NULLIF(storage_key, ''),
+                    CASE WHEN url LIKE '%/file/%' THEN substr(url, instr(url, '/file/') + 6) ELSE 'legacy_' || media_id END
+                  ) AS computed_key,
+                  MAX(media_id),
+                  MAX(CASE WHEN local_hash NOT LIKE 'media-record:%' THEN local_hash ELSE NULL END),
+                  MAX(CASE WHEN local_hash LIKE 'media-record:%' THEN local_hash ELSE NULL END),
+                  MAX(url),
+                  MAX(workspace_path),
+                  ${hasMarkdownRef ? 'MAX(markdown_ref)' : 'NULL'},
+                  MAX(status),
+                  MAX(uploaded_at)
+                FROM media_state
+                WHERE (storage_key IS NOT NULL AND storage_key != '') OR url LIKE '%/file/%'
+                GROUP BY computed_key;
+              `);
+              this.db.exec('DROP TABLE media_state;');
+            }
+            this.db.exec('ALTER TABLE media_state_v5 RENAME TO media_state;');
+            this.db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_media_state_media_id ON media_state (media_id);
+              CREATE INDEX IF NOT EXISTS idx_media_state_status ON media_state (status);
+              CREATE INDEX IF NOT EXISTS idx_media_state_content_hash ON media_state (local_content_hash);
+            `);
+            this.db.exec('COMMIT;');
+          } catch (err) {
+            this.db.exec('ROLLBACK;');
+            throw err;
+          }
+        }
+      }
 
       this.db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);
     }
@@ -822,12 +898,20 @@ export class CacheDatabase {
   // --- media_state operations ---
 
   public saveMediaState(record: MediaStateRecord): void {
+    const localContentHash =
+      record.localContentHash ??
+      (record.localHash && !record.localHash.startsWith('media-record:') ? record.localHash : null);
+    const remoteRecordRef =
+      record.remoteRecordRef ??
+      (record.localHash && record.localHash.startsWith('media-record:') ? record.localHash : null);
+
     const stmt = this.db.prepare(`
-      INSERT INTO media_state (local_hash, media_id, storage_key, url, workspace_path, markdown_ref, status, uploaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(local_hash) DO UPDATE SET
+      INSERT INTO media_state (storage_key, media_id, local_content_hash, remote_record_ref, url, workspace_path, markdown_ref, status, uploaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(storage_key) DO UPDATE SET
         media_id = excluded.media_id,
-        storage_key = excluded.storage_key,
+        local_content_hash = COALESCE(excluded.local_content_hash, media_state.local_content_hash),
+        remote_record_ref = COALESCE(excluded.remote_record_ref, media_state.remote_record_ref),
         url = excluded.url,
         workspace_path = COALESCE(excluded.workspace_path, media_state.workspace_path),
         markdown_ref = COALESCE(excluded.markdown_ref, media_state.markdown_ref),
@@ -835,9 +919,10 @@ export class CacheDatabase {
         uploaded_at = excluded.uploaded_at
     `);
     stmt.run(
-      record.localHash,
-      record.mediaId,
       record.storageKey,
+      record.mediaId,
+      localContentHash,
+      remoteRecordRef,
       record.url,
       record.workspacePath ?? null,
       record.markdownRef ?? null,
@@ -846,9 +931,20 @@ export class CacheDatabase {
     );
   }
 
-  public getMediaState(localHash: string): MediaStateRecord | null {
-    const stmt = this.db.prepare('SELECT * FROM media_state WHERE local_hash = ?');
-    const row = stmt.get(localHash) as Record<string, unknown> | undefined;
+  public getMediaState(storageKey: string): MediaStateRecord | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM media_state WHERE storage_key = ? ORDER BY uploaded_at DESC LIMIT 1',
+    );
+    const row = stmt.get(storageKey) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapMediaStateRow(row);
+  }
+
+  public getMediaStateByContentHash(contentHash: string): MediaStateRecord | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM media_state WHERE local_content_hash = ? ORDER BY uploaded_at DESC LIMIT 1',
+    );
+    const row = stmt.get(contentHash) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.mapMediaStateRow(row);
   }
@@ -863,17 +959,17 @@ export class CacheDatabase {
   }
 
   public getMediaStateByStorageKey(storageKey: string): MediaStateRecord | null {
-    const stmt = this.db.prepare(
-      'SELECT * FROM media_state WHERE storage_key = ? ORDER BY uploaded_at DESC LIMIT 1',
-    );
-    const row = stmt.get(storageKey) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return this.mapMediaStateRow(row);
+    return this.getMediaState(storageKey);
   }
 
-  public deleteMediaState(localHash: string): void {
-    const stmt = this.db.prepare('DELETE FROM media_state WHERE local_hash = ?');
-    stmt.run(localHash);
+  public deleteMediaState(storageKey: string): void {
+    const stmt = this.db.prepare('DELETE FROM media_state WHERE storage_key = ?');
+    stmt.run(storageKey);
+  }
+
+  public deleteMediaStateByContentHash(contentHash: string): void {
+    const stmt = this.db.prepare('DELETE FROM media_state WHERE local_content_hash = ?');
+    stmt.run(contentHash);
   }
 
   public listMediaStates(status?: MediaStateStatus): MediaStateRecord[] {
@@ -885,8 +981,19 @@ export class CacheDatabase {
   }
 
   private mapMediaStateRow(row: Record<string, unknown>): MediaStateRecord {
+    const localContentHash =
+      row.local_content_hash !== null && row.local_content_hash !== undefined
+        ? String(row.local_content_hash)
+        : null;
+    const remoteRecordRef =
+      row.remote_record_ref !== null && row.remote_record_ref !== undefined
+        ? String(row.remote_record_ref)
+        : null;
+    const localHash = localContentHash || remoteRecordRef || undefined;
     return {
-      localHash: String(row.local_hash),
+      localHash,
+      localContentHash,
+      remoteRecordRef,
       mediaId: String(row.media_id),
       storageKey: String(row.storage_key),
       url: String(row.url),

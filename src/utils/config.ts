@@ -67,14 +67,15 @@ export function getEnvOrigin(): string | undefined {
   return value ? value : undefined;
 }
 
-const DEFAULT_CONFIG: EmitConfig = {
+export const DEFAULT_CONFIG = {
   origin: DEFAULT_ORIGIN,
   defaultCollection: 'posts',
   defaultLocale: 'ja',
   postsSyncLimit: 30,
   mediaSyncLimit: 300,
   concurrency: 8,
-};
+  localMediaRefs: true,
+} as const satisfies EmitConfig;
 
 /**
  * Initializes a new .emit workspace directory with default config.
@@ -172,7 +173,7 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       // Local-first media refs are default-ON: a mirrored body image is spelled as an article-relative
       // `../../media/<storageKey>` reference so preview resolves offline. Only an explicit `false` opts back out;
       // an absent key (a workspace predating the setting) now defaults to local refs rather than canonical URLs.
-      localMediaRefs: parsed.localMediaRefs !== false,
+      localMediaRefs: parsed.localMediaRefs ?? DEFAULT_CONFIG.localMediaRefs,
       createdWithVersion: parsed.createdWithVersion,
       lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,
