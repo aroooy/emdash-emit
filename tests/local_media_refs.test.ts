@@ -383,6 +383,61 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
     void repull;
   });
 
+  it('reports a localized disk file as synced when sync_state still tracks the canonical hash', async () => {
+    // The exact state a workspace carries after its articles were written in the canonical spelling and then
+    // re-spelled to local references without being re-tracked: `sync_state.local_hash` records the canonical
+    // bytes while the disk holds `../../media/<storageKey>`. `emit diff` already treats that as clean, so
+    // `emit status` must not report 17 phantom edits for 60 untouched articles — the two diagnostics may never
+    // disagree. The baseline proves the divergence is spelling-only.
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: false,
+      rawItem: remoteItem('rev_1'),
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+    const articlePath = path.join(tempDir, res.filePath);
+
+    // Disk carries the localized spelling; the tracked hash records the canonical bytes that were written.
+    const canonicalBytes = fs.readFileSync(articlePath, 'utf8');
+    expect(canonicalBytes).toContain(CANONICAL_URL);
+    const localized = canonicalBytes.replace(`](${CANONICAL_URL})`, `](${LOCAL_REF})`);
+    fs.writeFileSync(articlePath, localized, 'utf8');
+
+    const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusBefore.summary.modified).toBe(0);
+
+    // The repair: localizing the canonical baseline reproduces the disk exactly, so the article is untouched.
+    // A legacy workspace tracks the canonical bytes while the disk carries the localized spelling — precisely
+    // the state that made `emit status` report 17 phantom edits for 60 untouched articles.
+    const staleHash = calculateHash(canonicalBytes);
+    cache.saveSyncState({ ...cache.getSyncState(ARTICLE_ID)!, localHash: staleHash });
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.modified).toBe(0);
+    expect(status.summary.synced).toBe(1);
+
+    // The status pass re-tracks the file against its own bytes, so the repair is permanent and the next pull
+    // of the same revision hits the fast-path skip instead of rewriting the localized file from canonical bytes.
+    const syncState = cache.getSyncState(ARTICLE_ID)!;
+    expect(syncState.localHash).not.toBe(staleHash);
+    expect(syncState.localHash).toBe(calculateHash(fs.readFileSync(articlePath, 'utf8')));
+
+    // `emit status` now certifies the file as untouched. `emit diff`'s *content* comparison already agreed
+    // (its baseline is rendered in the disk's own spelling), but its `status` verdict still reads the raw
+    // hash, so assert agreement through the diff payload and keep the real-edit case honest.
+    const diffResult = inspectArticleDiff({ workspaceRoot: tempDir, cache, id: ARTICLE_ID });
+    expect(diffResult.diff?.hasChanges).toBe(false);
+
+    fs.writeFileSync(articlePath, `${localized}\n\nA real new paragraph.\n`, 'utf8');
+    const edited = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(edited.summary.modified).toBe(1);
+    expect(
+      inspectArticleDiff({ workspaceRoot: tempDir, cache, id: ARTICLE_ID }).diff?.hasChanges,
+    ).toBe(true);
+  });
+
   it('keeps an untouched article clean when it moves from draft to published', async () => {
     // Moving an article changes the depth its mirror reference must carry. Both the disk bytes and the tracked
     // local_hash must land on the new depth together, or a status pass would report a media edit nobody made.

@@ -27,8 +27,12 @@ import {
   formatFrontmatterParseError,
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
+  serializeMarkdown,
+  type Frontmatter,
 } from '../utils/frontmatter.js';
-import { calculateHash, CONFLICTS_SUBDIR } from './pull.js';
+import { calculateHash, carriesDepthFreeMediaRef, CONFLICTS_SUBDIR } from './pull.js';
+import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import {
   compareArticleFilenameDesc,
   extractUlidFromFilename,
@@ -127,6 +131,48 @@ export function countQuarantinedCopies(
 }
 
 /**
+ * Reports whether a file whose hash disagrees with `sync_state.local_hash` is still byte-identical to its
+ * baseline once the baseline is spelled the way the disk spells it.
+ *
+ * `base_snapshots` always stores the canonical `/_emdash/api/media/file/<storageKey>` form, so re-spelling it
+ * through `localizeArticleMediaRefs` reproduces either local spelling a workspace carries — the article-relative
+ * `../../media/<key>` or the older depth-free `media/<key>`. A match proves the divergence is purely reference
+ * spelling and not an edit, which is exactly the case `emit diff` already treats as clean; status must agree or
+ * the two diagnostics disagree. Anything that still differs after this pass is a real local edit.
+ */
+function isBaselineSpellingMatch(
+  workspaceRoot: string,
+  cache: CacheDatabase,
+  relPath: string,
+  localContent: string,
+  currentHash: string,
+): boolean {
+  const id = extractUlidFromFilename(path.basename(relPath));
+  if (!id) return false;
+  const snapshot = cache.getBaseSnapshot(id);
+  if (!snapshot) return false;
+
+  try {
+    const candidates = loadLocalTaxonomyCandidates(workspaceRoot);
+    const baseMarkdown = serializeMarkdown(
+      JSON.parse(snapshot.frontmatterYaml) as Frontmatter,
+      snapshot.bodyMarkdown,
+      candidates,
+    );
+    const localizedBase = localizeArticleMediaRefs(baseMarkdown, {
+      workspaceRoot,
+      articleRelPath: relPath,
+      fs,
+      preferLegacyRef: carriesDepthFreeMediaRef(localContent),
+    });
+    return calculateHash(localizedBase) === currentHash;
+  } catch {
+    // An unreadable or malformed baseline cannot certify the file as untouched.
+    return false;
+  }
+}
+
+/**
  * Scans the workspace directory and compares files against cache.db to compute sync status.
  */
 export function getWorkspaceStatus(
@@ -175,7 +221,24 @@ export function getWorkspaceStatus(
         const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
 
         if (syncState) {
-          if (syncState.localHash === currentHash && !conflictPending && !taxonomyApplyPending) {
+          // `local_hash` is supposed to record the exact bytes on disk, but a workspace whose articles were
+          // written before media-ref localization existed keeps a hash of the *canonical* spelling while the
+          // file itself carries `../../media/<storageKey>` — pull's post-pass re-spelled the disk without
+          // re-tracking it. A legacy cache can therefore disagree with the disk purely on reference spelling.
+          // Ask the baseline, which stores the canonical form: when localizing it reproduces exactly what the
+          // disk carries, the article is untouched and must read as synced, the same rule `emit diff` applies.
+          // Only a file that actually diverges from its baseline falls through to 'modified'.
+          const hashMatches = syncState.localHash === currentHash;
+          const spellingMatch =
+            !hashMatches &&
+            isBaselineSpellingMatch(workspaceRoot, cache, relPath, content, currentHash);
+          if (spellingMatch) {
+            // Re-track the file against its own bytes so later passes skip it outright instead of re-reading
+            // and re-localizing the baseline on every status call. Values are untouched — only the recorded
+            // hash catches up with the spelling already on disk.
+            cache.saveSyncState({ ...syncState, localHash: currentHash });
+          }
+          if ((hashMatches || spellingMatch) && !conflictPending && !taxonomyApplyPending) {
             syncStatus = 'synced';
           } else {
             syncStatus = 'modified';
