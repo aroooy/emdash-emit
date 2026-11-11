@@ -779,7 +779,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     const mCheck = report.checks.find((c) => c.id === 'media_references');
     expect(mCheck?.status).toBe('warning');
     // Coverage must be stated as a number the user can act on, not as an assumed data loss.
-    expect(mCheck?.message).toContain('The remote library reports 4008 media record(s)');
+    expect(mCheck?.message).toContain('The remote library walk reached 4008 media record(s)');
     expect(mCheck?.message).toContain('this workspace mirrors 1 of them');
     expect(mCheck?.message).toContain('simply never downloaded');
   });

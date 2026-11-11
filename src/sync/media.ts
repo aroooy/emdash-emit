@@ -838,6 +838,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     mediaIdsByStorageKey: new Map<string, string>(),
     totalCount: null,
     complete: false,
+    scannedCount: 0,
   };
 
   const activeMediaBaseNames = new Set<string>();
@@ -917,6 +918,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       else if (result.skipped) skippedCount++;
 
       totalProcessed++;
+      remoteIndex.scannedCount++;
       if (totalProcessed >= targetTotal) {
         break;
       }
@@ -988,7 +990,9 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     downloaded: downloadedCount,
     skipped: skippedCount,
     deleted: deletedCount,
-    remoteTotalCount: remoteIndex.totalCount,
+    remoteTotalCount: remoteIndex.complete
+      ? (remoteIndex.totalCount ?? remoteIndex.scannedCount)
+      : remoteIndex.totalCount,
     referencedUnmirroredStorageKeys,
   };
 }
@@ -1013,6 +1017,12 @@ export interface RemoteStorageKeyIndex {
   totalCount: number | null;
   /** True only when the walk finished without hitting `maxItems`. */
   complete: boolean;
+  /**
+   * Records actually read from the list endpoint. Live EmDash reports no `totalCount` at all, so this
+   * walked count is the only figure a coverage report can state; it equals `storageKeys.size` unless a
+   * record repeated a key or lacked one.
+   */
+  scannedCount: number;
 }
 
 export async function collectRemoteStorageKeys(options: {
@@ -1082,7 +1092,7 @@ export async function collectRemoteStorageKeys(options: {
     cursor = data.nextCursor;
   }
 
-  return { storageKeys, mediaIdsByStorageKey, totalCount, complete };
+  return { storageKeys, mediaIdsByStorageKey, totalCount, complete, scannedCount: scanned };
 }
 
 /**

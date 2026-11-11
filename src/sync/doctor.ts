@@ -704,7 +704,11 @@ export async function runWorkspaceDoctor(
   // complete walk turns "447 references have no local file" into "the library holds M records, this
   // workspace mirrors K of them", which is what tells a user to widen the window instead of chase data
   // loss. Credentials are required, so plain doctor runs stay offline and skip this block.
-  let remoteLibrary: { totalCount: number | null; mirroredCount: number } | null = null;
+  let remoteLibrary: {
+    totalCount: number | null;
+    complete: boolean;
+    mirroredCount: number;
+  } | null = null;
   if (options.checkMediaLibrary) {
     const origin = options.profileOrigin || options.config.origin;
     try {
@@ -715,8 +719,10 @@ export async function runWorkspaceDoctor(
         refreshToken: options.refreshToken,
         fetchFn: options.fetchFn,
       });
+      // Live EmDash sends no `totalCount`, so the walk itself is the only library figure available.
       remoteLibrary = {
-        totalCount: index.totalCount,
+        totalCount: index.totalCount ?? (index.complete ? index.scannedCount : null),
+        complete: index.complete,
         mirroredCount: countMirroredMedia(mediaDir),
       };
     } catch {
@@ -726,7 +732,9 @@ export async function runWorkspaceDoctor(
 
   if (missingMedia.length > 0) {
     const coverage = remoteLibrary
-      ? ` The remote library reports ${remoteLibrary.totalCount ?? 'an unknown number of'} media record(s), and this workspace mirrors ${remoteLibrary.mirroredCount} of them, so most of these references were simply never downloaded.`
+      ? remoteLibrary.complete
+        ? ` The remote library walk reached ${remoteLibrary.totalCount ?? 'no'} media record(s), and this workspace mirrors ${remoteLibrary.mirroredCount} of them, so most of these references were simply never downloaded.`
+        : ` The remote library is larger than the walk that could be completed here, and this workspace mirrors ${remoteLibrary.mirroredCount} record(s), so most of these references were simply never downloaded.`
       : '';
     checks.push({
       id: 'media_references',

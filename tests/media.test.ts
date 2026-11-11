@@ -1088,11 +1088,98 @@ locale: ja
       mediaIdsByStorageKey: new Map([[`${REMOTE_KEY}.jpg`, OLD_RECORD]]),
       totalCount: 1,
       complete: true,
+      scannedCount: 1,
     };
     const referenced = [`${REMOTE_KEY}.jpg`, `${LOCAL_ONLY_KEY}.jpg`, `${NOWHERE_KEY}.jpg`];
     expect(findUnmirroredStorageKeys(referenced, [`${LOCAL_ONLY_KEY}.jpg`], index)).toEqual([
       `${NOWHERE_KEY}.jpg`,
     ]);
+  });
+
+  it('reports the walked record count as the library size when the server sends no totalCount', async () => {
+    // Live EmDash (aroooy.net) returns only `{ items, nextCursor }` from the list endpoint, so a complete
+    // walk is the only figure a coverage report can state. A `--all` run must never claim 0 records.
+    const suffixes = ['97', '98'];
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/_emdash/api/media?') || url.endsWith('/_emdash/api/media')) {
+        const items = suffixes.map((sfx) => ({
+          id: `01MJZZALLRD999999999999${sfx}`,
+          filename: `walked-${sfx}.jpg`,
+          mimeType: 'image/jpeg',
+          size: 5,
+          storageKey: `01MJZZALLSK999999999999${sfx}.jpg`,
+          createdAt: '2026-11-08T00:00:00.000Z',
+        }));
+        const body = url.includes('cursor=page1')
+          ? { success: true, data: { items: [] } }
+          : { success: true, data: { items, nextCursor: 'page1' } };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }),
+        );
+      }
+      if (url.includes('/_emdash/api/media/file/')) {
+        return Promise.resolve(new Response('bytes'));
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      all: true,
+      downloadFiles: false,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(2);
+    expect(res.remoteTotalCount).toBe(2);
+    expect(
+      formatMediaCoverageLine({ total: res.total, remoteTotalCount: res.remoteTotalCount }),
+    ).toContain('remote library holds 2 record(s), of which this run walked 2');
+  });
+
+  it('withholds a library size when a limited walk cannot reach the whole library', async () => {
+    // A truncated walk proves nothing about unvisited records, so coverage must stay silent rather than
+    // report the partial page count as if it were the library size.
+    const mockFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              nextCursor: 'page2',
+              items: [
+                {
+                  id: '01MJZZALLRD99999999999997',
+                  filename: 'walked-97.jpg',
+                  mimeType: 'image/jpeg',
+                  size: 5,
+                  storageKey: '01MJZZALLSK99999999999997.jpg',
+                  createdAt: '2026-11-08T00:00:00.000Z',
+                },
+              ],
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 1,
+      downloadFiles: false,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(1);
+    expect(res.remoteTotalCount).toBeNull();
+    expect(
+      formatMediaCoverageLine({ total: res.total, remoteTotalCount: res.remoteTotalCount }),
+    ).toBe('');
   });
 
   it('renders a coverage line that separates library size from local mirroring', () => {
@@ -1110,5 +1197,7 @@ locale: ja
     expect(line).toContain('blind INSERT can duplicate');
 
     expect(formatMediaCoverageLine({ total: 5 })).toBe('');
+    // Live EmDash reports no `totalCount`, so a zero must never render as an absurd library size.
+    expect(formatMediaCoverageLine({ total: 4008, remoteTotalCount: 0 })).toBe('');
   });
 });

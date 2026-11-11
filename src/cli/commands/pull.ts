@@ -75,9 +75,10 @@ export function formatMediaCoverageLine(res: {
   referencedUnmirroredStorageKeys?: string[];
 }): string {
   const parts: string[] = [];
-  if (typeof res.remoteTotalCount === 'number') {
+  const remoteTotal = res.remoteTotalCount;
+  if (typeof remoteTotal === 'number' && remoteTotal > 0) {
     parts.push(
-      `remote library holds ${res.remoteTotalCount} record(s), of which this run walked ${res.total}`,
+      `remote library holds ${remoteTotal} record(s), of which this run walked ${res.total}`,
     );
   }
   const unmirrored = res.referencedUnmirroredStorageKeys;
