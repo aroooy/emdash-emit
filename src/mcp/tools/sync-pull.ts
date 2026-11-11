@@ -157,7 +157,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       }
 
       // Batch sync mode: taxonomies + articles (+ media if includeMedia)
-      const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 100;
+      const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 30;
       const shouldPrune = args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
       const postsOnly = args.postsOnly === true;
       const includeMedia = args.includeMedia === true;
@@ -201,6 +201,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           force: args.force,
           prune: shouldPrune,
           localMediaRefs,
+          // Local-first media mirroring is default-ON for a batch pull; postsOnly skips it, matching the CLI.
+          mediaSync: !postsOnly,
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
@@ -231,6 +233,16 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
 
         // 3. Pull media if includeMedia
         let mediaMsg = '';
+        if (batchResult.media) {
+          const m = batchResult.media;
+          const totalLabel =
+            typeof m.remoteTotalCount === 'number' && m.remoteTotalCount > 0
+              ? `${m.walkedCount}/${m.remoteTotalCount}`
+              : `${m.walkedCount}${m.complete ? '' : '+'}`;
+          mediaMsg += `\nMedia (local-first): walked ${totalLabel} record(s), mirrored ${m.mirroredStorageKeys.length} referenced asset(s) (${m.downloaded} downloaded, ${m.skipped} up-to-date).`;
+          const orphanWarning = formatOrphanMediaWarning(m.orphanStorageKeys);
+          if (orphanWarning) mediaMsg += `\n${orphanWarning}`;
+        }
         if (includeMedia) {
           const mediaLimit = ctx.config.mediaSyncLimit || 300;
           const mediaResult = await pullMedia({
@@ -242,7 +254,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             downloadFiles: args.metadataOnly !== true,
             cache: ctx.cache,
           });
-          mediaMsg = `\nMedia: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
+          mediaMsg += `\nMedia (full library): ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
         }
 
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';

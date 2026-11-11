@@ -1060,6 +1060,8 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   const remoteIndex: RemoteStorageKeyIndex = {
     storageKeys: activeStorageKeys,
     mediaIdsByStorageKey: new Map<string, string>(),
+    recordsByStorageKey: new Map<string, EmDashMediaItem>(),
+    recordsById: new Map<string, EmDashMediaItem>(),
     totalCount: null,
     complete: false,
     scannedCount: 0,
@@ -1240,6 +1242,16 @@ export interface RemoteStorageKeyIndex {
   storageKeys: Set<string>;
   /** ULIDs of the records those keys belong to, for reporting a match as a record id. */
   mediaIdsByStorageKey: Map<string, string>;
+  /**
+   * The full `EmDashMediaItem` each storageKey resolves to, exactly as the list endpoint reported it.
+   * These carry `filename`, `mimeType`, and `size` — everything `mediaMirrorNames()` needs to derive a
+   * mirror stem, collision suffix, and extension — so an article-driven mirror can reuse a walked record
+   * instead of fetching `GET /_emdash/api/media/{id}` again per asset. A walk that only builds the key set
+   * (doctor's coverage check) still populates this; nothing reads it unless a mirror stage asks for it.
+   */
+  recordsByStorageKey: Map<string, EmDashMediaItem>;
+  /** The same records keyed by their record id, so an article body that references a media id resolves too. */
+  recordsById: Map<string, EmDashMediaItem>;
   /** `totalCount` reported by the server, or null when the response did not include it. */
   totalCount: number | null;
   /** True only when the walk finished without hitting `maxItems`. */
@@ -1267,6 +1279,8 @@ export async function collectRemoteStorageKeys(options: {
 
   const storageKeys = new Set<string>();
   const mediaIdsByStorageKey = new Map<string, string>();
+  const recordsByStorageKey = new Map<string, EmDashMediaItem>();
+  const recordsById = new Map<string, EmDashMediaItem>();
   let totalCount: number | null = null;
   let scanned = 0;
   let complete = false;
@@ -1306,9 +1320,16 @@ export async function collectRemoteStorageKeys(options: {
 
     for (const item of rawItems) {
       scanned++;
+      if (item.id) recordsById.set(item.id.toUpperCase(), item);
       if (typeof item.storageKey === 'string' && item.storageKey) {
         storageKeys.add(item.storageKey);
-        if (item.id) mediaIdsByStorageKey.set(item.storageKey, item.id);
+        // First record wins a repeated key, so reporting a match stays deterministic.
+        if (item.id && !mediaIdsByStorageKey.has(item.storageKey)) {
+          mediaIdsByStorageKey.set(item.storageKey, item.id);
+        }
+        if (!recordsByStorageKey.has(item.storageKey)) {
+          recordsByStorageKey.set(item.storageKey, item);
+        }
       }
     }
 
@@ -1319,7 +1340,132 @@ export async function collectRemoteStorageKeys(options: {
     cursor = data.nextCursor;
   }
 
-  return { storageKeys, mediaIdsByStorageKey, totalCount, complete, scannedCount: scanned };
+  return {
+    storageKeys,
+    mediaIdsByStorageKey,
+    recordsByStorageKey,
+    recordsById,
+    totalCount,
+    complete,
+    scannedCount: scanned,
+  };
+}
+
+/** The set of storageKeys a mirror stage actually resolved to a walked record and mirrored. */
+export interface MirroredAssetResult {
+  /** StorageKeys matched to a walked record and written to `media/` (binary + companion). */
+  mirroredStorageKeys: Set<string>;
+  /** How many of those were freshly downloaded versus already up-to-date on disk. */
+  downloaded: number;
+  skipped: number;
+  /**
+   * Referenced storageKeys no walked record mirrors, but confirmed evidence proves healthy: the walk stored
+   * that exact key, or a walked record / local mirror companion names the ULID baked into the key. Such a key
+   * is healthy and must never be escalated as missing.
+   */
+  verifiedStorageKeys: string[];
+  /**
+   * Referenced storageKeys that no walked record owns and no confirmed local mirror metadata names. A key
+   * whose ULID matches a record the walk resolved under that id is downgraded to `verifiedStorageKeys`,
+   * never escalated here — Emit mirrors records and never repairs server data.
+   */
+  orphanStorageKeys: string[];
+}
+
+/**
+ * Mirrors only the assets a batch of pulled articles actually references, reusing the records the lightweight
+ * index walk already fetched instead of paying for a per-asset `GET /_emdash/api/media/{id}`.
+ *
+ * This is the mirror half of the default-ON local-first pull: the walk phase builds `RemoteStorageKeyIndex`
+ * (JSON only, no binaries), and this phase downloads the binary + companion YAML for exactly the storageKeys
+ * found in article bodies. A key the walk did not report is NOT proof of a missing record — the record can
+ * exist under a different primary key while the body carries an R2 storageKey — so it is re-checked against
+ * confirmed evidence only (a walked record resolved under that exact ULID, or local mirror metadata) and what
+ * still fails is reported as `orphanStorageKeys`. Emit never fetches such an asset and never registers one.
+ */
+export async function mirrorReferencedAssetsFromIndex(
+  referencedStorageKeys: Iterable<string>,
+  index: RemoteStorageKeyIndex,
+  options: {
+    workspaceRoot: string;
+    origin: string;
+    token: string;
+    refreshToken?: string;
+    downloadFiles?: boolean;
+    fetchFn?: typeof fetch;
+    cache?: CacheDatabase;
+  },
+): Promise<MirroredAssetResult> {
+  const fetchFn = createAuthedFetch(options);
+  const downloadFiles = options.downloadFiles !== false;
+  const mediaDir = path.join(options.workspaceRoot, 'media');
+  fs.mkdirSync(mediaDir, { recursive: true });
+
+  const mirroredStorageKeys = new Set<string>();
+  let downloadedCount = 0;
+  let skippedCount = 0;
+
+  // Walk every referenced key once. A key resolves to a walked record either directly (the walk reported
+  // that exact storageKey) or through a ULID the walk resolved under that record id — the migrated-corpus
+  // case where the body URL bakes an R2 storageKey that differs from the record's own primary key.
+  const referenced = [...referencedStorageKeys];
+  const mirrorCandidates = collectLocalMediaMirrorCandidates(mediaDir);
+  const verifiedStorageKeys: string[] = [];
+  const orphanStorageKeys: string[] = [];
+
+  for (const key of referenced) {
+    let item: EmDashMediaItem | undefined = index.recordsByStorageKey.get(key);
+    if (!item) {
+      // The body key may itself be a record id the walk stored under `recordsById`, or share a ULID with a
+      // walked record. Reuse that record rather than re-fetching it.
+      const ulids = (key.match(/[0-9A-HJ-NP-Z]{26}/gi) ?? []).map((u) => u.toUpperCase());
+      for (const ulid of ulids) {
+        const byId = index.recordsById.get(ulid);
+        if (byId) {
+          item = byId;
+          break;
+        }
+      }
+    }
+
+    if (item) {
+      const result = await syncSingleMediaItem({
+        item,
+        mediaDir,
+        origin: options.origin,
+        token: options.token,
+        downloadFiles,
+        fetchFn,
+        cache: options.cache,
+      });
+      if (result.downloaded) downloadedCount++;
+      else if (result.skipped) skippedCount++;
+      if (item.storageKey) mirroredStorageKeys.add(item.storageKey);
+      mirroredStorageKeys.add(key);
+      continue;
+    }
+
+    // No walked record owns this key. Only two things count as evidence it is healthy: a local mirror
+    // companion already names the ULID, or the walk stored a matching storageKey. A bare body reference is
+    // never self-confirming — that is precisely the case to report rather than assume healthy.
+    const ulids = (key.match(/[0-9A-HJ-NP-Z]{26}/gi) ?? []).map((u) => u.toUpperCase());
+    const confirmed =
+      index.storageKeys.has(key) ||
+      ulids.some((ulid) => index.recordsById.has(ulid) || mirrorCandidates.has(ulid));
+    if (confirmed) {
+      verifiedStorageKeys.push(key);
+    } else {
+      orphanStorageKeys.push(key);
+    }
+  }
+
+  return {
+    mirroredStorageKeys,
+    downloaded: downloadedCount,
+    skipped: skippedCount,
+    verifiedStorageKeys,
+    orphanStorageKeys,
+  };
 }
 
 /**

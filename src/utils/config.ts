@@ -70,7 +70,7 @@ const DEFAULT_CONFIG: EmitConfig = {
   origin: DEFAULT_ORIGIN,
   defaultCollection: 'posts',
   defaultLocale: 'ja',
-  postsSyncLimit: 100,
+  postsSyncLimit: 30,
   mediaSyncLimit: 300,
   concurrency: 8,
 };
@@ -168,7 +168,10 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       postsSyncLimit: parsed.postsSyncLimit || DEFAULT_CONFIG.postsSyncLimit,
       mediaSyncLimit: parsed.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
       concurrency: parsed.concurrency || DEFAULT_CONFIG.concurrency,
-      localMediaRefs: parsed.localMediaRefs,
+      // Local-first media refs are default-ON: a mirrored body image is spelled as a workspace-relative
+      // `media/<storageKey>` reference so preview resolves offline. Only an explicit `false` opts back out;
+      // an absent key (a workspace predating the setting) now defaults to local refs rather than canonical URLs.
+      localMediaRefs: parsed.localMediaRefs !== false,
       createdWithVersion: parsed.createdWithVersion,
       lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,

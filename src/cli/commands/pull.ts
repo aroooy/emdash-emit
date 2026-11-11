@@ -144,7 +144,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     )
     .option('--force', 'Force overwrite local files and bypass differential skip')
     .option('--posts-only', 'Skip automatic taxonomy (categories/tags) sync. Pull articles only.')
-    .option('--media', 'Also pull media assets and metadata into media/ directory.')
+    .option(
+      '--media',
+      'Additionally pull the FULL remote media library into media/ (not just assets referenced by pulled articles). Local-first mirroring of referenced assets is already default-ON.',
+    )
     .option(
       '--metadata-only',
       'With --media: download only metadata YAML, skip binary file downloads.',
@@ -223,7 +226,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
 
           // 2. Pull articles (batch)
-          const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 100;
+          const limit = ctx.config.postsSyncLimit || ctx.config.syncLimit || 30;
 
           const concurrency = options.concurrency
             ? parseInt(options.concurrency, 10)
@@ -246,6 +249,9 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             localMediaRefs,
             concurrency,
             prune: options.prune,
+            // Local-first media mirroring is default-ON for a batch pull. `--posts-only` skips it entirely;
+            // the full-library walk stays on the dedicated `emit pull-media --all` command below.
+            mediaSync: !postsOnly,
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
@@ -286,6 +292,22 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           for (const item of batchResult.items) {
             const notice = formatQuarantineNotice(item.quarantined);
             if (notice) console.log(`\n${notice}`);
+          }
+
+          // Local-first media mirror summary. The walk is JSON-only; only assets referenced by pulled
+          // article bodies were downloaded. Report the coverage honestly and never claim a record is absent.
+          if (batchResult.media) {
+            const m = batchResult.media;
+            const totalLabel =
+              typeof m.remoteTotalCount === 'number' && m.remoteTotalCount > 0
+                ? `${m.walkedCount}/${m.remoteTotalCount}`
+                : `${m.walkedCount}${m.complete ? '' : '+'}`;
+            console.log(
+              `\n🖼️  Media (local-first): walked ${totalLabel} record(s), mirrored ${m.mirroredStorageKeys.length} referenced asset(s) (${m.downloaded} downloaded, ${m.skipped} up-to-date).`,
+            );
+            if (m.orphanStorageKeys.length > 0) {
+              reportOrphanStorageKeys(m.orphanStorageKeys);
+            }
           }
 
           // 3. Pull media (if --media)

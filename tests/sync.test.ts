@@ -1057,6 +1057,9 @@ describe('Pull & Push Synchronization Engine', () => {
       limit: 100,
       status: 'all',
       concurrency: 2,
+      // This test asserts healing costs only the article-list request; skip the default-ON local-first media
+      // walk so its "Unexpected fetch" guard still isolates the heal path.
+      mediaSync: false,
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
@@ -1084,6 +1087,172 @@ describe('Pull & Push Synchronization Engine', () => {
     // so it reports synced (no phantom "modified") and a bare push remains safely blocked.
     expect(statusAfter.summary.synced).toBe(2);
     expect(statusAfter.summary.modified).toBe(0);
+  });
+
+  it('pullBatch mirrors only the assets referenced by pulled article bodies, reusing the library walk', async () => {
+    // Local-first media mirroring is default-ON. A body carries a canonical storageKey URL; after the
+    // article lands, Emit walks the library once (JSON) and downloads exactly that asset — never the whole
+    // library, and never a per-asset id fetch. localMediaRefs then spells it as a workspace-relative mirror.
+    const articleId = '01M6MEDIAREFARTICLEAAAAAAAA1';
+    // A migrated body bakes a ULID-bearing R2 storageKey into the canonical file route. collectArticleStorageKeys
+    // harvests exactly this shape, so the mirror stage can resolve and download it.
+    const storageKey = '01M67STRGKEYX0000000123456.jpg';
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/_emdash/api/mcp')) {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({ result: { content: [{ text: '{"items": []}' }] } }),
+        };
+      }
+      if (url.includes('/openapi.json')) {
+        return { ok: true, status: 200, json: async () => ({ paths: {} }) };
+      }
+      if (url.includes('/content/posts?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              {
+                id: articleId,
+                slug: 'media-ref',
+                collection: 'posts',
+                status: 'draft',
+                title: 'Media Ref',
+                _rev: '1',
+                data: {
+                  title: 'Media Ref',
+                  body: `Intro paragraph.\n\n![hero](/_emdash/api/media/file/${storageKey})\n`,
+                },
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/_emdash/api/media?')) {
+        // The lightweight library walk: JSON records only, carrying the metadata a mirror needs.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              totalCount: 1,
+              items: [
+                {
+                  id: '01M6WALKEDRECORDAAAAAAAAAA01',
+                  filename: 'referenced-photo.jpg',
+                  mimeType: 'image/jpeg',
+                  size: 5,
+                  storageKey,
+                  url: `/_emdash/api/media/file/${storageKey}`,
+                },
+              ],
+            },
+          }),
+        };
+      }
+      if (url.includes(`/_emdash/api/media/file/${storageKey}`)) {
+        const buf = Buffer.from('photo');
+        return { ok: true, status: 200, arrayBuffer: async () => buf.buffer };
+      }
+      // Any per-asset id lookup would mean the mirror stage re-fetched instead of reusing the walk.
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    const batchResult = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'test-token',
+      limit: 100,
+      status: 'draft',
+      concurrency: 2,
+      localMediaRefs: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(batchResult.total).toBe(1);
+    expect(batchResult.media).toBeDefined();
+    expect(batchResult.media?.walkedCount).toBe(1);
+    expect(batchResult.media?.downloaded).toBe(1);
+    expect(batchResult.media?.mirroredStorageKeys).toEqual([storageKey]);
+    expect(batchResult.media?.orphanStorageKeys).toEqual([]);
+
+    // The binary mirror exists under the storageKey-derived stem (never the record id).
+    const mediaFiles = fs.readdirSync(path.join(tempDir, 'media'));
+    expect(mediaFiles).toContain('01M67STRGKEYX0000000123456.jpg');
+
+    // No per-asset id lookup was paid: only bylines probe, openapi, article list, library walk, binary GET.
+    const requestedUrls = mockFetch.mock.calls.map((call) => String(call[0]));
+    expect(requestedUrls.filter((u) => /\/_emdash\/api\/media\//.test(u))).toHaveLength(1);
+
+    // With localMediaRefs ON and the mirror present, the body is spelled as a workspace-relative reference.
+    const articlePath = batchResult.items.find((r) => r.id === articleId)!.filePath;
+    const diskBody = fs.readFileSync(path.join(tempDir, articlePath), 'utf8');
+    expect(diskBody).toContain('![hero](media/01M67STRGKEYX0000000123456.jpg)');
+  });
+
+  it('pullBatch with mediaSync disabled skips the library walk and downloads nothing', async () => {
+    const articleId = '01M6NOMEDIARTICLEAAAAAAAAAA1';
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/_emdash/api/mcp')) {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({ result: { content: [{ text: '{"items": []}' }] } }),
+        };
+      }
+      if (url.includes('/openapi.json')) {
+        return { ok: true, status: 200, json: async () => ({ paths: {} }) };
+      }
+      if (url.includes('/content/posts?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              {
+                id: articleId,
+                slug: 'no-media',
+                collection: 'posts',
+                status: 'draft',
+                title: 'No Media',
+                _rev: '1',
+                data: {
+                  title: 'No Media',
+                  body: '![hero](/_emdash/api/media/file/uploads/2026/skip-me.jpg)\n',
+                },
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/_emdash/api/media')) {
+        return Promise.reject(
+          new Error(`Media walk should not run when mediaSync is disabled: ${url}`),
+        );
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    const batchResult = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'test-token',
+      limit: 100,
+      status: 'draft',
+      concurrency: 2,
+      mediaSync: false,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(batchResult.media).toBeUndefined();
+    const requestedUrls = mockFetch.mock.calls.map((call) => String(call[0]));
+    expect(requestedUrls.filter((u) => u.includes('/_emdash/api/media'))).toHaveLength(0);
   });
 
   it('pushArticle reports previousId and previousFilePath when initial POST assigns a new server ULID', async () => {

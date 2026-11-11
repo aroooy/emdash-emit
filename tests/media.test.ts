@@ -34,6 +34,7 @@ import {
   findUnmirroredStorageKeys,
   storageKeyFromMediaMeta,
   pullArticleMedia,
+  mirrorReferencedAssetsFromIndex,
 } from '../src/sync/media.js';
 import {
   formatArticleMediaSummary,
@@ -1178,6 +1179,117 @@ locale: ja
       '01MJZZRECSTRGB9.jpg',
     ]);
     expect(index.mediaIdsByStorageKey.get('01MJZZRECSTRG99.jpg')).toBe('01MJZZRECRD99999999999999');
+    // The walk now retains each full record so a later mirror stage can reuse it without re-fetching.
+    const walkedRecord = index.recordsByStorageKey.get('01MJZZRECSTRG99.jpg');
+    expect(walkedRecord).toBeDefined();
+    expect(walkedRecord?.filename).toBe('photo-0.jpg');
+    expect(index.recordsById.get('01MJZZRECRD99999999999999')?.storageKey).toBe(
+      '01MJZZRECSTRG99.jpg',
+    );
+  });
+
+  it('mirrors only referenced storageKeys, reusing walked records without a per-asset id fetch', async () => {
+    // The mirror half of the local-first pull: given a walk index already holding each record's metadata,
+    // download binaries for exactly the keys an article references. No `GET /_emdash/api/media/{id}` is paid.
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    const referencedItem = {
+      id: '01M67WALKEDIDAAAAAAAAAAAA4',
+      filename: 'walked-hero.jpg',
+      mimeType: 'image/jpeg',
+      size: 8,
+      storageKey: 'uploads/2026/walked-hero.jpg',
+      url: '/_emdash/api/media/file/uploads/2026/walked-hero.jpg',
+    };
+    const unreferencedItem = {
+      id: '01M67WALKEDIDAAAAAAAAAAAA5',
+      filename: 'unused-side.jpg',
+      mimeType: 'image/jpeg',
+      size: 8,
+      storageKey: 'uploads/2026/unused-side.jpg',
+      url: '/_emdash/api/media/file/uploads/2026/unused-side.jpg',
+    };
+
+    const index = {
+      storageKeys: new Set([referencedItem.storageKey!, unreferencedItem.storageKey!]),
+      mediaIdsByStorageKey: new Map([
+        [referencedItem.storageKey!, referencedItem.id],
+        [unreferencedItem.storageKey!, unreferencedItem.id],
+      ]),
+      recordsByStorageKey: new Map([
+        [referencedItem.storageKey!, referencedItem],
+        [unreferencedItem.storageKey!, unreferencedItem],
+      ]),
+      recordsById: new Map([
+        [referencedItem.id, referencedItem],
+        [unreferencedItem.id, unreferencedItem],
+      ]),
+      totalCount: 2,
+      complete: true,
+      scannedCount: 2,
+    };
+
+    const imageBuffer = Buffer.from('walked-bytes');
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/_emdash/api/media/file/uploads/2026/walked-hero.jpg')) {
+        return Promise.resolve({ ok: true, arrayBuffer: async () => imageBuffer.buffer });
+      }
+      // Any per-asset id lookup would mean the mirror stage re-fetched instead of reusing the walk.
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const res = await mirrorReferencedAssetsFromIndex([referencedItem.storageKey!], index, {
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.mirroredStorageKeys.has('uploads/2026/walked-hero.jpg')).toBe(true);
+    expect(res.downloaded).toBe(1);
+    expect(res.orphanStorageKeys).toEqual([]);
+    const files = fs.readdirSync(mediaDir);
+    // The referenced asset is mirrored under its storageKey-derived stem; the unreferenced one stays absent.
+    expect(files).toContain('walked-hero.jpg');
+    expect(files.some((f) => f.includes('unused-side'))).toBe(false);
+  });
+
+  it('reports a referenced key no walked record owns as orphan without fetching it', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    const index = {
+      storageKeys: new Set<string>(),
+      mediaIdsByStorageKey: new Map<string, string>(),
+      recordsByStorageKey: new Map<string, unknown>(),
+      recordsById: new Map<string, unknown>(),
+      totalCount: 0,
+      complete: true,
+      scannedCount: 0,
+    } satisfies Record<string, unknown>;
+
+    const mockFetch = vi
+      .fn()
+      .mockImplementation((url: string) =>
+        Promise.reject(new Error(`Unexpected fetch URL: ${url}`)),
+      );
+
+    const res = await mirrorReferencedAssetsFromIndex(
+      ['01M67ORPHANKEX0000000000AB.jpg'],
+      index as unknown as Parameters<typeof mirrorReferencedAssetsFromIndex>[1],
+      {
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      },
+    );
+
+    expect(res.mirroredStorageKeys.size).toBe(0);
+    expect(res.orphanStorageKeys).toEqual(['01M67ORPHANKEX0000000000AB.jpg']);
+    // Emit never fetches an asset it cannot attribute to a record.
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('stops a library walk at maxItems and reports it as incomplete', async () => {
@@ -1222,6 +1334,8 @@ locale: ja
     const index = {
       storageKeys: new Set([`${REMOTE_KEY}.jpg`]),
       mediaIdsByStorageKey: new Map([[`${REMOTE_KEY}.jpg`, OLD_RECORD]]),
+      recordsByStorageKey: new Map(),
+      recordsById: new Map(),
       totalCount: 1,
       complete: true,
       scannedCount: 1,

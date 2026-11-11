@@ -35,6 +35,14 @@ import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
+import {
+  collectRemoteStorageKeys,
+  mirrorReferencedAssetsFromIndex,
+  collectArticleStorageKeys,
+  type RemoteStorageKeyIndex,
+  type MirroredAssetResult,
+} from './media.js';
+import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -63,6 +71,13 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
   prune?: boolean;
   /** Write mirrored body images as workspace-relative `media/<storageKey>` references. Passed to every article pull. */
   localMediaRefs?: boolean;
+  /**
+   * Local-first media mirroring is default-ON for a batch pull: after articles land on disk, Emit walks the
+   * remote media library once (JSON only), then downloads binaries for exactly the storageKeys those article
+   * bodies reference. Pass `false` to skip the walk and every binary download — this is what `--posts-only`
+   * uses. The full-library `emit pull-media --all` path stays a separate command, unaffected by this flag.
+   */
+  mediaSync?: boolean;
   onProgress?: (progress: { current: number; total: number; item: PullResult }) => void;
 }
 
@@ -75,6 +90,20 @@ export interface PullBatchResult {
   preserved?: number;
   /** Total number of divergent local copies preserved under `<collection>/conflicts/`. */
   quarantined?: number;
+  /**
+   * Local-first media mirror stage result: the lightweight library walk plus the binaries downloaded for
+   * exactly the storageKeys referenced by pulled article bodies. Absent when `mediaSync` was disabled.
+   */
+  media?: {
+    walkedCount: number;
+    remoteTotalCount: number | null;
+    complete: boolean;
+    downloaded: number;
+    skipped: number;
+    mirroredStorageKeys: string[];
+    verifiedStorageKeys: string[];
+    orphanStorageKeys: string[];
+  };
   items: PullResult[];
 }
 
@@ -262,6 +291,72 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     }
   }
 
+  // Local-first media mirror stage (default ON). Articles are already on disk in canonical form, so their
+  // bodies carry the exact storageKeys EmDash baked into them. Emit walks the remote library once — JSON
+  // only, no binaries — then downloads binaries for exactly those referenced keys, reusing each walked
+  // record instead of paying a per-asset `GET /_emdash/api/media/{id}`. Only assets an article actually
+  // references are downloaded; the rest of the library is left to `emit pull-media --all`.
+  let mediaResult: PullBatchResult['media'];
+  if (options.mediaSync !== false && results.some((r) => !r.deleted)) {
+    const index = await collectRemoteStorageKeys({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      fetchFn: options.fetchFn,
+    });
+
+    const referencedKeys = new Set<string>();
+    for (const res of results) {
+      if (res.deleted || !res.filePath) continue;
+      const fullPath = path.join(options.workspaceRoot, res.filePath);
+      if (!fs.existsSync(fullPath)) continue;
+      for (const descriptor of collectArticleStorageKeys(fs.readFileSync(fullPath, 'utf8'))) {
+        referencedKeys.add(descriptor.storageKey);
+      }
+    }
+
+    const mirrored: MirroredAssetResult = await mirrorReferencedAssetsFromIndex(
+      referencedKeys,
+      index,
+      {
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+        cache: options.cache,
+      },
+    );
+
+    // Binaries now exist under `media/`, so re-apply the local-ref spelling to every article that mirrors
+    // images. pullArticle wrote them canonical because no mirror existed yet; this pass resolves them to
+    // workspace-relative references only when the mirror is actually present, keeping disk and preview in
+    // step without ever touching the baseline hash (which stays canonical).
+    if (options.localMediaRefs) {
+      const mediaDir = path.join(options.workspaceRoot, 'media');
+      for (const res of results) {
+        if (res.deleted || !res.filePath) continue;
+        const fullPath = path.join(options.workspaceRoot, res.filePath);
+        if (!fs.existsSync(fullPath)) continue;
+        const current = fs.readFileSync(fullPath, 'utf8');
+        const localized = canonicalToLocalMediaRefs(current, { mediaDir, fs });
+        if (localized !== current) fs.writeFileSync(fullPath, localized, 'utf8');
+      }
+    }
+
+    mediaResult = {
+      walkedCount: index.scannedCount,
+      remoteTotalCount: index.totalCount,
+      complete: index.complete,
+      downloaded: mirrored.downloaded,
+      skipped: mirrored.skipped,
+      mirroredStorageKeys: [...mirrored.mirroredStorageKeys],
+      verifiedStorageKeys: mirrored.verifiedStorageKeys,
+      orphanStorageKeys: mirrored.orphanStorageKeys,
+    };
+  }
+
   updateConfigSyncedVersion(options.workspaceRoot);
 
   return {
@@ -271,6 +366,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     deleted,
     preserved,
     quarantined,
+    media: mediaResult,
     items: results,
   };
 }
