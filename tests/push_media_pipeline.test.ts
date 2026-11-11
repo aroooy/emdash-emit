@@ -263,13 +263,14 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     const syncState = cache.getSyncState(articleId);
     expect(syncState?.localHash).toBe(calculateHash(diskMd));
 
-    // Verify draft file was moved out of media/drafts/ and promoted into media/ with companion YAML
+    // Verify draft file was moved out of media/drafts/ and promoted into media/ with companion YAML.
+    // Both files share the storageKey-derived stem, so the pair is named exactly as the body URL reads it.
     expect(fs.existsSync(draftImgPath)).toBe(false);
-    const promotedFile = path.join(tempDir, 'media', `20261107_${mediaRecordId}-flight-sunset.png`);
+    const promotedFile = path.join(tempDir, 'media', `${confirmedStorageKey}`);
     const promotedYaml = path.join(
       tempDir,
       'media',
-      `20261107_${mediaRecordId}-flight-sunset.yaml`,
+      `${confirmedStorageKey.replace(/\.png$/, '')}.yaml`,
     );
     expect(fs.existsSync(promotedFile)).toBe(true);
     expect(fs.existsSync(promotedYaml)).toBe(true);
@@ -280,6 +281,9 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     expect(mediaState?.status).toBe('ready');
     expect(mediaState?.mediaId).toBe(mediaRecordId);
     expect(mediaState?.storageKey).toBe(confirmedStorageKey);
+    // `markdown_ref` is the stem shared by the binary and its companion, so a body storageKey resolves to
+    // this mirror through the index instead of by parsing a filename.
+    expect(mediaState?.markdownRef).toBe(`media/${confirmedStorageKey.replace(/\.png$/, '')}`);
 
     // Second push: body no longer contains draft paths, so media upload endpoints are never called
     requestLog.length = 0;
@@ -1155,7 +1159,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     // Promotion happens only on the push that actually succeeded
     expect(fs.existsSync(draftImgPath)).toBe(false);
-    const promotedRel = `media/20261107_${mediaRecordId}-window-test.png`;
+    const promotedRel = `media/${confirmedStorageKey}`;
     expect(fs.existsSync(path.join(tempDir, promotedRel))).toBe(true);
     expect(cache.getMediaState(localHash)?.status).toBe('ready');
     expect(cache.getMediaState(localHash)?.workspacePath).toBe(promotedRel);

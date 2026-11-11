@@ -130,6 +130,71 @@ export function stripDatePrefix(filenameOrPath: string): string {
 }
 
 /**
+ * Maximum UTF-8 byte length for a mirrored media filename stem. Media mirrors keep the storageKey's
+ * own basename, which can be a long migrated path, so the stem is capped well below the 255-byte POSIX
+ * NAME_MAX to leave room for the extension and any collision suffix.
+ */
+export const DEFAULT_MAX_MEDIA_REF_BYTES = 180;
+
+/**
+ * Derives the canonical local mirror name (`markdownRef`) from an EmDash media `storageKey`.
+ *
+ * A mirror is named after the storageKey — the identifier the article body actually references — so a
+ * Markdown image URL resolves to a file of the same name on disk, and the binary plus its companion YAML
+ * form one visibly matching pair. The record id is deliberately NOT part of the name: migrated storageKeys
+ * are arbitrary paths rather than ULIDs, so an id can never be recovered from a filename, and Emit reads
+ * it from the companion YAML (`id:`) and `media_state.media_id` instead.
+ *
+ * Sanitizing rules (cross-platform, no symlinks):
+ * - Only the storageKey's basename is used; migrated keys such as `uploads/2026/11/sample.png` collapse
+ *   to their final path segment.
+ * - Filesystem-invalid characters and control characters are removed, whitespace collapses to `-`.
+ * - Multi-ULID keys (`<ulid1>.<ulid2>.jpg`) keep their dot separators so the key stays recognizable.
+ * - The storageKey's own trailing extension is stripped, because callers append the extension they write:
+ *   a storageKey already ends in one, and re-appending it would produce `<key>.jpg.jpg`.
+ * - The result is truncated on a UTF-8 code point boundary.
+ * Returns `null` when the storageKey carries no usable name at all.
+ */
+export function storageKeyToMarkdownRef(
+  storageKey: string,
+  maxBytes: number = DEFAULT_MAX_MEDIA_REF_BYTES,
+): string | null {
+  if (!storageKey || !storageKey.trim()) return null;
+
+  const basename = storageKey.replace(/\\/g, '/').split('/').pop() || '';
+  let clean = basename
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+    .replace(/\s+/g, '-')
+    .trim();
+
+  // A leading dot would create a hidden file (or `.` / `..`), which no mirror may be.
+  clean = clean.replace(/^\.+/, '');
+  if (!clean) return null;
+
+  // Drop the storageKey's own extension: the stem is shared by the binary and its `.yaml` companion, so
+  // every caller appends the extension it actually writes and a key that already ends in one must not
+  // produce `<key>.jpg.jpg`.
+  clean = clean.replace(/\.[A-Za-z0-9]{1,11}$/, '');
+  if (!clean) return null;
+
+  // Trailing whitespace collapses to hyphens before the extension is known, so trim what the removal leaves.
+  clean = clean.replace(/^[-.\s]+|[-.\s]+$/g, '');
+  if (!clean) return null;
+
+  clean = truncateUtf8Bytes(clean, maxBytes).replace(/[.\s-]+$/, '');
+  return clean || null;
+}
+
+/**
+ * Disambiguates two storageKeys that sanitize to the same basename by appending the media record id.
+ * Deterministic: the same key and id always produce the same name, so re-running a pull never churns.
+ */
+export function collisionSuffixedMarkdownRef(markdownRef: string, mediaId: string): string {
+  const id = mediaId.trim().toUpperCase();
+  return `${markdownRef}--${id}`;
+}
+
+/**
  * Extracts the 26-character ULID from a filename or path, stripping any date prefix.
  * Returns null if no valid ULID is present.
  */

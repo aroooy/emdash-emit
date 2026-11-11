@@ -276,6 +276,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
               refreshToken: ctx.auth.refreshToken,
               limit: mediaLimit,
               downloadFiles,
+              cache: ctx.cache,
             });
             console.log(
               `  ✅ Media: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
@@ -427,6 +428,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             article: options.article,
             collection: options.collection || ctx.config.defaultCollection,
             downloadFiles: !options.metadataOnly,
+            cache: ctx.cache,
           });
 
           console.log(
@@ -446,6 +448,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           all: options.all,
           prune: options.prune,
           downloadFiles: !options.metadataOnly,
+          cache: ctx.cache,
         });
 
         const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';

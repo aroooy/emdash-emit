@@ -28,9 +28,12 @@ import { ApiError } from '../client/error.js';
 import { createAuthedFetch } from '../client/http.js';
 import { extractMediaUlid } from '../client/mapper.js';
 import { toRootRelativeMediaUrl } from '../client/media.js';
+import type { CacheDatabase } from '../db/cache.js';
 import {
   formatDatePrefix,
   sanitizeTitleForFilename,
+  storageKeyToMarkdownRef,
+  collisionSuffixedMarkdownRef,
   parseMarkdown,
   lenientRepairMarkdownFrontmatter,
 } from '../utils/frontmatter.js';
@@ -110,6 +113,18 @@ export function buildMediaMetaDoc(
   };
 }
 
+/** Result of promoting a local draft image into the canonical `media/` layout. */
+export interface PromotedMediaFile {
+  /** Workspace-relative path of the promoted binary, e.g. `media/<markdownRef>.png`. */
+  filePath: string;
+  /**
+   * Workspace-relative path of the shared stem for the binary and its companion YAML, e.g.
+   * `media/<markdownRef>`. Recorded as `media_state.markdown_ref` so a body storageKey resolves to this
+   * mirror without parsing a filename.
+   */
+  markdownRef: string;
+}
+
 export interface PromoteDraftMediaOptions {
   workspaceRoot: string;
   origin: string;
@@ -136,8 +151,10 @@ function moveFileSafe(src: string, dest: string): void {
 }
 
 /**
- * Removes any stale duplicate files in `media/` that share the same 26-char `mediaId`
- * but have a different baseName (e.g. a fabricated date prefix from an earlier local promotion).
+ * Removes any stale duplicate files in `media/` that belong to the same 26-char `mediaId` but sit under a
+ * different stem — a leftover date-prefixed name from an earlier local promotion, for instance. Ownership is
+ * read from each file's companion YAML rather than from the filename, because a storageKey-named mirror
+ * carries no record id at all and must never be matched (or deleted) by a coincidental ULID prefix.
  */
 function cleanupDuplicateMediaFilesForId(
   mediaDir: string,
@@ -145,14 +162,23 @@ function cleanupDuplicateMediaFilesForId(
   canonicalBaseName: string,
 ): void {
   if (!fs.existsSync(mediaDir)) return;
-  const entries = fs.readdirSync(mediaDir);
-  for (const entry of entries) {
-    const match = entry.replace(/^\d{8}_/, '').match(/^([0-9A-Z]{26})-/);
-    if (!match || match[1] !== mediaId) continue;
-    const entryBase = entry.replace(/\.[^.]+$/, '');
-    if (entryBase !== canonicalBaseName) {
+  const wanted = mediaId.toUpperCase();
+  for (const entry of fs.readdirSync(mediaDir)) {
+    if (entry.startsWith('legacy_')) continue;
+    const entryBase = entry.replace(/\.yaml$/, '').replace(/\.[^.]+$/, '');
+    if (entryBase === canonicalBaseName) continue;
+    // Only a companion-backed mirror can be attributed, and only when the companion itself is being
+    // retired together with its binary.
+    if (!entry.endsWith('.yaml')) continue;
+    if (mediaRecordIdForStem(mediaDir, entryBase) !== wanted) continue;
+    for (const orphan of [
+      `${entryBase}.yaml`,
+      ...MEDIA_BINARY_EXTENSIONS.map((e) => `${entryBase}${e}`),
+    ]) {
+      const orphanPath = path.join(mediaDir, orphan);
+      if (orphan === `${canonicalBaseName}.yaml`) continue;
       try {
-        fs.unlinkSync(path.join(mediaDir, entry));
+        if (fs.existsSync(orphanPath)) fs.unlinkSync(orphanPath);
       } catch {
         // Ignore cleanup errors
       }
@@ -210,7 +236,7 @@ export function storageKeyFromMediaMeta(doc: Record<string, unknown>): string | 
 }
 
 /**
- * Indexes every locally mirrored media asset (`media/<yyyyMMdd>_<mediaId>-<name>.yaml`) so a body
+ * Indexes every locally mirrored media asset (`media/<markdownRef>.yaml`, plus legacy companion names) so a body
  * storageKey that the canonical id lookup failed to resolve can be re-checked against confirmed local
  * metadata instead of being declared missing. Leftover `legacy_*` residue is skipped because it backs
  * no real record. The result maps each ULID found in a mirror (record id or storageKey) to its entry,
@@ -297,11 +323,43 @@ export function collectArticleStorageKeys(content: string): OrphanMediaDescripto
 }
 
 /**
- * Promotes a local draft image from media/drafts/<name> into the canonical
- * media/<yyyyMMdd>_<mediaId>-<sanitizedName>.<ext> location alongside its .yaml metadata.
- * Returns the workspace-relative path of the promoted binary file.
+ * Reads the media record id a mirror belongs to from its companion YAML, accepting both the storageKey-named
+ * stem and the legacy `<yyyyMMdd>_<id>-<name>` form. Returns `null` when no companion exists or it names no
+ * valid ULID, which is how Emit refuses to prune a file it cannot attribute to a record. A companion whose
+ * id is explicitly null (or any non-ULID value) proves the mirror backs no real record, so the stem's own
+ * leading characters are never trusted as an id — that fallback would let fabricated fixture ids reach
+ * record-keyed logic.
  */
-export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string {
+export function mediaRecordIdForStem(mediaDir: string, stem: string): string | null {
+  const candidates = [`${stem}.yaml`, `${stem.replace(/^\d{8}_/, '')}.yaml`];
+  for (const name of candidates) {
+    const candidatePath = path.join(mediaDir, name);
+    if (!fs.existsSync(candidatePath)) continue;
+    let doc: Record<string, unknown> | null = null;
+    try {
+      doc = yaml.load(fs.readFileSync(candidatePath, 'utf8')) as Record<string, unknown> | null;
+    } catch {
+      // An unreadable companion proves nothing.
+      continue;
+    }
+    if (!doc) continue;
+    const rawId = typeof doc.id === 'string' ? doc.id.trim() : '';
+    if (/^[0-9A-Za-z_-]{26}$/.test(rawId)) {
+      return rawId.toUpperCase();
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Promotes a local draft image from media/drafts/<name> into the canonical
+ * media/<markdownRef>.<ext> location alongside its matching media/<markdownRef>.yaml companion, where
+ * markdownRef is derived from the storageKey the article body will reference. Returns both the workspace-relative
+ * path of the promoted binary and the shared `media/<markdownRef>` stem, so the caller can record the mirror in
+ * `media_state.markdown_ref`.
+ */
+export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): PromotedMediaFile {
   const { workspaceRoot, origin, draftAbsPath, item, removeDraft = true } = options;
   const mediaDir = path.join(workspaceRoot, 'media');
   fs.mkdirSync(mediaDir, { recursive: true });
@@ -310,10 +368,11 @@ export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string
     path.extname(item.filename) ||
     path.extname(draftAbsPath) ||
     (item.mimeType.includes('png') ? '.png' : '.jpg');
-  const baseWithoutExt = path.basename(item.filename, path.extname(item.filename));
-  const sanitizedBase = sanitizeTitleForFilename(baseWithoutExt);
-  const datePrefix = formatDatePrefix(item.createdAt || new Date().toISOString());
-  const baseName = `${datePrefix}${item.id}-${sanitizedBase}`;
+  const names = mediaMirrorNames(
+    { ...item, filename: item.filename || path.basename(draftAbsPath) },
+    mediaDir,
+  );
+  const baseName = names.markdownRef;
 
   const yamlPath = path.join(mediaDir, `${baseName}.yaml`);
   let existingMeta: Record<string, unknown> | null = null;
@@ -340,9 +399,23 @@ export function promoteDraftMediaFile(options: PromoteDraftMediaOptions): string
     }
   }
 
+  // Retire any earlier id-named mirror of the same record so one asset never occupies two names.
+  for (const legacy of names.legacyBaseNames) {
+    for (const suffix of [ext, '.yaml']) {
+      const legacyPath = path.join(mediaDir, `${legacy}${suffix}`);
+      if (legacyPath !== yamlPath && legacyPath !== targetFilePath && fs.existsSync(legacyPath)) {
+        try {
+          fs.unlinkSync(legacyPath);
+        } catch {}
+      }
+    }
+  }
   cleanupDuplicateMediaFilesForId(mediaDir, item.id, baseName);
 
-  return path.posix.join('media', `${baseName}${ext}`);
+  return {
+    filePath: path.posix.join('media', `${baseName}${ext}`),
+    markdownRef: path.posix.join('media', baseName),
+  };
 }
 
 /**
@@ -423,6 +496,77 @@ export function collectArticleReferencedMediaIds(content: string): string[] {
 }
 
 /**
+ * A media mirror's on-disk identity under the storageKey naming rule.
+ *
+ * `markdownRef` is the stem both the binary and its companion YAML share, derived from the storageKey the
+ * article body references. `legacyBaseNames` enumerates every older stem this asset may still occupy — the
+ * un-prefixed `<id>-<name>` form and any `<yyyyMMdd>_<id>-<name>` form written by earlier Emit versions or
+ * by a local promotion with a provisional date — so one pull can rename an existing workspace into the new
+ * layout without re-downloading a byte.
+ */
+export interface MediaMirrorNames {
+  markdownRef: string;
+  ext: string;
+  legacyBaseNames: string[];
+}
+
+/** Extensions a media mirror binary may carry, used when probing a stem for an existing owner. */
+const MEDIA_BINARY_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.svg'];
+
+/**
+ * Resolves the storageKey-derived stem against the names already taken in `media/`. Two distinct keys can
+ * sanitize to the same basename — `a/sample.png` and `b/sample.png` both yield `sample` — and a second asset
+ * must never overwrite the first. A name already owned by this same record is reused as-is, so re-pulling is
+ * idempotent; any other collision gets the deterministic `<stem>--<mediaId>` suffix.
+ */
+function resolveMarkdownRefCollision(
+  mediaDir: string,
+  baseRef: string,
+  item: EmDashMediaItem,
+): string {
+  const suffixed = collisionSuffixedMarkdownRef(baseRef, item.id);
+  const takenByOther = (stem: string): boolean => {
+    for (const suffix of ['.yaml', ...MEDIA_BINARY_EXTENSIONS]) {
+      const candidatePath = path.join(mediaDir, `${stem}${suffix}`);
+      if (!fs.existsSync(candidatePath)) continue;
+      const ownerId = mediaRecordIdForStem(mediaDir, stem);
+      if (ownerId && ownerId !== item.id.toUpperCase()) return true;
+    }
+    return false;
+  };
+
+  if (!takenByOther(baseRef)) return baseRef;
+  if (!takenByOther(suffixed)) return suffixed;
+  // Both taken and both owned by this record: the suffixed form is already this asset's, so keep it.
+  return suffixed;
+}
+
+/**
+ * Computes the canonical mirror name for one remote media item. Falls back to the record-id based stem only
+ * when the storageKey carries no usable basename, so a malformed migrated key cannot produce an unnameable
+ * file. Pass `mediaDir` to resolve a stem collision against the mirrors already on disk.
+ */
+export function mediaMirrorNames(item: EmDashMediaItem, mediaDir?: string): MediaMirrorNames {
+  const ext = path.extname(item.filename) || '';
+  const sanitizedBase = sanitizeTitleForFilename(path.basename(item.filename, ext));
+  const legacyBaseNames = [
+    `${item.id}-${sanitizedBase}`,
+    `${formatDatePrefix(item.createdAt)}${item.id}-${sanitizedBase}`,
+  ];
+
+  const fromKey = item.storageKey ? storageKeyToMarkdownRef(item.storageKey) : null;
+  if (fromKey) {
+    const markdownRef = mediaDir ? resolveMarkdownRefCollision(mediaDir, fromKey, item) : fromKey;
+    return { markdownRef, ext, legacyBaseNames };
+  }
+  return {
+    markdownRef: `${formatDatePrefix(item.createdAt)}${item.id}-${sanitizedBase}`,
+    ext,
+    legacyBaseNames,
+  };
+}
+
+/**
  * Persists YAML companion metadata and downloads the binary file for a single media item.
  */
 async function syncSingleMediaItem(options: {
@@ -432,34 +576,43 @@ async function syncSingleMediaItem(options: {
   token: string;
   downloadFiles: boolean;
   fetchFn: typeof fetch;
+  cache?: CacheDatabase;
 }): Promise<{ downloaded: boolean; skipped: boolean; baseName: string }> {
-  const { item, mediaDir, origin, token, downloadFiles, fetchFn } = options;
-  const ext = path.extname(item.filename);
-  const baseWithoutExt = path.basename(item.filename, ext);
-  const sanitizedBase = sanitizeTitleForFilename(baseWithoutExt);
-  const datePrefix = formatDatePrefix(item.createdAt);
-  const baseName = `${datePrefix}${item.id}-${sanitizedBase}`;
-  const oldBaseName = `${item.id}-${sanitizedBase}`;
-
-  // Clean up old un-prefixed YAML if migrating, and load any existing metadata for this media ID
-  const oldYamlPath = path.join(mediaDir, `${oldBaseName}.yaml`);
+  const { item, mediaDir, origin, token, downloadFiles, fetchFn, cache } = options;
+  const names = mediaMirrorNames(item, mediaDir);
+  const baseName = names.markdownRef;
   const yamlPath = path.join(mediaDir, `${baseName}.yaml`);
+
+  // Read any existing companion for this record id first, whatever stem it currently occupies. The
+  // storageKey-named companion is the expected location; the legacy stems are where an older workspace still
+  // holds the same asset. `legacy_<storageKey>.yaml` is skipped unconditionally: it carries a matching ULID
+  // but fabricates its metadata from a file route, so it must never seed a real record.
   let existingMeta: Record<string, unknown> | null = null;
-  if (fs.existsSync(yamlPath)) {
+  let existingMetaPath: string | null = null;
+  const mediaFiles = fs.readdirSync(mediaDir);
+  const companionCandidates = [yamlPath];
+  for (const legacy of names.legacyBaseNames) {
+    companionCandidates.push(path.join(mediaDir, `${legacy}.yaml`));
+  }
+  for (const candidate of companionCandidates) {
+    if (!fs.existsSync(candidate)) continue;
     try {
-      existingMeta = yaml.load(fs.readFileSync(yamlPath, 'utf8')) as Record<string, unknown> | null;
+      existingMeta = yaml.load(fs.readFileSync(candidate, 'utf8')) as Record<
+        string,
+        unknown
+      > | null;
+      existingMetaPath = candidate;
+      break;
     } catch {
       existingMeta = null;
     }
-  } else {
-    // Check if an older or differently-dated YAML for the same item.id exists. A leftover
-    // `legacy_<storageKey>.yaml` from the removed file-route fallback also embeds this ULID, so it
-    // must never be read as a real record's metadata.
-    const existingFiles = fs.readdirSync(mediaDir);
-    const matchingYaml = existingFiles.find(
+  }
+  if (!existingMeta) {
+    const matchingYaml = mediaFiles.find(
       (f) =>
         f.endsWith('.yaml') &&
         !f.startsWith('legacy_') &&
+        f !== path.basename(yamlPath) &&
         (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
     );
     if (matchingYaml) {
@@ -467,18 +620,14 @@ async function syncSingleMediaItem(options: {
         existingMeta = yaml.load(
           fs.readFileSync(path.join(mediaDir, matchingYaml), 'utf8'),
         ) as Record<string, unknown> | null;
+        existingMetaPath = path.join(mediaDir, matchingYaml);
       } catch {
         existingMeta = null;
       }
     }
   }
-  if (oldYamlPath !== yamlPath && fs.existsSync(oldYamlPath)) {
-    try {
-      fs.unlinkSync(oldYamlPath);
-    } catch {}
-  }
 
-  // 1. Write YAML metadata
+  // 1. Write YAML metadata under the storageKey-derived stem
   const metaDoc = buildMediaMetaDoc(item, origin, existingMeta);
   fs.writeFileSync(
     yamlPath,
@@ -492,37 +641,37 @@ async function syncSingleMediaItem(options: {
   // 2. Download binary file if enabled and url is present
   const canonicalDownloadPath =
     item.url || (item.storageKey ? `/_emdash/api/media/file/${item.storageKey}` : '');
-  if (downloadFiles && canonicalDownloadPath) {
-    const fileExt = ext || (item.mimeType.includes('png') ? '.png' : '.jpg');
-    const oldFilePath = path.join(mediaDir, `${oldBaseName}${fileExt}`);
-    const targetFilePath = path.join(mediaDir, `${baseName}${fileExt}`);
+  const fileExt = names.ext || (item.mimeType.includes('png') ? '.png' : '.jpg');
+  const targetFilePath = path.join(mediaDir, `${baseName}${fileExt}`);
 
-    // Migrate/rename old or differently-dated file for the same media ID if already present
-    if (!fs.existsSync(targetFilePath)) {
-      const candidates = [
-        oldFilePath,
-        ...fs
-          .readdirSync(mediaDir)
+  // Rename an existing mirror into the new name before considering a download, so migrating a workspace
+  // costs no bandwidth. Size must match: a same-stem file of a different size is not this asset.
+  if (!fs.existsSync(targetFilePath)) {
+    const candidates = names.legacyBaseNames
+      .map((legacy) => path.join(mediaDir, `${legacy}${fileExt}`))
+      .concat(
+        mediaFiles
           .filter(
             (f) =>
-              !f.endsWith('.yaml') && (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
+              !f.endsWith('.yaml') &&
+              !f.startsWith('legacy_') &&
+              (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
           )
           .map((f) => path.join(mediaDir, f)),
-      ];
-      for (const candidate of candidates) {
-        if (candidate !== targetFilePath && fs.existsSync(candidate)) {
-          try {
-            const stat = fs.statSync(candidate);
-            if (stat.size === item.size) {
-              moveFileSafe(candidate, targetFilePath);
-              break;
-            }
-          } catch {}
+      );
+    for (const candidate of candidates) {
+      if (candidate === targetFilePath || !fs.existsSync(candidate)) continue;
+      try {
+        const stat = fs.statSync(candidate);
+        if (stat.size === item.size) {
+          moveFileSafe(candidate, targetFilePath);
+          break;
         }
-      }
+      } catch {}
     }
+  }
 
-    // Avoid re-downloading if already present and matches size
+  if (downloadFiles && canonicalDownloadPath) {
     let shouldDownload = true;
     if (fs.existsSync(targetFilePath)) {
       const stat = fs.statSync(targetFilePath);
@@ -551,6 +700,43 @@ async function syncSingleMediaItem(options: {
     }
   }
 
+  // Register the mirrored asset in media_state. Before storageKey naming, only the push/upload path wrote
+  // this table, so a pulled workspace had no index at all and every lookup fell back to scanning YAML. With
+  // the mirror name no longer carrying the record id, that index is what makes a body reference resolvable
+  // without re-reading thousands of companions. `local_hash` keys on the media id because a pull knows the
+  // record, not the local file's bytes — the upload path uses the content hash and simply overwrites.
+  if (cache && item.storageKey) {
+    const mirrorUrl =
+      typeof metaDoc.url === 'string' && metaDoc.url
+        ? metaDoc.url
+        : `/_emdash/api/media/file/${item.storageKey}`;
+    cache.saveMediaState({
+      localHash: `media-record:${item.id}`,
+      mediaId: item.id,
+      storageKey: item.storageKey,
+      url: mirrorUrl,
+      workspacePath: path.posix.join('media', `${baseName}${fileExt}`),
+      markdownRef: path.posix.join('media', baseName),
+      status: 'ready',
+    });
+  }
+
+  // Drop the companion this asset occupied under a legacy stem. Done after the binary rename so an
+  // interrupted run never leaves a record whose metadata and bytes disagree about the name.
+  if (existingMetaPath && existingMetaPath !== yamlPath && fs.existsSync(existingMetaPath)) {
+    try {
+      fs.unlinkSync(existingMetaPath);
+    } catch {}
+  }
+  for (const legacy of names.legacyBaseNames) {
+    const legacyYaml = path.join(mediaDir, `${legacy}.yaml`);
+    if (legacyYaml !== yamlPath && fs.existsSync(legacyYaml)) {
+      try {
+        fs.unlinkSync(legacyYaml);
+      } catch {}
+    }
+  }
+
   // Clean up any duplicate files with the same media ID but a different datePrefix/baseName
   cleanupDuplicateMediaFilesForId(mediaDir, item.id, baseName);
 
@@ -569,6 +755,12 @@ export interface PullMediaOptions {
   downloadFiles?: boolean;
   prune?: boolean;
   fetchFn?: typeof fetch;
+  /**
+   * Workspace cache. When provided, every mirrored asset is registered in `media_state` with its storageKey
+   * and mirror path, which is what lets a body reference resolve by index instead of by filename — mirrors
+   * are named after the storageKey and no longer carry the record id.
+   */
+  cache?: CacheDatabase;
 }
 
 export interface PullMediaResult {
@@ -628,6 +820,7 @@ export async function pullArticleMedia(options: {
   collection?: string;
   downloadFiles?: boolean;
   fetchFn?: typeof fetch;
+  cache?: CacheDatabase;
 }): Promise<PullMediaResult> {
   const fetchFn = createAuthedFetch(options);
   const collection = options.collection || 'posts';
@@ -770,6 +963,7 @@ export async function pullArticleMedia(options: {
         token: options.token,
         downloadFiles,
         fetchFn,
+        cache: options.cache,
       });
 
       if (result.downloaded) downloadedCount++;
@@ -834,6 +1028,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       collection: options.collection,
       downloadFiles: options.downloadFiles,
       fetchFn: options.fetchFn,
+      cache: options.cache,
     });
   }
 
@@ -863,6 +1058,8 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   };
 
   const activeMediaBaseNames = new Set<string>();
+  // Only records the remote walk actually reports may authorise a mirror to stay. Seeding this from local
+  // companions instead would make every existing file self-exempt and prune nothing at all.
   const activeMediaIds = new Set<string>();
 
   let totalProcessed = 0;
@@ -912,14 +1109,11 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     }
 
     for (const item of rawItems) {
-      const ext = path.extname(item.filename);
-      const baseWithoutExt = path.basename(item.filename, ext);
-      const sanitizedBase = sanitizeTitleForFilename(baseWithoutExt);
-      const datePrefix = formatDatePrefix(item.createdAt);
-      const baseName = `${datePrefix}${item.id}-${sanitizedBase}`;
-      const oldBaseName = `${item.id}-${sanitizedBase}`;
-      activeMediaBaseNames.add(baseName);
-      activeMediaBaseNames.add(oldBaseName);
+      const names = mediaMirrorNames(item);
+      activeMediaBaseNames.add(names.markdownRef);
+      for (const legacy of names.legacyBaseNames) {
+        activeMediaBaseNames.add(legacy);
+      }
       activeMediaIds.add(item.id);
       if (item.storageKey) {
         activeStorageKeys.add(item.storageKey);
@@ -933,6 +1127,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
         token: options.token,
         downloadFiles,
         fetchFn,
+        cache: options.cache,
       });
 
       if (result.downloaded) downloadedCount++;
@@ -960,17 +1155,20 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       // Leftover `legacy_*` mirrors from the removed file-route fallback are never matched by the
       // mediaId pattern below, so they survive pruning and must be deleted by hand.
       if (file.startsWith('legacy_')) continue;
-      // Check if file is related to any active media ID
-      const match = file.replace(/^\d{8}_/, '').match(/^([0-9A-Z]{26})/);
-      if (match) {
-        const id = match[1];
-        if (!activeMediaIds.has(id)) {
-          try {
-            fs.unlinkSync(path.join(mediaDir, file));
-            deletedCount++;
-          } catch {
-            // Ignore unlink errors
-          }
+      // A mirror is identified with its companion YAML: the stem names the storageKey, and the record id
+      // lives inside the companion. Only a file Emit can attribute to a record may be pruned — an
+      // unattributable migrated name is kept, because deleting an asset over a guess is unrecoverable.
+      const stem = file.replace(/\.[^.]+$/, '');
+      if (activeMediaBaseNames.has(stem) || activeMediaBaseNames.has(stem.replace(/^\d{8}_/, ''))) {
+        continue;
+      }
+      const companionId = mediaRecordIdForStem(mediaDir, stem);
+      if (companionId && !activeMediaIds.has(companionId)) {
+        try {
+          fs.unlinkSync(path.join(mediaDir, file));
+          deletedCount++;
+        } catch {
+          // Ignore unlink errors
         }
       }
     }

@@ -333,7 +333,7 @@ function rewriteDraftImagesInBody(
 
 /**
  * Promotes uploaded draft images from `media/drafts/<filename>` into
- * `media/<yyyyMMdd>_<mediaId>-<name>.<ext>` along with companion `.yaml` metadata,
+ * `media/<markdownRef>.<ext>` along with companion `.yaml` metadata, where markdownRef is derived from the
  * and commits `status = 'ready'` in `media_state`.
  *
  * Protected by try/catch per asset (C-2) so that any local filesystem failure
@@ -382,7 +382,7 @@ function finalizePromotedDraftImages(
     }
 
     try {
-      const promotedRelPath = promoteDraftMediaFile({
+      const promoted = promoteDraftMediaFile({
         workspaceRoot: options.workspaceRoot,
         origin: options.origin,
         draftAbsPath: ref.resolvedAbsPath,
@@ -409,10 +409,11 @@ function finalizePromotedDraftImages(
         mediaId: uploaded.mediaId,
         storageKey: uploaded.storageKey,
         url: uploaded.url,
-        workspacePath: promotedRelPath,
+        workspacePath: promoted.filePath,
+        markdownRef: promoted.markdownRef,
         status: 'ready',
       });
-      promotedRelPaths.push(promotedRelPath);
+      promotedRelPaths.push(promoted.filePath);
     } catch (err: unknown) {
       // Keep status='uploaded' in media_state so subsequent runs know the remote upload succeeded
       warnings.push(

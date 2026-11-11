@@ -82,11 +82,17 @@ export interface MediaStateRecord {
   storageKey: string;
   url: string;
   workspacePath?: string | null;
+  /**
+   * Workspace-relative path of the mirror named after the storageKey (`media/<markdownRef><ext>`), i.e.
+   * the file a Markdown body URL actually resolves to. Kept beside `workspace_path` because pruning and
+   * lookups need both: the record id addresses the remote row, the markdown ref addresses the article body.
+   */
+  markdownRef?: string | null;
   status: MediaStateStatus;
   uploadedAt?: number | null;
 }
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 3;
+export const CURRENT_CACHE_SCHEMA_VERSION = 4;
 
 export class CacheDatabase {
   private db: DatabaseSync;
@@ -302,6 +308,22 @@ export class CacheDatabase {
       );
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_sync_state_tax_apply ON sync_state (taxonomy_apply_pending);',
+      );
+
+      // Migration 4 (v4): media mirrors are named after the storageKey, so the cache must be able to
+      // address a mirror by that key. `markdown_ref` records the workspace-relative path of the file a
+      // Markdown body URL resolves to; lookups and pruning read it instead of parsing filenames, because
+      // a migrated storageKey is an arbitrary path and carries no media record id at all.
+      const mediaColumns = this.db.prepare("PRAGMA table_info('media_state');").all() as Array<
+        Record<string, unknown>
+      >;
+      const mediaColumnNames = new Set(mediaColumns.map((c) => String(c.name)));
+      if (!mediaColumnNames.has('markdown_ref')) {
+        this.db.exec('ALTER TABLE media_state ADD COLUMN markdown_ref TEXT;');
+      }
+
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_media_state_storage_key ON media_state (storage_key);',
       );
 
       this.db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);
@@ -801,13 +823,14 @@ export class CacheDatabase {
 
   public saveMediaState(record: MediaStateRecord): void {
     const stmt = this.db.prepare(`
-      INSERT INTO media_state (local_hash, media_id, storage_key, url, workspace_path, status, uploaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO media_state (local_hash, media_id, storage_key, url, workspace_path, markdown_ref, status, uploaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(local_hash) DO UPDATE SET
         media_id = excluded.media_id,
         storage_key = excluded.storage_key,
         url = excluded.url,
         workspace_path = COALESCE(excluded.workspace_path, media_state.workspace_path),
+        markdown_ref = COALESCE(excluded.markdown_ref, media_state.markdown_ref),
         status = excluded.status,
         uploaded_at = excluded.uploaded_at
     `);
@@ -817,6 +840,7 @@ export class CacheDatabase {
       record.storageKey,
       record.url,
       record.workspacePath ?? null,
+      record.markdownRef ?? null,
       record.status,
       record.uploadedAt ?? Math.floor(Date.now() / 1000),
     );
@@ -834,6 +858,15 @@ export class CacheDatabase {
       'SELECT * FROM media_state WHERE media_id = ? ORDER BY uploaded_at DESC LIMIT 1',
     );
     const row = stmt.get(mediaId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapMediaStateRow(row);
+  }
+
+  public getMediaStateByStorageKey(storageKey: string): MediaStateRecord | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM media_state WHERE storage_key = ? ORDER BY uploaded_at DESC LIMIT 1',
+    );
+    const row = stmt.get(storageKey) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.mapMediaStateRow(row);
   }
@@ -860,6 +893,10 @@ export class CacheDatabase {
       workspacePath:
         row.workspace_path !== null && row.workspace_path !== undefined
           ? String(row.workspace_path)
+          : null,
+      markdownRef:
+        row.markdown_ref !== null && row.markdown_ref !== undefined
+          ? String(row.markdown_ref)
           : null,
       status: String(row.status) as MediaStateStatus,
       uploadedAt:

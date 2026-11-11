@@ -229,6 +229,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             refreshToken: ctx.auth.refreshToken,
             limit: mediaLimit,
             downloadFiles: args.metadataOnly !== true,
+            cache: ctx.cache,
           });
           mediaMsg = `\nMedia: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
         }
@@ -296,7 +297,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<yyyyMMdd>_<id>-<name>.<ext> and .yaml). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded; because body URLs carry the R2 storageKey while GET /_emdash/api/media/{id} keys on the record id, such a key is unverified rather than proven missing.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<markdownRef>.<ext> and .yaml, where markdownRef is derived from the storageKey a body URL references). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded; because body URLs carry the R2 storageKey while GET /_emdash/api/media/{id} keys on the record id, such a key is unverified rather than proven missing.',
     {
       article: z
         .string()
@@ -329,6 +330,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           limit: args.limit || ctx.config.mediaSyncLimit || 300,
           all: args.all,
           downloadFiles: args.downloadFiles,
+          cache: ctx.cache,
         });
 
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;

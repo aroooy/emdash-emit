@@ -447,6 +447,9 @@ export {
   extractDatePrefixFromPath,
   computeArticleRelativePath,
   sanitizeTitleForFilename,
+  storageKeyToMarkdownRef,
+  collisionSuffixedMarkdownRef,
   DEFAULT_MAX_TITLE_BYTES,
+  DEFAULT_MAX_MEDIA_REF_BYTES,
   truncateUtf8Bytes,
 } from './naming.js';

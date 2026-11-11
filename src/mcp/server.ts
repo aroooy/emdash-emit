@@ -70,7 +70,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - posts/conflicts/<name>.conflict.md : Preserved divergent local copies (read-only rescue content; never an article)
 - categories/<id>-<name>.yaml : Category definitions
 - tags/<id>-<name>.yaml : Tag definitions
-- media/<yyyyMMdd>_<id>-<name>.<ext> & .yaml : Media assets & companion metadata
+- media/<markdownRef>.<ext> & .yaml : Media assets & companion metadata (markdownRef derived from the storageKey)
 - media/drafts/<filename> : Staging folder for offline draft images (auto-uploaded on sync_push)
 
 ## Rescue Copy Rule (posts/conflicts/)

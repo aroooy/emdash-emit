@@ -223,6 +223,47 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(cache.getMediaState(localHash)).toBeNull();
   });
 
+  it('records markdown_ref and resolves a mirror through the storage_key index', () => {
+    const localHash = 'c'.repeat(64);
+    const storageKey = 'uploads/2026/11/sample.png';
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey,
+      url: `/_emdash/api/media/file/${storageKey}`,
+      workspacePath: 'media/sample.png',
+      markdownRef: 'media/sample',
+      status: 'ready',
+      uploadedAt: 1730550500,
+    });
+
+    // A body URL carries the storageKey, so the index is what turns it into a mirror path without any
+    // filename parsing. The COALESCE upsert keeps markdown_ref across a later status-only write.
+    const byKey = cache.getMediaStateByStorageKey(storageKey);
+    expect(byKey?.markdownRef).toBe('media/sample');
+    expect(byKey?.workspacePath).toBe('media/sample.png');
+
+    cache.saveMediaState({
+      localHash,
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      storageKey,
+      url: `/_emdash/api/media/file/${storageKey}`,
+      status: 'uploaded',
+      uploadedAt: 1730550600,
+    });
+    expect(cache.getMediaState(localHash)?.markdownRef).toBe('media/sample');
+
+    // A record written without a mirror yet reports null rather than a fabricated path.
+    cache.saveMediaState({
+      localHash: 'd'.repeat(64),
+      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J1',
+      storageKey: 'pending-upload.png',
+      url: '/_emdash/api/media/file/pending-upload.png',
+      status: 'pending',
+    });
+    expect(cache.getMediaStateByStorageKey('pending-upload.png')?.markdownRef).toBeNull();
+  });
+
   it('runs schema migration 0 -> 1 on legacy database and creates atomic backup', () => {
     cache.close();
 
@@ -391,7 +432,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     rawDb.close();
 
     const migrated = new CacheDatabase(v2DbPath);
-    expect(migrated.getSchemaVersion()).toBe(3);
+    expect(migrated.getSchemaVersion()).toBe(CURRENT_CACHE_SCHEMA_VERSION);
 
     const rowBody = migrated.getSyncState('id-body');
     expect(rowBody?.bodyConflictPending).toBe(1);
@@ -430,7 +471,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     rawDb.close();
 
     const db = new CacheDatabase(freshDbPath);
-    expect(db.getSchemaVersion()).toBe(3);
+    expect(db.getSchemaVersion()).toBe(CURRENT_CACHE_SCHEMA_VERSION);
     db.close();
 
     const dbDir = path.dirname(freshDbPath);

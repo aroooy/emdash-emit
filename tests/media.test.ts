@@ -40,6 +40,7 @@ import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,
 } from '../src/cli/commands/pull.js';
+import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
 
 /**
  * Fixture identifiers must be valid canonical ULIDs (Crockford Base32, 26 chars, no I/O/L/U), otherwise
@@ -115,14 +116,17 @@ describe('Media Sync Engine', () => {
     expect(res.total).toBe(1);
     expect(res.downloaded).toBe(1);
 
+    // The mirror is named after the storageKey the body URL carries, not after the record id, so the
+    // multi-ULID key becomes the stem and `filename` survives only inside the companion YAML.
     const yamlPath = path.join(
       tempDir,
       'media',
-      '20261101_01M6A7SJ82SMPWKTJ7GSSDC6VZ-sample-image.yaml',
+      '01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19.yaml',
     );
     expect(fs.existsSync(yamlPath)).toBe(true);
     const yamlContent = fs.readFileSync(yamlPath, 'utf8');
     expect(yamlContent).toContain('id: 01M6A7SJ82SMPWKTJ7GSSDC6VZ');
+    expect(yamlContent).toContain('filename: sample-image.jpg');
     expect(yamlContent).toContain('alt: Sample Alt');
     expect(yamlContent).toContain(
       'storageKey: 01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19.jpeg',
@@ -133,7 +137,7 @@ describe('Media Sync Engine', () => {
     const filePath = path.join(
       tempDir,
       'media',
-      '20261101_01M6A7SJ82SMPWKTJ7GSSDC6VZ-sample-image.jpg',
+      '01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19.jpg',
     );
     expect(fs.existsSync(filePath)).toBe(true);
 
@@ -155,13 +159,14 @@ describe('Media Sync Engine', () => {
     const draftImg = path.join(draftsDir, 'offline-sunset.jpg');
     fs.writeFileSync(draftImg, 'draft-bytes');
 
-    // Stale top-level mirrored media that is no longer on remote
+    // Stale top-level mirrored media that is no longer on remote. The companion names its record id,
+    // which is what lets pruning attribute the file to a record at all.
     const staleMedia = path.join(
       tempDir,
       'media',
-      '20261031_01M67P08DXFTYDPFRTJCC4XMP8-stale.yaml',
+      '20261031_01M67P08DXFTYDPFRTJCC4XMPB-stale.yaml',
     );
-    fs.writeFileSync(staleMedia, 'id: 01M67P08DXFTYDPFRTJCC4XMP8\n');
+    fs.writeFileSync(staleMedia, 'id: 01M67P08DXFTYDPFRTJCC4XMPB\n');
 
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -181,13 +186,13 @@ describe('Media Sync Engine', () => {
     expect(fs.existsSync(draftImg)).toBe(true);
   });
 
-  it('promotes a draft media file into canonical media/<yyyyMMdd>_<id>-<name> with companion YAML', () => {
+  it('promotes a draft media file into canonical media/<markdownRef> named after its storageKey', () => {
     const draftsDir = path.join(tempDir, 'media', 'drafts');
     fs.mkdirSync(draftsDir, { recursive: true });
     const draftPath = path.join(draftsDir, 'flight-sunset.png');
     fs.writeFileSync(draftPath, Buffer.from([1, 2, 3, 4]));
 
-    const relPromoted = promoteDraftMediaFile({
+    const promoted = promoteDraftMediaFile({
       workspaceRoot: tempDir,
       origin: 'https://aroooy.net',
       draftAbsPath: draftPath,
@@ -207,14 +212,20 @@ describe('Media Sync Engine', () => {
       },
     });
 
-    expect(relPromoted).toBe('media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-flight-sunset.png');
+    expect(promoted.filePath).toBe(
+      'media/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+    );
+    // The shared stem is what `media_state.markdown_ref` records, so a body storageKey resolves to it.
+    expect(promoted.markdownRef).toBe(
+      'media/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M',
+    );
     expect(fs.existsSync(draftPath)).toBe(false);
-    expect(fs.existsSync(path.join(tempDir, relPromoted))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, promoted.filePath))).toBe(true);
 
     const yamlPath = path.join(
       tempDir,
       'media',
-      '20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-flight-sunset.yaml',
+      '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.yaml',
     );
     expect(fs.existsSync(yamlPath)).toBe(true);
     const yamlText = fs.readFileSync(yamlPath, 'utf8');
@@ -282,13 +293,15 @@ describe('Media Sync Engine', () => {
     });
 
     const filesAfter = fs.readdirSync(mediaDir).sort();
+    // The legacy fabricated-date pair is renamed onto the storageKey stem rather than re-downloaded, and
+    // no id-named residue survives the migration.
     expect(filesAfter).toEqual([
-      '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.png',
-      '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.yaml',
+      '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+      '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.yaml',
     ]);
 
     const mergedYaml = fs.readFileSync(
-      path.join(mediaDir, '20200305_01M6TF1XXBS2KC9EVYG6RBT0J0-hero.png'.replace('.png', '.yaml')),
+      path.join(mediaDir, '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.yaml'),
       'utf8',
     );
     expect(mergedYaml).toContain('alt: LOCAL ALT TEXT');
@@ -558,11 +571,7 @@ locale: ja
     expect(res.downloaded).toBe(1);
     expect(res.failed).toBe(0);
     expect(res.orphanStorageKeys).toEqual([]);
-    expect(
-      fs.existsSync(
-        path.join(tempDir, 'media', '20210620_01M67HEALTHYX000000000000B-hero-photo.jpg'),
-      ),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, 'media', '01M67HEALTHYX000000000000B.jpg'))).toBe(true);
   });
 
   it('confirms a body storageKey when the record resolves under that id but reports another storageKey', async () => {
@@ -655,9 +664,18 @@ locale: ja
       ),
     );
     fs.writeFileSync(
-      path.join(mediaDir, '20261108_01M67GONEAAAAAAAAAAAAAA0K5-stale.jpg'),
+      path.join(mediaDir, '20261108_01M67GNEXAAAAAAAAAAAAAAB2C-stale.jpg'),
       'stale bytes',
     );
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67GNEXAAAAAAAAAAAAAAB2C-stale.yaml'),
+      ['id: 01M67GNEXAAAAAAAAAAAAAAB2C', 'storageKey: 01M67GNEXAAAAAAAAAAAAAAB2C.jpg', ''].join(
+        '\n',
+      ),
+    );
+    // The stale mirror has a companion naming its record id, so pruning can attribute the binary to a
+    // record the remote no longer reports. A file with no companion at all is left alone instead.
+    fs.writeFileSync(path.join(mediaDir, 'uploads-2026-orphan.png'), 'no companion, never pruned');
 
     const mockFetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/media?')) {
@@ -678,9 +696,10 @@ locale: ja
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(res.deleted).toBe(1);
+    expect(res.deleted).toBe(2);
     expect(fs.existsSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.jpg'))).toBe(true);
     expect(fs.existsSync(path.join(mediaDir, 'legacy_01M67LEGACYX0000000000000C.yaml'))).toBe(true);
+    expect(fs.existsSync(path.join(mediaDir, 'uploads-2026-orphan.png'))).toBe(true);
   });
 
   it('does not re-download a mirrored asset whose storageKey is already local (idempotent pull)', async () => {
@@ -839,10 +858,120 @@ locale: ja
     expect(res.total).toBe(1);
     expect(res.downloaded).toBe(1);
     expect(res.failed).toBe(0);
-    // The asset is mirrored under the record's own id, never as a synthesized legacy_* pair.
+    // The asset is mirrored under the storageKey its record reports, never as a synthesized legacy_* pair.
     const mediaFiles = fs.readdirSync(path.join(tempDir, 'media'));
-    expect(mediaFiles).toContain('20210620_01M67ARTCLEDXY000000012345-wp-import-photo.jpg');
+    expect(mediaFiles).toContain('01M67STRGKEYX0000000123456.jpg');
     expect(mediaFiles.some((f) => f.startsWith('legacy_'))).toBe(false);
+  });
+
+  it('resolves two storageKeys that sanitize to the same basename onto distinct mirror names', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    // `a/sample.png` and `b/sample.png` both collapse to the stem `sample`. The first asset claims it,
+    // so the second must land on the id-suffixed name instead of overwriting the first mirror.
+    const items = [
+      {
+        id: '01M67FIRSTAAAAAAAAAAAAAAA1',
+        filename: 'sample.png',
+        mimeType: 'image/png',
+        size: 5,
+        storageKey: 'a/sample.png',
+        url: '/_emdash/api/media/file/a/sample.png',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: '01M67SECONDAAAAAAAAAAAAAA2',
+        filename: 'sample.png',
+        mimeType: 'image/png',
+        size: 5,
+        storageKey: 'b/sample.png',
+        url: '/_emdash/api/media/file/b/sample.png',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { items } }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: async () => Buffer.from('aaaaa').buffer });
+    });
+
+    const pullOptions = {
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      all: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    };
+
+    await pullMedia(pullOptions);
+
+    const files = fs.readdirSync(mediaDir).sort();
+    expect(files).toEqual([
+      'sample--01M67SECONDAAAAAAAAAAAAAA2.png',
+      'sample--01M67SECONDAAAAAAAAAAAAAA2.yaml',
+      'sample.png',
+      'sample.yaml',
+    ]);
+    expect(fs.readFileSync(path.join(mediaDir, 'sample.yaml'), 'utf8')).toContain(
+      'id: 01M67FIRSTAAAAAAAAAAAAAAA1',
+    );
+    expect(
+      fs.readFileSync(path.join(mediaDir, 'sample--01M67SECONDAAAAAAAAAAAAAA2.yaml'), 'utf8'),
+    ).toContain('id: 01M67SECONDAAAAAAAAAAAAAA2');
+
+    // Re-pulling must not churn: each record keeps the name it already owns.
+    await pullMedia(pullOptions);
+    expect(fs.readdirSync(mediaDir).sort()).toEqual(files);
+  });
+
+  it('registers every pulled mirror in media_state with its storageKey and markdown ref', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    const { CacheDatabase } = await import('../src/db/cache.js');
+    const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+
+    const item = {
+      id: '01M67INDEXEDAAAAAAAAAAAAAA3',
+      filename: 'hero-photo.jpg',
+      mimeType: 'image/jpeg',
+      size: 4,
+      storageKey: 'uploads/2026/indexed-hero.jpg',
+      url: '/_emdash/api/media/file/uploads/2026/indexed-hero.jpg',
+      createdAt: '2026-02-02T00:00:00.000Z',
+    };
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/media?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { items: [item] } }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: async () => Buffer.from('img!').buffer });
+    });
+
+    await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      all: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      cache,
+    });
+
+    // The index — not a filename parse — is what now answers "which file backs this body URL".
+    const record = cache.getMediaStateByStorageKey('uploads/2026/indexed-hero.jpg');
+    expect(record).not.toBeNull();
+    expect(record?.mediaId).toBe('01M67INDEXEDAAAAAAAAAAAAAA3');
+    expect(record?.workspacePath).toBe('media/indexed-hero.jpg');
+    expect(record?.markdownRef).toBe('media/indexed-hero');
+    cache.close();
   });
 
   it('downgrades an unresolved body storageKey to verified when a local mirror already proves it', async () => {
@@ -943,7 +1072,7 @@ locale: ja
     // `url:` still names the R2 key. Absolute and root-relative forms both appear in real corpora.
     expect(
       storageKeyFromMediaMeta({
-        id: '01M67P08DXFTYDPFRTJCC4XMP8',
+        id: '01M67P08DXFTYDPFRTJCC4XMPB',
         url: 'https://aroooy.net/_emdash/api/media/file/01M67P07X2VPW0MYRRRGMA6T5A.jpg',
       }),
     ).toBe('01M67P07X2VPW0MYRRRGMA6T5A.jpg');

@@ -14,6 +14,12 @@
 > §2「確定済み契約」に列挙した実測エビデンスに由来する。
 > 実測で確定できていない事項は §7「未確定事項（Phase 0 で確定）」に分離した。
 
+> [!NOTE]
+> **本計画書は当時の設計記録であり、昇格ファイル名の記述はすでに陳腐化している。**
+> 現行実装は `media/<yyyyMMdd>_<mediaId>-<name>.<ext>` ではなく
+> **`media/<markdownRef>.<ext>` + `.yaml`（markdownRef は storageKey 由来）** を採用している。
+> 命名・prune の権威ある仕様は `AGENTS.md` §7 と `docs/media-id-spaces.md` を参照すること。
+
 ---
 
 ## 1. 目的と狙い（Why & Objective）

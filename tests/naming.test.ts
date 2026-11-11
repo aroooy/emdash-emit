@@ -30,6 +30,9 @@ import {
   truncateUtf8Bytes,
   DEFAULT_MAX_TITLE_BYTES,
   compareArticleFilenameDesc,
+  storageKeyToMarkdownRef,
+  collisionSuffixedMarkdownRef,
+  DEFAULT_MAX_MEDIA_REF_BYTES,
 } from '../src/utils/naming.js';
 
 describe('naming utils', () => {
@@ -186,6 +189,59 @@ describe('naming utils', () => {
         'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
         'posts/draft/01M67MP2000000000000000001-Legacy.md',
       ]);
+    });
+  });
+
+  describe('storageKeyToMarkdownRef (media mirror naming)', () => {
+    it('names a ULID storageKey after the key itself, without its extension', () => {
+      expect(storageKeyToMarkdownRef('01M6A7SJ82S6P98MN1YSPQ33YG.jpg')).toBe(
+        '01M6A7SJ82S6P98MN1YSPQ33YG',
+      );
+    });
+
+    it('keeps the dot separators of a multi-ULID storageKey', () => {
+      expect(
+        storageKeyToMarkdownRef('01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19.jpeg'),
+      ).toBe('01M6A7SJ82S6P98MN1YSPQ33YG.01M6A7SJEN7HNDPPM537J23R19');
+    });
+
+    it('collapses a migrated path key to its basename', () => {
+      expect(storageKeyToMarkdownRef('uploads/2026/11/sample.png')).toBe('sample');
+      expect(storageKeyToMarkdownRef('wp-content/uploads/2019/05/DSC_0042-300x200.jpg')).toBe(
+        'DSC_0042-300x200',
+      );
+    });
+
+    it('strips filesystem-invalid characters and collapses whitespace', () => {
+      expect(storageKeyToMarkdownRef('uploads/a b<c>d:e|f?.png')).toBe('a-bcdef');
+      expect(storageKeyToMarkdownRef('uploads/  spaced name  .webp')).toBe('spaced-name');
+    });
+
+    it('never produces a dot-only or empty name', () => {
+      expect(storageKeyToMarkdownRef('..')).toBeNull();
+      expect(storageKeyToMarkdownRef('...')).toBeNull();
+      expect(storageKeyToMarkdownRef('   ')).toBeNull();
+      expect(storageKeyToMarkdownRef('.')).toBeNull();
+    });
+
+    it('truncates on a UTF-8 boundary and caps the stem below NAME_MAX', () => {
+      const long = `uploads/${'あ'.repeat(300)}.png`;
+      const ref = storageKeyToMarkdownRef(long);
+      expect(ref).not.toBeNull();
+      expect(Buffer.byteLength(ref as string, 'utf8')).toBeLessThanOrEqual(
+        DEFAULT_MAX_MEDIA_REF_BYTES,
+      );
+      // Truncation never splits the 3-byte code point.
+      expect(Buffer.from(ref as string, 'utf8').toString('utf8')).toBe(ref);
+    });
+
+    it('appends the record id when two keys sanitize to the same name', () => {
+      const first = storageKeyToMarkdownRef('a/sample.png');
+      const second = storageKeyToMarkdownRef('b/sample.png');
+      expect(first).toBe(second);
+      expect(collisionSuffixedMarkdownRef(first as string, '01M67N1E0BZW7D38RHAFJC3E8B')).toBe(
+        'sample--01M67N1E0BZW7D38RHAFJC3E8B',
+      );
     });
   });
 });

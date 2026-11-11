@@ -27,6 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import type { EmitConfig } from '../utils/config.js';
 import { getPackageVersion } from '../utils/version.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
+import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { scanArticleMediaReferences } from './delete.js';
@@ -518,9 +519,10 @@ export async function runWorkspaceDoctor(
   const knownStorageKeys = new Set<string>();
   const knownMediaIds = new Set<string>();
   const knownLocalFiles = new Set<string>();
-  // Filename-based fallback: "<name>.<ext>" suffixes of promoted media files, for bodies that
-  // reference a storageKey whose companion YAML never recorded the storageKey itself.
-  const knownMediaFileSuffixes = new Set<string>();
+  // StorageKey-derived stems of mirrored assets. A body URL carries the storageKey, and a mirror is now
+  // named after exactly that key, so the stem — not a filename tail parsed out of an id-based name — is
+  // what lets `/_emdash/api/media/file/<storageKey>` resolve to a file on disk.
+  const knownMediaStems = new Set<string>();
 
   if (fs.existsSync(mediaDir)) {
     const mediaFiles = fs.readdirSync(mediaDir);
@@ -552,9 +554,14 @@ export async function runWorkspaceDoctor(
           // ignore corrupted individual yaml
         }
       } else {
-        // media/<yyyyMMdd>_<mediaId>-<name>.<ext>: keep the "<name>.<ext>" tail.
-        const dash = f.indexOf('-');
-        if (dash !== -1) knownMediaFileSuffixes.add(f.slice(dash + 1));
+        // media/<markdownRef>.<ext>: the stem is the sanitized storageKey, so it is recorded whole and
+        // matched against the key a body URL carries. Legacy id-based names stay readable too, because a
+        // workspace that has not been re-pulled yet still holds them.
+        const stem = f.replace(/\.[^.]+$/, '');
+        knownMediaStems.add(stem);
+        knownMediaStems.add(stem.replace(/^\d{8}_/, ''));
+        const dash = stem.indexOf('-');
+        if (dash !== -1) knownMediaStems.add(stem.slice(dash + 1));
       }
     }
     const draftsDir = path.join(mediaDir, 'drafts');
@@ -620,12 +627,14 @@ export async function runWorkspaceDoctor(
           if (storageKeyMatch) {
             const key = storageKeyMatch[1];
             if (knownStorageKeys.has(key)) return true;
-            // The body URL may carry the media record id instead of the storageKey, or a legacy
-            // single-ULID key whose companion YAML lacks the field: resolve by ULID and filename tail.
+            // The body URL may carry the media record id instead of the storageKey, or a key whose
+            // companion YAML lacks the field: resolve by ULID, then by the mirror stem that names the key.
             const ulidMatch = key.match(/[0-9A-HJ-NP-Z]{26}/);
             if (ulidMatch && knownMediaIds.has(ulidMatch[0].toUpperCase())) return true;
-            for (const suffix of knownMediaFileSuffixes) {
-              if (key.endsWith(suffix)) return true;
+            const keyStem = storageKeyToMarkdownRef(key);
+            if (keyStem && knownMediaStems.has(keyStem)) return true;
+            for (const stem of knownMediaStems) {
+              if (key.endsWith(stem)) return true;
             }
             return knownFeaturedStorageKeys.has(key);
           }

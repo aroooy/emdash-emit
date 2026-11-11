@@ -75,7 +75,7 @@ export interface DraftImageReference {
   /** Resolved absolute path on disk (when `workspaceRoot` is known) */
   resolvedAbsPath: string;
   /**
-   * Present when `media/drafts/<filename>` was already promoted to `media/<yyyyMMdd>_<id>-<name>`
+   * Present when `media/drafts/<filename>` was already promoted to `media/<markdownRef>`
    * by an earlier article push (P1 shared draft image reuse across articles).
    */
   alreadyPromoted?: PromotedMediaMatch;
@@ -157,9 +157,15 @@ function resolveDraftImagePath(
 }
 
 /**
- * Searches `media_state` and `media/*.yaml` to see whether a draft image filename
- * (or a direct `media/<yyyyMMdd>_<id>-<name>.<ext>` reference) has already been promoted
- * into `media/` by a previous push (P1 shared draft image reuse across multiple articles).
+ * Searches `media_state` and `media/*.yaml` to see whether a draft image filename — or a direct reference to
+ * an already-promoted mirror under `media/` — has been promoted by a previous push (P1 shared draft image
+ * reuse across multiple articles).
+ *
+ * Mirrors are named after the storageKey, so a name can no longer be derived from the referenced filename:
+ * the match is made against what Emit has actually recorded. A reference may therefore hit a mirror by its
+ * exact on-disk basename (`media/<markdownRef>.<ext>`), by the original upload filename stored in the
+ * companion's `filename:` field, or, for a workspace still holding legacy `<yyyyMMdd>_<id>-<name>` names, by
+ * the sanitized name suffix or the media record id embedded in that stem.
  */
 function findAlreadyPromotedMedia(
   filename: string,
@@ -169,8 +175,13 @@ function findAlreadyPromotedMedia(
   const ext = path.extname(filename);
   const baseWithoutExt = path.basename(filename, ext);
   const sanitizedTarget = `${sanitizeTitleForFilename(baseWithoutExt)}${ext}`.toLowerCase();
+  const lowerFilename = filename.toLowerCase();
   const directUlidMatch = filename.replace(/^\d{8}_/, '').match(/^([0-9A-HJ-NP-Z]{26})-/i);
   const directUlid = directUlidMatch ? directUlidMatch[1].toUpperCase() : null;
+
+  /** Strips the legacy `<yyyyMMdd>_<ulid>-` prefix; a storageKey-named stem is returned untouched. */
+  const nameSuffixOf = (name: string): string =>
+    name.replace(/^(?:\d{8}_)?[0-9A-HJ-NP-Z]{26}-/i, '').toLowerCase();
 
   // 1. Check media_state records first
   if (cache) {
@@ -190,8 +201,12 @@ function findAlreadyPromotedMedia(
 
       if (st.workspacePath) {
         const promotedBase = path.basename(st.workspacePath);
-        const suffix = promotedBase.replace(/^(?:\d{8}_)?[0-9A-HJ-NP-Z]{26}-/i, '').toLowerCase();
-        if (suffix === sanitizedTarget || suffix === filename.toLowerCase()) {
+        const suffix = nameSuffixOf(promotedBase);
+        if (
+          promotedBase.toLowerCase() === lowerFilename ||
+          suffix === sanitizedTarget ||
+          suffix === lowerFilename
+        ) {
           return {
             mediaId: st.mediaId,
             storageKey: st.storageKey,
@@ -210,6 +225,7 @@ function findAlreadyPromotedMedia(
   const files = fs.readdirSync(mediaDir);
   for (const file of files) {
     if (!file.endsWith('.yaml')) continue;
+    if (file.startsWith('legacy_')) continue;
     if (directUlid && !file.toUpperCase().includes(directUlid)) continue;
 
     try {
@@ -219,14 +235,13 @@ function findAlreadyPromotedMedia(
       > | null;
       if (!meta || typeof meta.id !== 'string') continue;
       const metaFilename = typeof meta.filename === 'string' ? meta.filename : '';
-      const fileSuffix = file
-        .replace(/\.yaml$/, '')
-        .replace(/^(?:\d{8}_)?[0-9A-HJ-NP-Z]{26}-/i, '')
-        .toLowerCase();
+      const stem = file.replace(/\.yaml$/, '');
+      const fileSuffix = nameSuffixOf(stem);
       const matchesFilename =
         (directUlid !== null && meta.id.toUpperCase() === directUlid) ||
+        stem.toLowerCase() === lowerFilename ||
         metaFilename === filename ||
-        metaFilename.toLowerCase() === filename.toLowerCase() ||
+        metaFilename.toLowerCase() === lowerFilename ||
         `${fileSuffix}${ext.toLowerCase()}` === sanitizedTarget;
 
       if (!matchesFilename) continue;
@@ -373,7 +388,7 @@ export function runPreflightChecks(
 
       const resolved = resolveDraftImagePath(filePath, rawPath, options?.workspaceRoot);
       if (!resolved.isInsideDraftsDir) {
-        // Also allow reusing an already-promoted file directly under media/<yyyyMMdd>_<id>-<name>
+        // Also allow reusing an already-promoted file directly under media/<markdownRef>
         if (resolved.isInsideMediaDir && options?.workspaceRoot) {
           const promotedMatch = findAlreadyPromotedMedia(
             resolved.filename,
@@ -426,7 +441,7 @@ export function runPreflightChecks(
           errors.push({
             code: 'MISSING_LOCAL_IMAGE_FILE',
             message: `Draft image file not found on disk: '${rawPath}' (resolved to '${resolved.candidateAbs}', and no promoted asset matching '${resolved.filename}' was found in media/).`,
-            suggestion: `Place "${resolved.filename}" inside "media/drafts/", or if it was already promoted, check "media/<yyyyMMdd>_<id>-${resolved.filename}".`,
+            suggestion: `Place "${resolved.filename}" inside "media/drafts/", or if it was already promoted, look for a "media/<storageKey-derived-name>-${resolved.filename}" mirror in "media/".`,
           });
           continue;
         }
