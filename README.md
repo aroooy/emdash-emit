@@ -898,13 +898,15 @@ Downloads media assets and their companion metadata YAML files into `media/`. Su
 emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune] [--metadata-only]
 ```
 
-* `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space.
+* `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space. The summary separates what Emit actually mirrored from what it merely verified, and states plainly that a migrated body's ULIDs are `storageKey`s rather than record ids — so an id lookup resolving nothing is reported as expected, never as `failed`.
 * `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
 * `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. The summary reports how many records the server holds against how many this run walked, so coverage is visible instead of assumed.
 * `--prune`: Remove local media files that no longer exist on remote. Leftover `media/legacy_*` residue written by older Emit versions is never pruned and must be deleted by hand.
 * `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
 
 > **Two ID spaces, one lookup path:** Body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 when queried with a body URL's ULID. The list operation is the only endpoint that reports each record's own `storageKey`, and it exposes no storageKey filter (`q` matches filenames only) — which is why `emit pull-media --all` (or `emit doctor --check-media-library`) is how Emit reaches migrated assets, not a targeted lookup.
+
+> **How a migrated article reads:** for an article whose body bakes R2 `storageKey`s, `emit pull-media --article` reports something like `8 referenced item(s) (0 downloaded, 0 skipped/up-to-date, 4 verified/mirrored). (4 body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`. The assets already under `media/` are named after the **record id**, and each companion `.yaml` carries the body's `storageKey`, so those images resolve through local mirror metadata instead of re-downloading. Nothing in that line is a failure: `failed` counts only references that no id lookup *and* no storageKey check could match.
 
 > **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a *lookup* failure, not proof that the record is missing. Index the whole library first with `emit pull-media --all`, which resolves these keys without any server-side query; only then verify anything left over by storageKey before registering it — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
 

@@ -89,6 +89,7 @@ Related invariants:
 - **`emit doctor --check-media-library`** walks the whole remote library and reports its record count against the number of assets this workspace mirrors, which is what turns "447 references have no local file" into a coverage figure. A library-wide `emit pull-media --all` builds the same index while it downloads, so one pass both mirrors assets and indexes every storageKey.
 - **The list endpoint is the only lookup path for a storageKey.** `GET /_emdash/api/media` accepts `cursor`, `limit`, `page`, `mimeType`, `folderId`, `q`, and `includeUsage`; `q` matches filenames only, so a specific body key cannot be searched for. Every item in the response carries its own `storageKey`, which is why a complete walk is what makes an index possible at all.
 - **`--strict-media`** re-escalates those informational keys to warnings when you want the strictest reading.
+- **An article-targeted pull never reports a storageKey as `failed`.** `emit pull-media --article <id>` collects every ULID a body mentions and looks each one up as a record id, which resolves nothing for a migrated corpus by design. Those ids are counted in `unresolvedIds` (reported as expected), while `failed` counts only references that failed the id lookup *and* every storageKey check. A body key confirmed by a companion `.yaml` is reported as `verified/mirrored`, because the asset it points at already sits under `media/` under its record-id name.
 
 ## 6. Practical rules of thumb
 

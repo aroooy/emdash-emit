@@ -90,6 +90,33 @@ export function formatMediaCoverageLine(res: {
   return parts.length > 0 ? `\n${parts.join('\n')}` : '';
 }
 
+/**
+ * Renders the per-article media summary. A migrated corpus bakes R2 storageKeys into body URLs, so the
+ * ids collected from those URLs mostly resolve to nothing; that is reported as expected resolution data,
+ * never as a failure. Only a reference no id lookup and no storageKey check could match is a failure.
+ */
+export function formatArticleMediaSummary(res: {
+  articleId?: string;
+  total: number;
+  downloaded: number;
+  skipped: number;
+  failed?: number;
+  unresolvedIds?: number;
+  verifiedStorageKeys?: string[];
+}): string {
+  const parts = [`${res.downloaded} downloaded`, `${res.skipped} skipped/up-to-date`];
+  if (res.failed) parts.push(`${res.failed} unresolved`);
+  const mirrored =
+    res.verifiedStorageKeys?.length ?? res.total - (res.failed ?? 0) - res.downloaded - res.skipped;
+  if (mirrored > 0) parts.push(`${mirrored} verified/mirrored`);
+  const body = parts.join(', ');
+  const note =
+    res.unresolvedIds && !res.failed
+      ? ` (${res.unresolvedIds} body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`
+      : '';
+  return `✅ Media sync for article '${res.articleId || ''}' complete: ${res.total} referenced item(s) (${body}).${note}`;
+}
+
 export function formatPullStatusBreakdown(
   status: string | undefined,
   items: Array<{ deleted?: boolean; status?: string }>,
@@ -402,9 +429,8 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             downloadFiles: !options.metadataOnly,
           });
 
-          const failedMsg = res.failed ? `, ${res.failed} failed` : '';
           console.log(
-            `✅ Media sync for article '${res.articleId || options.article}' complete: ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).`,
+            formatArticleMediaSummary({ ...res, articleId: res.articleId || options.article }),
           );
           reportOrphanStorageKeys(res.orphanStorageKeys);
           return;

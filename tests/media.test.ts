@@ -35,7 +35,11 @@ import {
   storageKeyFromMediaMeta,
   pullArticleMedia,
 } from '../src/sync/media.js';
-import { formatMediaCoverageLine, formatOrphanMediaWarning } from '../src/cli/commands/pull.js';
+import {
+  formatArticleMediaSummary,
+  formatMediaCoverageLine,
+  formatOrphanMediaWarning,
+} from '../src/cli/commands/pull.js';
 
 /**
  * Fixture identifiers must be valid canonical ULIDs (Crockford Base32, 26 chars, no I/O/L/U), otherwise
@@ -896,7 +900,10 @@ locale: ja
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(res.failed).toBe(1);
+    // The body ULID is a storageKey, so the id lookup resolves nothing — expected for a migrated body —
+    // and the key itself is confirmed by the local mirror, so nothing counts as failed.
+    expect(res.failed).toBe(0);
+    expect(res.unresolvedIds).toBe(1);
     expect(res.orphanStorageKeys).toEqual([]);
     expect(res.verifiedStorageKeys).toEqual(['01M67STRGKEYX0000000123456.jpg']);
   });
@@ -1199,5 +1206,41 @@ locale: ja
     expect(formatMediaCoverageLine({ total: 5 })).toBe('');
     // Live EmDash reports no `totalCount`, so a zero must never render as an absurd library size.
     expect(formatMediaCoverageLine({ total: 4008, remoteTotalCount: 0 })).toBe('');
+  });
+
+  it('renders a per-article media summary that never calls a migrated storageKey a failure', () => {
+    const healthy = formatArticleMediaSummary({
+      articleId: '01M67N1E0BZW7D38RHAFJC3E8B',
+      total: 8,
+      downloaded: 0,
+      skipped: 0,
+      failed: 0,
+      unresolvedIds: 4,
+      verifiedStorageKeys: [
+        '01M67P0JEXNVDWFE19F33RC2JF.jpg',
+        '01M67P0JW605ZJ5GV4YXB7W400.jpg',
+        '01M67P0KNSDVY3S6Z4TCGCAKNW.jpg',
+        '01M67P0MBMJQQXH2K95HHCYRYB.jpg',
+      ],
+    });
+    expect(healthy).toContain('8 referenced item(s)');
+    expect(healthy).toContain('4 verified/mirrored');
+    expect(healthy).not.toContain('failed');
+    // The id mismatch is explained, so an agent reading it does not chase a phantom failure.
+    expect(healthy).toContain('R2 storageKeys, not media record ids');
+
+    const broken = formatArticleMediaSummary({
+      articleId: '01M67ART000000000000000009',
+      total: 2,
+      downloaded: 0,
+      skipped: 0,
+      failed: 1,
+      unresolvedIds: 1,
+      verifiedStorageKeys: [],
+    });
+    expect(broken).toContain('1 unresolved');
+    expect(broken).not.toContain('verified/mirrored');
+    // When something genuinely is unresolved, the reassuring note must not appear.
+    expect(broken).not.toContain('R2 storageKeys, not media record ids');
   });
 });

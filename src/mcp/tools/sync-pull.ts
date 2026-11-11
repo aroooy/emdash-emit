@@ -334,7 +334,13 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         const orphanWarning = formatOrphanMediaWarning(res.orphanStorageKeys);
         if (args.article) {
-          const failedMsg = res.failed ? `, ${res.failed} failed` : '';
+          const failedMsg = res.failed ? `, ${res.failed} unresolved` : '';
+          const verifiedCount = res.verifiedStorageKeys?.length ?? 0;
+          const verifiedMsg = verifiedCount > 0 ? `, ${verifiedCount} verified/mirrored` : '';
+          const idNote =
+            res.unresolvedIds && !res.failed
+              ? ` (${res.unresolvedIds} body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`
+              : '';
           const idsList =
             res.mediaIds && res.mediaIds.length > 0
               ? `\nMedia IDs: ${res.mediaIds.join(', ')}`
@@ -347,7 +353,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             content: [
               {
                 type: 'text',
-                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${failedMsg}).${idsList}${keysList}${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
+                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${verifiedMsg}${failedMsg}).${idNote}${idsList}${keysList}${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
               },
             ],
           };

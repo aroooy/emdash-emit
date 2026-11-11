@@ -576,7 +576,21 @@ export interface PullMediaResult {
   downloaded: number;
   skipped: number;
   deleted?: number;
+  /**
+   * Media ids that Emit could not mirror in this run. An article-targeted pull collects every ULID a
+   * body mentions, but a migrated corpus bakes the R2 `storageKey` into the body URL, and those ULIDs
+   * are media ids only by coincidence — so most of them resolve to nothing. That is a known shape of a
+   * migrated corpus, not an unresolved reference: for an article-targeted pull this field counts only
+   * references that failed every id lookup AND every storageKey check, and `unresolvedIds` below holds
+   * the ids that merely resolved to no record.
+   */
   failed?: number;
+  /**
+   * Article-targeted pulls only: how many collected media ULIDs returned no record. Expected for a
+   * migrated corpus, where the body URL carries an R2 storageKey rather than a media id, so these are
+   * reported separately from `failed` and never presented as unresolved references.
+   */
+  unresolvedIds?: number;
   articleId?: string;
   mediaIds?: string[];
   /**
@@ -585,7 +599,10 @@ export interface PullMediaResult {
    * a key is healthy and must never be escalated as missing.
    */
   verifiedStorageKeys?: string[];
-  /** Body storageKeys that neither a resolved record nor confirmed local metadata could match. */
+  /**
+   * Body storageKeys that neither a resolved record nor confirmed local metadata could match.
+   * Populated only for an article-targeted pull, where body references are inspected one by one.
+   */
   orphanStorageKeys?: string[];
   /**
    * Total media records reported by the server (`totalCount` of the list operation) for a library-wide
@@ -717,7 +734,10 @@ export async function pullArticleMedia(options: {
 
   let downloadedCount = 0;
   let skippedCount = 0;
-  let failedCount = 0;
+  // A body ULID that no canonical lookup resolves is the normal shape of a migrated corpus: the URL
+  // carries an R2 storageKey, not a media id. Only a reference that also survives every storageKey
+  // check is a problem, so a failed id lookup alone is never reported as `failed`.
+  let unresolvedIdCount = 0;
   const recoveredStorageKeys = new Set<string>();
   // Ids whose canonical lookup succeeded. A body key sharing one of these ULIDs is a confirmed match:
   // the record exists, it simply carries a storageKey that differs from the one baked into the body.
@@ -735,7 +755,7 @@ export async function pullArticleMedia(options: {
       });
 
       if (!res.ok) {
-        failedCount++;
+        unresolvedIdCount++;
         continue;
       }
 
@@ -757,7 +777,7 @@ export async function pullArticleMedia(options: {
       resolvedRecordIds.add(mId.toUpperCase());
       if (item.storageKey) recoveredStorageKeys.add(item.storageKey);
     } catch {
-      failedCount++;
+      unresolvedIdCount++;
     }
   }
 
@@ -789,7 +809,8 @@ export async function pullArticleMedia(options: {
     total: mediaIds.length + verifiedStorageKeys.length + orphanStorageKeys.length,
     downloaded: downloadedCount,
     skipped: skippedCount,
-    failed: failedCount,
+    failed: orphanStorageKeys.length,
+    unresolvedIds: unresolvedIdCount,
     articleId,
     mediaIds,
     verifiedStorageKeys,
