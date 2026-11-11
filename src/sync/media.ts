@@ -1022,8 +1022,12 @@ export async function pullArticleMedia(options: {
 
 /**
  * Pulls media metadata and files from EmDash API into media/ directory with cursor pagination.
- * media/<id>-<filename>.yaml
- * media/<id>-<filename>.<ext>
+ * media/<markdownRef>.yaml
+ * media/<markdownRef>.<ext>
+ *
+ * `markdownRef` is the sanitized storageKey basename (`storageKeyToMarkdownRef`), never the record id, so the
+ * mirror on disk shares one stem with the body URL that references it; the original `filename` survives only
+ * inside the companion YAML. See `mediaMirrorNames()` for the full naming and collision rule.
  */
 export async function pullMedia(options: PullMediaOptions): Promise<PullMediaResult> {
   if (options.article) {
