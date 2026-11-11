@@ -301,19 +301,27 @@ export function collectArticleStorageKeys(content: string): OrphanMediaDescripto
   const keys = new Set<string>();
   const keyPattern =
     /(?:^|\/)media\/file\/([0-9A-HJ-NP-Z]{26}(?:\.[0-9A-HJ-NP-Z]{26})*\.(?:jpg|jpeg|png|gif|webp|avif|svg))/gi;
+  // A workspace that spells a mirrored image as `media/<storageKey>` names the key outright rather than
+  // through the file route, so the census must read that spelling too — otherwise an unmirrored local
+  // reference silently disappears from `referencedUnmirroredStorageKeys`.
+  const localRefPattern =
+    /(?:^|\/)media\/([0-9A-HJ-NP-Z]{26}(?:\.[0-9A-HJ-NP-Z]{26})*\.(?:jpg|jpeg|png|gif|webp|avif|svg))/gi;
 
-  const harvest = (text: string): void => {
+  const harvest = (text: string, pattern: RegExp): void => {
     let match: RegExpExecArray | null;
-    keyPattern.lastIndex = 0;
-    while ((match = keyPattern.exec(text)) !== null) {
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(text)) !== null) {
       keys.add(match[1]);
     }
   };
 
   // scanArticleMediaReferences covers markdown images and HTML img tags anywhere in the body,
   // including inside opaque fences and legacy container lines where doctor stays quiet by design.
-  harvest(scanArticleMediaReferences(content).join('\n'));
-  harvest(content);
+  const scannedRefs = scanArticleMediaReferences(content).join('\n');
+  harvest(scannedRefs, keyPattern);
+  harvest(content, keyPattern);
+  harvest(scannedRefs, localRefPattern);
+  harvest(content, localRefPattern);
 
   const descriptors: OrphanMediaDescriptor[] = [];
   for (const storageKey of keys) {

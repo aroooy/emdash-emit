@@ -29,6 +29,7 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
+import { persistLocalMediaRefs } from '../../utils/config.js';
 import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -148,12 +149,36 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       '--metadata-only',
       'With --media: download only metadata YAML, skip binary file downloads.',
     )
+    .option(
+      '--local-media-refs',
+      'Write mirrored body images as workspace-relative "media/<storageKey>" references so Markdown preview resolves them locally. Remembered in .emit/config.json.',
+    )
+    .option(
+      '--no-local-media-refs',
+      'Disable a remembered local-media-ref preference and store canonical EmDash URLs on disk again.',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (id, options) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
       const postsOnly = options.postsOnly === true;
       const includeMedia = options.media === true;
+
+      // `--local-media-refs` is a workspace preference, not a per-run switch: remember it so every later
+      // pull and push keeps the same spelling without having to repeat the flag. `--no-local-media-refs` clears
+      // that preference again, because commander defaults the paired option to true and only an explicit negation
+      // means the user asked to go back to canonical URLs.
+      const localMediaRefs =
+        options.localMediaRefs === false
+          ? false
+          : options.localMediaRefs === true
+            ? true
+            : ctx.config.localMediaRefs;
+      if (options.localMediaRefs === true && ctx.config.localMediaRefs !== true) {
+        persistLocalMediaRefs(ctx.root, true);
+      } else if (options.localMediaRefs === false && ctx.config.localMediaRefs === true) {
+        persistLocalMediaRefs(ctx.root, false);
+      }
 
       try {
         if (!id) {
@@ -218,6 +243,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             limit,
             status: options.status,
             force: options.force,
+            localMediaRefs,
             concurrency,
             prune: options.prune,
             onProgress: ({ current, total, item }) => {
@@ -299,6 +325,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
             force: options.force,
+            localMediaRefs,
           });
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);

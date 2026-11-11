@@ -37,6 +37,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
+import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
@@ -52,6 +53,12 @@ export interface PullOptions extends MapperOptions {
   candidates?: TaxonomyCandidates;
   rawItem?: Record<string, unknown>;
   force?: boolean;
+  /**
+   * Write mirrored body images into the local file as workspace-relative `media/<storageKey>` references.
+   * The cache baseline always keeps the canonical remote URL, so this only changes the disk spelling and an
+   * editor preview can render the image from the mirror. Push restores the canonical form before any payload.
+   */
+  localMediaRefs?: boolean;
 }
 
 export interface PullResult {
@@ -531,6 +538,20 @@ export async function pullArticle(
     return candidates;
   };
 
+  /**
+   * Applies the workspace's local-media-ref spelling to a serialized document. `sync_state.local_hash` always
+   * records the exact bytes on disk, so every comparison against a tracked file must run through this same
+   * transform: reconstructing the canonical form from a remote response and then localizing it keeps the
+   * fast-path skip honest whether or not `localMediaRefs` is enabled.
+   */
+  const localizeDiskMarkdown = (canonicalContent: string): string =>
+    options.localMediaRefs
+      ? canonicalToLocalMediaRefs(canonicalContent, {
+          mediaDir: path.join(options.workspaceRoot, 'media'),
+          fs,
+        })
+      : canonicalContent;
+
   // Helper to test fast-path (unmodified skip or non-destructive frontmatter heal)
   const tryFastPathOrHeal = async (item: Record<string, unknown>): Promise<PullResult | null> => {
     if (options.force) return null;
@@ -554,6 +575,10 @@ export async function pullArticle(
 
     try {
       const currentDiskContent = fs.readFileSync(fullExistingPath, 'utf8');
+      // `sync_state.local_hash` always tracks the exact bytes on disk, so a workspace that spells mirrored
+      // images as local references must be compared against the same spelling — not against the canonical
+      // remote form. Reconstructing the expected disk content keeps the fast-path skip honest under both
+      // settings and prevents a phantom "modified" for an article nothing changed.
       const currentDiskHash = calculateHash(currentDiskContent);
 
       // Check if file path matches current naming standard
@@ -680,6 +705,9 @@ export async function pullArticle(
               getTaxonomyCandidates(),
             );
             const remoteCanonHash = calculateHash(remoteCanonMarkdown);
+            // The repaired file on disk carries the workspace's local-media-ref spelling, so the tracked hash
+            // must be the hash of that spelling. The baseline keeps the canonical form untouched.
+            const remoteDiskHash = calculateHash(localizeDiskMarkdown(remoteCanonMarkdown));
 
             const existingBase = options.cache.getBaseSnapshot(id);
             if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
@@ -696,7 +724,7 @@ export async function pullArticle(
             options.cache.saveSyncState({
               id,
               localFilePath: existingSync.localFilePath,
-              localHash: remoteCanonHash,
+              localHash: remoteDiskHash,
               remoteRev,
               status: parsedRepaired.frontmatter.status,
               slug: parsedRepaired.frontmatter.slug,
@@ -868,9 +896,18 @@ export async function pullArticle(
     }
   }
 
-  // Format full Markdown
-  const markdownContent = serializeMarkdown(frontmatter, body, getTaxonomyCandidates());
-  const contentHash = calculateHash(markdownContent);
+  // Format full Markdown. `canonicalMarkdown` is the remote form and is what every cache hash and every
+  // base snapshot records; `markdownContent` is what lands on disk, which may spell mirrored images as
+  // workspace-relative references when `localMediaRefs` is enabled. Keeping the two apart is what lets an
+  // editor preview render a mirror while the baseline stays byte-identical to a remote pull.
+  const canonicalMarkdown = serializeMarkdown(frontmatter, body, getTaxonomyCandidates());
+  const contentHash = calculateHash(canonicalMarkdown);
+  const markdownContent = options.localMediaRefs
+    ? canonicalToLocalMediaRefs(canonicalMarkdown, {
+        mediaDir: path.join(options.workspaceRoot, 'media'),
+        fs,
+      })
+    : canonicalMarkdown;
 
   // Determine standard relative file path: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md
   const existingSync = options.cache.getSyncState(frontmatter.id);
@@ -1022,7 +1059,7 @@ export async function pullArticle(
   options.cache.saveSyncState({
     id: frontmatter.id,
     localFilePath: relPath,
-    localHash: contentHash,
+    localHash: calculateHash(markdownContent),
     remoteRev: rev,
     status: frontmatter.status,
     slug: frontmatter.slug,

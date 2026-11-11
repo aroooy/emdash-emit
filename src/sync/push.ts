@@ -46,6 +46,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps, loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import {
   calculateHash,
@@ -83,6 +84,12 @@ export interface PushOptions extends MapperOptions {
   revive?: boolean;
   force?: boolean;
   noTaxonomyAudit?: boolean;
+  /**
+   * Accept body images spelled as workspace-relative `media/<storageKey>` references and rewrite them to the
+   * canonical `/_emdash/api/media/file/<storageKey>` URL before anything reaches EmDash. The cache baseline
+   * stores the canonical form too, so a local-ref workspace never reports a phantom diff.
+   */
+  localMediaRefs?: boolean;
 }
 
 export interface ResolvedTaxonomyItem {
@@ -906,7 +913,17 @@ export async function pushArticle(
     );
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
-    const serializedContent = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    // `parsed.body` carries the canonical URL because preflight rewrote every local reference. The file that
+    // lands on disk must carry the workspace's own spelling again, or a push would silently re-canonicalize
+    // the article and the next status pass would report an edit nobody made. The baseline keeps the canonical
+    // body untouched so `diff` and the 3-way merge stay byte-identical to what a remote pull would write.
+    const serializedContent = options.localMediaRefs
+      ? canonicalToLocalMediaRefs(serializedCanonical, {
+          mediaDir: path.join(options.workspaceRoot, 'media'),
+          fs,
+        })
+      : serializedCanonical;
     const newHash = calculateHash(serializedContent);
 
     // Transition status to published if requested and permitted
@@ -1435,7 +1452,15 @@ export async function pushArticle(
     );
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
-    const serializedContent = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    // Same disk spelling rule as the clean-push path: keep the workspace's own local references on disk while
+    // the canonical form goes to remote and into the baseline.
+    const serializedContent = options.localMediaRefs
+      ? canonicalToLocalMediaRefs(serializedCanonical, {
+          mediaDir: path.join(options.workspaceRoot, 'media'),
+          fs,
+        })
+      : serializedCanonical;
     const newHash = calculateHash(serializedContent);
 
     // Transition status (publish or unpublish) via dedicated endpoints if needed

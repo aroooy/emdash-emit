@@ -25,6 +25,7 @@ import { pushArticle, PushValidationError } from '../../sync/push.js';
 import { pushAll } from '../../sync/orchestrator.js';
 import { ApiError } from '../../client/error.js';
 import { FrontmatterParseError } from '../../utils/frontmatter.js';
+import { persistLocalMediaRefs } from '../../utils/config.js';
 import type { CliContextResolver } from '../context.js';
 
 export function registerPushCommand(program: Command, resolveContext: CliContextResolver): void {
@@ -47,9 +48,31 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     .option('--no-taxonomy-audit', 'Skip remote taxonomy pre-audit check before pushing')
     .option('--revive', 'Intentionally revive and push a delete-pending article')
     .option('-f, --force', 'Force push and overwrite conflicting taxonomy states')
+    .option(
+      '--local-media-refs',
+      'Keep mirrored body images as workspace-relative "media/<storageKey>" references on disk while pushing the canonical URL. Remembered in .emit/config.json.',
+    )
+    .option(
+      '--no-local-media-refs',
+      'Disable a remembered local-media-ref preference and store canonical EmDash URLs on disk again.',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (file, options) => {
       const ctx = resolveContext(options.profile);
+
+      // Same workspace-preference rule as pull: honour the remembered setting, persist an explicit flag, and
+      // let `--no-local-media-refs` clear a previously remembered preference.
+      const localMediaRefs =
+        options.localMediaRefs === false
+          ? false
+          : options.localMediaRefs === true
+            ? true
+            : ctx.config.localMediaRefs;
+      if (options.localMediaRefs === true && ctx.config.localMediaRefs !== true) {
+        persistLocalMediaRefs(ctx.root, true);
+      } else if (options.localMediaRefs === false && ctx.config.localMediaRefs === true) {
+        persistLocalMediaRefs(ctx.root, false);
+      }
 
       try {
         if (options.all) {
@@ -60,6 +83,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
             allowPublish: options.allowPublish,
+            localMediaRefs,
           });
 
           if (pushResult.invalid > 0) {
@@ -133,6 +157,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           noTaxonomyAudit: options.taxonomyAudit === false || Boolean(options.noTaxonomyAudit),
           revive: options.revive,
           force: options.force,
+          localMediaRefs,
         });
 
         if (res.conflict) {

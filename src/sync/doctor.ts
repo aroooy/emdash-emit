@@ -641,9 +641,24 @@ export async function runWorkspaceDoctor(
           // Check 2: Direct relative or local filesystem path
           const cleanRef = ref.replace(/^[./]+/, '');
           const directFull = path.isAbsolute(ref) ? ref : path.join(options.workspaceRoot, ref);
-          return (
-            fs.existsSync(directFull) || knownLocalFiles.has(ref) || knownLocalFiles.has(cleanRef)
-          );
+          if (
+            fs.existsSync(directFull) ||
+            knownLocalFiles.has(ref) ||
+            knownLocalFiles.has(cleanRef)
+          ) {
+            return true;
+          }
+          // Check 3: A workspace-relative mirror reference (`media/<storageKey>`) names the key outright, so a
+          // collision-suffixed or truncated mirror stem leaves no file at that exact path. Resolve it through
+          // the same confirmed-key and stem indexes Check 1 uses instead of reporting a mirrored asset missing.
+          const localKeyMatch = cleanRef.match(/^media\/([^?#]+)/);
+          if (localKeyMatch) {
+            const key = localKeyMatch[1];
+            if (knownStorageKeys.has(key)) return true;
+            const keyStem = storageKeyToMarkdownRef(key);
+            if (keyStem && knownMediaStems.has(keyStem)) return true;
+          }
+          return false;
         };
 
         for (const ref of detailed.normalRefs) {

@@ -296,6 +296,7 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 | `defaultLocale` | `"ja"` | Default locale used when scaffolding new drafts via `emit new` / `sync_new` |
 | `postsSyncLimit` | `100` | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback) |
 | `mediaSyncLimit` | `300` | Default maximum items fetched by `emit pull-media` / `sync_pull_media` |
+| `localMediaRefs` | `false` | When `true`, mirrored body images are stored as workspace-relative `media/<storageKey>` references instead of canonical `/_emdash/api/media/file/<storageKey>` URLs. Set it with `emit pull --local-media-refs` (or clear it with `--no-local-media-refs`); pull, push, diff, and MCP all honour it |
 | `concurrency` | `8` | Parallel HTTP fetch concurrency during batch pulls |
 
 ### 6. Recommended `.gitignore`
@@ -670,9 +671,14 @@ emit pull [id] [options]
 * `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
 * `--media`: Also pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `300`). Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
 * `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
+* `--local-media-refs`: Write mirrored body images as workspace-relative `media/<storageKey>` references instead of the canonical `/_emdash/api/media/file/<storageKey>` URL, so Markdown preview and local tooling resolve them offline. The choice is **remembered in `.emit/config.json`**, so every later pull, push, and diff keeps the same spelling without repeating the flag.
+* `--no-local-media-refs`: Clear a previously remembered preference and store canonical EmDash URLs on disk again.
 
 > [!NOTE]
 > **Taxonomies are pulled by default in batch mode.** Categories and tags are lightweight (2 API calls) and required for valid push operations (Preflight Guard G4 validates taxonomy terms against these local definitions). This eliminates a common source of push failures. Use `--posts-only` if you need articles only.
+
+> [!NOTE]
+> **Local media references change only the disk spelling, never the remote payload.** With `localMediaRefs` enabled, `base_snapshots`, `sync_state.local_hash`, and the body sent to EmDash all keep the canonical `/_emdash/api/media/file/<storageKey>` URL, while the Markdown file carries `media/<storageKey>`. Because the baseline stays canonical, `emit diff` renders it in whichever spelling the disk already uses — an untouched article reports no change, and only a genuine edit appears.
 
 > [!NOTE]
 > **Why `--no-prune` is rarely needed:**  
@@ -742,6 +748,7 @@ emit push [file] [options]
 * `--resolve-taxonomy <strategy>`: Resolves taxonomy conflict explicitly (`union`, `local`, or `remote`).
 * `--revive`: Pushes an article that was previously marked delete_pending.
 * `-f, --force`: Bypasses non-critical safety guardrails.
+* `--local-media-refs` / `--no-local-media-refs`: Override the remembered workspace preference for how mirrored body images are spelled on disk (see [`emit pull`](#emit-pull)). Push always sends the canonical URL to remote; the flag only decides what stays in the local file, and passing it persists the choice to `.emit/config.json`.
 * `-p, --profile <name>`: Explicitly target a specific connection profile.
 
 **Example:**

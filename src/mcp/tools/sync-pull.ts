@@ -56,6 +56,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe('Force overwrite local files and bypass differential hash checking'),
+      localMediaRefs: z
+        .boolean()
+        .optional()
+        .describe(
+          'Write mirrored body images as workspace-relative "media/<storageKey>" references so Markdown preview resolves them locally. Defaults to the workspace setting in .emit/config.json.',
+        ),
       noPrune: z
         .boolean()
         .optional()
@@ -89,6 +95,9 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       }
       const collection = args.collection || ctx.config.defaultCollection;
       const origin = ctx.origin;
+      // An explicit MCP argument wins over the remembered workspace setting, matching the CLI flag precedence.
+      const localMediaRefs =
+        args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs;
 
       const { id: targetId } = resolveArticleTarget({
         workspaceRoot: ctx.root,
@@ -114,6 +123,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
             force: args.force,
+            localMediaRefs,
           });
         } catch (error) {
           return formatToolError(error);
@@ -190,6 +200,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           status: args.status,
           force: args.force,
           prune: shouldPrune,
+          localMediaRefs,
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';

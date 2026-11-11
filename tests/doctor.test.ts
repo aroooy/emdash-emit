@@ -421,6 +421,53 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('ok');
   });
 
+  it('accepts a workspace-relative mirror reference (`media/<storageKey>`) as resolved (local media refs)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    cache.saveMediaState({
+      localHash: 'd'.repeat(64),
+      mediaId: '01M67MEDIA0000000000000DD',
+      storageKey: '01M67LQCALKEY556YVG6RBT0J0.png',
+      url: '/_emdash/api/media/file/01M67LQCALKEY556YVG6RBT0J0.png',
+      workspacePath: null,
+      markdownRef: 'media/01M67LQCALKEY556YVG6RBT0J0',
+      status: 'ready',
+      uploadedAt: 1700000000,
+    });
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'local-ref-resolved',
+      title: 'Local Ref Resolved',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    // The reference names the storageKey outright and no file exists at that exact path, so only recorded
+    // metadata can resolve it.
+    const body = '![Local](media/01M67LQCALKEY556YVG6RBT0J0.png)\n';
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-local-ref-resolved.md`),
+      serializeMarkdown(frontmatter, body),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+
+    // The census must still see the reference so an unmirrored key can never disappear silently.
+    const keys = collectArticleStorageKeys(body);
+    expect(keys.map((k) => k.storageKey)).toContain('01M67LQCALKEY556YVG6RBT0J0.png');
+  });
+
   it('resolves a media reference from a media_state record even with no local file (A-2)', async () => {
     const draftDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
@@ -884,15 +931,16 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
 
   it('collects real legacy workspace storageKeys from migrated article bodies (C-5)', async () => {
     const wsRoot = '/Volumes/ext/github/emdash.aroooy.net';
-    if (!fs.existsSync(wsRoot)) return; // only runs on the developer machine that mirrors the live site
-
-    const body = fs.readFileSync(
-      path.join(
-        wsRoot,
-        'posts/published/20210620_01M67N0ZG3F9N0WH6D30EA3J5A-GoPro-Maxを一年くらい使ってみての雑なレビュー.md',
-      ),
-      'utf8',
+    const targetFile = path.join(
+      wsRoot,
+      'posts/published/20210620_01M67N0ZG3F9N0WH6D30EA3J5A-GoPro-Maxを一年くらい使ってみての雑なレビュー.md',
     );
+    // This is a live-corpus smoke test, not a unit test: it reads the developer's real mirrored workspace.
+    // Guard on the specific article file, not just the workspace root, so clearing or re-pulling that
+    // workspace skips the check instead of failing the suite (keep the suite hermetic to ambient state).
+    if (!fs.existsSync(targetFile)) return;
+
+    const body = fs.readFileSync(targetFile, 'utf8');
     const keys = collectArticleStorageKeys(body);
     expect(keys.length).toBeGreaterThanOrEqual(2);
     expect(keys.map((k) => k.storageKey)).toEqual([

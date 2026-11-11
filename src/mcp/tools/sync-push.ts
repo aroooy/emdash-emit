@@ -68,6 +68,12 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .boolean()
         .optional()
         .describe('Force push and overwrite conflicting taxonomy states'),
+      localMediaRefs: z
+        .boolean()
+        .optional()
+        .describe(
+          'Keep mirrored body images as workspace-relative "media/<storageKey>" references on disk while pushing the canonical URL. Defaults to the workspace setting in .emit/config.json.',
+        ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -93,6 +99,8 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           noTaxonomyAudit: args.noTaxonomyAudit,
           revive: args.revive,
           force: args.force,
+          localMediaRefs:
+            args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs,
         });
 
         if (res.conflict) {

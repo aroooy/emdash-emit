@@ -35,6 +35,13 @@ export interface EmitConfig {
   mediaSyncLimit?: number;
   concurrency?: number;
   /**
+   * When true, a pulled article writes mirrored body images as workspace-relative `media/<storageKey>`
+   * references so an editor preview renders them from the local mirror. The cache baseline and every remote
+   * payload keep the canonical `/_emdash/api/media/file/<storageKey>` URL regardless, so enabling this only
+   * changes how the file on disk spells an asset Emit already mirrors.
+   */
+  localMediaRefs?: boolean;
+  /**
    * Package version that initialized this workspace.
    */
   createdWithVersion?: string;
@@ -95,6 +102,27 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
 }
 
 /**
+ * Persists the `localMediaRefs` workspace preference into `.emit/config.json`.
+ *
+ * The setting decides how mirrored body images are spelled on disk, so it must survive across commands: a pull
+ * that writes `media/<storageKey>` references has to be matched by every later push and diff. Only touches the
+ * one key and leaves the rest of the config untouched.
+ */
+export function persistLocalMediaRefs(workspaceRoot: string, value: boolean): void {
+  try {
+    const paths = getWorkspacePaths(workspaceRoot);
+    if (!fs.existsSync(paths.configPath)) return;
+
+    const raw = fs.readFileSync(paths.configPath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed.localMediaRefs = value;
+    fs.writeFileSync(paths.configPath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Non-fatal if config update fails
+  }
+}
+
+/**
  * Updates `lastSyncedVersion` in `.emit/config.json` after a successful sync operation.
  */
 export function updateConfigSyncedVersion(workspaceRoot: string, version?: string): void {
@@ -140,6 +168,7 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       postsSyncLimit: parsed.postsSyncLimit || DEFAULT_CONFIG.postsSyncLimit,
       mediaSyncLimit: parsed.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
       concurrency: parsed.concurrency || DEFAULT_CONFIG.concurrency,
+      localMediaRefs: parsed.localMediaRefs,
       createdWithVersion: parsed.createdWithVersion,
       lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,

@@ -61,6 +61,8 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
   force?: boolean;
   concurrency?: number;
   prune?: boolean;
+  /** Write mirrored body images as workspace-relative `media/<storageKey>` references. Passed to every article pull. */
+  localMediaRefs?: boolean;
   onProgress?: (progress: { current: number; total: number; item: PullResult }) => void;
 }
 
@@ -194,6 +196,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         refreshToken: options.refreshToken,
         rawItem: item.rawItem,
         force: options.force,
+        localMediaRefs: options.localMediaRefs,
         fetchFn: options.fetchFn,
         bylineIdToSlug: bylineMaps.idToSlug,
         bylineSlugToId: bylineMaps.slugToId,
@@ -335,6 +338,9 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
       refreshToken: options.refreshToken,
       allowPublish: options.allowPublish,
       fetchFn: options.fetchFn,
+      // Batch push must honor the same setting single push does, or a workspace that spells mirrored images as
+      // local references gets every one of them rewritten to canonical URLs on disk.
+      localMediaRefs: options.localMediaRefs,
     });
     results.push(res);
     pushed++;

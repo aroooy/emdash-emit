@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Workspace-Relative Local Media References (`localMediaRefs`)**:
+  - New workspace setting `.emit/config.json → localMediaRefs` (default `false`). When enabled, mirrored body images are written to disk as workspace-relative `media/<storageKey>` references so Markdown preview and local tooling resolve them offline, instead of the canonical `/_emdash/api/media/file/<storageKey>` URL.
+  - Round-trip symmetry is preserved: the **baseline snapshot and hash stay canonical**, so the 3-way merge, `sync_state.local_hash`, and the remote payload all keep the canonical URL, while only the file on disk carries the local spelling. Push localizes *after* preflight canonicalization, so an article that spells images locally still pushes the exact canonical body.
+  - CLI flags `emit pull --local-media-refs` / `emit push --local-media-refs` enable the setting and persist it; `--no-local-media-refs` clears a remembered preference. MCP `sync_pull` / `sync_push` accept a `localMediaRefs` argument that overrides the stored setting, matching CLI precedence (explicit argument > remembered config).
+  - `emit diff` renders the baseline in whichever spelling the disk already carries, so an untouched local-ref article never reports a phantom media rewrite and only a real edit shows up.
+
 - **Fast-Path Frontmatter Self-Healing (H1 / P1)**:
   - `tryFastPathOrHeal` in `src/sync/pull.ts` now validates `parseMarkdown` even when the disk hash matches the cached baseline. Legacy files whose unquoted percent-encoded taxonomy slugs never parse were previously skipped forever, so `emit status` reported them invalid while `emit pull` did nothing.
   - Such files are repaired locally by `lenientRepairMarkdownFrontmatter` and re-tracked against their own repaired hash; the `base_snapshot` is left untouched, values are never altered, and no per-article or taxonomy fetch is issued — batch pulls of large legacy corpora stay fast (verified: only list/bylines/openapi requests for healed articles).

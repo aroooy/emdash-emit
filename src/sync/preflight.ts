@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { extractUlidFromFilename } from '../utils/naming.js';
+import { extractUlidFromFilename, storageKeyToMarkdownRef } from '../utils/naming.js';
 import { extractMediaUlid } from '../client/mapper.js';
 import {
   MAX_MEDIA_UPLOAD_BYTES,
@@ -40,6 +40,8 @@ import {
   type Frontmatter,
   type ParsedMarkdown,
 } from '../utils/frontmatter.js';
+import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
+import { storageKeyFromMediaMeta } from './media.js';
 import {
   findClosestTaxonomySuggestions,
   getLocalTaxonomiesSummary,
@@ -271,6 +273,84 @@ function findAlreadyPromotedMedia(
 }
 
 /**
+ * Collects every storageKey Emit has confirmed for this workspace — the `media_state` index plus each
+ * `media/*.yaml` companion — so a body reference can be resolved against recorded metadata instead of by
+ * guessing a filename. `legacy_*` residue is skipped because it backs no real record.
+ */
+function confirmedStorageKeys(options?: PreflightOptions): Set<string> {
+  const keys = new Set<string>();
+  if (options?.cache) {
+    for (const state of options.cache.listMediaStates()) {
+      if (state.storageKey) keys.add(state.storageKey);
+    }
+  }
+  if (!options?.workspaceRoot) return keys;
+
+  const mediaDir = path.join(options.workspaceRoot, 'media');
+  if (!fs.existsSync(mediaDir)) return keys;
+  for (const file of fs.readdirSync(mediaDir)) {
+    if (!file.endsWith('.yaml') || file.startsWith('legacy_')) continue;
+    try {
+      const meta = yaml.load(fs.readFileSync(path.join(mediaDir, file), 'utf8')) as Record<
+        string,
+        unknown
+      > | null;
+      if (!meta) continue;
+      const key = storageKeyFromMediaMeta(meta);
+      if (key) keys.add(key);
+    } catch {
+      // Ignore unreadable YAML
+    }
+  }
+  return keys;
+}
+
+/**
+ * Resolves a body reference that names a storageKey outright (`media/<storageKey>`) to the promoted asset
+ * Emit already mirrors. The key is confirmed against recorded metadata — `media_state` or a companion YAML —
+ * so an unmirrored key stays unresolved and still reaches the push guards. A media record id is attached when
+ * a source records one, which lets push verify the remote record before baking the URL into the body.
+ */
+function findPromotedMediaByStorageKey(
+  storageKey: string,
+  options?: PreflightOptions,
+): PromotedMediaMatch | null {
+  if (!options?.workspaceRoot) return null;
+
+  const state = options.cache?.getMediaStateByStorageKey(storageKey);
+  if (state && state.mediaId && state.url) {
+    return {
+      mediaId: state.mediaId,
+      storageKey: state.storageKey || storageKey,
+      url: state.url,
+      promotedRelPath: state.markdownRef || state.workspacePath || `media/${storageKey}`,
+    };
+  }
+
+  const stem = storageKeyToMarkdownRef(storageKey);
+  if (!stem) return null;
+  const companionPath = path.join(options.workspaceRoot, 'media', `${stem}.yaml`);
+  if (!fs.existsSync(companionPath)) return null;
+
+  try {
+    const meta = yaml.load(fs.readFileSync(companionPath, 'utf8')) as Record<
+      string,
+      unknown
+    > | null;
+    if (!meta || typeof meta.id !== 'string') return null;
+    const companionKey = storageKeyFromMediaMeta(meta) || storageKey;
+    return {
+      mediaId: meta.id.toUpperCase(),
+      storageKey: companionKey,
+      url: `${MEDIA_FILE_ROUTE_PREFIX}${companionKey}`,
+      promotedRelPath: `media/${stem}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Runs Preflight Guards G2 through G11 against the article to prevent AI misbehavior.
  * (G1 is enforced at the MCP / CLI invocation layer).
  */
@@ -405,6 +485,26 @@ export function runPreflightChecks(
               alreadyPromoted: promotedMatch,
             });
             continue;
+          }
+
+          // A workspace that spells a mirrored image as `media/<storageKey>` references the storageKey
+          // outright rather than a companion stem, so name matching above cannot resolve it. Recover the key
+          // from recorded metadata and queue it as a reuse: push rewrites the line to the canonical route
+          // without ever re-uploading, and an unmirrored key still falls through to LOCAL_IMAGE_DETECTED.
+          const directKey = storageKeyFromMirrorRef(rawPath, confirmedStorageKeys(options));
+          if (directKey) {
+            const promotedByStorageKey = findPromotedMediaByStorageKey(directKey, options);
+            if (promotedByStorageKey) {
+              draftImages.push({
+                line: trimmedLine,
+                alt,
+                rawPath: standaloneMatch[2],
+                filename: resolved.filename,
+                resolvedAbsPath: resolved.candidateAbs,
+                alreadyPromoted: promotedByStorageKey,
+              });
+              continue;
+            }
           }
         }
 
