@@ -193,6 +193,23 @@ export interface LocalMediaMirrorCandidate {
 }
 
 /**
+ * Recovers the storageKey a companion YAML actually refers to. Older mirrors — most visibly the ones
+ * written before Emit persisted the field — carry no `storageKey:` key at all, yet their `url:` is the
+ * canonical `/_emdash/api/media/file/<storageKey>` route, which is confirmed metadata written from the
+ * server response and not an inference from a body reference. Absolute and root-relative forms are both
+ * accepted because either can appear depending on how the record was mirrored. `legacy_*` residue is
+ * never read here: it backs no real record, so it must not serve as verification evidence.
+ */
+export function storageKeyFromMediaMeta(doc: Record<string, unknown>): string | undefined {
+  if (typeof doc.storageKey === 'string' && doc.storageKey.trim()) {
+    return doc.storageKey.trim();
+  }
+  if (typeof doc.url !== 'string' || !doc.url.trim()) return undefined;
+  const match = doc.url.match(/(?:^|\/)media\/file\/([^?#]+)/);
+  return match ? match[1] : undefined;
+}
+
+/**
  * Indexes every locally mirrored media asset (`media/<yyyyMMdd>_<mediaId>-<name>.yaml`) so a body
  * storageKey that the canonical id lookup failed to resolve can be re-checked against confirmed local
  * metadata instead of being declared missing. Leftover `legacy_*` residue is skipped because it backs
@@ -216,8 +233,7 @@ export function collectLocalMediaMirrorCandidates(
       continue;
     }
     if (!doc) continue;
-    const storageKey =
-      typeof doc.storageKey === 'string' && doc.storageKey ? doc.storageKey : undefined;
+    const storageKey = storageKeyFromMediaMeta(doc);
     const stem = file.replace(/\.yaml$/, '');
     const idMatch = stem.replace(/^\d{8}_/, '').match(/^([0-9A-HJ-NP-Z]{26})/i);
     const docId =
@@ -571,6 +587,16 @@ export interface PullMediaResult {
   verifiedStorageKeys?: string[];
   /** Body storageKeys that neither a resolved record nor confirmed local metadata could match. */
   orphanStorageKeys?: string[];
+  /**
+   * Total media records reported by the server (`totalCount` of the list operation) for a library-wide
+   * pull. Lets a user tell "this run covered N of M" apart from "the library has N items".
+   */
+  remoteTotalCount?: number | null;
+  /**
+   * StorageKeys referenced by workspace articles that no local mirror names and that a complete remote
+   * library walk also did not report. Populated only for `--all` pulls, where the walk is exhaustive.
+   */
+  referencedUnmirroredStorageKeys?: string[];
 }
 
 /**
@@ -797,6 +823,22 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
 
   const mediaDir = path.join(options.workspaceRoot, 'media');
   fs.mkdirSync(mediaDir, { recursive: true });
+  // Every mirrored companion is a confirmed storageKey source, including the ones written before Emit
+  // persisted the field, whose `url:` still names the key. Seeding from disk means `--prune` never
+  // deletes an asset that this run's media window simply did not reach.
+  const activeStorageKeys = new Set<string>();
+  for (const candidate of collectLocalMediaMirrorCandidates(mediaDir).values()) {
+    if (candidate.storageKey) activeStorageKeys.add(candidate.storageKey);
+  }
+
+  // Metadata for the coverage report and the storageKey census. `pullMedia` already walks the library
+  // cursor-by-cursor, so it owns the index instead of paying for a second one.
+  const remoteIndex: RemoteStorageKeyIndex = {
+    storageKeys: activeStorageKeys,
+    mediaIdsByStorageKey: new Map<string, string>(),
+    totalCount: null,
+    complete: false,
+  };
 
   const activeMediaBaseNames = new Set<string>();
   const activeMediaIds = new Set<string>();
@@ -836,12 +878,14 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
 
     const json = await res.json();
     const data = unwrapEnvelope<Record<string, unknown>>(json);
+    if (typeof data.totalCount === 'number') remoteIndex.totalCount = data.totalCount;
     const rawItems = (
       Array.isArray(data.items) ? data.items : Array.isArray(data) ? data : []
     ) as EmDashMediaItem[];
 
     if (rawItems.length === 0) {
       // An empty page ends the listing regardless of any cursor the server echoes back.
+      remoteIndex.complete = true;
       break;
     }
 
@@ -855,6 +899,10 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       activeMediaBaseNames.add(baseName);
       activeMediaBaseNames.add(oldBaseName);
       activeMediaIds.add(item.id);
+      if (item.storageKey) {
+        activeStorageKeys.add(item.storageKey);
+        remoteIndex.mediaIdsByStorageKey.set(item.storageKey, item.id);
+      }
 
       const result = await syncSingleMediaItem({
         item,
@@ -875,6 +923,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     }
 
     if (!data.nextCursor || typeof data.nextCursor !== 'string') {
+      remoteIndex.complete = true;
       break;
     }
     cursor = data.nextCursor;
@@ -904,10 +953,155 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     }
   }
 
+  // A library-wide walk is exhaustive, so it doubles as the storageKey census: every article reference
+  // that neither a local companion nor any remote record names is reported. The list endpoint exposes no
+  // storageKey filter, which is why the census requires the full walk `--all` already performs.
+  let referencedUnmirroredStorageKeys: string[] | undefined = undefined;
+  if (options.all) {
+    const referenced = new Set<string>();
+    for (const status of ['draft', 'published']) {
+      const statusDir = path.join(options.workspaceRoot, options.collection || 'posts', status);
+      if (!fs.existsSync(statusDir)) continue;
+      for (const file of fs.readdirSync(statusDir)) {
+        if (!file.endsWith('.md')) continue;
+        try {
+          const content = fs.readFileSync(path.join(statusDir, file), 'utf8');
+          for (const descriptor of collectArticleStorageKeys(content)) {
+            referenced.add(descriptor.storageKey);
+          }
+        } catch {
+          // An unreadable article contributes nothing to the census.
+        }
+      }
+    }
+    if (referenced.size > 0) {
+      referencedUnmirroredStorageKeys = findUnmirroredStorageKeys(
+        referenced,
+        activeStorageKeys,
+        remoteIndex,
+      );
+    }
+  }
+
   return {
     total: totalProcessed,
     downloaded: downloadedCount,
     skipped: skippedCount,
     deleted: deletedCount,
+    remoteTotalCount: remoteIndex.totalCount,
+    referencedUnmirroredStorageKeys,
   };
+}
+
+/**
+ * Reads the media library once and returns its full storageKey index.
+ *
+ * `GET /_emdash/api/media` accepts only `cursor`, `limit`, `page`, `mimeType`, `folderId`, `q`, and
+ * `includeUsage`, so a specific body reference cannot be looked up by key: the list operation is the
+ * only handle that reaches migrated assets, whose storageKey differs from the record id that
+ * `GET /_emdash/api/media/{id}` keys on. Every item in the response carries its own `storageKey` and
+ * the listing is cursor-bounded by `totalCount`, so one walk indexes the whole library. The response's
+ * `totalCount` is reported alongside the index so callers can tell "the key is absent from a complete
+ * library" apart from "the walk stopped early".
+ */
+export interface RemoteStorageKeyIndex {
+  /** Every storageKey present in the remote media library, as reported by the list endpoint. */
+  storageKeys: Set<string>;
+  /** ULIDs of the records those keys belong to, for reporting a match as a record id. */
+  mediaIdsByStorageKey: Map<string, string>;
+  /** `totalCount` reported by the server, or null when the response did not include it. */
+  totalCount: number | null;
+  /** True only when the walk finished without hitting `maxItems`. */
+  complete: boolean;
+}
+
+export async function collectRemoteStorageKeys(options: {
+  workspaceRoot: string;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  /** Stop after this many records. Defaults to unlimited, which is the whole library. */
+  maxItems?: number;
+  fetchFn?: typeof fetch;
+}): Promise<RemoteStorageKeyIndex> {
+  const fetchFn = createAuthedFetch(options);
+  const batchSize = 100;
+  const maxItems = options.maxItems ?? Infinity;
+
+  const storageKeys = new Set<string>();
+  const mediaIdsByStorageKey = new Map<string, string>();
+  let totalCount: number | null = null;
+  let scanned = 0;
+  let complete = false;
+  let cursor: string | undefined = undefined;
+
+  for (;;) {
+    const remaining = maxItems - scanned;
+    if (remaining <= 0) break;
+    const currentBatch = Math.min(remaining, batchSize);
+
+    const url = new URL('/_emdash/api/media', options.origin);
+    url.searchParams.set('limit', String(currentBatch));
+    if (cursor) url.searchParams.set('cursor', cursor);
+
+    const res = await fetchFn(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!res.ok) {
+      throw new ApiError({
+        message: `Failed to list media: ${res.statusText}`,
+        code: 'MEDIA_LIST_FAILED',
+        status: res.status,
+        endpoint: url.toString(),
+        suggestion: 'Verify network connection and token permissions.',
+      });
+    }
+
+    const data = unwrapEnvelope<Record<string, unknown>>(await res.json());
+    if (typeof data.totalCount === 'number') totalCount = data.totalCount;
+    const rawItems = (
+      Array.isArray(data.items) ? data.items : Array.isArray(data.data) ? data.data : []
+    ) as EmDashMediaItem[];
+
+    for (const item of rawItems) {
+      scanned++;
+      if (typeof item.storageKey === 'string' && item.storageKey) {
+        storageKeys.add(item.storageKey);
+        if (item.id) mediaIdsByStorageKey.set(item.storageKey, item.id);
+      }
+    }
+
+    if (rawItems.length === 0 || typeof data.nextCursor !== 'string' || !data.nextCursor) {
+      complete = true;
+      break;
+    }
+    cursor = data.nextCursor;
+  }
+
+  return { storageKeys, mediaIdsByStorageKey, totalCount, complete };
+}
+
+/**
+ * Reports body storageKeys that no local mirror names and that a full remote library walk does not
+ * contain. A key is only listed when the walk was complete: an early stop proves nothing about the
+ * rest of the library, so an incomplete walk yields nothing. Even a confirmed absence is reported as a
+ * lookup result rather than as a missing record — Emit mirrors records and never repairs server data.
+ */
+export function findUnmirroredStorageKeys(
+  referenced: Iterable<string>,
+  localMirrorKeys: Iterable<string>,
+  remoteIndex: RemoteStorageKeyIndex,
+): string[] {
+  if (!remoteIndex.complete) return [];
+  const mirrored = new Set(localMirrorKeys);
+  const unresolved = new Set<string>();
+  for (const key of referenced) {
+    if (mirrored.has(key) || remoteIndex.storageKeys.has(key)) continue;
+    unresolved.add(key);
+  }
+  return Array.from(unresolved).sort();
 }

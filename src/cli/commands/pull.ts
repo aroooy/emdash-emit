@@ -57,10 +57,36 @@ export function formatOrphanMediaWarning(orphanStorageKeys: string[] | undefined
     `⚠️ [UNRESOLVED_MEDIA_ASSET] ${orphanStorageKeys.length} storageKey(s) referenced in article bodies ` +
     `could not be matched to a media record or a local mirror and were not downloaded: ${keyList}. ` +
     `These keys are R2 storage keys, not media record ids — GET /_emdash/api/media/{id} searches the ` +
-    `primary key, so a 404 here does not prove the record is missing. Verify the library by storageKey ` +
-    `(admin UI or wrangler d1 SELECT on the media table) before registering anything: a blind INSERT can ` +
-    `create a duplicate. Emit mirrors records and never repairs server data.`
+    `primary key, so a 404 here does not prove the record is missing. The library's own storageKeys are ` +
+    `reachable from Emit: run "emit pull-media --all" (or "emit doctor --check-media-library") to index ` +
+    `every record the server reports, which resolves these keys without any server-side query. Verify by ` +
+    `storageKey before registering anything: a blind INSERT can create a duplicate. Emit mirrors records ` +
+    `and never repairs server data.`
   );
+}
+
+/**
+ * Renders the coverage line for a library-wide media pull: how many records the server reports, how
+ * many this run walked, and any referenced key that even a complete walk could not match.
+ */
+export function formatMediaCoverageLine(res: {
+  total: number;
+  remoteTotalCount?: number | null;
+  referencedUnmirroredStorageKeys?: string[];
+}): string {
+  const parts: string[] = [];
+  if (typeof res.remoteTotalCount === 'number') {
+    parts.push(
+      `remote library holds ${res.remoteTotalCount} record(s), of which this run walked ${res.total}`,
+    );
+  }
+  const unmirrored = res.referencedUnmirroredStorageKeys;
+  if (unmirrored && unmirrored.length > 0) {
+    parts.push(
+      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey before registering anything, because a blind INSERT can duplicate an existing record.`,
+    );
+  }
+  return parts.length > 0 ? `\n${parts.join('\n')}` : '';
 }
 
 export function formatPullStatusBreakdown(
@@ -397,7 +423,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
         const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
         console.log(
-          `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).`,
+          `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}`,
         );
       } catch (error) {
         if (error instanceof ApiError) {

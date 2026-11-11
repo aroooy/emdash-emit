@@ -383,7 +383,7 @@ Consequences worth internalizing before debugging media:
 
 * A record `id` on the file route returns **404**; a `storageKey` on `GET /_emdash/api/media/{id}` returns **401** (no bearer token) or **404**. Both codes describe the *lookup*, never the health of the asset.
 * Because a 404 proves only that one lookup failed, Emit never concludes a record is missing and never suggests inserting one — see `[UNRESOLVED_MEDIA_ASSET]` under [`emit pull-media`](#emit-pull-media).
-* An old article whose images do not render **locally** is usually an unmirrored asset (the media window is newest-first, `mediaSyncLimit` default 300) rather than a broken reference. `emit doctor` reports how many references have no local file.
+* An old article whose images do not render **locally** is usually an unmirrored asset (the media window is newest-first, `mediaSyncLimit` default 300) rather than a broken reference. `emit doctor --check-media-library` states the remote library size against the local mirror count, and `emit pull-media --all` indexes every storageKey the server reports.
 
 The full specification — identifier table, endpoint matrix, migrated-corpus behavior, resolution order (`verifiedStorageKeys` → `orphanStorageKeys`), and `legacy_*` residue rules — lives in **[docs/media-id-spaces.md](docs/media-id-spaces.md)**.
 
@@ -803,7 +803,7 @@ emit conflicts resolve <filePath> --accept-canonical [-c, --collection <collecti
 Runs an automated diagnostic health check across the local workspace and cache database.
 
 ```bash
-emit doctor [-c, --collection <collection>] [-p, --profile <name>]
+emit doctor [-c, --collection <collection>] [--strict-media] [--check-media-urls] [--check-media-library] [-p, --profile <name>]
 ```
 
 Validates 6 critical health vectors:
@@ -813,6 +813,10 @@ Validates 6 critical health vectors:
 4. **Conflicts & Quarantine**: Flags unresolved conflict copies and deletion backups in `conflicts/`.
 5. **Sync Status**: Verifies local baseline hash tracking.
 6. **Referenced Media Existence**: Validates that all local media referenced in article Markdown bodies exist on disk.
+
+Media flags:
+* `--check-media-urls`: Probe `HEAD /_emdash/api/media/file/<storageKey>` for references no local source resolves, downgrading ones the origin still serves to informational notes.
+* `--check-media-library`: Walk the whole remote library and state how many records it holds against how many this workspace mirrors, so a missing-file count reads as coverage rather than data loss.
 
 ---
 
@@ -896,11 +900,13 @@ emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune]
 
 * `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space.
 * `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
-* `--all`: Fetch all media items without limit.
+* `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. The summary reports how many records the server holds against how many this run walked, so coverage is visible instead of assumed.
 * `--prune`: Remove local media files that no longer exist on remote. Leftover `media/legacy_*` residue written by older Emit versions is never pruned and must be deleted by hand.
 * `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
 
-> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a *lookup* failure, not proof that the record is missing: body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 here. Verify by storageKey (admin UI, or `wrangler d1 SELECT` on the media table) before registering anything — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
+> **Two ID spaces, one lookup path:** Body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 when queried with a body URL's ULID. The list operation is the only endpoint that reports each record's own `storageKey`, and it exposes no storageKey filter (`q` matches filenames only) — which is why `emit pull-media --all` (or `emit doctor --check-media-library`) is how Emit reaches migrated assets, not a targeted lookup.
+
+> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a *lookup* failure, not proof that the record is missing. Index the whole library first with `emit pull-media --all`, which resolves these keys without any server-side query; only then verify anything left over by storageKey before registering it — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
 
 ---
 
@@ -1067,7 +1073,7 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 
 **Cause**: Two different things look identical here. (1) The asset was never mirrored locally: `emit pull-media` walks the remote library newest-first and stops at `mediaSyncLimit` (default 300), so images referenced by older articles have no file under `media/`. (2) You are trying to resolve a body URL against local filenames: body URLs carry the R2 `storageKey`, while `media/<yyyyMMdd>_<ULID>-<name>.<ext>` is named after the media record `id`, and those two ULIDs never match for the same image.
 
-**Solution**: Run `emit doctor` first — its `Media References` check reports how many references have no local file, which distinguishes "not mirrored" from "broken reference". Mirror more assets with `emit pull-media --all` (or a larger `--limit`), and resolve any specific asset by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
+**Solution**: Run `emit doctor --check-media-library` first — its `Media References` check reports how many references have no local file *and* how many records the remote library holds against how many this workspace mirrors, which distinguishes "not mirrored" from "broken reference". Mirror everything with `emit pull-media --all` (or a larger `--limit`) to index every storageKey the server reports; only for what remains should you verify by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
 
 ### Q: `[NETWORK_ERROR]`: Network request failed (`fetch failed`)
 

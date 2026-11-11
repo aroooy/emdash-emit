@@ -48,6 +48,12 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         .describe(
           'Probe the remote media file route (HEAD /_emdash/api/media/file/<key>) for references with no local mirror; legacy assets still served remotely are downgraded to informational notes',
         ),
+      checkMediaLibrary: z
+        .boolean()
+        .optional()
+        .describe(
+          'Walk the whole remote media library (GET /_emdash/api/media) and report its record count against the number of assets this workspace mirrors, so a missing-file count reads as coverage instead of data loss',
+        ),
     },
     async (args) => {
       let ctx: ServerContext;
@@ -68,6 +74,9 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
           collection,
           strictMedia: Boolean(args.strictMedia),
           checkMediaUrls: Boolean(args.checkMediaUrls),
+          checkMediaLibrary: Boolean(args.checkMediaLibrary),
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
         });
 
         return formatToolSuccess(report as unknown as Record<string, unknown>, ctx.meta);

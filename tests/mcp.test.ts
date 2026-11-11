@@ -79,6 +79,10 @@ describe('Emit MCP Server', () => {
     // name both identifiers and point at the standalone specification document.
     expect(instructions).toContain('docs/media-id-spaces.md');
     expect(instructions).toContain('storageKey');
+    // The only storageKey lookup path Emit owns is the paginated list operation, so agents must be told
+    // to index the library before reaching for server-side tools.
+    expect(instructions).toContain('sync_pull_media with all:true');
+    expect(instructions).toContain('checkMediaLibrary:true');
 
     // Expected tools
     const expectedTools = [

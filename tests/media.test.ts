@@ -30,9 +30,23 @@ import {
   collectArticleReferencedMediaIds,
   collectArticleStorageKeys,
   collectLocalMediaMirrorCandidates,
+  collectRemoteStorageKeys,
+  findUnmirroredStorageKeys,
+  storageKeyFromMediaMeta,
   pullArticleMedia,
 } from '../src/sync/media.js';
-import { formatOrphanMediaWarning } from '../src/cli/commands/pull.js';
+import { formatMediaCoverageLine, formatOrphanMediaWarning } from '../src/cli/commands/pull.js';
+
+/**
+ * Fixture identifiers must be valid canonical ULIDs (Crockford Base32, 26 chars, no I/O/L/U), otherwise
+ * name parsing and key validation reject them for reasons unrelated to what a test is asserting.
+ */
+const OLD_RECORD = '01MJZZDRECRD99999999999999';
+const OLD_DISK_KEY = '01MJZZDDSKKEY9999999999999';
+const OLD_ARTICLE = '01MJZZARTCED99999999999999';
+const REMOTE_KEY = '01MJZZREMTEKEY9999999991';
+const LOCAL_ONLY_KEY = '01MJZZLCLYZ999999999999';
+const NOWHERE_KEY = '01MJZZNWHEREKY999999999999';
 
 describe('Media Sync Engine', () => {
   let tempDir: string;
@@ -745,7 +759,10 @@ locale: ja
     expect(warning).toContain('01M67LEGACYX0000000000000A.jpg');
     expect(warning).toContain('GET /_emdash/api/media/{id} searches the primary key');
     expect(warning).toContain('does not prove the record is missing');
-    expect(warning).toContain('wrangler d1 SELECT');
+    // The library index is reachable through Emit's own list walk, so the warning points there first
+    // instead of sending the user to a server-side query.
+    expect(warning).toContain('emit pull-media --all');
+    expect(warning).toContain('without any server-side query');
     expect(warning).toContain('blind INSERT can create a duplicate');
     expect(warning).toContain('Emit mirrors records and never repairs server data');
     // The warning must never assert that the record is absent, nor tell the user to insert it.
@@ -912,5 +929,186 @@ locale: ja
     );
     // Legacy residue backs no real record, so it must never be usable as verification evidence.
     expect(candidates.has('01M67LEGACYX00000000000003')).toBe(false);
+  });
+
+  it('recovers a storageKey from a companion url when the storageKey field is absent', () => {
+    // The production shape of a migrated mirror: Emit wrote no `storageKey:` field, yet the canonical
+    // `url:` still names the R2 key. Absolute and root-relative forms both appear in real corpora.
+    expect(
+      storageKeyFromMediaMeta({
+        id: '01M67P08DXFTYDPFRTJCC4XMP8',
+        url: 'https://aroooy.net/_emdash/api/media/file/01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+      }),
+    ).toBe('01M67P07X2VPW0MYRRRGMA6T5A.jpg');
+    expect(
+      storageKeyFromMediaMeta({
+        url: '/_emdash/api/media/file/01M6V28HPV5D66A8SYMYY0MSQR.01M6V28HWMWTD4BFNN64C9W9RY.jpg',
+      }),
+    ).toBe('01M6V28HPV5D66A8SYMYY0MSQR.01M6V28HWMWTD4BFNN64C9W9RY.jpg');
+    // An explicit field always wins over the URL, and a url that is not a file route names no key.
+    expect(
+      storageKeyFromMediaMeta({
+        storageKey: '01M67EXPLICITX000000000001.jpg',
+        url: '/_emdash/api/media/file/01M67IGNOREDX0000000000001.jpg',
+      }),
+    ).toBe('01M67EXPLICITX000000000001.jpg');
+    expect(storageKeyFromMediaMeta({ url: 'https://cdn.example.com/a.png' })).toBeUndefined();
+    expect(storageKeyFromMediaMeta({})).toBeUndefined();
+  });
+
+  it('indexes a legacy companion through its url so an old body reference verifies instead of orphaning', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(path.join(mediaDir, `20210620_${OLD_RECORD}-photo.jpg`), 'bytes');
+    fs.writeFileSync(
+      path.join(mediaDir, `20210620_${OLD_RECORD}-photo.yaml`),
+      [
+        `id: ${OLD_RECORD}`,
+        `url: https://aroooy.net/_emdash/api/media/file/${OLD_DISK_KEY}.jpg`,
+        '',
+      ].join('\n'),
+    );
+
+    const candidates = collectLocalMediaMirrorCandidates(mediaDir);
+    expect(candidates.get(OLD_RECORD)?.storageKey).toBe(`${OLD_DISK_KEY}.jpg`);
+
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(postsDir, `20210620_${OLD_ARTICLE}-old.md`),
+      [
+        '---',
+        `id: ${OLD_ARTICLE}`,
+        'slug: old',
+        'title: Old',
+        'collection: posts',
+        'status: draft',
+        '---',
+        '',
+        `![old](/_emdash/api/media/file/${OLD_DISK_KEY}.jpg)`,
+        '',
+      ].join('\n'),
+    );
+
+    const res = await pullArticleMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://aroooy.net',
+      token: 'fake-token',
+      article: OLD_ARTICLE,
+      fetchFn: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
+    });
+
+    // The key is confirmed by local mirror metadata alone, so it must never surface as unresolved.
+    expect(res.verifiedStorageKeys).toEqual([`${OLD_DISK_KEY}.jpg`]);
+    expect(res.orphanStorageKeys).toEqual([]);
+  });
+
+  it('walks the whole remote library cursor-by-cursor and indexes every storageKey', async () => {
+    const suffixes = ['99', 'A9', 'B9'];
+    const page = (count: number, from: number, next?: string) =>
+      JSON.stringify({
+        success: true,
+        data: {
+          totalCount: 3,
+          nextCursor: next,
+          items: Array.from({ length: count }, (_, i) => ({
+            id: `01MJZZRECRD999999999999${suffixes[from + i]}`,
+            filename: `photo-${from + i}.jpg`,
+            mimeType: 'image/jpeg',
+            size: 10,
+            storageKey: `01MJZZRECSTRG${suffixes[from + i]}.jpg`,
+          })),
+        },
+      });
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('cursor=page1')) return Promise.resolve(new Response(page(1, 1, 'page2')));
+      if (url.includes('cursor=page2')) return Promise.resolve(new Response(page(1, 2)));
+      return Promise.resolve(new Response(page(1, 0, 'page1')));
+    });
+
+    const index = await collectRemoteStorageKeys({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(index.totalCount).toBe(3);
+    expect(index.complete).toBe(true);
+    expect([...index.storageKeys].sort()).toEqual([
+      '01MJZZRECSTRG99.jpg',
+      '01MJZZRECSTRGA9.jpg',
+      '01MJZZRECSTRGB9.jpg',
+    ]);
+    expect(index.mediaIdsByStorageKey.get('01MJZZRECSTRG99.jpg')).toBe('01MJZZRECRD99999999999999');
+  });
+
+  it('stops a library walk at maxItems and reports it as incomplete', async () => {
+    const mockFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              totalCount: 4008,
+              nextCursor: 'next',
+              items: [
+                {
+                  id: OLD_RECORD,
+                  filename: 'a.jpg',
+                  mimeType: 'image/jpeg',
+                  size: 10,
+                  storageKey: `${REMOTE_KEY}.jpg`,
+                },
+              ],
+            },
+          }),
+        ),
+      ),
+    );
+
+    const index = await collectRemoteStorageKeys({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      maxItems: 1,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(index.totalCount).toBe(4008);
+    expect(index.complete).toBe(false);
+    // An incomplete walk proves nothing about the rest of the library, so it must report no absence.
+    expect(findUnmirroredStorageKeys([`${NOWHERE_KEY}.jpg`], [], index)).toEqual([]);
+  });
+
+  it('reports only references a complete library walk cannot match as unmirrored', () => {
+    const index = {
+      storageKeys: new Set([`${REMOTE_KEY}.jpg`]),
+      mediaIdsByStorageKey: new Map([[`${REMOTE_KEY}.jpg`, OLD_RECORD]]),
+      totalCount: 1,
+      complete: true,
+    };
+    const referenced = [`${REMOTE_KEY}.jpg`, `${LOCAL_ONLY_KEY}.jpg`, `${NOWHERE_KEY}.jpg`];
+    expect(findUnmirroredStorageKeys(referenced, [`${LOCAL_ONLY_KEY}.jpg`], index)).toEqual([
+      `${NOWHERE_KEY}.jpg`,
+    ]);
+  });
+
+  it('renders a coverage line that separates library size from local mirroring', () => {
+    const line = formatMediaCoverageLine({
+      total: 4008,
+      remoteTotalCount: 4008,
+      referencedUnmirroredStorageKeys: [`${NOWHERE_KEY}.jpg`],
+    });
+    expect(line).toContain('remote library holds 4008 record(s)');
+    expect(line).toContain('this run walked 4008');
+    expect(line).toContain('[UNREFERENCED_REMOTE_MEDIA]');
+    expect(line).toContain(`${NOWHERE_KEY}.jpg`);
+    // Coverage output must stay epistemic about what an absent key proves.
+    expect(line).toContain('not proof that a record is absent');
+    expect(line).toContain('blind INSERT can duplicate');
+
+    expect(formatMediaCoverageLine({ total: 5 })).toBe('');
   });
 });

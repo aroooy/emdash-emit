@@ -78,7 +78,7 @@ The combination — body keys from the deep past, a newest-first window, and emp
 Resolution order, confirmed sources only:
 
 1. A record Emit resolved under that ULID (canonical `GET /_emdash/api/media/{id}`, or a media-list entry) → the key is recorded in **`verifiedStorageKeys`**, even if that record reports a different storageKey.
-2. Confirmed local mirror metadata (`media/*.yaml`, indexed by both its record id and its stored `storageKey`) → also `verifiedStorageKeys`.
+2. Confirmed local mirror metadata (`media/*.yaml`, indexed by its record id and by its storageKey — read from `storageKey:` when present, otherwise recovered from the companion's canonical `url:`, because most migrated companions carry only the URL) → also `verifiedStorageKeys`.
 3. Nothing matched → the key stays in **`orphanStorageKeys`** and is surfaced as `[UNRESOLVED_MEDIA_ASSET]`. Emit downloads nothing and invents nothing.
 
 Related invariants:
@@ -86,12 +86,14 @@ Related invariants:
 - **Local mirror names never equal body URLs.** A mirror is named after the record id while its body reference carries a storageKey, so matching the two requires the companion YAML (`storageKey:` / `url:`), not filename guessing.
 - **`media/legacy_<storageKey>.<ext>` + `.yaml` residue** was written by an older Emit version that synthesized metadata straight from a file route. Nothing reads it any more, every known-key set excludes it, `--prune` never touches it (it matches no media id), and it must be deleted by hand.
 - **`emit doctor --check-media-urls`** probes `HEAD /_emdash/api/media/file/<key>` for references no local source can resolve, and downgrades the ones the origin still serves to an informational note. A served key proves only that the R2 object exists — never that a record is absent. Without the flag, doctor stays offline.
+- **`emit doctor --check-media-library`** walks the whole remote library and reports its record count against the number of assets this workspace mirrors, which is what turns "447 references have no local file" into a coverage figure. A library-wide `emit pull-media --all` builds the same index while it downloads, so one pass both mirrors assets and indexes every storageKey.
+- **The list endpoint is the only lookup path for a storageKey.** `GET /_emdash/api/media` accepts `cursor`, `limit`, `page`, `mimeType`, `folderId`, `q`, and `includeUsage`; `q` matches filenames only, so a specific body key cannot be searched for. Every item in the response carries its own `storageKey`, which is why a complete walk is what makes an index possible at all.
 - **`--strict-media`** re-escalates those informational keys to warnings when you want the strictest reading.
 
 ## 6. Practical rules of thumb
 
 1. Reading or writing `featuredImage`, cache columns, or local filenames → **record id**.
 2. Writing or resolving any URL under `/_emdash/api/media/file/` → **storageKey**.
-3. Looking up an asset you cannot resolve → search by **storageKey** on the server (admin UI / wrangler), not by guessing a record id.
+3. Looking up an asset you cannot resolve → index the whole library first (`emit pull-media --all`, or `emit doctor --check-media-library` for the counts alone), because the list endpoint is the only one that reports storageKeys. Only after a complete walk should anything be verified server-side (admin UI / wrangler) by **storageKey**, never by guessing a record id.
 4. Never register, insert, or "fix" media records from Emit; mirroring is its whole job.
-5. A local preview that shows no image for an old article usually means *the asset was never mirrored locally* (media window too small), not that the reference is broken — check `emit doctor`'s media count before suspecting the ID spaces.
+5. A local preview that shows no image for an old article usually means *the asset was never mirrored locally* (media window too small), not that the reference is broken — check `emit doctor --check-media-library` before suspecting the ID spaces.

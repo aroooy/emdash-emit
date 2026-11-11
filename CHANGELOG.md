@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **Fast-Path Frontmatter Self-Healing (H1 / P1)**:
   - `tryFastPathOrHeal` in `src/sync/pull.ts` now validates `parseMarkdown` even when the disk hash matches the cached baseline. Legacy files whose unquoted percent-encoded taxonomy slugs never parse were previously skipped forever, so `emit status` reported them invalid while `emit pull` did nothing.
   - Such files are repaired locally by `lenientRepairMarkdownFrontmatter` and re-tracked against their own repaired hash; the `base_snapshot` is left untouched, values are never altered, and no per-article or taxonomy fetch is issued — batch pulls of large legacy corpora stay fast (verified: only list/bylines/openapi requests for healed articles).
@@ -21,16 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Accurate Repair Hints (H3 / P3)**: CLI `emit status` and MCP `sync_status` distinguish healable from unrecoverable invalid files (`healableInvalid` / `unrecoverableInvalid` in the MCP payload) and describe the actual repair mechanism (local syntax-only re-quoting, no article fetch for cached unchanged revisions).
 
 ### Added
+
 - **Two Media ID Spaces Specification (`docs/media-id-spaces.md`)**: a standalone reference documenting EmDash's two unrelated media ULIDs — the D1 `media` record `id` (used by `GET /_emdash/api/media/{id}` and every write endpoint) and the R2 object `storageKey` (served by `/_emdash/api/media/file/{storageKey}`) — with an identifier/endpoint matrix, a live production example proving they never match for the same asset, why a 401/404 from either route proves only a failed lookup, how migrated corpora enter a workspace (newest-first `mediaSyncLimit` window plus empty migrated featured images), and the `verifiedStorageKeys` → `orphanStorageKeys` resolution order.
 - **Discovery Points for Humans and Agents**: the specification is reachable from every surface that touches media — README (§ Directory Structure & Data Specifications, Key Features, frontmatter schema note, `emit pull-media`, and a new FAQ entry for images that do not render in a local preview), AGENTS.md (§1 Reference Documents plus the workspace tree and Guard section), MCP `instructions` (the two-ULID rule and a media-window hint on `[MEDIA]`), `emit guide`, and the `emit doctor` "Media References" warning, which now states that a missing local mirror is not a broken reference. Tests assert the pointer survives in MCP instructions, `emit guide` output, and the doctor message.
 
 ### Changed
+
+- **Media Mirror Coverage — Local `url:` Recovery and a Complete Library Walk**: the audit that proved all 4,008 records exist also showed why Emit could not see them: only 6 of the 33 migrated companions carried a `storageKey:` field, and `pullMedia` stopped at `mediaSyncLimit` (300), so 3,708 assets were unreachable and 27 healthy companions produced false warnings.
+  - New exported `storageKeyFromMediaMeta(doc)` reads a companion's storageKey from `storageKey:` when present and otherwise recovers it from the canonical `url:` (`/_emdash/api/media/file/<storageKey>`, absolute or root-relative). A `url` that is not a file route names no key, and an explicit field always wins. `collectLocalMediaMirrorCandidates` and the `emit doctor` media index both use it, so a migrated companion verifies its own body reference instead of warning forever. `legacy_*` residue stays excluded.
+  - `pullMedia` reports coverage: `PullMediaResult.remoteTotalCount` carries the server's `totalCount`, and CLI/MCP append `remote library holds N record(s), of which this run walked M`. Under `--all` the walk is exhaustive, so it doubles as a storageKey census — `referencedUnmirroredStorageKeys` lists body keys that neither a local companion nor any remote record names, surfaced as `[UNREFERENCED_REMOTE_MEDIA]` and worded as a lookup result rather than a missing record. Local mirrors seed the active-key set, so `--prune` never deletes an asset this run's window simply did not reach.
+  - New exported `collectRemoteStorageKeys()` walks the library cursor-by-cursor (100 per page) into a `RemoteStorageKeyIndex`, and `findUnmirroredStorageKeys()` reports against it. A walk that stopped early is marked `complete: false` and yields nothing, because a partial walk proves nothing about the rest of the library.
+  - `emit doctor --check-media-library` (MCP `sync_doctor checkMediaLibrary: true`) states the remote record count against the number of assets this workspace mirrors, so a missing-file warning reads as coverage. Plain `emit doctor` stays offline.
+  - Guidance now routes through Emit first: `[UNRESOLVED_MEDIA_ASSET]`, the doctor suggestion, README, MCP instructions, `emit guide`, and `docs/media-id-spaces.md` all present `emit pull-media --all` / `emit doctor --check-media-library` as the way to index every storageKey, with server-side verification only for what a complete walk could not match.
 - **Media Resolution Stays Epistemic (production investigation follow-up)**: a live D1 audit of the migrated corpus proved that all 4,008 media records exist and every WordPress `storage_key` is registered, so the earlier "the D1 record is missing" framing was wrong — the 401/404 symptoms come from addressing `GET /_emdash/api/media/{id}` (D1 primary key) with an R2 `storageKey`, and from calling the authenticated admin API without a bearer token. Emit must therefore never conclude that a record is absent, and its advice must never invite a duplicate registration:
   - CLI warning renamed to `⚠️ [UNRESOLVED_MEDIA_ASSET]`, and both its wording and `emit doctor --check-media-urls`'s suggestion now state that a 404 proves only a failed lookup and instruct verification by storageKey (`wrangler d1 SELECT` on the media table, or the admin UI) before registering anything. The old "Register the missing media records" instruction is gone.
   - New exported `collectLocalMediaMirrorCandidates(mediaDir)` indexes every `media/*.yaml` companion by both its record id and its recorded `storageKey`, skipping `legacy_*` residue so fabricated metadata can never serve as verification evidence.
   - `PullMediaResult` adds `verifiedStorageKeys`: a body key is confirmed when Emit resolved a record under that ULID (even if the record reports a different storageKey) or when a local mirror companion names it, so such a key is never escalated as missing. Only keys with no evidence at all stay in `orphanStorageKeys`.
 
 ### Removed
+
 - **Legacy Synthesized Media Fallback (`media/legacy_*` companions)**:
   - Deleted `syncSynthesizedMediaItem` and every direct file-route fallback branch in `pullArticleMedia`: Emit no longer downloads a `/_emdash/api/media/file/<storageKey>` asset that no media record resolves to, never invents a media record for it, and writes nothing into `media/`. Registering records belongs to EmDash (admin UI) or Wrangler — Emit mirrors records and does not repair server data. This also eliminates the self-destruct bug where a synthesized pair was unlinked during cleanup because its `legacy_` base name never matched the referenced id.
   - `pullArticleMedia` now collects every body storageKey via the new exported `collectArticleStorageKeys` (markdown images, HTML `img` tags, opaque fences, and legacy container lines) and reports the keys no media record could mirror as `orphanStorageKeys`, which CLI `emit pull-media --article` prints as a warning and MCP `sync_pull_media` returns both as an unresolved-keys list and the same warning. See **Changed** above for how that warning is worded now.
@@ -42,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.14] - 2026-11-10
 
 ### Added
+
 - **Taxonomy Strategy Enforcement (R1 / P1)**:
   - Made `mergeTaxonomies` in `src/sync/merge.ts` the single authoritative decision point for 3-way merge resolution, strictly honoring `--resolve-taxonomy local|remote` (CLI and MCP).
   - Extended strategy adoption to Case 2 (remote deleted vs local modified) and Case 4 (both modified), recording `strategyAdoptions` in merge warnings and returning discarded terms.
@@ -73,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.13] - 2026-11-09
 
 ### Added
+
 - **Pre-PUT Taxonomy Divergence Audit (R1 / EMIT-001)**:
   - Audits remote taxonomy assignments (`GET /_emdash/api/content/:collection/:id/terms/{category,tag}`) prior to PUT when article defines taxonomies.
   - Detects out-of-band remote taxonomy modifications independent of entry `_rev` and routes directly into 3-way merge / guards.
@@ -94,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `profile` and `workspaceRoot` to MCP heartbeat recording state.
 
 ### Fixed
+
 - **Cache Schema Mismatch Presentation (R4 / EMIT-006)**:
   - Wrapped `CacheDatabase` initialization in CLI context resolver so `[CACHE_SCHEMA_MISMATCH]` exits with exit code 1 and a clean message instead of printing raw Node stack traces.
 - **Deterministic Filename Resolution (R7 / EMIT-005)**:
@@ -102,6 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Treated missing or malformed term lists as `unknown` (`null`) instead of `none` (`[]`), avoiding false divergence detection on unsupported or mock endpoints.
 
 ### Notes & Migration
+
 - **Schema v2 Self-Healing for Existing Workspaces**:
   - Articles synchronized prior to v0.1.12 will have `remote_taxonomy_hash` set to `NULL` in the SQLite cache upon upgrading to schema v2. The remote taxonomy hash is automatically calculated and saved on the article's first subsequent `emit push` or `emit pull`, after which out-of-band taxonomy divergence auditing is fully active.
 
@@ -110,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.12] - 2026-11-09
 
 ### Added
+
 - **Phase 0: SQLite Schema Migration & WAL Safety**:
   - Implemented schema versioning via `PRAGMA user_version` (`CURRENT_CACHE_SCHEMA_VERSION = 1`).
   - Added safe migration with `PRAGMA wal_checkpoint(TRUNCATE)` before backup and 3-generation backup retention (`.bak-0.1.11-<timestamp>`).
@@ -128,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Maintained complete backward compatibility in `emit status` by omitting the `Flags:` line when all flags are 0.
 
 ### Fixed
+
 - **Phase 1: Revision Normalization & Heal Symmetry**:
   - Fixed false-positive unpushed edits quarantine caused by Base64 token vs numeric revision formats (`normalizeRev()`).
   - Kept raw opaque tokens strictly unchanged for server `_rev` PUT transmission and storage.
@@ -144,6 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.11] - 2026-11-09
 
 ### Fixed
+
 - **Doctor Media References False-Positive (D1)**:
   - Resolved `/_emdash/api/media/file/<storageKey>` references against indexed `media/*.yaml` companion documents and local media files.
   - Fixes false-positive warnings where valid remote canonical image references were falsely reported as missing from disk.
@@ -167,6 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Version 0.1.10 represents a comprehensive modernization of Emit into an AI-first, zero-data-loss content authoring environment. It eliminates phantom diffs, hardens deletion and conflict safety, enhances workspace diagnostics, and introduces targeted media syncing.
 
 ### Added
+
 - **Phase 1a & 1b: Non-Destructive Frontmatter & Inline Taxonomy Comments**
   - **Non-destructive frontmatter healing**: Unquoted colons, invalid YAML indentations, and encoding quirks are healed non-destructively while strictly preserving local body edits.
   - **Inline Taxonomy Comments (`# <Name>`)**: Frontmatter arrays for categories and tags now support trailing inline comments (e.g. `- tech # 技術`, `- 01M6... # Cloudflare`) so human and AI authors see names alongside IDs.
@@ -202,12 +220,14 @@ Version 0.1.10 represents a comprehensive modernization of Emit into an AI-first
   - **Complete Documentation Harmonization**: Full alignment across `README.md`, `EMIT_MCP_INSTRUCTIONS`, and CLI command help.
 
 ### Changed
+
 - **README Authoring Desk & Division of Labor clarification**: Non-Goals are now stated as deliberate design decisions rather than missing capabilities — `postsSyncLimit` can be raised to effectively sync the full article set, the sliding window bounds what stays on disk (not what is reachable via `emit pull <id>`), and a new "Division of Labor with the Official EmDash MCP" section documents that bulk media library management and site-wide operations are intentionally delegated to the official EmDash MCP / Admin Dashboard. A matching FAQ entry ("comprehensive piece referencing my entire back-catalog") was added, and the `--all` note now honestly reflects that `emit pull-media --all` exists while articles deliberately omit it.
 - Standardized CLI failure outputs across `emit new`, `emit delete`, and `emit conflicts` to print clean single-line actionable errors with suggestions and exit code 1, rather than dumping raw runtime stack traces.
 - Hermetic test isolation: tests stub `fetch` and isolate temporary `HOME` configurations to prevent ambient leakage from developer profiles.
 
 ### Known Limitations
-- **Orphaned media records are not reported by `emit doctor`**: If a draft media upload succeeded but the subsequent article push failed, Emit keeps the record in `media_state` with `status = 'failed'` for compensation on the next run. A record that never gets retried remains visible only in the local cache and may linger as a `pending` entry in the remote media library; `emit doctor` currently checks referenced-media *disk existence* but does not yet report these failed/pending `media_state` entries (planned for a future release). Run `emit pull-media` to re-verify library state in the meantime.
+
+- **Orphaned media records are not reported by `emit doctor`**: If a draft media upload succeeded but the subsequent article push failed, Emit keeps the record in `media_state` with `status = 'failed'` for compensation on the next run. A record that never gets retried remains visible only in the local cache and may linger as a `pending` entry in the remote media library; `emit doctor` currently checks referenced-media _disk existence_ but does not yet report these failed/pending `media_state` entries (planned for a future release). Run `emit pull-media` to re-verify library state in the meantime.
 - **Article-targeted media pull (`--article`) scans remote Portable Text content with a ULID regex fallback** when no local Markdown body is available, which may collect ULIDs appearing outside body image references; precise AST-based extraction is planned for a future release.
 
 ---
@@ -215,12 +235,14 @@ Version 0.1.10 represents a comprehensive modernization of Emit into an AI-first
 ## [0.1.9] - 2026-11-04
 
 ### Added
+
 - **Sliding Window Staging Desk Model**: Bounded synchronizations defaulting to latest 100 articles (`postsSyncLimit`) per status (`all`, `draft`, `published`).
 - **Offline Draft Media Upload Pipeline**: Standalone image references in `media/drafts/*` are automatically uploaded to EmDash R2 storage and rewritten to storageKey-based URLs during `emit push`.
 - **Preflight Guards G1–G12**: Enforces strict invariants before writing to remote CMS (ID mismatch check, unintended publish guard, merge conflict marker detection, title autotrim, opaque block verification, etc.).
 - **Distributed Mutex Lock**: Distributed 7-minute lease protocol via `POST /_emdash/api/content/{collection}/{id}/lock` to prevent multi-agent write collisions.
 
 ### Changed
+
 - Refactored `emit pull` to automatically sync taxonomies (`categories/` and `tags/`) by default alongside articles.
 
 ---
@@ -228,6 +250,7 @@ Version 0.1.10 represents a comprehensive modernization of Emit into an AI-first
 ## [0.1.8] - 2026-10-31
 
 ### Added
+
 - Initial release of `emdash-emit`.
 - Local-first synchronization engine for Cloudflare Workers + D1 powered EmDash CMS.
 - Multi-site profile management (`emit profile add`, `list`, `use`, `remove`).

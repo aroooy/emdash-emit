@@ -31,7 +31,7 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { formatOrphanMediaWarning } from '../../cli/commands/pull.js';
+import { formatMediaCoverageLine, formatOrphanMediaWarning } from '../../cli/commands/pull.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';
@@ -358,7 +358,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           content: [
             {
               type: 'text',
-              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${metaSuffix}`,
+              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}${metaSuffix}`,
             },
           ],
         };

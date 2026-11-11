@@ -691,12 +691,123 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('warning');
     expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000F.jpg');
     // The suggestion must demand storageKey-based verification before any write, and must never imply
-    // that a missing record has been proven or instruct a blind INSERT.
-    expect(mCheck?.suggestion).toContain('admin UI');
-    expect(mCheck?.suggestion).toContain('wrangler d1 SELECT');
+    // that a missing record has been proven or instruct a blind INSERT. It also must not route the user
+    // to a server-side query when Emit's own library walk can index every storageKey the server holds.
+    expect(mCheck?.suggestion).toContain('emit pull-media --all');
+    expect(mCheck?.suggestion).toContain('emit doctor --check-media-library');
+    expect(mCheck?.suggestion).toContain('without any server-side query');
     expect(mCheck?.suggestion).toContain('blind INSERT can duplicate an existing record');
     expect(mCheck?.suggestion).toContain('never repairs server data');
-    expect(mCheck?.suggestion ?? '').not.toContain('pull-media');
+  });
+
+  it('verifies a legacy companion through its url field instead of reporting the reference missing', async () => {
+    // 27 of the 33 real companions in the migrated corpus have no storageKey field, only an absolute
+    // url. Those keys must count as confirmed local metadata or every one of them warns forever.
+    writeLegacyArticle('legacy-companion', '01MJZZDDSKKEY9999999999999.jpg');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(path.join(mediaDir, '20210620_01MJZZDRECRD99999999999999-photo.jpg'), 'bytes');
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01MJZZDRECRD99999999999999-photo.yaml'),
+      [
+        'id: 01MJZZDRECRD99999999999999',
+        'url: https://aroooy.net/_emdash/api/media/file/01MJZZDDSKKEY9999999999999.jpg',
+        '',
+      ].join('\n'),
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    expect(report.checks.find((c) => c.id === 'media_references')?.status).toBe('ok');
+  });
+
+  it('reports remote library coverage against local mirroring when the census is enabled', async () => {
+    // A unique article id per fixture: writeLegacyArticle reuses the shared one, and a second file with
+    // the same id would read as a duplicate rather than as an unresolved reference.
+    const censusId = '01MJZZARTCED99999999999998';
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(draftDir, `20210620_${censusId}-legacy-census.md`),
+      '![legacy](/_emdash/api/media/file/01MJZZNWHEREKY999999999999.jpg)\n',
+      'utf8',
+    );
+
+    const fetchFn = async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('/api/media/file/')) return new Response(null, { status: 404 });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            totalCount: 4008,
+            items: [
+              {
+                id: '01MJZZDRECRD99999999999999',
+                filename: 'mirrored.jpg',
+                mimeType: 'image/jpeg',
+                size: 5,
+                storageKey: '01MJZZDDSKKEY9999999999999.jpg',
+              },
+            ],
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    };
+
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mediaDir, '20210620_01MJZZDRECRD99999999999999-mirrored.jpg'),
+      'bytes',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+      profileOrigin: 'https://aroooy.net',
+      token: 'fake-token',
+      checkMediaLibrary: true,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('warning');
+    // Coverage must be stated as a number the user can act on, not as an assumed data loss.
+    expect(mCheck?.message).toContain('The remote library reports 4008 media record(s)');
+    expect(mCheck?.message).toContain('this workspace mirrors 1 of them');
+    expect(mCheck?.message).toContain('simply never downloaded');
+  });
+
+  it('reports an ok coverage note when nothing is missing and the census ran', async () => {
+    const fetchFn = async () =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { totalCount: 7, items: [] },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+      profileOrigin: 'https://aroooy.net',
+      token: 'fake-token',
+      checkMediaLibrary: true,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    expect(mCheck?.message).toContain('Remote media library holds 7 record(s)');
+    expect(mCheck?.message).toContain('this workspace mirrors 0');
   });
 
   it('reports a leftover legacy_* mirror as missing because Emit no longer recognizes it (C-4)', async () => {

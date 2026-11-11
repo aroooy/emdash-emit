@@ -52,6 +52,10 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
       '--check-media-urls',
       'Probe the remote media file route for references with no local mirror, downgrading legacy assets that are still served remotely to informational notes',
     )
+    .option(
+      '--check-media-library',
+      'Walk the remote media library and report how many records it holds against how many this workspace mirrors (mediaSyncLimit truncates the local window)',
+    )
     .action(async (options) => {
       try {
         const ctx = resolveContext(options.profile, { optionalAuth: true });
@@ -66,6 +70,9 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
           collection,
           strictMedia: Boolean(options.strictMedia),
           checkMediaUrls: Boolean(options.checkMediaUrls),
+          checkMediaLibrary: Boolean(options.checkMediaLibrary),
+          token: ctx.auth?.token,
+          refreshToken: ctx.auth?.refreshToken,
         });
 
         console.log(`🩺 Emit Workspace Doctor`);

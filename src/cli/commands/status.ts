@@ -244,7 +244,9 @@ export function registerStatusInitCommands(
   - emit delete <id>  ... Safely delete article locally & remotely (saves .deleted.md rescue copy)
   - emit conflicts    ... List, diff, and resolve quarantined copies in posts/conflicts/
   - emit doctor       ... Diagnose workspace health, version, origin, and media references
-  - emit pull-media   ... Download remote media assets (supports --article <id> for targeted sync)
+                          (--check-media-library compares the remote library to the local mirror count)
+  - emit pull-media   ... Download remote media assets (--article <id> targeted, --all for the whole
+                          library, which is also how every remote storageKey gets indexed)
   - emit mcp          ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
 
 ■ Collaboration Rules with AI (AGENTS.md)

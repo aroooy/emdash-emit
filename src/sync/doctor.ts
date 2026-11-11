@@ -31,6 +31,11 @@ import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { scanArticleMediaReferences } from './delete.js';
 import { calculateHash } from './pull.js';
+import {
+  collectRemoteStorageKeys,
+  findUnmirroredStorageKeys,
+  storageKeyFromMediaMeta,
+} from './media.js';
 import { checkMcpProcess } from '../mcp/heartbeat.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
@@ -71,6 +76,17 @@ export interface RunWorkspaceDoctorOptions {
    * default so doctor stays offline.
    */
   checkMediaUrls?: boolean;
+  /** Bearer token used by the remote library census (only read when `checkMediaLibrary` is set). */
+  token?: string;
+  refreshToken?: string;
+  /**
+   * Walk the whole remote media library (`GET /_emdash/api/media`, cursor-paginated) and report how
+   * many records it holds, so a missing-file count can be read as coverage ("N of M mirrored") instead
+   * of being guessed. The list operation exposes no storageKey filter, so this census is the only way
+   * Emit can reach migrated assets whose storageKey differs from the record id. Requires credentials and
+   * is skipped silently when none are available, keeping plain `emit doctor` offline.
+   */
+  checkMediaLibrary?: boolean;
   /** Optional fetch override used by the file-route probe (tests inject stubs here). */
   fetchFn?: typeof fetch;
 }
@@ -85,6 +101,21 @@ export interface ScannedMediaReferences {
 /** A storageKey-style media file key: ULID segments joined by dots, plus a known image extension. */
 const VALID_MEDIA_FILE_KEY =
   /^[0-9A-HJ-NP-Z]{26}(\.[0-9A-HJ-NP-Z]{26})*\.(jpg|jpeg|png|gif|webp|avif|svg)$/i;
+
+/**
+ * Counts the media assets this workspace actually mirrors: canonical binaries under `media/`, excluding
+ * `drafts/` staging and the `legacy_*` residue that backs no real record.
+ */
+function countMirroredMedia(mediaDir: string): number {
+  if (!fs.existsSync(mediaDir)) return 0;
+  let count = 0;
+  for (const file of fs.readdirSync(mediaDir)) {
+    if (file.endsWith('.yaml') || file.startsWith('legacy_')) continue;
+    if (!fs.statSync(path.join(mediaDir, file)).isFile()) continue;
+    count++;
+  }
+  return count;
+}
 
 /** Any storageKey-style ULID appearing inside a media file URL. */
 const MEDIA_ULID_IN_URL = /[0-9A-HJ-NP-Z]{26}/g;
@@ -509,12 +540,13 @@ export async function runWorkspaceDoctor(
             unknown
           > | null;
           if (doc) {
-            if (typeof doc.storageKey === 'string' && doc.storageKey) {
-              knownStorageKeys.add(doc.storageKey);
-            }
             if (typeof doc.id === 'string' && doc.id) {
               knownMediaIds.add(doc.id);
             }
+            // The storageKey field is missing on older mirrors, but their `url:` still names the key,
+            // so both forms count as confirmed local metadata.
+            const metaKey = storageKeyFromMediaMeta(doc);
+            if (metaKey) knownStorageKeys.add(metaKey);
           }
         } catch {
           // ignore corrupted individual yaml
@@ -667,7 +699,35 @@ export async function runWorkspaceDoctor(
 
   missingMedia.push(...unreachableFileRoute);
 
+  // Remote library census: the list operation is the only handle that reaches migrated assets, because
+  // it is the one endpoint that reports each record's own storageKey and exposes no key filter. A
+  // complete walk turns "447 references have no local file" into "the library holds M records, this
+  // workspace mirrors K of them", which is what tells a user to widen the window instead of chase data
+  // loss. Credentials are required, so plain doctor runs stay offline and skip this block.
+  let remoteLibrary: { totalCount: number | null; mirroredCount: number } | null = null;
+  if (options.checkMediaLibrary) {
+    const origin = options.profileOrigin || options.config.origin;
+    try {
+      const index = await collectRemoteStorageKeys({
+        workspaceRoot: options.workspaceRoot,
+        origin,
+        token: options.token || '',
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+      });
+      remoteLibrary = {
+        totalCount: index.totalCount,
+        mirroredCount: countMirroredMedia(mediaDir),
+      };
+    } catch {
+      // An unreachable or unauthenticated library is not a workspace defect; doctor stays silent.
+    }
+  }
+
   if (missingMedia.length > 0) {
+    const coverage = remoteLibrary
+      ? ` The remote library reports ${remoteLibrary.totalCount ?? 'an unknown number of'} media record(s), and this workspace mirrors ${remoteLibrary.mirroredCount} of them, so most of these references were simply never downloaded.`
+      : '';
     checks.push({
       id: 'media_references',
       name: 'Media References',
@@ -675,13 +735,23 @@ export async function runWorkspaceDoctor(
       message:
         `${missingMedia.length} referenced media file(s) are missing from disk. ` +
         `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
-        `configured mediaSyncLimit) to fetch them. Body URLs carry R2 storage keys while media/ files are ` +
-        `named after media record ids, so a missing local file is not a broken reference: see ` +
-        `docs/media-id-spaces.md.`,
+        `configured mediaSyncLimit) to fetch them.${coverage} Body URLs carry R2 storage keys while ` +
+        `media/ files are named after media record ids, so a missing local file is not a broken ` +
+        `reference: see docs/media-id-spaces.md.`,
       suggestion: options.checkMediaUrls
-        ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. Confirm the record by storageKey (admin UI, or wrangler d1 SELECT on the media table) before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
+        ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. The full library index is reachable through "emit pull-media --all" or "emit doctor --check-media-library", which report every storageKey the server holds without any server-side query. Confirm by storageKey before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
         : undefined,
       details: missingMedia,
+    });
+  } else if (remoteLibrary) {
+    const notes: string[] = [
+      `Remote media library holds ${remoteLibrary.totalCount ?? 'an unknown number of'} record(s); this workspace mirrors ${remoteLibrary.mirroredCount}`,
+    ];
+    checks.push({
+      id: 'media_references',
+      name: 'Media References',
+      status: 'ok',
+      message: notes.join('; '),
     });
   } else if (options.strictMedia && informationalUnresolved.length > 0) {
     checks.push({

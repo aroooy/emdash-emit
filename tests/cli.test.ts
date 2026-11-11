@@ -97,6 +97,14 @@ describe('Emit CLI (Commander)', () => {
     expect(optionNames).toContain('--profile');
   });
 
+  it('doctor command exposes --check-media-library so library coverage is measurable locally', () => {
+    const doctorCmd = program.commands.find((c) => c.name() === 'doctor');
+    expect(doctorCmd).toBeDefined();
+    const optionNames = doctorCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--check-media-urls');
+    expect(optionNames).toContain('--check-media-library');
+  });
+
   it('push command description mentions auto-uploading media/drafts/* images', () => {
     const pushCmd = program.commands.find((c) => c.name() === 'push');
     expect(pushCmd).toBeDefined();
