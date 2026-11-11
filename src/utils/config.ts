@@ -35,10 +35,11 @@ export interface EmitConfig {
   mediaSyncLimit?: number;
   concurrency?: number;
   /**
-   * When true, a pulled article writes mirrored body images as workspace-relative `media/<storageKey>`
-   * references so an editor preview renders them from the local mirror. The cache baseline and every remote
-   * payload keep the canonical `/_emdash/api/media/file/<storageKey>` URL regardless, so enabling this only
-   * changes how the file on disk spells an asset Emit already mirrors.
+   * When true (the default), a pulled article writes mirrored body images as article-relative
+   * `../../media/<storageKey>` references — the depth derived from the article's own path — so an editor
+   * preview renders them from the local mirror. The cache baseline and every remote payload keep the canonical
+   * `/_emdash/api/media/file/<storageKey>` URL regardless, so this only changes how the file on disk spells an
+   * asset Emit already mirrors.
    */
   localMediaRefs?: boolean;
   /**
@@ -168,8 +169,8 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       postsSyncLimit: parsed.postsSyncLimit || DEFAULT_CONFIG.postsSyncLimit,
       mediaSyncLimit: parsed.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
       concurrency: parsed.concurrency || DEFAULT_CONFIG.concurrency,
-      // Local-first media refs are default-ON: a mirrored body image is spelled as a workspace-relative
-      // `media/<storageKey>` reference so preview resolves offline. Only an explicit `false` opts back out;
+      // Local-first media refs are default-ON: a mirrored body image is spelled as an article-relative
+      // `../../media/<storageKey>` reference so preview resolves offline. Only an explicit `false` opts back out;
       // an absent key (a workspace predating the setting) now defaults to local refs rather than canonical URLs.
       localMediaRefs: parsed.localMediaRefs !== false,
       createdWithVersion: parsed.createdWithVersion,

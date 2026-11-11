@@ -308,6 +308,52 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.message).toContain('All referenced local media files exist on disk');
   });
 
+  it('resolves an article-relative mirror reference through the storageKey it names (D1)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    // The companion names a storageKey whose markdown ref is a different stem, so only the recorded key — never
+    // a filename guess — can resolve the reference, and doctor must not report a mirrored asset as missing.
+    const storageKey = 'sample.png';
+    fs.writeFileSync(
+      path.join(mediaDir, '20261108_01M67MEDIA000000000000001-sample.yaml'),
+      [
+        'id: 01M67MEDIA000000000000001',
+        'filename: sample.png',
+        `storageKey: ${storageKey}`,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const frontmatter: Frontmatter = {
+      id: articleId,
+      slug: 'media-depth-ref-post',
+      title: 'Media Depth Ref Post',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    fs.writeFileSync(
+      path.join(draftDir, `20261108_${articleId}-media-depth-ref-post.md`),
+      serializeMarkdown(frontmatter, '![img](../../media/sample.png)\n'),
+      'utf8',
+    );
+
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: loadConfig(tempDir),
+    });
+    const mCheck = report.checks.find((c) => c.id === 'media_references');
+    expect(mCheck?.status).toBe('ok');
+    expect(mCheck?.message).toContain('All referenced local media files exist on disk');
+  });
+
   it('classifies code-span, code-fence, and placeholder media references as informational without triggering warnings (Phase 5)', async () => {
     const draftDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
@@ -421,7 +467,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('ok');
   });
 
-  it('accepts a workspace-relative mirror reference (`media/<storageKey>`) as resolved (local media refs)', async () => {
+  it('accepts a mirror reference spelled from the article directory (`../../media/<storageKey>`) (local media refs)', async () => {
     const draftDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
@@ -448,7 +494,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     };
     // The reference names the storageKey outright and no file exists at that exact path, so only recorded
     // metadata can resolve it.
-    const body = '![Local](media/01M67LQCALKEY556YVG6RBT0J0.png)\n';
+    const body = '![Local](../../media/01M67LQCALKEY556YVG6RBT0J0.png)\n';
     fs.writeFileSync(
       path.join(draftDir, `20261108_${articleId}-local-ref-resolved.md`),
       serializeMarkdown(frontmatter, body),

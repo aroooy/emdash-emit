@@ -154,7 +154,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     )
     .option(
       '--local-media-refs',
-      'Write mirrored body images as workspace-relative "media/<storageKey>" references so Markdown preview resolves them locally. Remembered in .emit/config.json.',
+      'Write mirrored body images as article-relative "../../media/<storageKey>" references so Markdown preview resolves them locally. Remembered in .emit/config.json.',
     )
     .option(
       '--no-local-media-refs',

@@ -72,7 +72,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .boolean()
         .optional()
         .describe(
-          'Keep mirrored body images as workspace-relative "media/<storageKey>" references on disk while pushing the canonical URL. Defaults to the workspace setting in .emit/config.json.',
+          'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk while pushing the canonical URL. Defaults to the workspace setting in .emit/config.json.',
         ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },

@@ -1092,7 +1092,7 @@ describe('Pull & Push Synchronization Engine', () => {
   it('pullBatch mirrors only the assets referenced by pulled article bodies, reusing the library walk', async () => {
     // Local-first media mirroring is default-ON. A body carries a canonical storageKey URL; after the
     // article lands, Emit walks the library once (JSON) and downloads exactly that asset — never the whole
-    // library, and never a per-asset id fetch. localMediaRefs then spells it as a workspace-relative mirror.
+    // library, and never a per-asset id fetch. localMediaRefs then spells it as an article-relative mirror.
     const articleId = '01M6MEDIAREFARTICLEAAAAAAAA1';
     // A migrated body bakes a ULID-bearing R2 storageKey into the canonical file route. collectArticleStorageKeys
     // harvests exactly this shape, so the mirror stage can resolve and download it.
@@ -1189,10 +1189,10 @@ describe('Pull & Push Synchronization Engine', () => {
     const requestedUrls = mockFetch.mock.calls.map((call) => String(call[0]));
     expect(requestedUrls.filter((u) => /\/_emdash\/api\/media\//.test(u))).toHaveLength(1);
 
-    // With localMediaRefs ON and the mirror present, the body is spelled as a workspace-relative reference.
+    // With localMediaRefs ON and the mirror present, the body is spelled as an article-relative reference.
     const articlePath = batchResult.items.find((r) => r.id === articleId)!.filePath;
     const diskBody = fs.readFileSync(path.join(tempDir, articlePath), 'utf8');
-    expect(diskBody).toContain('![hero](media/01M67STRGKEYX0000000123456.jpg)');
+    expect(diskBody).toContain('![hero](../../media/01M67STRGKEYX0000000123456.jpg)');
   });
 
   it('pullBatch with mediaSync disabled skips the library walk and downloads nothing', async () => {

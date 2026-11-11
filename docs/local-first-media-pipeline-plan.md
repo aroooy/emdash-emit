@@ -20,6 +20,14 @@
 > **`media/<markdownRef>.<ext>` + `.yaml`（markdownRef は storageKey 由来）** を採用している。
 > 命名・prune の権威ある仕様は `AGENTS.md` §7 と `docs/media-id-spaces.md` を参照すること。
 
+> [!NOTE]
+> **ディスク上の本文画像参照は「記事相対」表記へ移行した。** `localMediaRefs`（既定 ON）が
+> 書き込む表記は `media/<storageKey>` ではなく **`../../media/<storageKey>`**（記事の位置から
+> 算出した depth、`mediaRefPrefixForArticle()` 由来）であり、VS Code / Obsidian のプレビューが
+> オフラインで解決できる。baseline・push ペイロードは canonical URL のまま。旧 `media/<storageKey>`
+> 表記のワークスペースは次の `emit pull` で自動再表記され、hash も追随するため phantom diff は出ない。
+> 権威ある仕様は `AGENTS.md` §7。
+
 ---
 
 ## 1. 目的と狙い（Why & Objective）

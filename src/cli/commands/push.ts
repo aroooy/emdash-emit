@@ -50,7 +50,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     .option('-f, --force', 'Force push and overwrite conflicting taxonomy states')
     .option(
       '--local-media-refs',
-      'Keep mirrored body images as workspace-relative "media/<storageKey>" references on disk while pushing the canonical URL. Remembered in .emit/config.json.',
+      'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk while pushing the canonical URL. Remembered in .emit/config.json.',
     )
     .option(
       '--no-local-media-refs',

@@ -28,7 +28,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { pushAll } from '../src/sync/orchestrator.js';
-import { pullArticle } from '../src/sync/pull.js';
+import { pullArticle, calculateHash } from '../src/sync/pull.js';
 import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 
@@ -36,9 +36,11 @@ const ARTICLE_ID = '01M67LQCALREF556YVG6RBT0J0';
 const MEDIA_ID = '01M6TF1XXBS2KC9EVYG6RBT0J0';
 const STORAGE_KEY = '01M67P0JW605ZJ5GV4YXB7W400.jpg';
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
+/** How an article under `<collection>/draft|published/` spells its own mirror on disk. */
+const LOCAL_REF = `../../media/${STORAGE_KEY}`;
 const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-describe('Workspace-Relative Local Media References (pull/push round-trip)', () => {
+describe('Article-Relative Local Media References (pull/push round-trip)', () => {
   let tempDir: string;
   let cache: CacheDatabase;
 
@@ -76,7 +78,7 @@ describe('Workspace-Relative Local Media References (pull/push round-trip)', () 
     },
   });
 
-  it('pull writes a mirrored image as a workspace-relative reference while the baseline keeps the canonical URL', async () => {
+  it('pull writes a mirrored image as an article-relative reference while the baseline keeps the canonical URL', async () => {
     const res = await pullArticle('posts', ARTICLE_ID, {
       workspaceRoot: tempDir,
       cache,
@@ -88,7 +90,7 @@ describe('Workspace-Relative Local Media References (pull/push round-trip)', () 
     });
 
     const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
-    expect(disk).toContain(`![LG 背面端子](media/${STORAGE_KEY})`);
+    expect(disk).toContain(`![LG 背面端子](${LOCAL_REF})`);
     expect(disk).not.toContain(CANONICAL_URL);
 
     // The baseline must stay byte-identical to the canonical remote form or every diff and merge drifts.
@@ -154,7 +156,7 @@ describe('Workspace-Relative Local Media References (pull/push round-trip)', () 
 
   it('push rewrites the local reference to the canonical URL for remote while the disk keeps the local form', async () => {
     const relPath = `posts/draft/${todayPrefix}_${ARTICLE_ID}-local-ref-article.md`;
-    const localBody = ['Body paragraph.', '', `![LG 背面端子](media/${STORAGE_KEY})`].join('\n');
+    const localBody = ['Body paragraph.', '', `![LG 背面端子](${LOCAL_REF})`].join('\n');
     fs.writeFileSync(
       path.join(tempDir, relPath),
       [
@@ -267,7 +269,7 @@ describe('Workspace-Relative Local Media References (pull/push round-trip)', () 
 
     // Disk keeps the local spelling so the preview stays intact and status reports no phantom edit.
     const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
-    expect(disk).toContain(`![LG 背面端子](media/${STORAGE_KEY})`);
+    expect(disk).toContain(`![LG 背面端子](${LOCAL_REF})`);
     expect(disk).not.toContain(CANONICAL_URL);
 
     const status = getWorkspaceStatus(tempDir, cache, 'posts');
@@ -322,8 +324,108 @@ describe('Workspace-Relative Local Media References (pull/push round-trip)', () 
 
     // Without the setting threaded through pushAll, the batch path would rewrite every mirror back to a canonical URL.
     const afterBatch = fs.readFileSync(articlePath, 'utf8');
-    expect(afterBatch).toContain(`![LG 背面端子](media/${STORAGE_KEY})`);
+    expect(afterBatch).toContain(`![LG 背面端子](${LOCAL_REF})`);
     expect(afterBatch).not.toContain(CANONICAL_URL);
+  });
+
+  it('re-spells a legacy depth-free workspace ref into the article-relative form on the next pull', async () => {
+    // A workspace built before article-relative refs existed carries `media/<storageKey>` on disk and its hash
+    // tracked in sync_state. Re-pulling must repair the spelling to the preview-resolvable form instead of
+    // reporting a phantom edit — and must stay byte-stable from then on.
+    const first = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: remoteItem('rev_1'),
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+    const articlePath = path.join(tempDir, first.filePath);
+    const legacy = fs
+      .readFileSync(articlePath, 'utf8')
+      .replace(`](${LOCAL_REF})`, `](media/${STORAGE_KEY})`);
+    fs.writeFileSync(articlePath, legacy, 'utf8');
+    cache.saveSyncState({ ...cache.getSyncState(ARTICLE_ID)!, localHash: calculateHash(legacy) });
+
+    expect(getWorkspaceStatus(tempDir, cache, 'posts').summary.modified).toBe(0);
+
+    const repull = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: remoteItem('rev_1'),
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+
+    const migrated = fs.readFileSync(articlePath, 'utf8');
+    expect(migrated).toContain(`![LG 背面端子](${LOCAL_REF})`);
+    expect(migrated).not.toContain(`](media/${STORAGE_KEY})`);
+    expect(calculateHash(migrated)).toBe(cache.getSyncState(ARTICLE_ID)!.localHash);
+
+    // The repaired spelling is now the stable one: a third pull of the same revision skips.
+    const settled = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: remoteItem('rev_1'),
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+    expect(settled.skipped).toBe(true);
+    expect(fs.readFileSync(articlePath, 'utf8')).toBe(migrated);
+    expect(
+      inspectArticleDiff({ workspaceRoot: tempDir, cache, id: ARTICLE_ID }).diff?.hasChanges,
+    ).toBe(false);
+    void repull;
+  });
+
+  it('keeps an untouched article clean when it moves from draft to published', async () => {
+    // Moving an article changes the depth its mirror reference must carry. Both the disk bytes and the tracked
+    // local_hash must land on the new depth together, or a status pass would report a media edit nobody made.
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: remoteItem('rev_1'),
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+    const draftPath = path.join(tempDir, res.filePath);
+    const draftContent = fs.readFileSync(draftPath, 'utf8');
+    expect(draftContent).toContain(`![LG 背面端子](${LOCAL_REF})`);
+
+    // Promote the article through the cache-visible status change, then re-pull from remote.
+    const publishedRemote = {
+      ...remoteItem('rev_2'),
+      status: 'published',
+      publishedAt: '2026-11-11T00:00:00.000Z',
+    };
+    const moved = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: publishedRemote,
+      fetchFn: vi.fn() as unknown as typeof fetch,
+    });
+
+    expect(moved.filePath).toContain('/published/');
+    const movedContent = fs.readFileSync(path.join(tempDir, moved.filePath), 'utf8');
+    // Same depth for `published/` as for `draft/`, so the reference itself is unchanged.
+    expect(movedContent).toContain(`![LG 背面端子](${LOCAL_REF})`);
+    expect(fs.existsSync(draftPath)).toBe(false);
+
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.modified).toBe(0);
+    expect(
+      inspectArticleDiff({ workspaceRoot: tempDir, cache, id: ARTICLE_ID }).diff?.hasChanges,
+    ).toBe(false);
   });
 
   it('a local reference whose asset is not mirrored is rejected before any request is made', async () => {

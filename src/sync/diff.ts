@@ -26,8 +26,8 @@ import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { serializeMarkdown, type Frontmatter } from '../utils/frontmatter.js';
-import { calculateHash } from './pull.js';
-import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
+import { calculateHash, carriesDepthFreeMediaRef } from './pull.js';
+import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 
 export interface DiffResult {
@@ -169,14 +169,18 @@ export function inspectArticleDiff(options: {
     baseSnapshot.bodyMarkdown,
     candidates,
   );
-  // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as
-  // `media/<storageKey>`. Comparing those two spellings directly reports a change on every untouched article.
-  // Decide the spelling from the disk file itself: when localizing the baseline reproduces exactly what the disk
-  // carries, compare in that spelling so an untouched article reads clean. Otherwise keep the baseline canonical
-  // — which is what `sync_state.local_hash` records for a file that stores canonical URLs or whose asset was
-  // never mirrored locally.
-  const mediaDir = path.join(options.workspaceRoot, 'media');
-  const localizedBase = canonicalToLocalMediaRefs(baseFullMarkdown, { mediaDir, fs });
+  // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as local
+  // references (`../../media/<storageKey>`, or the older depth-free `media/<storageKey>`). Comparing those two
+  // spellings directly reports a change on every untouched article. Decide the spelling from the disk file
+  // itself: when localizing the baseline reproduces exactly what the disk carries, compare in that spelling so
+  // an untouched article reads clean. Otherwise keep the baseline canonical — which is what `sync_state.local_hash`
+  // records for a file that stores canonical URLs or whose asset was never mirrored locally.
+  const localizedBase = localizeArticleMediaRefs(baseFullMarkdown, {
+    workspaceRoot: options.workspaceRoot,
+    articleRelPath: targetFile,
+    fs,
+    preferLegacyRef: carriesDepthFreeMediaRef(localContent),
+  });
   const baseForCompare =
     localizedBase === baseFullMarkdown || calculateHash(localizedBase) === currentHash
       ? localizedBase

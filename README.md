@@ -294,9 +294,9 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 | `origin` | `"https://example.com"` | Base URL of the target EmDash instance, exactly as written to disk. It is never rewritten in-memory by `EMDASH_ORIGIN`; see [Origin Resolution Precedence](#origin-resolution-precedence) for how the effective origin is chosen |
 | `defaultCollection` | `"posts"` | Default content collection when `--collection` is omitted |
 | `defaultLocale` | `"ja"` | Default locale used when scaffolding new drafts via `emit new` / `sync_new` |
-| `postsSyncLimit` | `100` | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback) |
+| `postsSyncLimit` | `30` | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback) |
 | `mediaSyncLimit` | `300` | Default maximum items fetched by `emit pull-media` / `sync_pull_media` |
-| `localMediaRefs` | `false` | When `true`, mirrored body images are stored as workspace-relative `media/<storageKey>` references instead of canonical `/_emdash/api/media/file/<storageKey>` URLs. Set it with `emit pull --local-media-refs` (or clear it with `--no-local-media-refs`); pull, push, diff, and MCP all honour it |
+| `localMediaRefs` | `true` | Default-ON. Mirrored body images are stored as article-relative `../../media/<storageKey>` references (depth derived from the article's own path) instead of canonical `/_emdash/api/media/file/<storageKey>` URLs, so Markdown preview resolves them offline. Opt out with `emit pull --no-local-media-refs`; pull, push, diff, and MCP all honour it |
 | `concurrency` | `8` | Parallel HTTP fetch concurrency during batch pulls |
 
 ### 6. Recommended `.gitignore`
@@ -671,14 +671,17 @@ emit pull [id] [options]
 * `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
 * `--media`: Also pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `300`). Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
 * `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
-* `--local-media-refs`: Write mirrored body images as workspace-relative `media/<storageKey>` references instead of the canonical `/_emdash/api/media/file/<storageKey>` URL, so Markdown preview and local tooling resolve them offline. The choice is **remembered in `.emit/config.json`**, so every later pull, push, and diff keeps the same spelling without repeating the flag.
+* `--local-media-refs`: Write mirrored body images as article-relative `../../media/<storageKey>` references instead of the canonical `/_emdash/api/media/file/<storageKey>` URL, so Markdown preview and local tooling resolve them offline from the article's own directory. The choice is **remembered in `.emit/config.json`** and is **default-ON**, so every later pull, push, and diff keeps the same spelling without repeating the flag.
 * `--no-local-media-refs`: Clear a previously remembered preference and store canonical EmDash URLs on disk again.
 
 > [!NOTE]
 > **Taxonomies are pulled by default in batch mode.** Categories and tags are lightweight (2 API calls) and required for valid push operations (Preflight Guard G4 validates taxonomy terms against these local definitions). This eliminates a common source of push failures. Use `--posts-only` if you need articles only.
 
 > [!NOTE]
-> **Local media references change only the disk spelling, never the remote payload.** With `localMediaRefs` enabled, `base_snapshots`, `sync_state.local_hash`, and the body sent to EmDash all keep the canonical `/_emdash/api/media/file/<storageKey>` URL, while the Markdown file carries `media/<storageKey>`. Because the baseline stays canonical, `emit diff` renders it in whichever spelling the disk already uses — an untouched article reports no change, and only a genuine edit appears.
+> **Local media references change only the disk spelling, never the remote payload.** With `localMediaRefs` enabled (the default), `base_snapshots` and the body sent to EmDash keep the canonical `/_emdash/api/media/file/<storageKey>` URL, while the Markdown file carries `../../media/<storageKey>` spelled from its own directory; only `sync_state.local_hash` tracks those disk bytes. Because the baseline stays canonical, `emit diff` renders it in whichever spelling the disk already uses — an untouched article reports no change, and only a genuine edit appears.
+
+> [!NOTE]
+> **A workspace written by an older Emit heals itself.** Files that still carry the depth-free `media/<storageKey>` spelling are re-spelled to the article-relative form on the next `emit pull`, and re-tracked against their own repaired hash — no content changes, no phantom "modified", and the following pull of the same revision skips.
 
 > [!NOTE]
 > **Why `--no-prune` is rarely needed:**  

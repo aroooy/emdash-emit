@@ -27,6 +27,7 @@ import {
   listRemoteArticles,
   pullArticle,
   calculateHash,
+  carriesDepthFreeMediaRef,
   findLocalFilesByUlid,
   type PullResult,
   type ListRemoteArticlesOptions,
@@ -42,7 +43,7 @@ import {
   type RemoteStorageKeyIndex,
   type MirroredAssetResult,
 } from './media.js';
-import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
+import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -69,7 +70,7 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
   force?: boolean;
   concurrency?: number;
   prune?: boolean;
-  /** Write mirrored body images as workspace-relative `media/<storageKey>` references. Passed to every article pull. */
+  /** Write mirrored body images as article-relative `../../media/<storageKey>` references. Passed to every article pull. */
   localMediaRefs?: boolean;
   /**
    * Local-first media mirroring is default-ON for a batch pull: after articles land on disk, Emit walks the
@@ -331,16 +332,21 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
 
     // Binaries now exist under `media/`, so re-apply the local-ref spelling to every article that mirrors
     // images. pullArticle wrote them canonical because no mirror existed yet; this pass resolves them to
-    // workspace-relative references only when the mirror is actually present, keeping disk and preview in
-    // step without ever touching the baseline hash (which stays canonical).
+    // article-relative references only when the mirror is actually present, keeping disk and preview in step
+    // without ever touching the baseline hash (which stays canonical). Each file is localized at the depth of
+    // its own path, so an article written by a legacy workspace keeps the spelling its bytes already carry.
     if (options.localMediaRefs) {
-      const mediaDir = path.join(options.workspaceRoot, 'media');
       for (const res of results) {
         if (res.deleted || !res.filePath) continue;
         const fullPath = path.join(options.workspaceRoot, res.filePath);
         if (!fs.existsSync(fullPath)) continue;
         const current = fs.readFileSync(fullPath, 'utf8');
-        const localized = canonicalToLocalMediaRefs(current, { mediaDir, fs });
+        const localized = localizeArticleMediaRefs(current, {
+          workspaceRoot: options.workspaceRoot,
+          articleRelPath: res.filePath,
+          fs,
+          preferLegacyRef: carriesDepthFreeMediaRef(current),
+        });
         if (localized !== current) fs.writeFileSync(fullPath, localized, 'utf8');
       }
     }

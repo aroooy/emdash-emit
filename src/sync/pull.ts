@@ -37,7 +37,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
+import { isLocalMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
@@ -54,7 +54,8 @@ export interface PullOptions extends MapperOptions {
   rawItem?: Record<string, unknown>;
   force?: boolean;
   /**
-   * Write mirrored body images into the local file as workspace-relative `media/<storageKey>` references.
+   * Write mirrored body images into the local file as article-relative `../../media/<storageKey>` references,
+   * at the depth derived from the article's own path.
    * The cache baseline always keeps the canonical remote URL, so this only changes the disk spelling and an
    * editor preview can render the image from the mirror. Push restores the canonical form before any payload.
    */
@@ -185,6 +186,40 @@ export function findLocalFilesByUlid(
     }
   }
   return matches;
+}
+
+/**
+ * Reports whether a Markdown document spells its mirrored images with the depth-free `media/<storageKey>` form.
+ * That spelling is what a workspace built before article-relative refs carried on disk, and `sync_state.local_hash`
+ * records exactly those bytes — re-spelling an untouched file would report a media rewrite nobody made. Once a
+ * document carries the article-relative form (or no local ref at all), the article-relative spelling takes over.
+ */
+export function carriesDepthFreeMediaRef(content: string): boolean {
+  for (const rawLine of content.split('\n')) {
+    const match = rawLine.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (!match) continue;
+    const ref = match[2].trim();
+    // A depth-free `media/...` reference is the legacy spelling; anything carrying `../` already migrated.
+    if (isLocalMediaRef(ref) && ref.startsWith('media/')) return true;
+  }
+  return false;
+}
+
+/**
+ * Reports whether any local copy of an article still carries the depth-free spelling, deciding which form a
+ * re-pull must reproduce. A genuinely new article has no local copy, so it gets the article-relative form.
+ */
+export function shouldPreferLegacyRef(workspaceRoot: string, existingRelPaths: string[]): boolean {
+  for (const relPath of existingRelPaths) {
+    try {
+      if (carriesDepthFreeMediaRef(fs.readFileSync(path.join(workspaceRoot, relPath), 'utf8'))) {
+        return true;
+      }
+    } catch {
+      // Ignore unreadable files
+    }
+  }
+  return false;
 }
 
 /**
@@ -543,14 +578,33 @@ export async function pullArticle(
    * records the exact bytes on disk, so every comparison against a tracked file must run through this same
    * transform: reconstructing the canonical form from a remote response and then localizing it keeps the
    * fast-path skip honest whether or not `localMediaRefs` is enabled.
+   *
+   * `articleRelPath` decides the depth of the resulting reference — an article spells its mirror relative to its
+   * own directory so a Markdown preview resolves it offline. Pass `preferLegacyRef` only when reproducing bytes
+   * for a file that already sits on disk in the depth-free form, so an untouched article is never re-spelled
+   * into a phantom edit; a write that overwrites the file instead targets the article-relative form.
    */
-  const localizeDiskMarkdown = (canonicalContent: string): string =>
+  const localizeDiskMarkdown = (
+    canonicalContent: string,
+    articleRelPath?: string,
+    preferLegacyRef?: boolean,
+  ): string =>
     options.localMediaRefs
-      ? canonicalToLocalMediaRefs(canonicalContent, {
-          mediaDir: path.join(options.workspaceRoot, 'media'),
+      ? localizeArticleMediaRefs(canonicalContent, {
+          workspaceRoot: options.workspaceRoot,
+          articleRelPath: articleRelPath ?? existingFilePathForDepth(),
           fs,
+          preferLegacyRef,
         })
       : canonicalContent;
+
+  /** The path a tracked article currently sits at, used when the caller has not resolved a new one yet. */
+  const existingFilePathForDepth = (): string => {
+    const tracked = options.cache.getSyncState(id)?.localFilePath;
+    if (tracked) return tracked;
+    const onDisk = findLocalFilesByUlid(options.workspaceRoot, collection, id)[0];
+    return onDisk ?? `${collection}/draft/${id}.md`;
+  };
 
   // Helper to test fast-path (unmodified skip or non-destructive frontmatter heal)
   const tryFastPathOrHeal = async (item: Record<string, unknown>): Promise<PullResult | null> => {
@@ -603,6 +657,45 @@ export async function pullArticle(
 
       // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML)
       if (existingSync.localFilePath === expectedRelPath) {
+        // A workspace built before article-relative refs carries the depth-free `media/<storageKey>` spelling,
+        // and its tracked hash records exactly those bytes. Repairing the spelling here — rather than falling
+        // through to a full remote re-pull — keeps the skip honest: the content is untouched, only the reference
+        // form advances, and the file re-tracks against its own repaired hash so nothing reports a phantom edit.
+        if (
+          options.localMediaRefs &&
+          currentDiskHash === existingSync.localHash &&
+          carriesDepthFreeMediaRef(currentDiskContent)
+        ) {
+          const respelled = localizeArticleMediaRefs(currentDiskContent, {
+            workspaceRoot: options.workspaceRoot,
+            articleRelPath: existingSync.localFilePath,
+            fs,
+          });
+          if (respelled !== currentDiskContent) {
+            try {
+              parseMarkdown(respelled);
+              fs.writeFileSync(fullExistingPath, respelled, 'utf8');
+              options.cache.saveSyncState({
+                ...existingSync,
+                localHash: calculateHash(respelled),
+                lastSyncedAt: Math.floor(Date.now() / 1000),
+              });
+              return {
+                id,
+                slug: existingSync.slug,
+                status: existingSync.status,
+                filePath: existingSync.localFilePath,
+                updated: true,
+                healed: true,
+                meaningChanged: false,
+                title: rawTitle,
+              };
+            } catch {
+              // Re-spelling broke the parse (it should not): fall through to the normal paths untouched.
+            }
+          }
+        }
+
         if (currentDiskHash === existingSync.localHash) {
           try {
             parseMarkdown(currentDiskContent);
@@ -707,7 +800,9 @@ export async function pullArticle(
             const remoteCanonHash = calculateHash(remoteCanonMarkdown);
             // The repaired file on disk carries the workspace's local-media-ref spelling, so the tracked hash
             // must be the hash of that spelling. The baseline keeps the canonical form untouched.
-            const remoteDiskHash = calculateHash(localizeDiskMarkdown(remoteCanonMarkdown));
+            const remoteDiskHash = calculateHash(
+              localizeDiskMarkdown(remoteCanonMarkdown, existingSync.localFilePath, true),
+            );
 
             const existingBase = options.cache.getBaseSnapshot(id);
             if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
@@ -897,17 +992,11 @@ export async function pullArticle(
   }
 
   // Format full Markdown. `canonicalMarkdown` is the remote form and is what every cache hash and every
-  // base snapshot records; `markdownContent` is what lands on disk, which may spell mirrored images as
-  // workspace-relative references when `localMediaRefs` is enabled. Keeping the two apart is what lets an
-  // editor preview render a mirror while the baseline stays byte-identical to a remote pull.
+  // base snapshot records; `markdownContent` is what lands on disk, which may spell mirrored images as local
+  // references when `localMediaRefs` is enabled. Keeping the two apart is what lets an editor preview render a
+  // mirror while the baseline stays byte-identical to a remote pull.
   const canonicalMarkdown = serializeMarkdown(frontmatter, body, getTaxonomyCandidates());
   const contentHash = calculateHash(canonicalMarkdown);
-  const markdownContent = options.localMediaRefs
-    ? canonicalToLocalMediaRefs(canonicalMarkdown, {
-        mediaDir: path.join(options.workspaceRoot, 'media'),
-        fs,
-      })
-    : canonicalMarkdown;
 
   // Determine standard relative file path: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md
   const existingSync = options.cache.getSyncState(frontmatter.id);
@@ -938,6 +1027,17 @@ export async function pullArticle(
     },
     existingPrefix,
   );
+
+  // Localizing needs the depth of the path the article is about to occupy, so it runs after `relPath` is
+  // resolved. A file that already sits on disk in the depth-free legacy spelling keeps that spelling; a fresh
+  // write (or an article moving between `draft/` and `published/`) gets the article-relative form its preview
+  // can resolve.
+  const markdownContent = localizeDiskMarkdown(
+    canonicalMarkdown,
+    relPath,
+    shouldPreferLegacyRef(options.workspaceRoot, existingDiskMatches),
+  );
+
   const fullFilePath = path.join(options.workspaceRoot, relPath);
 
   // Path tracking: Remove any previous file(s) for this ULID at a different path

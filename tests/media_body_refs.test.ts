@@ -25,6 +25,7 @@ import {
   canonicalToLocalMediaRefs,
   isCanonicalMediaUrl,
   isLocalMediaRef,
+  localizeArticleMediaRefs,
   mediaRefPrefixForArticle,
   storageKeyFromCanonicalUrl,
   storageKeyFromMirrorRef,
@@ -32,6 +33,9 @@ import {
 
 const STORAGE_KEY = '01M67P0JW605ZJ5GV4YXB7W400.jpg';
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
+/** The disk spelling for an article two levels below the workspace root (`posts/draft/…`). */
+const ARTICLE_REL_PATH = 'posts/draft/20261111_01M67P0JW605ZJ5GV4YXB7W40-title.md';
+const DEPTH_LOCAL_REF = `../../media/${STORAGE_KEY}`;
 
 /** Minimal fs stub: only the keys listed here "exist" under media/. */
 function fsWith(...existingKeys: string[]) {
@@ -46,17 +50,52 @@ describe('media-body-refs classification', () => {
     expect(storageKeyFromCanonicalUrl('https://cdn.example.com/a.jpg')).toBeNull();
   });
 
-  it('recognizes only a workspace-relative storageKey reference, never an arbitrary path', () => {
+  it('recognizes a storageKey reference with or without article-relative depth, never an arbitrary path', () => {
     expect(isLocalMediaRef(`media/${STORAGE_KEY}`)).toBe(true);
     expect(isLocalMediaRef(`  media/${STORAGE_KEY}  `)).toBe(true);
+    // An article spells its mirror relative to its own directory so preview resolves the link.
+    expect(isLocalMediaRef(DEPTH_LOCAL_REF)).toBe(true);
+    expect(isLocalMediaRef('../media/shot.jpg')).toBe(true);
+    expect(isLocalMediaRef('./media/shot.jpg')).toBe(true);
     // A leading slash makes it the canonical route shape, not a local ref.
     expect(isLocalMediaRef(CANONICAL_URL)).toBe(false);
     expect(isLocalMediaRef('./hero.png')).toBe(false);
     expect(isLocalMediaRef('media/drafts/shot.png')).toBe(false);
+    // Depth alone does not make a staging draft or an unrelated folder a canonicalized local reference.
+    expect(isLocalMediaRef('../../media/drafts/shot.png')).toBe(false);
+    expect(isLocalMediaRef('../../uploads/x.jpg')).toBe(false);
   });
 });
 
 describe('canonicalToLocalMediaRefs', () => {
+  it('rewrites a standalone canonical line to the article-relative mirror path when one is given', () => {
+    const body = `Paragraph.\n\n![LG 背面端子](${CANONICAL_URL})\n`;
+    const localized = canonicalToLocalMediaRefs(body, {
+      mediaDir: '/ws/media',
+      fs: fsWith(STORAGE_KEY),
+      articleRelPath: ARTICLE_REL_PATH,
+    });
+    expect(localized).toBe(`Paragraph.\n\n![LG 背面端子](${DEPTH_LOCAL_REF})\n`);
+  });
+
+  it('spells the depth for a published article and for an article at the workspace root', () => {
+    const body = `![alt](${CANONICAL_URL})`;
+    expect(
+      canonicalToLocalMediaRefs(body, {
+        mediaDir: '/ws/media',
+        fs: fsWith(STORAGE_KEY),
+        articleRelPath: 'posts/published/20261111_01M67P0JW605ZJ5GV4YXB7W40-title.md',
+      }),
+    ).toBe(`![alt](../../media/${STORAGE_KEY})`);
+    expect(
+      canonicalToLocalMediaRefs(body, {
+        mediaDir: '/ws/media',
+        fs: fsWith(STORAGE_KEY),
+        articleRelPath: 'root-level.md',
+      }),
+    ).toBe(`![alt](../media/${STORAGE_KEY})`);
+  });
+
   it('rewrites a standalone canonical line only when the mirror exists on disk', () => {
     const body = `Paragraph.\n\n![LG 背面端子](${CANONICAL_URL})\n`;
     const localized = canonicalToLocalMediaRefs(body, {
@@ -96,9 +135,10 @@ describe('canonicalToLocalMediaRefs', () => {
 });
 
 describe('storageKeyFromMirrorRef', () => {
-  it('resolves an exact storageKey reference verbatim', () => {
+  it('resolves an exact storageKey reference verbatim, with or without article-relative depth', () => {
     expect(storageKeyFromMirrorRef(`media/${STORAGE_KEY}`, [])).toBe(STORAGE_KEY);
-    expect(storageKeyFromMirrorRef(`../../media/${STORAGE_KEY}`, [])).toBeNull();
+    expect(storageKeyFromMirrorRef(DEPTH_LOCAL_REF, [])).toBe(STORAGE_KEY);
+    expect(storageKeyFromMirrorRef('../media/shot.jpg', [])).toBe('shot.jpg');
   });
 
   it('recovers a collision-suffixed or truncated stem from confirmed storageKeys', () => {
@@ -120,5 +160,74 @@ describe('mediaRefPrefixForArticle', () => {
     expect(mediaRefPrefixForArticle('posts/draft/20261111_01M67X-title.md')).toBe('../../');
     expect(mediaRefPrefixForArticle('articles/published/x.md')).toBe('../../');
     expect(mediaRefPrefixForArticle('root-level.md')).toBe('../');
+  });
+});
+
+describe('localizeArticleMediaRefs', () => {
+  /** fs stub keyed by workspace-relative paths (`media/<key>`, `media/drafts/<name>`). */
+  function fsWithFiles(...workspacePaths: string[]) {
+    const set = new Set(workspacePaths);
+    return { existsSync: (p: string) => set.has(String(p).replace(/^\/ws\//, '')) };
+  }
+
+  it('prefers the article-relative spelling so a preview resolves the mirror offline', () => {
+    const localized = localizeArticleMediaRefs(`![alt](${CANONICAL_URL})`, {
+      workspaceRoot: '/ws',
+      articleRelPath: ARTICLE_REL_PATH,
+      fs: fsWithFiles(`media/${STORAGE_KEY}`),
+    });
+    expect(localized).toBe(`![alt](${DEPTH_LOCAL_REF})`);
+  });
+
+  it('falls back to the legacy depth-free spelling when that is what the disk already carries', () => {
+    // A workspace built before article-relative refs existed keeps `media/<storageKey>` on disk. Reading it
+    // back in its own spelling is what keeps an untouched article from reporting a phantom media rewrite.
+    const localized = localizeArticleMediaRefs(`![alt](media/${STORAGE_KEY})`, {
+      workspaceRoot: '/ws',
+      articleRelPath: ARTICLE_REL_PATH,
+      fs: fsWithFiles(`media/${STORAGE_KEY}`),
+      preferLegacyRef: true,
+    });
+    expect(localized).toBe(`![alt](media/${STORAGE_KEY})`);
+  });
+
+  it('re-spells a disk file that carries the legacy form into the article-relative form', () => {
+    const localized = localizeArticleMediaRefs(`![alt](media/${STORAGE_KEY})`, {
+      workspaceRoot: '/ws',
+      articleRelPath: ARTICLE_REL_PATH,
+      fs: fsWithFiles(`media/${STORAGE_KEY}`),
+    });
+    expect(localized).toBe(`![alt](${DEPTH_LOCAL_REF})`);
+  });
+
+  it('leaves a disk file already written in the article-relative form byte-identical', () => {
+    const body = `![alt](${DEPTH_LOCAL_REF})`;
+    expect(
+      localizeArticleMediaRefs(body, {
+        workspaceRoot: '/ws',
+        articleRelPath: ARTICLE_REL_PATH,
+        fs: fsWithFiles(`media/${STORAGE_KEY}`),
+      }),
+    ).toBe(body);
+  });
+
+  it('keeps the canonical URL when no mirror exists, so no broken local link is invented', () => {
+    const body = `![alt](${CANONICAL_URL})`;
+    expect(
+      localizeArticleMediaRefs(body, {
+        workspaceRoot: '/ws',
+        articleRelPath: ARTICLE_REL_PATH,
+        fs: fsWithFiles(),
+      }),
+    ).toBe(body);
+  });
+
+  it('localizes only a reference whose storageKey is confirmed mirrored, never a hand-written path', () => {
+    const localized = localizeArticleMediaRefs(`![alt](${CANONICAL_URL})`, {
+      workspaceRoot: '/ws',
+      articleRelPath: ARTICLE_REL_PATH,
+      fs: fsWithFiles('media/drafts/shot.png'),
+    });
+    expect(localized).toBe(`![alt](${CANONICAL_URL})`);
   });
 });

@@ -60,7 +60,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe(
-          'Write mirrored body images as workspace-relative "media/<storageKey>" references so Markdown preview resolves them locally. Defaults to the workspace setting in .emit/config.json.',
+          'Write mirrored body images as article-relative "../../media/<storageKey>" references so Markdown preview resolves them locally. Defaults to the workspace setting in .emit/config.json.',
         ),
       noPrune: z
         .boolean()

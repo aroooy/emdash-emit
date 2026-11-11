@@ -138,10 +138,13 @@ function resolveDraftImagePath(
   }
 
   const normalized = trimmed.replace(/\\/g, '/');
-  const candidateAbs =
-    normalized.startsWith('media/') || normalized.startsWith('./media/')
-      ? path.resolve(root, normalized)
-      : path.resolve(articleDir, normalized);
+  // A depth-free `media/...` reference is workspace-relative by contract. Anything carrying leading `../` /
+  // `./` is spelled from the article's own directory — which is how an article references its own mirror so a
+  // preview resolves it — and resolves against that article's directory instead.
+  const isWorkspaceRelative = !/^(?:\.\.\/|\.\.\\|\.\/|\.\\)/.test(normalized);
+  const candidateAbs = isWorkspaceRelative
+    ? path.resolve(root, normalized)
+    : path.resolve(articleDir, normalized);
 
   const draftsDirAbs = path.resolve(root, 'media', 'drafts');
   const mediaDirAbs = path.resolve(root, 'media');
@@ -487,7 +490,7 @@ export function runPreflightChecks(
             continue;
           }
 
-          // A workspace that spells a mirrored image as `media/<storageKey>` references the storageKey
+          // A workspace that spells a mirrored image as `../../media/<storageKey>` references the storageKey
           // outright rather than a companion stem, so name matching above cannot resolve it. Recover the key
           // from recorded metadata and queue it as a reuse: push rewrites the line to the canonical route
           // without ever re-uploading, and an unmirrored key still falls through to LOCAL_IMAGE_DETECTED.

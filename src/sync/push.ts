@@ -46,10 +46,11 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyMaps, loadLocalTaxonomyCandidates } from './taxonomies.js';
-import { canonicalToLocalMediaRefs } from '../utils/media-body-refs.js';
+import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { runPreflightChecks, type DraftImageReference, type PreflightError } from './preflight.js';
 import {
   calculateHash,
+  carriesDepthFreeMediaRef,
   CONFLICTS_SUBDIR,
   isQuarantinedRelativePath,
   quarantineLocalCopy,
@@ -85,9 +86,10 @@ export interface PushOptions extends MapperOptions {
   force?: boolean;
   noTaxonomyAudit?: boolean;
   /**
-   * Accept body images spelled as workspace-relative `media/<storageKey>` references and rewrite them to the
-   * canonical `/_emdash/api/media/file/<storageKey>` URL before anything reaches EmDash. The cache baseline
-   * stores the canonical form too, so a local-ref workspace never reports a phantom diff.
+   * Accept body images spelled as local mirror references — article-relative `../../media/<storageKey>` or the
+   * older depth-free `media/<storageKey>` — and rewrite them to the canonical
+   * `/_emdash/api/media/file/<storageKey>` URL before anything reaches EmDash. The cache baseline stores the
+   * canonical form too, so a local-ref workspace never reports a phantom diff.
    */
   localMediaRefs?: boolean;
 }
@@ -918,10 +920,14 @@ export async function pushArticle(
     // lands on disk must carry the workspace's own spelling again, or a push would silently re-canonicalize
     // the article and the next status pass would report an edit nobody made. The baseline keeps the canonical
     // body untouched so `diff` and the 3-way merge stay byte-identical to what a remote pull would write.
+    // An already-tracked file keeps the spelling its bytes already carry; only a fresh article (or one whose
+    // path just changed, which changes the depth) is written in the article-relative form.
     const serializedContent = options.localMediaRefs
-      ? canonicalToLocalMediaRefs(serializedCanonical, {
-          mediaDir: path.join(options.workspaceRoot, 'media'),
+      ? localizeArticleMediaRefs(serializedCanonical, {
+          workspaceRoot: options.workspaceRoot,
+          articleRelPath: newRelPath,
           fs,
+          preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
         })
       : serializedCanonical;
     const newHash = calculateHash(serializedContent);
@@ -1454,11 +1460,14 @@ export async function pushArticle(
 
     const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
     // Same disk spelling rule as the clean-push path: keep the workspace's own local references on disk while
-    // the canonical form goes to remote and into the baseline.
+    // the canonical form goes to remote and into the baseline. A file that already carries the depth-free form
+    // keeps it; a path change (draft→published) re-spells at the new depth.
     const serializedContent = options.localMediaRefs
-      ? canonicalToLocalMediaRefs(serializedCanonical, {
-          mediaDir: path.join(options.workspaceRoot, 'media'),
+      ? localizeArticleMediaRefs(serializedCanonical, {
+          workspaceRoot: options.workspaceRoot,
+          articleRelPath: newRelPath,
           fs,
+          preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
         })
       : serializedCanonical;
     const newHash = calculateHash(serializedContent);

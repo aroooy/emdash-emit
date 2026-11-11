@@ -648,8 +648,9 @@ export async function runWorkspaceDoctor(
           ) {
             return true;
           }
-          // Check 3: A workspace-relative mirror reference (`media/<storageKey>`) names the key outright, so a
-          // collision-suffixed or truncated mirror stem leaves no file at that exact path. Resolve it through
+          // Check 3: A local mirror reference (`../../media/<storageKey>` or the older depth-free
+          // `media/<storageKey>`) names the key outright, so a collision-suffixed or truncated mirror stem
+          // leaves no file at that exact path. Resolve it through
           // the same confirmed-key and stem indexes Check 1 uses instead of reporting a mirrored asset missing.
           const localKeyMatch = cleanRef.match(/^media\/([^?#]+)/);
           if (localKeyMatch) {

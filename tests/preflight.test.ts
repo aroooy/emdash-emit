@@ -159,6 +159,70 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
     expect(res4.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
   });
 
+  it('G5: accepts a standalone article-relative mirror ref only when metadata confirms the key', () => {
+    const tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-depth-ref-'));
+    try {
+      const storageKey = '01M67NPPKKGDWBH3HVQ1JR4JSB.jpg';
+      const mediaId = '01M6TF1XXBS2KC9EVYG6RBT0J0';
+      const canonicalUrl = `/_emdash/api/media/file/${storageKey}`;
+
+      // 1. An article-relative reference whose key is confirmed by a companion YAML resolves as a reuse: no
+      //    upload, no LOCAL_IMAGE_DETECTED, and the line is queued for canonical rewriting.
+      fs.mkdirSync(path.join(tempWorkspace, 'media'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempWorkspace, 'media', `${storageKey.replace(/\.jpg$/, '')}.yaml`),
+        [
+          'id: 01M6TF1XXBS2KC9EVYG6RBT0J0',
+          `filename: shot.jpg`,
+          'status: ready',
+          `url: ${canonicalUrl}`,
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const depthParsed: ParsedMarkdown = {
+        ...validParsed,
+        body: 'Intro paragraph.\n\n![Photo](../../media/' + storageKey + ')',
+      };
+      const resOk = runPreflightChecks(filePath, depthParsed, { workspaceRoot: tempWorkspace });
+      expect(resOk.valid).toBe(true);
+      expect(resOk.draftImages).toHaveLength(1);
+      expect(resOk.draftImages[0]?.alreadyPromoted?.mediaId).toBe(mediaId);
+      expect(resOk.draftImages[0]?.alreadyPromoted?.url).toBe(canonicalUrl);
+
+      // 2. The depth-free legacy spelling resolves identically — both forms reach the same guard outcome.
+      const legacyParsed: ParsedMarkdown = {
+        ...depthParsed,
+        body: `![Photo](media/${storageKey})`,
+      };
+      const resLegacy = runPreflightChecks(filePath, legacyParsed, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resLegacy.valid).toBe(true);
+      expect(resLegacy.draftImages[0]?.alreadyPromoted?.mediaId).toBe(mediaId);
+
+      // 3. A depth-prefixed reference that points at nothing confirmed is still refused before any request.
+      fs.rmSync(path.join(tempWorkspace, 'media'), { recursive: true, force: true });
+      const ghostParsed: ParsedMarkdown = {
+        ...depthParsed,
+        body: '![Ghost](../../media/01M67NQTMRRED556YVG6RBT0J0.jpg)',
+      };
+      const resGhost = runPreflightChecks(filePath, ghostParsed, { workspaceRoot: tempWorkspace });
+      expect(resGhost.valid).toBe(false);
+      expect(resGhost.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
+
+      // 4. Depth does not turn an unrelated folder into a mirror reference.
+      const uploadsParsed: ParsedMarkdown = { ...depthParsed, body: '![X](../../uploads/x.jpg)' };
+      const resUploads = runPreflightChecks(filePath, uploadsParsed, {
+        workspaceRoot: tempWorkspace,
+      });
+      expect(resUploads.valid).toBe(false);
+      expect(resUploads.errors.some((e) => e.code === 'LOCAL_IMAGE_DETECTED')).toBe(true);
+    } finally {
+      fs.rmSync(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it('G6: blocks push when unresolved conflict markers exist in body', () => {
     const conflictParsed: ParsedMarkdown = {
       ...validParsed,
