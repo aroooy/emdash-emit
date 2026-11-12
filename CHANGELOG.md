@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-11-12
+
+### Fixed
+
+- **Draft image localization on push (`localMediaRefs: true`)**:
+  - A draft image auto-uploaded from `media/drafts/` during `emit push` / `sync_push` now lands on disk as an article-relative mirror reference (`../../media/<storageKey>`) instead of a canonical remote URL. Promotion of the uploaded file into `media/` (P6) was running *after* the body localization pass, and `localizeArticleMediaRefs` only rewrites a reference whose storageKey already has a real mirror under `media/`, so a freshly uploaded image stayed spelled as `/_emdash/api/media/file/<storageKey>` on disk until the next pull.
+  - The fix relocates promotion to just after the remote POST/PUT (and its conflict handling) and before localization, on both the create and update paths. Promotion still never runs when the remote article write fails or a 3-way merge aborts the push, so the compensation window stays intact: the draft image remains staged under `media/drafts/`, the article file keeps its original draft-path reference, and `media_state` keeps `status: 'uploaded'` for the next run.
+
 ### Removed
 
 - **Zero-Communication Article Scaffolding (`emit new` / `sync_new`)**:

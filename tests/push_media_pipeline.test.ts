@@ -26,8 +26,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { computeMediaHashes } from '../src/client/media.js';
+import { inspectArticleDiff } from '../src/sync/diff.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { pushArticle } from '../src/sync/push.js';
+import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
 const TINY_PNG_BUFFER = Buffer.from(
@@ -1166,5 +1168,311 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const diskMd = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(diskMd).toContain(`![Window test](${confirmedUrl})`);
+  });
+});
+
+/**
+ * Regression guard for the reported ordering bug: a freshly uploaded `media/drafts/` image was promoted into
+ * `media/` only *after* the article file had already been written, so `localizeArticleMediaRefs` saw no mirror
+ * on disk and left the canonical URL in the body even though `localMediaRefs: true` was requested.
+ */
+describe('localMediaRefs with auto-uploaded draft images (promote-before-localize ordering)', () => {
+  let tempDir: string;
+  let cache: CacheDatabase;
+
+  const articleId = '01M67MP2W0VKCK2DFWM166CR24';
+  const mediaRecordId = '01M6TF1XXBS2KC9EVYG6RBT0J0';
+  const pendingStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
+  const confirmedStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
+  const confirmedUrl = `/_emdash/api/media/file/${confirmedStorageKey}`;
+  const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  const baseOptions = {
+    origin: 'https://aroooy.net',
+    token: 'test-token',
+    bylineSlugToId: { aroooy: '01M6BYLINE0000000000000000' },
+    knownTaxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+  };
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-push-media-localrefs-'));
+    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'media', 'drafts'), { recursive: true });
+    cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+  });
+
+  afterEach(() => {
+    cache.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  /** Fetch stub for the full 4-phase media flow plus a plain article PUT. */
+  function mediaFlowFetch() {
+    return vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
+      }
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (method === 'GET' && url.endsWith(`/_emdash/api/media/${mediaRecordId}`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaRecordId,
+                filename: 'local-ref-draft.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                storageKey: confirmedStorageKey,
+                status: 'ready',
+                createdAt: '2026-11-07T07:37:33.355Z',
+                url: confirmedUrl,
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              uploadUrl: `/_emdash/api/media/${mediaRecordId}/upload`,
+              method: 'PUT',
+              headers: { 'Content-Type': 'image/png' },
+              mediaId: mediaRecordId,
+              storageKey: pendingStorageKey,
+              expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/upload`)) {
+        return new Response(JSON.stringify({ success: true, data: { uploaded: true } }), {
+          status: 200,
+        });
+      }
+      if (method === 'POST' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/confirm`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaRecordId,
+                filename: 'local-ref-draft.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                storageKey: confirmedStorageKey,
+                status: 'ready',
+                createdAt: '2026-11-07T07:37:33.355Z',
+                url: confirmedUrl,
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}`)) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/content/posts/${articleId}`)) {
+        return new Response(JSON.stringify({ item: { id: articleId }, _rev: '2' }), {
+          status: 200,
+        });
+      }
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+  }
+
+  function seedDraftArticle(slug: string, body: string): string {
+    const fm: Frontmatter = {
+      id: articleId,
+      slug,
+      title: `Title ${slug}`,
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
+      bylines: ['aroooy'],
+    };
+    const relPath = `posts/draft/${todayPrefix}_${articleId}-${slug}.md`;
+    const serialized = serializeMarkdown(fm, body);
+    fs.writeFileSync(path.join(tempDir, relPath), serialized, 'utf8');
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: calculateHash(serialized),
+      remoteRev: '1',
+      status: 'draft',
+      slug,
+      lastSyncedAt: 1700000000,
+    });
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '1',
+      bodyMarkdown: body,
+      frontmatterYaml: JSON.stringify(fm),
+      hash: calculateHash(serialized),
+      savedAt: 1700000000,
+    });
+    return relPath;
+  }
+
+  it('writes the article-relative mirror reference on disk when a draft image is auto-uploaded', async () => {
+    const draftImgPath = path.join(tempDir, 'media', 'drafts', 'local-ref-draft.png');
+    fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
+
+    const relPath = seedDraftArticle(
+      'local-ref-draft',
+      'Offline writing.\n\n![Local ref draft](../../media/drafts/local-ref-draft.png)',
+    );
+
+    const res = await pushArticle(relPath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mediaFlowFetch(),
+      localMediaRefs: true,
+    });
+    expect(res.success).toBe(true);
+
+    // The promoted mirror must exist before the article body is spelled locally.
+    expect(fs.existsSync(draftImgPath)).toBe(false);
+    expect(fs.existsSync(path.join(tempDir, 'media', confirmedStorageKey))).toBe(true);
+
+    const diskMd = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    expect(diskMd).toContain(`![Local ref draft](../../media/${confirmedStorageKey})`);
+    expect(diskMd).not.toContain(confirmedUrl);
+
+    // The baseline and the remote payload stay canonical.
+    const base = cache.getBaseSnapshot(articleId)!;
+    expect(base.bodyMarkdown).toContain(confirmedUrl);
+    expect(base.bodyMarkdown).not.toContain('../../media/');
+
+    // Disk bytes must be what sync_state tracks, or the article reports a phantom edit right after push.
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.localHash).toBe(calculateHash(diskMd));
+
+    // Pushing must leave the workspace clean: no modified article, and `diff` reads the same verdict.
+    const status = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(status.summary.modified).toBe(0);
+    expect(status.summary.synced).toBe(1);
+    const inspection = inspectArticleDiff({ workspaceRoot: tempDir, cache, id: articleId });
+    expect(inspection.status).toBe('synced');
+    expect(inspection.diff?.hasChanges).toBe(false);
+
+    // A second push of the same file stays idempotent and keeps the local spelling on disk.
+    const res2 = await pushArticle(res.filePath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mediaFlowFetch(),
+      localMediaRefs: true,
+    });
+    expect(res2.success).toBe(true);
+    const diskMd2 = fs.readFileSync(path.join(tempDir, res2.filePath), 'utf8');
+    expect(diskMd2).toBe(diskMd);
+  });
+
+  it('leaves the draft image staged and the article file untouched when the article PUT fails after upload (P5 window)', async () => {
+    const draftImgPath = path.join(tempDir, 'media', 'drafts', 'put-fail.png');
+    fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
+
+    const relPath = seedDraftArticle(
+      'put-fail',
+      'Offline writing.\n\n![Put fail](../../media/drafts/put-fail.png)',
+    );
+    const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
+
+    let articlePutCalled = false;
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
+      }
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              uploadUrl: `/_emdash/api/media/${mediaRecordId}/upload`,
+              method: 'PUT',
+              headers: { 'Content-Type': 'image/png' },
+              mediaId: mediaRecordId,
+              storageKey: pendingStorageKey,
+              expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/upload`)) {
+        return new Response(JSON.stringify({ success: true, data: { uploaded: true } }), {
+          status: 200,
+        });
+      }
+      if (method === 'POST' && url.endsWith(`/_emdash/api/media/${mediaRecordId}/confirm`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaRecordId,
+                filename: 'put-fail.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                storageKey: confirmedStorageKey,
+                status: 'ready',
+                createdAt: '2026-11-07T07:37:33.355Z',
+                url: confirmedUrl,
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaRecordId}`)) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/content/posts/${articleId}`)) {
+        articlePutCalled = true;
+        return new Response('Service Unavailable', {
+          status: 503,
+          statusText: 'Service Unavailable',
+        });
+      }
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    await expect(
+      pushArticle(relPath, {
+        ...baseOptions,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn,
+        localMediaRefs: true,
+      }),
+    ).rejects.toThrow(/Push failed: Service Unavailable/);
+
+    expect(articlePutCalled).toBe(true);
+    // The compensation window stays intact: the draft image is never promoted before a successful PUT, and the
+    // article file keeps its original draft-path reference instead of pointing at a mirror that does not exist.
+    expect(fs.existsSync(draftImgPath)).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, 'media', confirmedStorageKey))).toBe(false);
+    expect(fs.readFileSync(path.join(tempDir, relPath), 'utf8')).toBe(originalDiskMd);
+    const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
+    expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('uploaded');
   });
 });

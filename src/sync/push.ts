@@ -959,6 +959,13 @@ export async function pushArticle(
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
     const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state.
+    // Promotion must stay after the remote POST (a failed create never promotes a local image), but it must run
+    // *before* the article is localized below: `localizeArticleMediaRefs` only rewrites a reference whose
+    // storageKey already has a real mirror under media/, so promoting afterwards would leave a freshly uploaded
+    // draft image spelled as a canonical remote URL on disk even with localMediaRefs enabled.
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
+
     // `parsed.body` carries the canonical URL because preflight rewrote every local reference. The file that
     // lands on disk must carry the workspace's own spelling again, or a push would silently re-canonicalize
     // the article and the next status pass would report an edit nobody made. The baseline keeps the canonical
@@ -1002,9 +1009,6 @@ export async function pushArticle(
         );
       }
     }
-
-    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
-    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
     const finalTaxHash = hasTaxFailures
       ? null
@@ -1502,6 +1506,12 @@ export async function pushArticle(
     const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
     const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
+    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state — after the
+    // remote PUT and its conflict handling (a failed or conflicted push never promotes), but before the
+    // localization below, for the same reason as on the create path: a mirror that does not exist yet on disk
+    // can never be localized into an article-relative reference.
+    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
+
     // Same disk spelling rule as the clean-push path: keep the workspace's own local references on disk while
     // the canonical form goes to remote and into the baseline. A file that already carries the depth-free form
     // keeps it; a path change (draft→published) re-spells at the new depth.
@@ -1556,9 +1566,6 @@ export async function pushArticle(
     } else {
       fs.writeFileSync(fullPath, serializedContent, 'utf8');
     }
-
-    // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state
-    finalizePromotedDraftImages(preflight.draftImages, uploadedByAbsPath, options, warnings);
 
     // Update Base snapshot
     const savedFrontmatter: Frontmatter = { ...parsed.frontmatter };
