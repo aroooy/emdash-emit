@@ -41,7 +41,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull: Pull remote article(s) and taxonomies
   server.tool(
     'sync_pull',
-    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
+    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true for an additional bounded media-library pass (mediaSyncLimit, default 300) — referenced images in pulled articles are already mirrored on-demand without it. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -80,7 +80,9 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       includeMedia: z
         .boolean()
         .optional()
-        .describe('Also pull media assets and metadata into media/ directory.'),
+        .describe(
+          'Also pull media assets and companion metadata into media/ (bounded by mediaSyncLimit, default 300; referenced media in pulled articles is mirrored on-demand automatically without this flag).',
+        ),
       metadataOnly: z
         .boolean()
         .optional()
@@ -256,7 +258,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             downloadFiles: args.metadataOnly !== true,
             cache: ctx.cache,
           });
-          mediaMsg += `\nMedia (full library): ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
+          mediaMsg += `\nMedia (library pass, limit ${mediaLimit}): ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
         }
 
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
@@ -322,7 +324,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<markdownRef>.<ext> and .yaml, where markdownRef is derived from the storageKey a body URL references). Can pull all media, a limited batch, or targeted media referenced by a specific article. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded; because body URLs carry the R2 storageKey while GET /_emdash/api/media/{id} keys on the record id, such a key is unverified rather than proven missing.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<markdownRef>.<ext> and .yaml, where markdownRef is derived from the storageKey a body URL references). Can pull targeted media referenced by an article ("article") or the full library ("all", maintenance/backup only). Note: Routine workflows rarely need this tool because sync_pull mirrors referenced assets on-demand automatically. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded.',
     {
       article: z
         .string()
@@ -337,8 +339,15 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       limit: z
         .number()
         .optional()
-        .describe('Maximum number of media items to pull (defaults to 300)'),
-      all: z.boolean().optional().describe('Pull ALL media items from remote (defaults to false)'),
+        .describe(
+          'Maximum number of media items to pull (defaults to 300; bounded batch, routine workflows mirror referenced assets on-demand automatically)',
+        ),
+      all: z
+        .boolean()
+        .optional()
+        .describe(
+          'Maintenance/backup only (⚠️ NOT for routine use). Pull ALL media binaries from remote (can download thousands of files). Routine workflows do not need this because sync_pull mirrors referenced assets automatically. Reserve strictly for complete offline backups or migration diagnostics (defaults to false).',
+        ),
       downloadFiles: z.boolean().optional().describe('Download binary files (defaults to true)'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },

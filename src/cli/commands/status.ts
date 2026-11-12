@@ -245,16 +245,15 @@ export function registerStatusInitCommands(
   - emit conflicts    ... List, diff, and resolve quarantined copies in posts/conflicts/
   - emit doctor       ... Diagnose workspace health, version, origin, and media references
                           (--check-media-library compares the remote library to the local mirror count)
-  - emit pull-media   ... Download remote media assets (--article <id> targeted, --all for the whole
-                          library, which is also how every remote storageKey gets indexed)
+  - emit pull-media   ... Download remote media assets (--article <id> targeted; --all is a
+                          maintenance/full-backup run, referenced media mirrors automatically on pull)
   - emit mcp          ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
 
 ■ Collaboration Rules with AI (AGENTS.md)
   - Strict prohibition against creating throwaway temporary files (e.g. temp.md).
   - Never manually rename (mv) cached files; update the frontmatter slug/status instead.
-  - Media uses two different ULIDs: featuredImage and media/ filenames use the media record id,
-    while body ![...](/_emdash/api/media/file/...) URLs use the storageKey. They never match —
-    see docs/media-id-spaces.md before debugging a missing image.
+  - Media uses two different ULIDs: featuredImage uses the media record id, while body URLs
+    and local mirrors use the storageKey. They never match — see docs/media-id-spaces.md.
 ========================================================================
 `);
     });

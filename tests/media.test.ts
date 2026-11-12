@@ -784,8 +784,12 @@ locale: ja
     expect(warning).toContain('GET /_emdash/api/media/{id} searches the primary key');
     expect(warning).toContain('does not prove the record is missing');
     // The library index is reachable through Emit's own list walk, so the warning points there first
-    // instead of sending the user to a server-side query.
-    expect(warning).toContain('emit pull-media --all');
+    // instead of sending the user to a server-side query. It must point to doctor --check-media-library first.
+    const doctorIdx = warning.indexOf('emit doctor --check-media-library');
+    const allIdx = warning.indexOf('emit pull-media --all');
+    expect(doctorIdx).toBeGreaterThan(-1);
+    expect(allIdx).toBeGreaterThan(-1);
+    expect(doctorIdx).toBeLessThan(allIdx);
     expect(warning).toContain('without any server-side query');
     expect(warning).toContain('blind INSERT can create a duplicate');
     expect(warning).toContain('Emit mirrors records and never repairs server data');

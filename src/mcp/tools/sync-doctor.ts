@@ -52,7 +52,7 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         .boolean()
         .optional()
         .describe(
-          'Walk the whole remote media library (GET /_emdash/api/media) and report its record count against the number of assets this workspace mirrors, so a missing-file count reads as coverage instead of data loss',
+          'Walk the whole remote media library via metadata only (GET /_emdash/api/media; no binary downloads) and report its record count against the number of assets this workspace mirrors, so a missing-file count reads as coverage instead of data loss',
         ),
     },
     async (args) => {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-11-12
+
 ### Added
 
 - **Article-Relative Local Media References (`localMediaRefs`, default-ON)**:
@@ -52,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New exported `formatArticleMediaSummary` renders CLI output as `(0 downloaded, 0 skipped/up-to-date, 4 verified/mirrored). (4 body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`; MCP `sync_pull_media` gained the same `verified/mirrored` count and explanation. The reassuring note is suppressed whenever something genuinely is unresolved.
   - README (`emit pull-media`), `docs/media-id-spaces.md`, and `PullMediaResult` docstrings now state that a migrated body's ULIDs are expected to resolve to nothing.
   - `emit doctor --check-media-library` (MCP `sync_doctor checkMediaLibrary: true`) states the remote record count against the number of assets this workspace mirrors, so a missing-file warning reads as coverage. Plain `emit doctor` stays offline.
-  - Guidance now routes through Emit first: `[UNRESOLVED_MEDIA_ASSET]`, the doctor suggestion, README, MCP instructions, `emit guide`, and `docs/media-id-spaces.md` all present `emit pull-media --all` / `emit doctor --check-media-library` as the way to index every storageKey, with server-side verification only for what a complete walk could not match.
+  - Guidance now routes through Emit first: `[UNRESOLVED_MEDIA_ASSET]`, the doctor suggestion, README, MCP instructions, `emit guide`, and `docs/media-id-spaces.md` all route to `emit doctor --check-media-library` (metadata-only walk) first and reserve `emit pull-media --all` for deliberate full offline backups, with server-side verification only for what a complete walk could not match. Maintenance-only guardrails are enforced across CLI help, MCP schema descriptions, and `emit guide` outputs.
 - **Media Resolution Stays Epistemic (production investigation follow-up)**: a live D1 audit of the migrated corpus proved that all 4,008 media records exist and every WordPress `storage_key` is registered, so the earlier "the D1 record is missing" framing was wrong — the 401/404 symptoms come from addressing `GET /_emdash/api/media/{id}` (D1 primary key) with an R2 `storageKey`, and from calling the authenticated admin API without a bearer token. Emit must therefore never conclude that a record is absent, and its advice must never invite a duplicate registration:
   - CLI warning renamed to `⚠️ [UNRESOLVED_MEDIA_ASSET]`, and both its wording and `emit doctor --check-media-urls`'s suggestion now state that a 404 proves only a failed lookup and instruct verification by storageKey (`wrangler d1 SELECT` on the media table, or the admin UI) before registering anything. The old "Register the missing media records" instruction is gone.
   - New exported `collectLocalMediaMirrorCandidates(mediaDir)` indexes every `media/*.yaml` companion by both its record id and its recorded `storageKey`, skipping `legacy_*` residue so fabricated metadata can never serve as verification evidence.

@@ -783,12 +783,19 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     const mCheck = report.checks.find((c) => c.id === 'media_references');
     expect(mCheck?.status).toBe('warning');
     expect(JSON.stringify(mCheck?.details ?? '')).toContain('01M67LEGACYX0000000000000F.jpg');
-    // The suggestion must demand storageKey-based verification before any write, and must never imply
-    // that a missing record has been proven or instruct a blind INSERT. It also must not route the user
-    // to a server-side query when Emit's own library walk can index every storageKey the server holds.
-    expect(mCheck?.suggestion).toContain('emit pull-media --all');
-    expect(mCheck?.suggestion).toContain('emit doctor --check-media-library');
+    // The suggestion must point to doctor --check-media-library first (without binary downloads)
+    // and reserve pull-media --all for deliberate full backups, demanding storageKey-based
+    // verification before any write.
+    const doctorIndex = mCheck?.suggestion?.indexOf('emit doctor --check-media-library') ?? -1;
+    const allIndex = mCheck?.suggestion?.indexOf('emit pull-media --all') ?? -1;
+    expect(doctorIndex).toBeGreaterThan(-1);
+    expect(allIndex).toBeGreaterThan(-1);
+    expect(doctorIndex).toBeLessThan(allIndex);
+    expect(mCheck?.suggestion).toContain('without binary downloads');
     expect(mCheck?.suggestion).toContain('without any server-side query');
+    expect(mCheck?.message).toContain(
+      'Reserve "emit pull-media --all" for deliberate full offline backups',
+    );
     expect(mCheck?.suggestion).toContain('blind INSERT can duplicate an existing record');
     expect(mCheck?.suggestion).toContain('never repairs server data');
   });

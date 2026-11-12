@@ -79,10 +79,9 @@ describe('Emit MCP Server', () => {
     // name both identifiers and point at the standalone specification document.
     expect(instructions).toContain('docs/media-id-spaces.md');
     expect(instructions).toContain('storageKey');
-    // The only storageKey lookup path Emit owns is the paginated list operation, so agents must be told
-    // to index the library before reaching for server-side tools.
-    expect(instructions).toContain('sync_pull_media with all:true');
-    expect(instructions).toContain('checkMediaLibrary:true');
+    // Agents must be cautioned against running all:true routinely, and directed to checkMediaLibrary first
+    expect(instructions).toContain('Do NOT use sync_pull_media with all: true');
+    expect(instructions).toContain('checkMediaLibrary: true');
 
     // Expected tools
     const expectedTools = [
@@ -130,6 +129,37 @@ describe('Emit MCP Server', () => {
     expect(shape!['postsOnly']).toBeDefined();
     expect(shape!['includeMedia']).toBeDefined();
     expect(shape!['metadataOnly']).toBeDefined();
+
+    // sync_pull_media description and all-parameter safety assertion
+    expect(registered['sync_pull_media'].description).toContain(
+      'targeted media referenced by an article',
+    );
+    expect(registered['sync_pull_media'].description).toContain('maintenance/backup only');
+
+    const syncPullMediaTool = registered['sync_pull_media'] as unknown as {
+      inputSchema?: { _def?: { shape?: () => Record<string, { description?: string }> } };
+    };
+    const mediaShape = syncPullMediaTool.inputSchema?._def?.shape?.();
+    expect(mediaShape).toBeDefined();
+    expect(mediaShape!['all']).toBeDefined();
+    expect(mediaShape!['all'].description).toContain('Maintenance/backup only');
+    expect(mediaShape!['all'].description).toContain('NOT for routine use');
+  });
+
+  it('sync_pull source code locks bounded media library pass label and forbids "full library" (G-3)', () => {
+    const syncPullSrc = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-pull.ts'),
+      'utf-8',
+    );
+    expect(syncPullSrc).toContain('Media (library pass, limit');
+    expect(syncPullSrc).not.toContain('Media (full library)');
+  });
+
+  it('docs/media-id-spaces.md enforces doctor --check-media-library first and reserves --all (G-5)', () => {
+    const docPath = path.resolve(__dirname, '../docs/media-id-spaces.md');
+    const doc = fs.readFileSync(docPath, 'utf-8');
+    expect(doc).toContain('index the library with `emit doctor --check-media-library` first');
+    expect(doc).toContain('reserve `emit pull-media --all` for deliberate full offline backups');
   });
 
   it('correctly resolves ULID from filePath with yyyyMMdd_ date prefix in sync_pull', () => {

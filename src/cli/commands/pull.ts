@@ -59,7 +59,7 @@ export function formatOrphanMediaWarning(orphanStorageKeys: string[] | undefined
     `could not be matched to a media record or a local mirror and were not downloaded: ${keyList}. ` +
     `These keys are R2 storage keys, not media record ids — GET /_emdash/api/media/{id} searches the ` +
     `primary key, so a 404 here does not prove the record is missing. The library's own storageKeys are ` +
-    `reachable from Emit: run "emit pull-media --all" (or "emit doctor --check-media-library") to index ` +
+    `reachable from Emit: run "emit doctor --check-media-library" (or "emit pull-media --all" for complete backup) to index ` +
     `every record the server reports, which resolves these keys without any server-side query. Verify by ` +
     `storageKey before registering anything: a blind INSERT can create a duplicate. Emit mirrors records ` +
     `and never repairs server data.`
@@ -85,7 +85,7 @@ export function formatMediaCoverageLine(res: {
   const unmirrored = res.referencedUnmirroredStorageKeys;
   if (unmirrored && unmirrored.length > 0) {
     parts.push(
-      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey before registering anything, because a blind INSERT can duplicate an existing record.`,
+      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey (after the complete library walk above) before registering anything, because a blind INSERT can duplicate an existing record.`,
     );
   }
   return parts.length > 0 ? `\n${parts.join('\n')}` : '';
@@ -452,10 +452,13 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Collection name when using --article (defaults to "posts")',
     )
     .option('-l, --limit <number>', 'Maximum media items to fetch (default: 300 or config)')
-    .option('--all', 'Fetch ALL media files from remote')
+    .option(
+      '--all',
+      'Fetch ALL media files from remote (maintenance only — routine workflows do not need this)',
+    )
     .option(
       '--prune',
-      'Prune local media files that no longer exist on remote (legacy_* residue is never touched)',
+      'Prune local media whose companion .yaml names a deleted remote record (files without a companion are left untouched)',
     )
     .option('--metadata-only', 'Do not download binary files, only metadata YAML')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')

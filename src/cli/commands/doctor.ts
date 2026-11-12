@@ -54,7 +54,7 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
     )
     .option(
       '--check-media-library',
-      'Walk the remote media library and report how many records it holds against how many this workspace mirrors (mediaSyncLimit truncates the local window)',
+      'Walk the whole remote media library page by page via metadata only (no binary downloads) and report its record count against local mirrors',
     )
     .action(async (options) => {
       try {

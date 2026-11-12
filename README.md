@@ -94,7 +94,10 @@ These Non-Goals are **deliberate design decisions, not missing capabilities**: r
 
 > [!NOTE]
 > **Can the sync limit be adjusted — and why is there no `--all` for articles?**
-> Yes. Set `postsSyncLimit: 300` (or any larger number, e.g. your full article count) in `.emit/config.json`, and Emit's internal pagination engine automatically batch-fetches up to that configured limit. What Emit deliberately omits is a `--all` _flag_ for articles: pulling the entire history into the workspace is an explicit configuration choice, not a routine default, so the "staging desk" discipline is preserved in day-to-day UX while remaining fully escapable when you truly want a larger working set. Media is intentionally different — `emit pull-media --all` does exist, because media files are inert assets that never carry unsynced writing risk.
+>
+> **Articles**: Set `postsSyncLimit: 300` (or any larger number, e.g. your full article count) in `.emit/config.json`, and Emit's internal pagination engine automatically batch-fetches up to that configured limit. What Emit deliberately omits is a `--all` _flag_ for articles: pulling the entire history into the workspace is an explicit configuration choice, not a routine default, so the "staging desk" discipline is preserved in day-to-day UX while remaining fully escapable when you truly want a larger working set.
+>
+> **Media**: Media is handled via an on-demand local-first pipeline — referenced media files in pulled articles are mirrored automatically. While `emit pull-media --all` exists for full offline backup or migration diagnostics, it is not intended for routine workflows because pulling thousands of binary files can overwhelm local disk and network bandwidth.
 
 ### 2. The Sliding Window "Staging Desk" Model
 
@@ -102,7 +105,7 @@ Traditional synchronization tools attempt to download the entire history of a si
 
 Emit adopts a **bounded sliding window**:
 
-- It maintains an active sliding window of recent posts (default: **latest 100 posts**).
+- It maintains an active sliding window of recent posts (default: **latest 30 posts per status**, up to 60 files total; the legacy `syncLimit` config key is still accepted for backwards compatibility).
 - When older posts fall outside the sliding window during `emit pull`, Emit cleanly **prunes them from disk**, keeping your local repository lean, fast, and organized.
 - Any pruned article can be pulled back into the workspace at any time with `emit pull <id>`.
 
@@ -295,7 +298,7 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 | `origin`            | `"https://example.com"` | Base URL of the target EmDash instance, exactly as written to disk. It is never rewritten in-memory by `EMDASH_ORIGIN`; see [Origin Resolution Precedence](#origin-resolution-precedence) for how the effective origin is chosen                                                                                                                       |
 | `defaultCollection` | `"posts"`               | Default content collection when `--collection` is omitted                                                                                                                                                                                                                                                                                              |
 | `defaultLocale`     | `"ja"`                  | Default locale used when scaffolding new drafts via `emit new` / `sync_new`                                                                                                                                                                                                                                                                            |
-| `postsSyncLimit`    | `30`                    | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; also supports legacy `syncLimit` fallback)                                                                                                                                          |
+| `postsSyncLimit`    | `30`                    | Sliding window size for batch article pulls (when `status: all`, fetches up to `postsSyncLimit` `published` + up to `postsSyncLimit` `draft` articles in parallel; legacy `syncLimit` is also accepted)                                                                                                                                              |
 | `mediaSyncLimit`    | `300`                   | Default maximum items fetched by `emit pull-media` / `sync_pull_media`                                                                                                                                                                                                                                                                                 |
 | `localMediaRefs`    | `true`                  | Default-ON. Mirrored body images are stored as article-relative `../../media/<storageKey>` references (depth derived from the article's own path) instead of canonical `/_emdash/api/media/file/<storageKey>` URLs, so Markdown preview resolves them offline. Opt out with `emit pull --no-local-media-refs`; pull, push, diff, and MCP all honour it |
 | `concurrency`       | `8`                     | Parallel HTTP fetch concurrency during batch pulls                                                                                                                                                                                                                                                                                                     |
@@ -386,10 +389,10 @@ Consequences worth internalizing before debugging media:
 
 - A record `id` on the file route returns **404**; a `storageKey` on `GET /_emdash/api/media/{id}` returns **401** (no bearer token) or **404**. Both codes describe the _lookup_, never the health of the asset.
 - Because a 404 proves only that one lookup failed, Emit never concludes a record is missing and never suggests inserting one — see `[UNRESOLVED_MEDIA_ASSET]` under [`emit pull-media`](#emit-pull-media).
-- An old article whose images do not render **locally** is usually an unmirrored asset (the media window is newest-first, `mediaSyncLimit` default 300) rather than a broken reference. `emit doctor --check-media-library` states the remote library size against the local mirror count, and `emit pull-media --all` indexes every storageKey the server reports.
-- Local mirrors are named after the **storageKey** (`media/<markdownRef>.<ext>`), so a body URL and the file on disk share one key. Workspaces built before this rule still hold legacy `media/<yyyyMMdd>_<id>-<name>.<ext>` names; a single `emit pull-media --all` renames them in place with no re-downloading, and Emit reads both forms meanwhile.
+- An old article whose images do not render **locally** is usually an unmirrored asset (the media window is newest-first, `mediaSyncLimit` default 300) rather than a broken reference. `emit doctor --check-media-library` performs a metadata-only walk comparing remote size against local mirrors, and `emit pull-media --article <id>` fetches referenced images on demand without pulling the full library (reserve `emit pull-media --all` for complete offline backups).
+- Local mirrors are named after the **storageKey** (`media/<markdownRef>.<ext>`), so a body URL and the file on disk share one key. Workspaces built before this rule still hold legacy `media/<yyyyMMdd>_<id>-<name>.<ext>` names; pulling an article (or a one-time maintenance run of `emit pull-media --all`) renames them in place with no re-downloading, and Emit reads both forms meanwhile.
 
-The full specification — identifier table, endpoint matrix, migrated-corpus behavior, resolution order (`verifiedStorageKeys` → `orphanStorageKeys`), and `legacy_*` residue rules — lives in **[docs/media-id-spaces.md](docs/media-id-spaces.md)**.
+The full specification — identifier table, endpoint matrix, migrated-corpus behavior, and resolution order (`verifiedStorageKeys` → `orphanStorageKeys`) — lives in **[docs/media-id-spaces.md](docs/media-id-spaces.md)**.
 
 ---
 
@@ -676,7 +679,7 @@ emit pull [id] [options]
 - `--force`: Force overwrite local files and bypass differential hash checking.
 - `--concurrency <n>`: Parallel processing task limit (default: `8`).
 - `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
-- `--media`: Full library media sync: pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `300`). Note that referenced media in pulled articles is mirrored on-demand by default (local-first media pipeline) without requiring this flag. Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
+- `--media`: Bounded media-library pass: pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `300`). Note that referenced media in pulled articles is mirrored on-demand by default (local-first media pipeline) without requiring this flag. Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
 - `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
 - `--local-media-refs`: Write mirrored body images as article-relative `../../media/<storageKey>` references instead of the canonical `/_emdash/api/media/file/<storageKey>` URL, so Markdown preview and local tooling resolve them offline from the article's own directory. The choice is **remembered in `.emit/config.json`** and is **default-ON**, so every later pull, push, and diff keeps the same spelling without repeating the flag.
 - `--no-local-media-refs`: Clear a previously remembered preference and store canonical EmDash URLs on disk again.
@@ -730,11 +733,11 @@ Available Categories:
 Available Tags:
   - ai, cloudflare, emit, typescript
 
-Fetching articles from remote (posts, status: all, window: 100/status, concurrency: 8)...
-  [1/169] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
-  [2/169] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
+Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...
+  [1/50] ✅ Pulled hello-world -> posts/published/20261101_01M5...-Hello-World.md
+  [2/50] ✅ Pulled draft-post -> posts/draft/20261104_01M6...-Draft-Post.md
 
-🎉 Articles: 169 total [100 published, 69 draft] (12 updated, 157 skipped/up-to-date)
+🎉 Articles: 50 total [30 published, 20 draft] (12 updated, 38 skipped/up-to-date)
 
 ```
 
@@ -836,7 +839,7 @@ Validates 6 critical health vectors:
 Media flags:
 
 - `--check-media-urls`: Probe `HEAD /_emdash/api/media/file/<storageKey>` for references no local source resolves, downgrading ones the origin still serves to informational notes.
-- `--check-media-library`: Walk the whole remote library and state how many records it holds against how many this workspace mirrors, so a missing-file count reads as coverage rather than data loss.
+- `--check-media-library`: Walk the whole remote library page by page via metadata only (no binary downloads) and state how many records it holds against how many this workspace mirrors, so a missing-file count reads as coverage rather than data loss.
 
 ---
 
@@ -920,15 +923,15 @@ emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune]
 
 - `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space. The summary separates what Emit actually mirrored from what it merely verified, and states plainly that a migrated body's ULIDs are `storageKey`s rather than record ids — so an id lookup resolving nothing is reported as expected, never as `failed`.
 - `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
-- `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. The summary reports how many records the server holds against how many this run walked, so coverage is visible instead of assumed.
-- `--prune`: Remove local media files whose companion `.yaml` names a media record that no longer exists on remote. Ownership is read from the companion, never guessed from a filename, so a file with no companion is left untouched. Leftover `media/legacy_*` residue written by older Emit versions is never pruned and must be deleted by hand.
+- `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. **Maintenance / Backup Only**: Routine workflows do not need this because `emit pull` automatically mirrors referenced media on-demand. Fetching the full library can download thousands of images and consume substantial bandwidth and disk space.
+- `--prune`: Remove local media files whose companion `.yaml` names a media record that no longer exists on remote. Ownership is read from the companion, never guessed from a filename, so a file with no companion is left untouched. Residue written by older Emit versions is never pruned and must be deleted manually.
 - `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
 
-> **Two ID spaces, one lookup path:** Body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 when queried with a body URL's ULID. The list operation is the only endpoint that reports each record's own `storageKey`, and it exposes no storageKey filter (`q` matches filenames only) — which is why `emit pull-media --all` (or `emit doctor --check-media-library`) is how Emit reaches migrated assets, not a targeted lookup.
+> **Two ID spaces, one lookup path:** Body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 when queried with a body URL's ULID. The list operation is the only endpoint that reports each record's own `storageKey`, and it exposes no storageKey filter (`q` matches filenames only) — which is why `emit doctor --check-media-library` (or `emit pull-media --all` for maintenance backup) is how Emit reaches migrated assets, not a targeted lookup.
 
 > **How a migrated article reads:** for an article whose body bakes R2 `storageKey`s, `emit pull-media --article` reports something like `8 referenced item(s) (0 downloaded, 0 skipped/up-to-date, 4 verified/mirrored). (4 body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`. The assets already under `media/` are named after the **storageKey** the body references (or, in a workspace that has not been re-pulled yet, after the legacy **record id**), and each companion `.yaml` carries both identifiers, so those images resolve through local mirror metadata instead of re-downloading. Nothing in that line is a failure: `failed` counts only references that no id lookup _and_ no storageKey check could match.
 
-> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a _lookup_ failure, not proof that the record is missing. Index the whole library first with `emit pull-media --all`, which resolves these keys without any server-side query; only then verify anything left over by storageKey before registering it — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
+> **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a _lookup_ failure, not proof that the record is missing. Index the whole library first with `emit doctor --check-media-library` (metadata-only walk) or `emit pull-media --all` (offline backup), which resolves these keys without any server-side query; only then verify anything left over by storageKey before registering it — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
 
 ---
 
@@ -1064,7 +1067,7 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 
 ```
 
-**Cause**: An article that has fallen outside the sliding window (e.g., beyond the latest 100 posts) contains local edits that have not been pushed to the remote server. To prevent accidental data loss, Emit aborts the pull.
+**Cause**: An article that has fallen outside the sliding window (e.g., beyond the latest 30 posts per status) contains local edits that have not been pushed to the remote server. To prevent accidental data loss, Emit aborts the pull.
 
 **Solution**:
 
@@ -1090,9 +1093,9 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 
 ### Q: Images in an older article do not render in a local Markdown preview
 
-**Cause**: Two different things look identical here. (1) The asset was never mirrored locally: `emit pull-media` walks the remote library newest-first and stops at `mediaSyncLimit` (default 300), so images referenced by older articles have no file under `media/`. (2) You are trying to resolve a body URL against local filenames in a workspace that still holds legacy names: body URLs carry the R2 `storageKey`, while a legacy `media/<yyyyMMdd>_<ULID>-<name>.<ext>` is named after the media record `id`, and those two ULIDs never match for the same image. Run `emit pull-media --all` once and mirrors are renamed to the storageKey-derived stem, so the body URL and the file on disk share one key.
+**Cause**: Two different things look identical here. (1) The asset was never mirrored locally: `emit pull-media` walks the remote library newest-first and stops at `mediaSyncLimit` (default 300), so images referenced by older articles have no file under `media/`. (2) You are trying to resolve a body URL against local filenames in a workspace that still holds legacy names: body URLs carry the R2 `storageKey`, while a legacy `media/<yyyyMMdd>_<ULID>-<name>.<ext>` is named after the media record `id`, and those two ULIDs never match for the same image. Run `emit pull-media --article <id>` (or a one-time maintenance run of `emit pull-media --all`) and mirrors are renamed to the storageKey-derived stem, so the body URL and the file on disk share one key.
 
-**Solution**: Run `emit doctor --check-media-library` first — its `Media References` check reports how many references have no local file _and_ how many records the remote library holds against how many this workspace mirrors, which distinguishes "not mirrored" from "broken reference". Mirror everything with `emit pull-media --all` (or a larger `--limit`) to index every storageKey the server reports; only for what remains should you verify by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
+**Solution**: Run `emit doctor --check-media-library` first (a metadata-only walk) — its `Media References` check reports how many references have no local file _and_ how many records the remote library holds against how many this workspace mirrors, which distinguishes "not mirrored" from "broken reference". To fetch missing images without pulling the entire library, run `emit pull-media --article <id>`. Reserve `emit pull-media --all` strictly for deliberate full offline backups. Only for what remains unresolved after indexing should you verify by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
 
 ### Q: `[NETWORK_ERROR]`: Network request failed (`fetch failed`)
 

@@ -769,13 +769,12 @@ export async function runWorkspaceDoctor(
       name: 'Media References',
       status: 'warning',
       message:
-        `${missingMedia.length} referenced media file(s) are missing from disk. ` +
-        `Run "emit pull-media" (or "emit pull-media --all" when the remote library is larger than the ` +
-        `configured mediaSyncLimit) to fetch them.${coverage} Body URLs carry R2 storage keys while ` +
-        `media/ files are named after media record ids, so a missing local file is not a broken ` +
-        `reference: see docs/media-id-spaces.md.`,
+        `${missingMedia.length} referenced media file(s) are missing from disk.${coverage} ` +
+        `Run "emit pull-media --article <id>" for the specific article, or "emit doctor --check-media-library" ` +
+        `to size the remote library (metadata-only walk). Reserve "emit pull-media --all" for deliberate full offline backups. ` +
+        `Body URLs carry R2 storage keys, so a missing local file does not mean the remote asset is broken: see docs/media-id-spaces.md.`,
       suggestion: options.checkMediaUrls
-        ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. The full library index is reachable through "emit pull-media --all" or "emit doctor --check-media-library", which report every storageKey the server holds without any server-side query. Confirm by storageKey before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
+        ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. The full library index is reachable without binary downloads through "emit doctor --check-media-library" (or "emit pull-media --all" for complete offline backup), which reports every storageKey the server holds without any server-side query. Confirm by storageKey before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
         : undefined,
       details: missingMedia,
     });

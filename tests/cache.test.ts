@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getPackageVersion } from '../src/utils/version.js';
 import {
   CacheDatabase,
   CURRENT_CACHE_SCHEMA_VERSION,
@@ -486,7 +487,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(bakFiles.length).toBe(1);
 
     // T6-4: Filename contains package.json version
-    expect(bakFiles[0]).toContain('.bak-0.1.14-');
+    expect(bakFiles[0]).toContain(`.bak-${getPackageVersion()}-`);
 
     // T6-1: Verify backup is valid SQLite with sync_state table
     const bakFull = path.join(dbDir, bakFiles[0]);

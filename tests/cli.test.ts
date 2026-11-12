@@ -91,6 +91,9 @@ describe('Emit CLI (Commander)', () => {
     const optionNames = pullMediaCmd?.options.map((o) => o.long) || [];
     expect(optionNames).toContain('--article');
     expect(optionNames).toContain('--all');
+    const allOpt = pullMediaCmd?.options.find((o) => o.long === '--all');
+    expect(allOpt).toBeDefined();
+    expect(allOpt?.description).toContain('maintenance only');
     expect(optionNames).toContain('--limit');
     expect(optionNames).toContain('--prune');
     expect(optionNames).toContain('--metadata-only');
@@ -103,6 +106,9 @@ describe('Emit CLI (Commander)', () => {
     const optionNames = doctorCmd?.options.map((o) => o.long) || [];
     expect(optionNames).toContain('--check-media-urls');
     expect(optionNames).toContain('--check-media-library');
+    const libOpt = doctorCmd?.options.find((o) => o.long === '--check-media-library');
+    expect(libOpt?.description).toContain('metadata only');
+    expect(libOpt?.description).toContain('no binary downloads');
   });
 
   it('push command description mentions auto-uploading media/drafts/* images', () => {
@@ -624,6 +630,14 @@ describe('Emit CLI (Commander)', () => {
       const docOut = logLines.join('\n');
       expect(docOut).toContain('Emit Workspace Doctor');
       expect(docOut).toContain('Overall Status: HEALTHY');
+
+      // 3. emit guide in clean workspace (Handy Commands must lock maintenance-only stance)
+      logLines.length = 0;
+      await program.parseAsync(['node', 'emit', 'guide']);
+      const guideOut = logLines.join('\n');
+      expect(guideOut).toContain('maintenance/full-backup run');
+      expect(guideOut).toContain('local mirrors use the storageKey');
+      expect(guideOut).not.toMatch(/--all[^.]*how every remote storageKey gets indexed/);
     } finally {
       console.log = originalLog;
       process.chdir(originalCwd);
