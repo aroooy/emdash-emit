@@ -97,6 +97,7 @@ describe('Emit MCP Server', () => {
       'sync_delete',
       'sync_conflicts',
       'sync_doctor',
+      'sync_media_search',
     ];
 
     const registered = (
@@ -748,6 +749,185 @@ Inline body
       );
       expect(mediaPullRes.content[0].text).toContain(`Media IDs: ${mediaId}`);
       expect(mediaPullRes.content[0].text).toContain('_meta:');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('T4-2, T4-6: sync_media_search returns structured JSON with hits and walkComplete', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (args: Record<string, unknown>) => Promise<{
+              isError?: boolean;
+              content: Array<{ type: string; text: string }>;
+            }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((urlStr: string) => {
+      const url = new URL(urlStr);
+      expect(url.searchParams.has('q')).toBe(false);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: '01M67P08DXFTYDPFRTJCC4XMP8',
+                filename: 'sky.jpg',
+                mimeType: 'image/jpeg',
+                size: 5000,
+                alt: '夕焼け空',
+                storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+              },
+            ],
+            nextCursor: 'cursor-has-more',
+            totalCount: 100,
+          },
+        }),
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await registered['sync_media_search'].handler({
+        query: '夕焼け',
+        maxScan: 1,
+      });
+
+      expect(res.isError).toBeUndefined();
+      const payload = JSON.parse(res.content[0].text);
+      expect(payload.query).toBe('夕焼け');
+      expect(payload.scannedCount).toBe(1);
+      expect(payload.walkComplete).toBe(false);
+      expect(payload.note).toContain('[WALK_INCOMPLETE]');
+      expect(payload.note).not.toContain('does not exist');
+      expect(payload.note).not.toContain('INSERT');
+      expect(payload.hits).toHaveLength(1);
+      expect(payload.hits[0].storageKey).toBe('01M67P07X2VPW0MYRRRGMA6T5A.jpg');
+      expect(payload.hits[0].mirrored).toBe(false);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('T4-5: sync_media_search formats network error via formatToolError', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (args: Record<string, unknown>) => Promise<{
+              isError?: boolean;
+              content: Array<{ type: string; text: string }>;
+            }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Error',
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await registered['sync_media_search'].handler({ query: 'fail-test' });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('MEDIA_LIST_FAILED');
+      expect(res.content[0].text).toContain('HTTP 500');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('T5-5: sync_pull_media with storageKey mirrors targeted asset', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (args: Record<string, unknown>) => Promise<{
+              isError?: boolean;
+              content: Array<{ type: string; text: string }>;
+            }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const targetKey = '01M6TARGETKEYMCP0000000001.jpg';
+    const targetId = '01M6TARGETIDMCP00000000001';
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((urlStr: string) => {
+      if (urlStr.includes('/_emdash/api/media/file/')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new ArrayBuffer(50),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: targetId,
+                filename: 'mcp-target.jpg',
+                mimeType: 'image/jpeg',
+                size: 50,
+                storageKey: targetKey,
+              },
+            ],
+            nextCursor: null,
+          },
+        }),
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await registered['sync_pull_media'].handler({
+        storageKey: targetKey,
+      });
+
+      expect(res.isError).toBeUndefined();
+      expect(res.content[0].text).toContain(
+        `Successfully pulled targeted media asset '${targetKey}'`,
+      );
+      expect(res.content[0].text).toContain('1 downloaded');
+
+      // Unresolved storageKey must return isError: true
+      const errRes = await registered['sync_pull_media'].handler({
+        storageKey: 'unresolved-key.jpg',
+      });
+      expect(errRes.isError).toBe(true);
+      expect(errRes.content[0].text).toContain('Could not resolve targeted storageKey');
     } finally {
       globalThis.fetch = origFetch;
     }

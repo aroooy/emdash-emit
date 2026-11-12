@@ -58,6 +58,7 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('doctor');
     expect(commandNames).toContain('mcp');
     expect(commandNames).toContain('profile');
+    expect(commandNames).toContain('media-search');
   });
 
   it('delete command exposes safety options', () => {
@@ -637,6 +638,7 @@ describe('Emit CLI (Commander)', () => {
       const guideOut = logLines.join('\n');
       expect(guideOut).toContain('maintenance/full-backup run');
       expect(guideOut).toContain('local mirrors use the storageKey');
+      expect(guideOut).toContain('emit media-search');
       expect(guideOut).not.toMatch(/--all[^.]*how every remote storageKey gets indexed/);
     } finally {
       console.log = originalLog;

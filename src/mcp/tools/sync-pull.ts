@@ -324,13 +324,19 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull_media
   server.tool(
     'sync_pull_media',
-    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<markdownRef>.<ext> and .yaml, where markdownRef is derived from the storageKey a body URL references). Can pull targeted media referenced by an article ("article") or the full library ("all", maintenance/backup only). Note: Routine workflows rarely need this tool because sync_pull mirrors referenced assets on-demand automatically. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded.',
+    'Download remote media assets and companion YAML metadata into the local media/ directory (media/<markdownRef>.<ext> and .yaml, where markdownRef is derived from the storageKey a body URL references). Can pull targeted media referenced by an article ("article"), a specific storageKey ("storageKey"), or the full library ("all", maintenance/backup only). Note: Routine workflows rarely need this tool because sync_pull mirrors referenced assets on-demand automatically. Body image references that match neither a media record nor confirmed local mirror metadata are reported as orphanStorageKeys and never downloaded.',
     {
       article: z
         .string()
         .optional()
         .describe(
           'Target article ULID or Markdown file path to pull only media referenced by that article',
+        ),
+      storageKey: z
+        .string()
+        .optional()
+        .describe(
+          'Target a specific storageKey to mirror individually (e.g. chosen from sync_media_search)',
         ),
       collection: z
         .string()
@@ -354,6 +360,42 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
     async (args) => {
       try {
         const ctx = resolveContext(args.profile);
+        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
+
+        if (args.storageKey) {
+          const res = await pullMedia({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            storageKeys: [args.storageKey],
+            downloadFiles: args.downloadFiles,
+            cache: ctx.cache,
+          });
+
+          const orphanWarning = formatOrphanMediaWarning(res.orphanStorageKeys);
+          if (res.total === 0 && res.orphanStorageKeys && res.orphanStorageKeys.length > 0) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ Could not resolve targeted storageKey '${args.storageKey}' on remote.${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
+                },
+              ],
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Successfully pulled targeted media asset '${args.storageKey}': ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
+              },
+            ],
+          };
+        }
+
         const res = await pullMedia({
           workspaceRoot: ctx.root,
           origin: ctx.origin,
@@ -367,7 +409,6 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           cache: ctx.cache,
         });
 
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
         const orphanWarning = formatOrphanMediaWarning(res.orphanStorageKeys);
         if (args.article) {
           const failedMsg = res.failed ? `, ${res.failed} unresolved` : '';

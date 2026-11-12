@@ -35,6 +35,7 @@ import {
   storageKeyFromMediaMeta,
   pullArticleMedia,
   mirrorReferencedAssetsFromIndex,
+  type EmDashMediaItem,
 } from '../src/sync/media.js';
 import {
   formatArticleMediaSummary,
@@ -42,6 +43,7 @@ import {
   formatOrphanMediaWarning,
 } from '../src/cli/commands/pull.js';
 import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
+import { CacheDatabase } from '../src/db/cache.js';
 
 /**
  * Fixture identifiers must be valid canonical ULIDs (Crockford Base32, 26 chars, no I/O/L/U), otherwise
@@ -1489,5 +1491,170 @@ locale: ja
     expect(broken).not.toContain('verified/mirrored');
     // When something genuinely is unresolved, the reassuring note must not appear.
     expect(broken).not.toContain('R2 storageKeys, not media record ids');
+  });
+
+  describe('Targeted StorageKey Pull (v0.1.16 / M5)', () => {
+    it('T5-1: mirrors targeted storageKey via library walk without re-fetching GET /media/{id}', async () => {
+      const targetKey = '01M6TARGETKEY0000000000001.jpg';
+      const targetId = '01M6TARGETID00000000000001';
+      const targetItem: EmDashMediaItem = {
+        id: targetId,
+        filename: 'target.jpg',
+        mimeType: 'image/jpeg',
+        size: 1024,
+        storageKey: targetKey,
+        alt: 'Target Alt',
+      };
+
+      const requestedUrls: string[] = [];
+      const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+        requestedUrls.push(urlStr);
+        if (urlStr.includes('/_emdash/api/media/file/')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new ArrayBuffer(1024),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [targetItem],
+              nextCursor: null,
+            },
+          }),
+        });
+      });
+
+      const cache = new CacheDatabase(path.join(tempDir, 'cache.db'));
+      try {
+        const result = await pullMedia({
+          workspaceRoot: tempDir,
+          origin: 'https://emdash.test',
+          token: 'token',
+          storageKeys: [targetKey],
+          cache,
+          fetchFn: mockFetch as unknown as typeof fetch,
+        });
+
+        expect(result.total).toBe(1);
+        expect(result.downloaded).toBe(1);
+        expect(result.skipped).toBe(0);
+        expect(result.orphanStorageKeys).toBeUndefined();
+
+        // Must not fetch GET /_emdash/api/media/{id}
+        const fetchedSingleRecord = requestedUrls.some((u) =>
+          u.includes(`/_emdash/api/media/${targetId}`),
+        );
+        expect(fetchedSingleRecord).toBe(false);
+
+        // Files on disk
+        const expectedStem = storageKeyToMarkdownRef(targetKey);
+        const yamlPath = path.join(tempDir, 'media', `${expectedStem}.yaml`);
+        const binPath = path.join(tempDir, 'media', `${expectedStem}.jpg`);
+        expect(fs.existsSync(yamlPath)).toBe(true);
+        expect(fs.existsSync(binPath)).toBe(true);
+
+        // Cache registration
+        const states = cache.listMediaStates();
+        expect(states).toHaveLength(1);
+        expect(states[0].storageKey).toBe(targetKey);
+        expect(states[0].mediaId).toBe(targetId);
+        expect(states[0].markdownRef).toBe(`media/${expectedStem}`);
+        expect(states[0].workspacePath).toBe(`media/${expectedStem}.jpg`);
+      } finally {
+        cache.close();
+      }
+    });
+
+    it('T5-2: reports unresolvable storageKey in orphanStorageKeys without downloading', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [],
+            nextCursor: null,
+          },
+        }),
+      });
+
+      const result = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://emdash.test',
+        token: 'token',
+        storageKeys: ['nonexistent.png'],
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.total).toBe(0);
+      expect(result.downloaded).toBe(0);
+      expect(result.orphanStorageKeys).toEqual(['nonexistent.png']);
+      expect(fs.existsSync(path.join(tempDir, 'media', 'nonexistent.png'))).toBe(false);
+    });
+
+    it('T5-3: re-running existing targeted mirror is idempotent (skipped)', async () => {
+      const targetKey = '01M6TARGETKEY0000000000002.png';
+      const targetId = '01M6TARGETID00000000000002';
+      const targetItem: EmDashMediaItem = {
+        id: targetId,
+        filename: 'target2.png',
+        mimeType: 'image/png',
+        size: 512,
+        storageKey: targetKey,
+        alt: 'Original Alt',
+        caption: 'Original Caption',
+      };
+
+      const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
+        if (urlStr.includes('/_emdash/api/media/file/')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new ArrayBuffer(512),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [targetItem],
+              nextCursor: null,
+            },
+          }),
+        });
+      });
+
+      const cache = new CacheDatabase(path.join(tempDir, 'cache.db'));
+      try {
+        // Run 1: downloads
+        const r1 = await pullMedia({
+          workspaceRoot: tempDir,
+          origin: 'https://emdash.test',
+          token: 'token',
+          storageKeys: [targetKey],
+          cache,
+          fetchFn: mockFetch as unknown as typeof fetch,
+        });
+        expect(r1.downloaded).toBe(1);
+
+        // Run 2: skips because size and file already exist
+        const r2 = await pullMedia({
+          workspaceRoot: tempDir,
+          origin: 'https://emdash.test',
+          token: 'token',
+          storageKeys: [targetKey],
+          cache,
+          fetchFn: mockFetch as unknown as typeof fetch,
+        });
+        expect(r2.downloaded).toBe(0);
+        expect(r2.skipped).toBe(1);
+      } finally {
+        cache.close();
+      }
+    });
   });
 });

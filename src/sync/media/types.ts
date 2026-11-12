@@ -94,6 +94,8 @@ export interface PullMediaOptions {
   collection?: string;
   limit?: number;
   all?: boolean;
+  /** Mirror exactly these storageKeys, resolved from the library walk. */
+  storageKeys?: string[];
   downloadFiles?: boolean;
   prune?: boolean;
   fetchFn?: typeof fetch;
@@ -208,3 +210,51 @@ export interface MirroredAssetResult {
    */
   orphanStorageKeys: string[];
 }
+
+/** One media-search hit, decorated with the local mirror state Emit actually holds. */
+export interface MediaSearchHit {
+  /** D1 media record id (uppercase ULID). NEVER usable in a body URL. */
+  mediaId: string;
+  /** R2 storage key — the only value valid in `/_emdash/api/media/file/<storageKey>`. */
+  storageKey: string | null;
+  filename: string | null;
+  mimeType: string | null;
+  size: number | null;
+  alt: string | null;
+  caption: string | null;
+  createdAt?: string;
+  /** True when Emit already mirrors this asset (media_state or companion YAML confirms it). */
+  mirrored: boolean;
+  /** Workspace-relative mirror path (`media/<markdownRef>.<ext>`), null when not mirrored. */
+  localPath: string | null;
+  /** Which field matched the query, so an agent can read why a row was returned. */
+  matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'>;
+}
+
+export interface MediaSearchResult {
+  hits: MediaSearchHit[];
+  /** Records actually read from the list endpoint. */
+  scannedCount: number;
+  /** True only when the walk finished without hitting `maxScan`. Absence claims require this. */
+  walkComplete: boolean;
+  /** Server-reported totalCount when present (live EmDash reports none). */
+  totalCount: number | null;
+  /** True when hits were cut at `limit`. */
+  truncated: boolean;
+  /** Query as normalized for matching (lowercased), echoed so agents can audit. */
+  normalizedQuery: string;
+}
+
+export interface LocalMirrorEntry {
+  mediaId: string;
+  storageKey: string;
+  /** Workspace-relative binary path, read from media_state.markdown_ref / workspace_path. */
+  localPath: string | null;
+  /** Companion YAML metadata only — never guessed from a filename. */
+  filename: string | null;
+  alt: string | null;
+  caption: string | null;
+}
+
+/** storageKey -> mirror entry. Built from confirmed metadata sources only. */
+export type LocalMirrorIndex = Map<string, LocalMirrorEntry>;

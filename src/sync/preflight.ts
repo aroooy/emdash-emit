@@ -515,7 +515,7 @@ export function runPreflightChecks(
           code: 'LOCAL_IMAGE_DETECTED',
           message: `Local image path detected in markdown body: '${trimmedLine}'. Only images placed directly under "media/drafts/" can be automatically uploaded.`,
           suggestion:
-            'Place the image in "media/drafts/<filename>" and reference it on a standalone line (e.g. ![alt](../../media/drafts/<filename>)), or upload first using EmDash MCP "media_upload" and replace with /_emdash/api/media/file/<storageKey>.',
+            'Place the image in "media/drafts/<filename>" and reference it on a standalone line (e.g. ![alt](../../media/drafts/<filename>)), or upload first using EmDash MCP "media_upload" and replace with /_emdash/api/media/file/<storageKey>. If a media asset is already mirrored in this workspace, look it up with "emit media-search <keyword>" (or MCP "sync_media_search") and replace the local path with /_emdash/api/media/file/<storageKey> instead of re-uploading. Filename/alt lookup resolves only assets Emit already mirrored (media_state plus media/*.yaml); a remote-only asset must be uploaded via the official EmDash MCP or placed in media/drafts/.',
         });
         continue;
       }
@@ -544,7 +544,7 @@ export function runPreflightChecks(
           errors.push({
             code: 'MISSING_LOCAL_IMAGE_FILE',
             message: `Draft image file not found on disk: '${rawPath}' (resolved to '${resolved.candidateAbs}', and no promoted asset matching '${resolved.filename}' was found in media/).`,
-            suggestion: `Place "${resolved.filename}" inside "media/drafts/", or if it was already promoted, look for a "media/<storageKey-derived-name>-${resolved.filename}" mirror in "media/".`,
+            suggestion: `Place "${resolved.filename}" inside "media/drafts/", or if it was already promoted, look for a "media/<storageKey-derived-name>-${resolved.filename}" mirror in "media/". If a media asset is already mirrored in this workspace, look it up with "emit media-search <keyword>" (or MCP "sync_media_search") and replace the local path with /_emdash/api/media/file/<storageKey> instead of re-uploading. Filename/alt lookup resolves only assets Emit already mirrored (media_state plus media/*.yaml); a remote-only asset must be uploaded via the official EmDash MCP or placed in media/drafts/.`,
           });
           continue;
         }
@@ -608,7 +608,7 @@ export function runPreflightChecks(
           code: 'LOCAL_IMAGE_DETECTED',
           message: `Local image path detected in markdown body: '${fullImgSyntax}'.`,
           suggestion:
-            'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL (e.g. /_emdash/api/media/file/<id>.<ext>), or place it in "media/drafts/" on a standalone line.',
+            'Upload the image first using emdash official MCP "media_upload", and replace the local path with the returned remote URL (e.g. /_emdash/api/media/file/<storageKey>), or place it in "media/drafts/" on a standalone line. If a media asset is already mirrored in this workspace, look it up with "emit media-search <keyword>" (or MCP "sync_media_search") and replace the local path with /_emdash/api/media/file/<storageKey> instead of re-uploading. Filename/alt lookup resolves only assets Emit already mirrored (media_state plus media/*.yaml); a remote-only asset must be uploaded via the official EmDash MCP or placed in media/drafts/.',
         });
       }
     }

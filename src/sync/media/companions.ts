@@ -2,8 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { toRootRelativeMediaUrl } from '../../client/media.js';
+import type { CacheDatabase } from '../../db/cache.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../../utils/media-refs.js';
-import type { EmDashMediaItem, LocalMediaMirrorCandidate } from './types.js';
+import { storageKeyToMarkdownRef } from '../../utils/naming.js';
+import type {
+  EmDashMediaItem,
+  LocalMediaMirrorCandidate,
+  LocalMirrorEntry,
+  LocalMirrorIndex,
+} from './types.js';
 
 export function buildMediaMetaDoc(
   item: EmDashMediaItem,
@@ -121,4 +128,174 @@ export function collectLocalMediaMirrorCandidates(
     }
   }
   return byUlid;
+}
+
+/**
+ * Builds a local mirror index mapping storageKey -> LocalMirrorEntry.
+ *
+ * Driven by cache `media_state` (status 'ready' or 'uploaded') when available.
+ * Resolves companion YAML metadata (filename, alt, caption) strictly from companion YAML,
+ * never by filename guessing. If companion YAML is absent, metadata is null.
+ *
+ * For cache-less workspaces, scans `media/*.yaml` and recovers storageKey via storageKeyFromMediaMeta.
+ * Leftover `legacy_*` residue is strictly ignored.
+ */
+export function collectLocalMirrorIndex(
+  workspaceRoot: string,
+  cache?: CacheDatabase,
+): LocalMirrorIndex {
+  const index: LocalMirrorIndex = new Map();
+  const mediaDir = path.join(workspaceRoot, 'media');
+
+  if (cache) {
+    const states = cache.listMediaStates();
+    for (const record of states) {
+      if (record.status !== 'ready' && record.status !== 'uploaded') continue;
+      if (!record.storageKey) continue;
+
+      let stem: string;
+      if (record.markdownRef) {
+        stem = path.basename(record.markdownRef);
+      } else {
+        stem = storageKeyToMarkdownRef(record.storageKey) || record.storageKey;
+      }
+
+      let filename: string | null = null;
+      let alt: string | null = null;
+      let caption: string | null = null;
+
+      const yamlPath = path.join(mediaDir, `${stem}.yaml`);
+      let loadedDoc: Record<string, unknown> | null = null;
+
+      if (fs.existsSync(yamlPath)) {
+        try {
+          loadedDoc = yaml.load(fs.readFileSync(yamlPath, 'utf8')) as Record<
+            string,
+            unknown
+          > | null;
+        } catch {
+          loadedDoc = null;
+        }
+      } else if (record.workspacePath) {
+        const altYamlPath = path.join(
+          workspaceRoot,
+          record.workspacePath.replace(/\.[^.]+$/, '.yaml'),
+        );
+        if (fs.existsSync(altYamlPath)) {
+          try {
+            loadedDoc = yaml.load(fs.readFileSync(altYamlPath, 'utf8')) as Record<
+              string,
+              unknown
+            > | null;
+          } catch {
+            loadedDoc = null;
+          }
+        }
+      }
+
+      if (loadedDoc) {
+        filename =
+          typeof loadedDoc.filename === 'string' && loadedDoc.filename ? loadedDoc.filename : null;
+        alt = typeof loadedDoc.alt === 'string' && loadedDoc.alt ? loadedDoc.alt : null;
+        caption =
+          typeof loadedDoc.caption === 'string' && loadedDoc.caption ? loadedDoc.caption : null;
+      } else if (fs.existsSync(mediaDir)) {
+        // Fallback: search for any companion that confirms this storageKey or mediaId
+        for (const f of fs.readdirSync(mediaDir)) {
+          if (!f.endsWith('.yaml') || f.startsWith('legacy_')) continue;
+          try {
+            const candidate = yaml.load(fs.readFileSync(path.join(mediaDir, f), 'utf8')) as Record<
+              string,
+              unknown
+            > | null;
+            if (
+              candidate &&
+              (storageKeyFromMediaMeta(candidate) === record.storageKey ||
+                (candidate.id && String(candidate.id).toUpperCase() === record.mediaId))
+            ) {
+              filename =
+                typeof candidate.filename === 'string' && candidate.filename
+                  ? candidate.filename
+                  : null;
+              alt = typeof candidate.alt === 'string' && candidate.alt ? candidate.alt : null;
+              caption =
+                typeof candidate.caption === 'string' && candidate.caption
+                  ? candidate.caption
+                  : null;
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      let localPath: string | null = null;
+      if (record.workspacePath && fs.existsSync(path.join(workspaceRoot, record.workspacePath))) {
+        localPath = record.workspacePath;
+      } else if (fs.existsSync(mediaDir)) {
+        const files = fs.readdirSync(mediaDir);
+        for (const f of files) {
+          if (f.replace(/\.[^.]+$/, '') === stem && !f.endsWith('.yaml')) {
+            localPath = path.posix.join('media', f);
+            break;
+          }
+        }
+      }
+
+      index.set(record.storageKey, {
+        mediaId: record.mediaId,
+        storageKey: record.storageKey,
+        localPath,
+        filename,
+        alt,
+        caption,
+      });
+    }
+    return index;
+  }
+
+  // Cache-less fallback
+  if (fs.existsSync(mediaDir)) {
+    const files = fs.readdirSync(mediaDir);
+    for (const file of files) {
+      if (!file.endsWith('.yaml') || file.startsWith('legacy_')) continue;
+      let doc: Record<string, unknown> | null = null;
+      try {
+        doc = yaml.load(fs.readFileSync(path.join(mediaDir, file), 'utf8')) as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        continue;
+      }
+      if (!doc) continue;
+
+      const storageKey = storageKeyFromMediaMeta(doc);
+      if (!storageKey) continue;
+
+      const stem = file.replace(/\.yaml$/, '');
+      const docId =
+        typeof doc.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(doc.id.trim())
+          ? doc.id.trim().toUpperCase()
+          : '';
+
+      let binaryPath: string | null = null;
+      for (const f of files) {
+        if (f !== file && f.replace(/\.[^.]+$/, '') === stem && !f.endsWith('.yaml')) {
+          binaryPath = path.posix.join('media', f);
+          break;
+        }
+      }
+
+      index.set(storageKey, {
+        mediaId: docId,
+        storageKey,
+        localPath: binaryPath,
+        filename: typeof doc.filename === 'string' && doc.filename ? doc.filename : null,
+        alt: typeof doc.alt === 'string' && doc.alt ? doc.alt : null,
+        caption: typeof doc.caption === 'string' && doc.caption ? doc.caption : null,
+      });
+    }
+  }
+
+  return index;
 }

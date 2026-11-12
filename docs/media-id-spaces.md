@@ -43,6 +43,7 @@ Both ULIDs point at the same image, and neither is a typo of the other. A worksp
 | --- | --- | --- |
 | Frontmatter `featuredImage:` | record `id` (or `null`) | A `storageKey` here fails preflight Guard **G10** (`INVALID_FEATURED_IMAGE`), or pushes a hero image the admin UI cannot resolve |
 | Body `![alt](/_emdash/api/media/file/<...>)` | `storageKey` | A record `id` here returns **HTTP 404** from the public file route |
+| Search output (`emit media-search` / `sync_media_search`) | Both shown side-by-side (`mediaId` + `storageKey`) | Copying the `mediaId` into the article body instead of `storageKey` returns **HTTP 404** |
 | Local mirror filename `media/<markdownRef>.<ext>` | `storageKey` (sanitized basename via `storageKeyToMarkdownRef`) | A record `id` here is the legacy shape; it stays readable for migration but a body URL never equals such a path |
 | Companion YAML `storageKey:` / `url:` | `storageKey` | — |
 | `.emit/cache.db` → `media_state.media_id` / `workspace_path` | record `id` | — |

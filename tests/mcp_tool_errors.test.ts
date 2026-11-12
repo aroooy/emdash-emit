@@ -253,6 +253,7 @@ describe('MCP Tool Error Formatting', () => {
         ['sync_push', { filePath: 'posts/draft/20261108_01M6ABCDEF1234567890123456-post.md' }],
         ['sync_diff', { id: '01M6ABCDEF1234567890123456' }],
         ['sync_new', { slug: 'ambiguity-probe' }],
+        ['sync_media_search', { query: 'ambiguity-probe' }],
       ];
 
       for (const [toolName, args] of cases) {

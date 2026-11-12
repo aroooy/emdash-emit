@@ -453,6 +453,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     )
     .option('-l, --limit <number>', 'Maximum media items to fetch (default: 300 or config)')
     .option(
+      '--storage-key <key>',
+      'Target specific storageKey to mirror (can be specified multiple times)',
+      (val: string, prev: string[] = []) => [...prev, val],
+    )
+    .option(
       '--all',
       'Fetch ALL media files from remote (maintenance only — routine workflows do not need this)',
     )
@@ -463,6 +468,13 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     .option('--metadata-only', 'Do not download binary files, only metadata YAML')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (options) => {
+      if (options.storageKey && options.storageKey.length > 0) {
+        if (options.article || options.all) {
+          console.error('❌ Error: --storage-key cannot be combined with --article or --all.');
+          process.exit(1);
+        }
+      }
+
       const ctx = resolveContext(options.profile);
       const limit = options.all
         ? undefined
@@ -471,6 +483,34 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           : ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
 
       try {
+        if (options.storageKey && options.storageKey.length > 0) {
+          const keys = options.storageKey as string[];
+          console.log(`Pulling ${keys.length} targeted media asset(s)...`);
+          const res = await pullMedia({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            storageKeys: keys,
+            downloadFiles: !options.metadataOnly,
+            cache: ctx.cache,
+          });
+
+          if (res.total === 0 && res.orphanStorageKeys && res.orphanStorageKeys.length > 0) {
+            console.error(
+              `❌ Error: Could not resolve targeted storageKey(s) on remote: ${res.orphanStorageKeys.join(', ')}`,
+            );
+            reportOrphanStorageKeys(res.orphanStorageKeys);
+            process.exit(1);
+          }
+
+          console.log(
+            `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).`,
+          );
+          reportOrphanStorageKeys(res.orphanStorageKeys);
+          return;
+        }
+
         if (options.article) {
           console.log(`Pulling media referenced by article '${options.article}'...`);
           const res = await pullMedia({

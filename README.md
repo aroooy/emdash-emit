@@ -48,6 +48,7 @@
   - [`emit diff`](#emit-diff)
   - [`emit pull-taxonomies`](#emit-pull-taxonomies)
   - [`emit pull-media`](#emit-pull-media)
+  - [`emit media-search`](#emit-media-search)
   - [`emit guide`](#emit-guide)
   - [`emit mcp`](#emit-mcp)
 - [🤖 Model Context Protocol (MCP) Support](#-model-context-protocol-mcp-support)
@@ -133,12 +134,13 @@ To prevent concurrent race conditions when multiple authors or AI agents collabo
 
 Emit is intentionally not a complete EmDash client. The [official EmDash MCP server](https://github.com/aroooy/emdash) (and the Admin Dashboard) remains the canonical surface for whole-library operations, and the two tools are designed to be used **side by side against the same site**:
 
-| Operation                                                                             | Right Tool                                                      |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Drafting, reviewing, diffing, publishing articles with safety guards                  | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools)        |
-| On-demand retrieval of any single historical article by ULID                          | **Emit** (`emit pull <id>`)                                     |
-| Bulk media library management (mass upload, mass delete, full-library listing)        | **Official EmDash MCP** (e.g. `media_upload`) / Admin Dashboard |
-| Site-wide content queries, arbitrary collection operations outside the authoring loop | **Official EmDash MCP** raw content tools                       |
+| Operation                                                                                                             | Right Tool                                                       |
+| --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Drafting, reviewing, diffing, publishing articles with safety guards                                                  | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools)         |
+| On-demand retrieval of any single historical article by ULID                                                          | **Emit** (`emit pull <id>`)                                      |
+| Finding a media asset to use in the article being drafted (keyword search over the remote library, with mirror status) | **Emit** (`emit media-search` / MCP `sync_media_search`)          |
+| Bulk media library management (mass upload, mass delete, full-library listing)                                        | **Official EmDash MCP** (e.g. `media_upload`) / Admin Dashboard  |
+| Site-wide content queries, arbitrary collection operations outside the authoring loop                                 | **Official EmDash MCP** raw content tools                        |
 
 This division is a design stance, not a limitation to work around: Emit focuses its guardrails (G1–G14, locks, 3-way merge, quarantine) on the _authoring loop_ where data loss actually happens, and leaves fleet-scale operations to the server-native tooling that already handles them safely.
 
@@ -918,10 +920,11 @@ Available Tags:
 Downloads media assets and their companion metadata YAML files into `media/`. Supports pulling all media, a limited batch, or targeted media referenced by a specific article.
 
 ```bash
-emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune] [--metadata-only]
+emit pull-media [-a, --article <id-or-path>] [--storage-key <key>] [-l, --limit <n>] [--all] [--prune] [--metadata-only]
 ```
 
 - `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space. The summary separates what Emit actually mirrored from what it merely verified, and states plainly that a migrated body's ULIDs are `storageKey`s rather than record ids — so an id lookup resolving nothing is reported as expected, never as `failed`.
+- `--storage-key <key>`: Mirror a specific storageKey directly (can be specified multiple times; mutually exclusive with `--article` and `--all`).
 - `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
 - `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. **Maintenance / Backup Only**: Routine workflows do not need this because `emit pull` automatically mirrors referenced media on-demand. Fetching the full library can download thousands of images and consume substantial bandwidth and disk space.
 - `--prune`: Remove local media files whose companion `.yaml` names a media record that no longer exists on remote. Ownership is read from the companion, never guessed from a filename, so a file with no companion is left untouched. Residue written by older Emit versions is never pruned and must be deleted manually.
@@ -932,6 +935,25 @@ emit pull-media [-a, --article <id-or-path>] [-l, --limit <n>] [--all] [--prune]
 > **How a migrated article reads:** for an article whose body bakes R2 `storageKey`s, `emit pull-media --article` reports something like `8 referenced item(s) (0 downloaded, 0 skipped/up-to-date, 4 verified/mirrored). (4 body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`. The assets already under `media/` are named after the **storageKey** the body references (or, in a workspace that has not been re-pulled yet, after the legacy **record id**), and each companion `.yaml` carries both identifiers, so those images resolve through local mirror metadata instead of re-downloading. Nothing in that line is a failure: `failed` counts only references that no id lookup _and_ no storageKey check could match.
 
 > **Unresolved assets:** When an article body references a `/_emdash/api/media/file/<storageKey>` image that Emit cannot match to a media record or to confirmed local mirror metadata, Emit reports it as `⚠️ [UNRESOLVED_MEDIA_ASSET]` and mirrors nothing. That is a _lookup_ failure, not proof that the record is missing. Index the whole library first with `emit doctor --check-media-library` (metadata-only walk) or `emit pull-media --all` (offline backup), which resolves these keys without any server-side query; only then verify anything left over by storageKey before registering it — a blind INSERT can duplicate a record that already exists. Registering records is an EmDash/Wrangler task; once Emit can resolve the record, a normal `emit pull-media` mirrors the asset normally. See [docs/media-id-spaces.md](docs/media-id-spaces.md) for the full two-ID-space specification.
+
+---
+
+### `emit media-search`
+
+Search the remote EmDash media library by keyword across filename, alt text, caption, and storageKey, displaying whether each hit is already mirrored locally:
+
+```bash
+emit media-search <query> [-l, --limit <n>] [--max-scan <n>] [--mirrored-only] [--suggest-keywords] [-p, --profile <name>]
+```
+
+Options:
+- `-l, --limit <n>`: Maximum hits to return (default: 20, max: 50).
+- `--max-scan <n>`: Maximum remote records to read before stopping (default: 500; `0` = walk entire library).
+- `--mirrored-only`: Show only assets already mirrored in this workspace.
+- `--suggest-keywords`: Append top local tag slugs as search hints.
+- `-p, --profile <name>`: Explicitly select a connection profile.
+
+Absence is only proven when `walkComplete: true` (a complete walk). When stopped early, `[WALK_INCOMPLETE]` indicates that an asset may still exist in the unread portion of the library.
 
 ---
 
@@ -1017,7 +1039,8 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 | `sync_doctor`          | Run comprehensive workspace diagnostics (version, origin, frontmatter, conflicts, sync, referenced media)                                         | `collection`, `profile`                                                                                                       |
 | `sync_diff`            | Inspect diff between working file and baseline snapshot                                                                                           | `filePath`, `id`, `profile`                                                                                                   |
 | `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints)                                                                     | `profile`                                                                                                                     |
-| `sync_pull_media`      | Pull remote media files and metadata into `media/` (supports batch or targeted article media)                                                     | `article`, `limit`, `all`, `downloadFiles`, `profile`                                                                         |
+| `sync_pull_media`      | Pull remote media files and metadata into `media/` (supports batch, targeted article media, or targeted storageKey)                               | `article`, `storageKey`, `limit`, `all`, `downloadFiles`, `profile`                                                          |
+| `sync_media_search`    | Search remote media library by keyword across filename, alt, caption, and storageKey with local mirror decoration                                   | `query` (required), `limit`, `maxScan`, `mirroredOnly`, `suggestKeywords`, `profile`                                          |
 | `profile_list`         | List all configured connection profiles                                                                                                           | (none)                                                                                                                        |
 | `profile_switch`       | Switch active profile for multi-site environments                                                                                                 | `name` (required), `persist`                                                                                                  |
 

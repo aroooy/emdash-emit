@@ -9,7 +9,7 @@ import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
 import { mediaMirrorNames, mediaRecordIdForStem } from './naming_mirror.js';
 import { pullArticleMedia } from './pull_article.js';
-import { findUnmirroredStorageKeys } from './remote_index.js';
+import { collectRemoteStorageKeys, findUnmirroredStorageKeys } from './remote_index.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
   type EmDashMediaItem,
@@ -28,6 +28,59 @@ import {
  * inside the companion YAML. See `mediaMirrorNames()` for the full naming and collision rule.
  */
 export async function pullMedia(options: PullMediaOptions): Promise<PullMediaResult> {
+  if (options.storageKeys && options.storageKeys.length > 0) {
+    const fetchFn = createAuthedFetch(options);
+    const mediaDir = path.join(options.workspaceRoot, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    const downloadFiles = options.downloadFiles !== false;
+
+    // Walk metadata via collectRemoteStorageKeys (walks library to index records by storageKey)
+    const remoteIndex = await collectRemoteStorageKeys({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      fetchFn,
+    });
+
+    let totalProcessed = 0;
+    let downloadedCount = 0;
+    let skippedCount = 0;
+    const orphanStorageKeys: string[] = [];
+
+    for (const key of options.storageKeys) {
+      const item = remoteIndex.recordsByStorageKey.get(key);
+      if (!item) {
+        orphanStorageKeys.push(key);
+        continue;
+      }
+
+      totalProcessed++;
+      const result = await syncSingleMediaItem({
+        item,
+        mediaDir,
+        origin: options.origin,
+        token: options.token,
+        downloadFiles,
+        fetchFn,
+        cache: options.cache,
+      });
+
+      if (result.downloaded) downloadedCount++;
+      else if (result.skipped) skippedCount++;
+    }
+
+    return {
+      total: totalProcessed,
+      downloaded: downloadedCount,
+      skipped: skippedCount,
+      orphanStorageKeys: orphanStorageKeys.length > 0 ? orphanStorageKeys : undefined,
+      remoteTotalCount: remoteIndex.complete
+        ? (remoteIndex.totalCount ?? remoteIndex.scannedCount)
+        : remoteIndex.totalCount,
+    };
+  }
+
   if (options.article) {
     return pullArticleMedia({
       workspaceRoot: options.workspaceRoot,

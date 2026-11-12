@@ -245,8 +245,9 @@ export function registerStatusInitCommands(
   - emit conflicts    ... List, diff, and resolve quarantined copies in posts/conflicts/
   - emit doctor       ... Diagnose workspace health, version, origin, and media references
                           (--check-media-library compares the remote library to the local mirror count)
-  - emit pull-media   ... Download remote media assets (--article <id> targeted; --all is a
-                          maintenance/full-backup run, referenced media mirrors automatically on pull)
+  - emit media-search ... Search remote media library by keyword (--limit, --max-scan)
+  - emit pull-media   ... Download remote media assets (--article <id> or --storage-key <key>;
+                          --all is a maintenance/full-backup run, referenced media mirrors on pull)
   - emit mcp          ... Launch stdio MCP server for AI agents (Antigravity, Claude Code)
 
 ■ Collaboration Rules with AI (AGENTS.md)

@@ -59,7 +59,7 @@ When drafting, reviewing, or updating articles, AI agents must strictly follow t
 ```
 
 1. **PULL / STATUS (`sync_pull` / `sync_status`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. `sync_status` returns tracked articles sorted newest-first (descending by date prefix and ULID; date reflects publication/creation date, not last modified). To locate active edits, filter by `syncStatus: 'modified'`. Batch mode `sync_pull` automatically syncs up to `postsSyncLimit` (default `30` published + `30` draft) articles, synchronizes taxonomies (categories/tags), and mirrors referenced media assets on-demand (local-first media pipeline). Use `postsOnly:true` to skip taxonomies. Use `includeMedia:true` to pull media library assets (bounded by `mediaSyncLimit`, default 300; note that referenced media is already mirrored on-demand without this flag).
-2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files. Valid categories and tags (sorted by usage count) are returned automatically in the response hint.
+2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files. Valid categories and tags (sorted by usage count) are returned automatically in the response hint. To discover and reference existing remote images pre-uploaded via Web or mobile, use `emit media-search <query>` (or MCP `sync_media_search`) to find the canonical `storageKey`, then reference `/_emdash/api/media/file/<storageKey>` directly in the Markdown body (or pull an offline copy via `emit pull-media --storage-key <storageKey>`).
 3. **DIRECT EDIT**: Edit the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly (frontmatter and body).
 4. **PUSH (`sync_push`)**: When editing is complete, push the specific `filePath` to remote EmDash.
 
@@ -152,6 +152,7 @@ These rules are enforced at the code level via Safety Guards (G1–G19) declared
 - Emit canonicalizes `featuredImage` to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
 - `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
 - Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.
+- **Media search epistemic rule:** A media search (`emit media-search` / `sync_media_search`) that did not finish its walk reports `walkComplete: false` and must never assert that an asset is absent. Filename/alt resolution applies only to assets Emit already mirrored (`media_state` + companion YAML); a remote-only asset is searchable but carries no local mirror metadata, and fleet-scale listing remains the official EmDash MCP's responsibility.
 
 ### 7. Media Mirror Naming & Index-Based Pruning Invariant
 

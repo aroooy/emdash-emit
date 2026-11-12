@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.1.16] - 2026-11-12
+
+### Added
+
+- **Media Search Index (`emit media-search` / `sync_media_search`)**:
+  - Search pre-uploaded remote EmDash media assets across filename, alt text, caption, storageKey, and local mirror stems without downloading bulk binary files (conserving bandwidth, disk space, and LLM context).
+  - Client-side pagination walk: Does not rely on the remote server's `q` parameter (which only filters filenames), enabling multi-lingual search over `alt` and `caption` metadata.
+  - Epistemic completeness reporting: Reports `scannedCount` and `walkComplete: boolean`. When stopped early at `--max-scan`, emits `[WALK_INCOMPLETE]` and refuses to assert that an asset is absent, preventing AI hallucinations and rogue duplicate INSERTs.
+  - Local mirror decoration: Resolves `mirrored: boolean`, `localPath`, and companion metadata against schema v5 `media_state` and companion YAMLs (`media/*.yaml`) without schema migrations.
+  - Keyword hints (`--suggest-keywords`): Suggests top 10 local tag slugs (sorted by frequency count) to help discover assets in migrated corpora with opaque ULID filenames.
+
+- **Targeted StorageKey Mirroring (`--storage-key`)**:
+  - `emit pull-media --storage-key <key>` and MCP `sync_pull_media({ storageKey })`: Allows AI agents and users to mirror an individual asset discovered via search without pulling the full library or an entire article.
+  - Directly reuses walked remote records via `syncSingleMediaItem()` without issuing duplicate `GET /_emdash/api/media/{id}` requests.
+  - Enforces mutual exclusivity with `--article` and `--all` at the CLI level.
+
+### Changed
+
+- **Guard G5 / G11 Suggestion Guidance**:
+  - `LOCAL_IMAGE_DETECTED` and `MISSING_LOCAL_IMAGE_FILE` suggestions now recommend looking up mirrored assets via `emit media-search` / `sync_media_search` and replacing local paths with canonical `/_emdash/api/media/file/<storageKey>` URLs, emphasizing that metadata matching resolves only confirmed local mirrors.
 
 ## [0.1.15] - 2026-11-12
 

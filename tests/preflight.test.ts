@@ -453,4 +453,38 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       fs.rmSync(tempWorkspace, { recursive: true, force: true });
     }
   });
+
+  it('T6-1, T6-2: G5 and G11 suggestion text includes media-search path and mirror-only condition', () => {
+    const localParsed: ParsedMarkdown = {
+      ...validParsed,
+      body: 'Standalone local image:\n\n![Local](./local-hero.png)',
+    };
+    const resLocal = runPreflightChecks(filePath, localParsed);
+    expect(resLocal.valid).toBe(false);
+    const errG5 = resLocal.errors.find((e) => e.code === 'LOCAL_IMAGE_DETECTED');
+    expect(errG5).toBeDefined();
+    expect(errG5?.suggestion).toContain('media-search');
+    expect(errG5?.suggestion).toContain('sync_media_search');
+    expect(errG5?.suggestion).toContain(
+      'Filename/alt lookup resolves only assets Emit already mirrored',
+    );
+
+    const missingParsed: ParsedMarkdown = {
+      ...validParsed,
+      body: '![Draft](media/drafts/missing-file.png)',
+    };
+    const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-missing-'));
+    try {
+      const resMissing = runPreflightChecks(filePath, missingParsed, { workspaceRoot: tempWs });
+      expect(resMissing.valid).toBe(false);
+      const errG11 = resMissing.errors.find((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE');
+      expect(errG11).toBeDefined();
+      expect(errG11?.suggestion).toContain('media-search');
+      expect(errG11?.suggestion).toContain(
+        'Filename/alt lookup resolves only assets Emit already mirrored',
+      );
+    } finally {
+      fs.rmSync(tempWs, { recursive: true, force: true });
+    }
+  });
 });
