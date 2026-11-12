@@ -38,7 +38,7 @@ export interface DuplicateSlugInfo {
   existingId: string;
   existingFilePath: string;
   existingStatus: string;
-  source: 'workspace' | 'cache' | 'remote';
+  source: 'workspace' | 'cache';
 }
 
 export class DuplicateSlugError extends Error {
@@ -142,56 +142,6 @@ export function findLocalDuplicateSlug(
         }
       }
     }
-  }
-
-  return null;
-}
-
-/**
- * Best-effort remote API search for existing slug.
- * Skips safely on network error, 404, or unsupported endpoints.
- */
-export async function checkRemoteDuplicateSlug(options: {
-  origin: string;
-  token: string;
-  collection: string;
-  slug: string;
-  fetchFn?: typeof fetch;
-}): Promise<DuplicateSlugInfo | null> {
-  const fetchFn = options.fetchFn || globalThis.fetch;
-  const normalizedSlug = options.slug.trim().toLowerCase();
-  try {
-    const url = new URL(`/_emdash/api/content/${options.collection}`, options.origin);
-    url.searchParams.set('slug', normalizedSlug);
-    url.searchParams.set('limit', '5');
-
-    const res = await fetchFn(url.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        Accept: 'application/json',
-      },
-    });
-
-    if (!res.ok) return null;
-
-    const data = (await res.json()) as { items?: Array<Record<string, unknown>> };
-    if (Array.isArray(data.items)) {
-      const match = data.items.find(
-        (item) => String(item.slug || '').toLowerCase() === normalizedSlug,
-      );
-      if (match && match.id) {
-        return {
-          slug: normalizedSlug,
-          existingId: String(match.id),
-          existingFilePath: `${options.collection}/${String(match.status || 'draft')}/${normalizedSlug}.md`,
-          existingStatus: String(match.status || 'draft'),
-          source: 'remote',
-        };
-      }
-    }
-  } catch {
-    // Best effort - ignore remote errors
   }
 
   return null;

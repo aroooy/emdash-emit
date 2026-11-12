@@ -21,11 +21,7 @@
  */
 
 import type { Command } from 'commander';
-import {
-  createArticleScaffold,
-  checkRemoteDuplicateSlug,
-  DuplicateSlugError,
-} from '../../sync/new.js';
+import { createArticleScaffold, DuplicateSlugError } from '../../sync/new.js';
 import { ApiError } from '../../client/error.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
@@ -60,19 +56,6 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
         const ctx = resolveContext(options.profile);
         const collection = options.collection || ctx.config.defaultCollection;
         const locale = options.locale || ctx.config.defaultLocale;
-
-        // Best-effort remote duplicate check if connected
-        if (ctx.origin && ctx.auth?.token) {
-          const remoteDup = await checkRemoteDuplicateSlug({
-            origin: ctx.origin,
-            token: ctx.auth.token,
-            collection,
-            slug,
-          }).catch(() => null);
-          if (remoteDup) {
-            throw new DuplicateSlugError(remoteDup);
-          }
-        }
 
         const res = createArticleScaffold({
           slug,

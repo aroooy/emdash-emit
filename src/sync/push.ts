@@ -880,13 +880,56 @@ export async function pushArticle(
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
+      // Slug-conflict detection is code-first. A 422 or 409 alone is never grounds for the
+      // collision guidance: an explicit code that names another failure (VALIDATION_ERROR,
+      // ENTRY_LOCKED, FORBIDDEN, ...) must keep the generic suggestion, and a bare 409 on create
+      // is far more likely a lock or race contention than a taken slug. Message text is only
+      // consulted when the server sent no structured code at all - which is the case for EmDash
+      // builds that predate `SLUG_CONFLICT`.
+      const slugConflictDetail = 'slug-conflict-detail';
+      let remoteSlug: string | undefined;
+      let conflictSignal: string | boolean = false;
+      try {
+        const parsedJson = JSON.parse(errBody) as {
+          error?: { code?: string; message?: string; details?: { slug?: string } };
+          code?: string;
+          message?: string;
+          details?: { slug?: string };
+        };
+        const errObj = parsedJson?.error || parsedJson;
+        remoteSlug = errObj?.details?.slug;
+        if (errObj?.code === 'SLUG_CONFLICT') {
+          conflictSignal = true;
+        } else if (remoteSlug !== undefined) {
+          // Structured slug metadata is the confirmed shape of a newer server: trust it.
+          conflictSignal = slugConflictDetail;
+        } else if (!errObj?.code && (res.status === 409 || res.status === 422)) {
+          // No structured code available - fall back to message text only.
+          conflictSignal = /slug/i.test(errObj?.message || '');
+        }
+      } catch {
+        // Fallback for non-JSON error bodies: status alone is not enough, require slug wording.
+        conflictSignal =
+          (res.status === 409 || res.status === 422 ? /slug/i.test(errBody) : false) ||
+          /slug.*(?:already exists|conflict)|unique constraint.*slug/i.test(errBody);
+      }
+
+      const isSlugConflict = conflictSignal === true || conflictSignal === slugConflictDetail;
+      const suggestion = isSlugConflict
+        ? [
+            `An article with slug "${remoteSlug || parsed.frontmatter.slug}" already exists on remote.`,
+            'Change the "slug" field in frontmatter and re-run',
+            `"emit push ${targetFilePath}" (Emit will automatically update the filename and cache).`,
+            'Note: EmDash keeps slugs reserved for trashed entries too, so a slug freed by deletion may still be taken.',
+          ].join(' ')
+        : 'Check if an article with this slug already exists or if token has create permissions.';
+
       throw new ApiError({
         message: `Create push failed: ${res.statusText} - ${errBody}`,
         code: 'PUSH_CREATE_FAILED',
         status: res.status,
         endpoint: postUrl,
-        suggestion:
-          'Check if an article with this slug already exists or if token has create permissions.',
+        suggestion,
       });
     }
 

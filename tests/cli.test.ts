@@ -502,10 +502,10 @@ describe('Emit CLI (Commander)', () => {
       path.join(configDir, 'profiles.yaml'),
     );
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 })),
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ items: [] }), { status: 200 }),
     );
+    vi.stubGlobal('fetch', fetchMock);
 
     const originalCwd = process.cwd();
     process.chdir(tempDir);
@@ -538,6 +538,8 @@ describe('Emit CLI (Commander)', () => {
       // 1. Create initial article
       await runCli(['new', 'duplicate-cli-test']);
       expect(exitCode).toBeUndefined();
+      // emit new must be completely offline / zero-communication
+      expect(fetchMock).not.toHaveBeenCalled();
 
       // 2. emit new with duplicate slug must report clean error without stack trace
       await runCli(['new', 'duplicate-cli-test']);

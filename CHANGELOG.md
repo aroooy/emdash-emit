@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- **Zero-Communication Article Scaffolding (`emit new` / `sync_new`)**:
+  - Removed `checkRemoteDuplicateSlug` network calls during `emit new` and MCP `sync_new`. Article scaffolding is now 100% local-first and zero-communication (0ms instant response even when offline or in airplane mode).
+  - Remote slug collision detection is deferred to `emit push` / `sync_push`. Guard G18 (`DUPLICATE_SLUG_CONFLICT`) now operates strictly against local files and indexed `cache.db` entries.
+
+### Changed
+
+- **Remote Slug Conflict Guidance on Push**:
+  - When creating a new article via `emit push`, if remote EmDash returns `422 Unprocessable Entity` with `SLUG_CONFLICT` (or `details.slug`), `PUSH_CREATE_FAILED` now provides a targeted suggestion guiding the user or AI agent to change the `slug` in frontmatter and re-run push (leveraging Emit's automatic file renaming and cache tracking).
+  - Detection stays strictly code-first: an explicit code that names another failure (`VALIDATION_ERROR`, `ENTRY_LOCKED`, `FORBIDDEN`, ...) keeps the generic suggestion, and a body-less `409` on create is reported as contention rather than a taken slug. Message-text matching is consulted only when the server sends no structured code at all, which covers EmDash builds that predate `SLUG_CONFLICT`.
+  - Note: EmDash enforces slug uniqueness on `(slug, locale)` including trashed entries, so a slug freed by moving an entry to Trash stays reserved; the guidance names that case explicitly.
+
 ## [0.1.16] - 2026-11-12
 
 ### Added

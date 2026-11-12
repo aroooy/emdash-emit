@@ -23,13 +23,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import {
-  createArticleScaffold,
-  DuplicateSlugError,
-  checkRemoteDuplicateSlug,
-} from '../src/sync/new.js';
+import { createArticleScaffold, DuplicateSlugError } from '../src/sync/new.js';
 import { parseMarkdown } from '../src/utils/frontmatter.js';
 
 describe('createArticleScaffold (emit new / sync_new)', () => {
@@ -170,47 +166,20 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       }).toThrow(DuplicateSlugError);
     });
 
-    it('detects duplicate slug from remote API via checkRemoteDuplicateSlug', async () => {
-      const mockFetch = async () =>
-        new Response(
-          JSON.stringify({
-            items: [
-              {
-                id: '01M67REMOTE0000000000000002',
-                slug: 'tokyo-ramen',
-                status: 'published',
-              },
-            ],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-
-      const dup = await checkRemoteDuplicateSlug({
-        origin: 'https://test.origin',
-        token: 'token',
-        collection: 'posts',
-        slug: 'tokyo-ramen',
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expect(dup).not.toBeNull();
-      expect(dup?.slug).toBe('tokyo-ramen');
-      expect(dup?.existingId).toBe('01M67REMOTE0000000000000002');
-      expect(dup?.source).toBe('remote');
-    });
-
-    it('safely ignores remote errors in checkRemoteDuplicateSlug', async () => {
-      const errorFetch = async () => new Response('Internal error', { status: 500 });
-
-      const dup = await checkRemoteDuplicateSlug({
-        origin: 'https://test.origin',
-        token: 'token',
-        collection: 'posts',
-        slug: 'some-new-slug',
-        fetchFn: errorFetch as unknown as typeof fetch,
-      });
-
-      expect(dup).toBeNull();
+    it('never touches the network when scaffolding (zero-communication local-first)', () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      try {
+        const res = createArticleScaffold({
+          workspaceRoot: tempDir,
+          slug: 'offline-scaffold',
+          cache,
+        });
+        expect(res).toBeDefined();
+        expect(res.slug).toBe('offline-scaffold');
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
     });
   });
 });

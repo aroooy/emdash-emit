@@ -1310,6 +1310,198 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.filePath).toBe(`posts/draft/20261108_${assignedServerId}-New-Post-ULID-Swap.md`);
   });
 
+  it('pushArticle reports specific suggestion when initial POST fails with 422 SLUG_CONFLICT', async () => {
+    const provisionalId = '01M60000000000000000000002';
+    const fm: Frontmatter = {
+      id: provisionalId,
+      slug: 'slug-conflict-test',
+      title: 'Slug Conflict Test',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const relPath = `posts/draft/20261108_${provisionalId}-Slug-Conflict-Test.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Conflict draft body.'), 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () =>
+            JSON.stringify({
+              error: {
+                code: 'SLUG_CONFLICT',
+                message: "Slug 'slug-conflict-test' already exists in collection 'posts'",
+                details: { slug: 'slug-conflict-test' },
+              },
+            }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PUSH_CREATE_FAILED',
+      status: 422,
+      suggestion: expect.stringContaining(
+        'An article with slug "slug-conflict-test" already exists on remote.',
+      ),
+    });
+  });
+
+  it('pushArticle keeps the generic suggestion when POST fails with an explicit non-conflict code that mentions slug', async () => {
+    const provisionalId = '01M60000000000000000000003';
+    const fm: Frontmatter = {
+      id: provisionalId,
+      slug: 'bad-slug-format',
+      title: 'Bad Slug Format',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const relPath = `posts/draft/20261108_${provisionalId}-Bad-Slug-Format.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Bad slug draft body.'), 'utf8');
+
+    // A slug *format* complaint carries an explicit VALIDATION_ERROR code: it must never be
+    // reported as a collision, or the guidance would send the agent down the wrong path.
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () =>
+            JSON.stringify({
+              error: { code: 'VALIDATION_ERROR', message: 'slug must be lowercase ascii' },
+            }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PUSH_CREATE_FAILED',
+      status: 422,
+      suggestion:
+        'Check if an article with this slug already exists or if token has create permissions.',
+    });
+  });
+
+  it('pushArticle treats a body-less 409 on create as contention, not a slug conflict', async () => {
+    const provisionalId = '01M60000000000000000000004';
+    const fm: Frontmatter = {
+      id: provisionalId,
+      slug: 'locked-create-attempt',
+      title: 'Locked Create Attempt',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const relPath = `posts/draft/20261108_${provisionalId}-Locked-Create-Attempt.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Contended draft body.'), 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          statusText: 'Conflict',
+          text: async () => '',
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PUSH_CREATE_FAILED',
+      status: 409,
+      suggestion:
+        'Check if an article with this slug already exists or if token has create permissions.',
+    });
+  });
+
+  it('pushArticle still detects a slug conflict from message text when the server sends no structured code', async () => {
+    const provisionalId = '01M60000000000000000000005';
+    const fm: Frontmatter = {
+      id: provisionalId,
+      slug: 'legacy-server-conflict',
+      title: 'Legacy Server Conflict',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const relPath = `posts/draft/20261108_${provisionalId}-Legacy-Server-Conflict.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Legacy conflict draft body.'), 'utf8');
+
+    // EmDash builds that predate `SLUG_CONFLICT` return a plain 422 with only message text.
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () =>
+            JSON.stringify({ message: "Slug 'legacy-server-conflict' already exists" }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    await expect(
+      pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PUSH_CREATE_FAILED',
+      status: 422,
+      suggestion: expect.stringContaining(
+        'An article with slug "legacy-server-conflict" already exists on remote.',
+      ),
+    });
+  });
+
   it('pullArticle repairs an uncached invalid file and cleans up stale duplicate filenames for the same ULID', async () => {
     const uncachedId = '01M67N0TNFS6F3PJX4T96NKPKT';
     // Uncached legacy file with lowercased title slug and 20190405_ prefix (no entry in sync_state)

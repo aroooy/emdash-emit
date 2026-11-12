@@ -23,11 +23,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver, ServerContext } from '../context.js';
-import {
-  createArticleScaffold,
-  checkRemoteDuplicateSlug,
-  DuplicateSlugError,
-} from '../../sync/new.js';
+import { createArticleScaffold, DuplicateSlugError } from '../../sync/new.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import { formatToolError } from '../tool-errors.js';
 
@@ -59,19 +55,6 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
 
       try {
         const collection = args.collection || ctx.config.defaultCollection;
-
-        // Best-effort remote duplicate check if connected
-        if (ctx.origin && ctx.auth?.token) {
-          const remoteDup = await checkRemoteDuplicateSlug({
-            origin: ctx.origin,
-            token: ctx.auth.token,
-            collection,
-            slug: args.slug,
-          }).catch(() => null);
-          if (remoteDup) {
-            throw new DuplicateSlugError(remoteDup);
-          }
-        }
 
         const res = createArticleScaffold({
           slug: args.slug,
