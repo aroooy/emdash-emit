@@ -32,6 +32,7 @@ import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
+import { mediaFileEndpoint } from '../client/endpoints.js';
 import { calculateHash } from './workspace/index.js';
 import {
   collectRemoteStorageKeys,
@@ -39,12 +40,7 @@ import {
   storageKeyFromMediaMeta,
 } from './media.js';
 import { checkMcpProcess } from '../mcp/heartbeat.js';
-import {
-  VALID_MEDIA_FILE_KEY,
-  MEDIA_FILE_ROUTE_PREFIX,
-  FENCE_POLICY,
-  isCodeFenceDelimiter,
-} from '../utils/media-refs.js';
+import { VALID_MEDIA_FILE_KEY, FENCE_POLICY, isCodeFenceDelimiter } from '../utils/media-refs.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
 
@@ -703,7 +699,7 @@ export async function runWorkspaceDoctor(
       if (reachableByKey.has(candidate.key)) continue;
       let reachable = false;
       try {
-        const url = new URL(`${MEDIA_FILE_ROUTE_PREFIX}${candidate.key}`, origin).toString();
+        const url = mediaFileEndpoint(origin, candidate.key);
         const res = await probeFetch(url, { method: 'HEAD' });
         reachable = res.ok;
       } catch {

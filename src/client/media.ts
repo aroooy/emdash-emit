@@ -26,6 +26,7 @@ import path from 'node:path';
 import { unwrapEnvelope } from './api.js';
 import { ApiError } from './error.js';
 import { createAuthedFetch } from './http.js';
+import { mediaDetailEndpoint, mediaConfirmEndpoint, mediaUploadUrlEndpoint } from './endpoints.js';
 import type { CacheDatabase } from '../db/cache.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
 
@@ -194,7 +195,7 @@ export async function fetchRemoteMediaDetail(
   mediaId: string,
   options: { origin: string; token: string; fetchFn: typeof fetch },
 ): Promise<RemoteMediaExistence> {
-  const itemUrl = new URL(`/_emdash/api/media/${mediaId}`, options.origin).toString();
+  const itemUrl = mediaDetailEndpoint(options.origin, mediaId);
   try {
     const res = await options.fetchFn(itemUrl, {
       method: 'GET',
@@ -262,7 +263,7 @@ async function syncRemoteMediaMetadata(
   }
   if (Object.keys(body).length === 0) return;
 
-  const itemUrl = new URL(`/_emdash/api/media/${mediaId}`, options.origin).toString();
+  const itemUrl = mediaDetailEndpoint(options.origin, mediaId);
   try {
     await options.fetchFn(itemUrl, {
       method: 'PUT',
@@ -291,7 +292,7 @@ export async function compensateOrphanMedia(
   options: { origin: string; token: string; fetchFn: typeof fetch },
 ): Promise<CompensationResult> {
   const { origin, token, fetchFn } = options;
-  const itemUrl = new URL(`/_emdash/api/media/${mediaId}`, origin).toString();
+  const itemUrl = mediaDetailEndpoint(origin, mediaId);
   const authHeaders = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/json',
@@ -338,7 +339,7 @@ async function requestUploadTarget(
   },
   options: { origin: string; token: string; fetchFn: typeof fetch },
 ): Promise<MediaUploadUrlResponse | MediaExistingResponse> {
-  const endpoint = new URL('/_emdash/api/media/upload-url', options.origin).toString();
+  const endpoint = mediaUploadUrlEndpoint(options.origin);
   const res = await options.fetchFn(endpoint, {
     method: 'POST',
     headers: {
@@ -635,10 +636,7 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
     }
 
     // [Phase C] Confirm upload (`POST /_emdash/api/media/{mediaId}/confirm`)
-    const confirmEndpoint = new URL(
-      `/_emdash/api/media/${pendingMediaId}/confirm`,
-      options.origin,
-    ).toString();
+    const confirmEndpoint = mediaConfirmEndpoint(options.origin, pendingMediaId);
     const confirmRes = await fetchFn(confirmEndpoint, {
       method: 'POST',
       headers: {

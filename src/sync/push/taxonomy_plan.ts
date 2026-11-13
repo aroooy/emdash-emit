@@ -21,6 +21,7 @@
  */
 
 import { ApiError } from '../../client/error.js';
+import { articleTermsEndpoint } from '../../client/endpoints.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { BaseSnapshot } from '../../db/cache.js';
 import type { ParsedMarkdown } from '../../utils/frontmatter.js';
@@ -165,10 +166,7 @@ export async function syncArticleTaxonomies(params: {
       }
     }
 
-    const termsUrl = new URL(
-      `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
-      options.origin,
-    ).toString();
+    const termsUrl = articleTermsEndpoint(options.origin, collection, articleId, taxonomyName);
 
     const termRes = await fetchFn(termsUrl, {
       method: 'POST',

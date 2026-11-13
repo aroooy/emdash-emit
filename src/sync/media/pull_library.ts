@@ -3,6 +3,7 @@ import path from 'node:path';
 import { unwrapEnvelope } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
+import { mediaListEndpoint } from '../../client/endpoints.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
@@ -138,7 +139,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     const remaining = targetTotal - totalProcessed;
     const currentBatch = Math.min(remaining, batchSize);
 
-    const url = new URL(`/_emdash/api/media`, options.origin);
+    const url = new URL(mediaListEndpoint(options.origin));
     url.searchParams.set('limit', String(currentBatch));
     if (cursor) {
       url.searchParams.set('cursor', cursor);

@@ -27,6 +27,7 @@ import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { withEntryLock } from '../../client/lock.js';
 import { localToApiPayload } from '../../client/mapper.js';
+import { articleContentEndpoint } from '../../client/endpoints.js';
 import { parseMarkdown, type TaxonomyCandidates } from '../../utils/frontmatter.js';
 import { syncRemoteBylines } from '../bylines.js';
 import { loadLocalTaxonomyCandidates, loadLocalTaxonomyMaps } from '../taxonomies.js';
@@ -176,7 +177,7 @@ export async function pushArticle(
         options.workspaceRoot,
       ),
     );
-    const postUrl = new URL(`/_emdash/api/content/${collection}`, options.origin).toString();
+    const postUrl = articleContentEndpoint(options.origin, collection);
 
     const res = await fetchFn(postUrl, {
       method: 'POST',
@@ -293,7 +294,7 @@ export async function pushArticle(
         options.workspaceRoot,
       ),
     );
-    const putUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
+    const putUrl = articleContentEndpoint(options.origin, collection, id);
 
     // Pre-PUT Taxonomy Audit
     const { remoteTaxAudit, taxonomyDivergenceDetected } = await auditRemoteTaxonomies({

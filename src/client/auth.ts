@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { resolveTargetProfile } from '../utils/profile.js';
+import { authTokenEndpoint } from './endpoints.js';
 
 export interface EmDashAuthData {
   origin?: string;
@@ -171,7 +172,7 @@ export async function refreshAccessToken(
     );
   }
 
-  const tokenUrl = new URL('/_emdash/api/auth/token', auth.origin).toString();
+  const tokenUrl = authTokenEndpoint(auth.origin);
   const res = await fetchFn(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

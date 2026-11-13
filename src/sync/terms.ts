@@ -21,6 +21,7 @@
  */
 
 import crypto from 'node:crypto';
+import { articleTermsEndpoint } from '../client/endpoints.js';
 
 /**
  * Computes deterministic SHA-256 hash for taxonomy assignments.
@@ -51,10 +52,12 @@ export async function fetchAssignedTerms(options: {
   fetchFn: typeof fetch;
 }): Promise<string[] | null> {
   try {
-    const termsUrl = new URL(
-      `/_emdash/api/content/${options.collection}/${options.id}/terms/${options.taxonomy}`,
+    const termsUrl = articleTermsEndpoint(
       options.origin,
-    ).toString();
+      options.collection,
+      options.id,
+      options.taxonomy,
+    );
     const termsRes = await options.fetchFn(termsUrl, {
       method: 'GET',
       headers: {

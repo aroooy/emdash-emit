@@ -22,6 +22,7 @@
 
 import { type CacheDatabase, type BylineRecord } from '../db/cache.js';
 import { createAuthedFetch } from '../client/http.js';
+import { mcpEndpoint } from '../client/endpoints.js';
 
 export interface BylineMaps {
   slugToId: Record<string, string>;
@@ -87,7 +88,7 @@ export async function syncRemoteBylines(options: SyncBylinesOptions): Promise<By
   const fetchFn = createAuthedFetch(options);
 
   try {
-    const mcpUrl = new URL('/_emdash/api/mcp', options.origin).toString();
+    const mcpUrl = mcpEndpoint(options.origin);
     const res = await fetchFn(mcpUrl, {
       method: 'POST',
       headers: {

@@ -29,6 +29,7 @@ import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
 import { unwrapEnvelope, unwrapItem, extractRev, normalizeRev } from '../client/api.js';
+import { articleContentEndpoint, openApiEndpoint } from '../client/endpoints.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
@@ -246,7 +247,7 @@ export async function getRemoteMaxBatchLimit(options: {
 }): Promise<number> {
   const fetchFn = options.fetchFn || fetch;
   try {
-    const url = new URL('/_emdash/api/openapi.json', options.origin).toString();
+    const url = openApiEndpoint(options.origin);
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (options.token) {
       headers.Authorization = `Bearer ${options.token}`;
@@ -295,7 +296,7 @@ async function fetchStatusArticles(
     const remaining = targetTotal - items.length;
     const currentBatch = Math.min(remaining, batchLimit);
 
-    const url = new URL(`/_emdash/api/content/${collection}`, options.origin);
+    const url = new URL(articleContentEndpoint(options.origin, collection));
     url.searchParams.set('status', status);
     url.searchParams.set('limit', String(currentBatch));
     if (cursor) {
@@ -746,7 +747,7 @@ export async function pullArticle(
 
   // 2. Fetch raw item if not passed in options
   if (!rawItem) {
-    const url = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
+    const url = articleContentEndpoint(options.origin, collection, id);
     const res = await fetchFn(url, {
       method: 'GET',
       headers: {

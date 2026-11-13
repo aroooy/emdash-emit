@@ -4,6 +4,7 @@ import { unwrapEnvelope } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { extractMediaUlid } from '../../client/mapper.js';
+import { articleContentEndpoint, mediaDetailEndpoint } from '../../client/endpoints.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import { parseMarkdown } from '../../utils/frontmatter.js';
 import { collectArticleReferencedMediaIds, collectArticleStorageKeys } from './body_scan.js';
@@ -76,7 +77,7 @@ export async function pullArticleMedia(options: {
 
   // 3. If still absent locally, fetch remote article content from EmDash API
   if (!articleContent) {
-    const url = new URL(`/_emdash/api/content/${collection}/${options.article}`, options.origin);
+    const url = new URL(articleContentEndpoint(options.origin, collection, options.article));
     const res = await fetchFn(url.toString(), {
       headers: {
         Authorization: `Bearer ${options.token}`,
@@ -148,7 +149,7 @@ export async function pullArticleMedia(options: {
   // 1. Canonical path: resolve each referenced media record id and mirror it normally.
   for (const mId of mediaIds) {
     try {
-      const mediaUrl = new URL(`/_emdash/api/media/${mId}`, options.origin);
+      const mediaUrl = new URL(mediaDetailEndpoint(options.origin, mId));
       const res = await fetchFn(mediaUrl.toString(), {
         headers: {
           Authorization: `Bearer ${options.token}`,

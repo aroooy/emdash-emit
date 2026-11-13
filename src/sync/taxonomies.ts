@@ -73,6 +73,7 @@ export function flattenTaxonomyTerms(
 import { ApiError } from '../client/error.js';
 import { createAuthedFetch } from '../client/http.js';
 import { unwrapEnvelope } from '../client/api.js';
+import { taxonomiesTermsEndpoint } from '../client/endpoints.js';
 
 export interface PullTaxonomiesOptions {
   workspaceRoot: string;
@@ -102,7 +103,7 @@ export async function pullTaxonomies(
   const fetchFn = createAuthedFetch(options);
 
   const fetchTerms = async (taxName: 'category' | 'tag'): Promise<TaxonomyTerm[]> => {
-    const url = new URL(`/_emdash/api/taxonomies/${taxName}/terms`, options.origin).toString();
+    const url = taxonomiesTermsEndpoint(options.origin, taxName);
     const res = await fetchFn(url, {
       method: 'GET',
       headers: {

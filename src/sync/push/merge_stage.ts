@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ApiError } from '../../client/error.js';
 import { apiResponseToLocal } from '../../client/mapper.js';
+import { articleContentEndpoint } from '../../client/endpoints.js';
 import { readBaseline, readBaselineFrontmatter, createBaseSnapshot } from '../../db/baseline.js';
 import type { BaseSnapshot, SyncState } from '../../db/cache.js';
 import {
@@ -105,7 +106,7 @@ export async function resolveConflictAndMerge(params: {
   }
 
   // True revision mismatch conflict or taxonomy divergence: fetch remote latest and run Hybrid 3-Way Merge
-  const getUrl = new URL(`/_emdash/api/content/${collection}/${id}`, options.origin).toString();
+  const getUrl = articleContentEndpoint(options.origin, collection, id);
   const getRes = await fetchFn(getUrl, {
     method: 'GET',
     headers: {

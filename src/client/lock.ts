@@ -34,6 +34,7 @@ export interface LockResponse {
 }
 
 import { authenticatedFetch, createAuthedFetch } from './http.js';
+import { articleLockEndpoint } from './endpoints.js';
 
 export interface LockClientOptions {
   origin: string;
@@ -67,7 +68,7 @@ export async function getLockStatus(
   options: LockClientOptions,
 ): Promise<LockResponse> {
   const fetchFn = createLockFetch(options);
-  const url = new URL(`/_emdash/api/content/${collection}/${id}/lock`, options.origin).toString();
+  const url = articleLockEndpoint(options.origin, collection, id);
 
   const res = await fetchFn(url, {
     method: 'GET',
@@ -97,7 +98,7 @@ export async function acquireLock(
   options: LockClientOptions,
 ): Promise<LockResponse> {
   const fetchFn = createLockFetch(options);
-  const url = new URL(`/_emdash/api/content/${collection}/${id}/lock`, options.origin).toString();
+  const url = articleLockEndpoint(options.origin, collection, id);
 
   const res = await fetchFn(url, {
     method: 'POST',
@@ -129,7 +130,7 @@ export async function releaseLock(
   options: LockClientOptions,
 ): Promise<void> {
   const fetchFn = createLockFetch(options);
-  const url = new URL(`/_emdash/api/content/${collection}/${id}/lock`, options.origin).toString();
+  const url = articleLockEndpoint(options.origin, collection, id);
 
   try {
     await fetchFn(url, {

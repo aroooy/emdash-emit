@@ -73,6 +73,7 @@ export class PublishedArticleDeletionForbiddenError extends Error {
  * Scans article Markdown body to detect referenced media files in media/.
  */
 import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
+import { articleContentEndpoint } from '../client/endpoints.js';
 
 export interface DeleteArticleOptions {
   workspaceRoot: string;
@@ -175,7 +176,7 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
   let remoteDeleted = false;
   if (options.origin && options.token && articleId && articleId !== 'unknown') {
     const fetchFn = options.fetchFn || globalThis.fetch;
-    const url = new URL(`/_emdash/api/content/${collection}/${articleId}`, options.origin);
+    const url = new URL(articleContentEndpoint(options.origin, collection, articleId));
 
     let res: Response;
     try {
@@ -199,7 +200,7 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
     if (res.ok || res.status === 204) {
       // Step 2: Verification GET with no-cache and timestamp query parameter
       // Exponential backoff retries: 0ms, 500ms, 1500ms
-      const verifyUrl = new URL(`/_emdash/api/content/${collection}/${articleId}`, options.origin);
+      const verifyUrl = new URL(articleContentEndpoint(options.origin, collection, articleId));
       verifyUrl.searchParams.set('_cb', String(Date.now()));
 
       let verifiedDeleted = false;

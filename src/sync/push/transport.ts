@@ -22,6 +22,7 @@
 
 import { ApiError } from '../../client/error.js';
 import { extractRev } from '../../client/api.js';
+import { articleStatusTransitionEndpoint } from '../../client/endpoints.js';
 import type { PushOptions } from './types.js';
 
 /**
@@ -37,10 +38,12 @@ export async function transitionContentStatus(
   fetchFn: typeof fetch,
 ): Promise<string> {
   const isPublishing = targetStatus === 'published';
-  const endpoint = new URL(
-    `/_emdash/api/content/${collection}/${id}/${isPublishing ? 'publish' : 'unpublish'}`,
+  const endpoint = articleStatusTransitionEndpoint(
     options.origin,
-  ).toString();
+    collection,
+    id,
+    isPublishing ? 'publish' : 'unpublish',
+  );
 
   const body: Record<string, unknown> = { _rev: currentRev };
   if (isPublishing && publishedAt) {

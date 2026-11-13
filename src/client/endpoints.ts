@@ -62,6 +62,11 @@ export function mediaDetailEndpoint(origin: string, mediaId: string): string {
   return new URL(`/_emdash/api/media/${mediaId}`, origin).toString();
 }
 
+/** Final stage of the 4-stage upload flow: `POST /_emdash/api/media/{mediaId}/confirm`. */
+export function mediaConfirmEndpoint(origin: string, mediaId: string): string {
+  return new URL(`/_emdash/api/media/${mediaId}/confirm`, origin).toString();
+}
+
 export function mediaListEndpoint(origin: string): string {
   return new URL('/_emdash/api/media', origin).toString();
 }

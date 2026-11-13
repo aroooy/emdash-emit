@@ -2,6 +2,7 @@ import path from 'node:path';
 import { unwrapEnvelope } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
+import { mediaListEndpoint } from '../../client/endpoints.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
@@ -50,7 +51,7 @@ async function fetchMediaListPage(options: {
   nextCursor?: string;
   totalCount: number | null;
 }> {
-  const url = new URL('/_emdash/api/media', options.origin);
+  const url = new URL(mediaListEndpoint(options.origin));
   url.searchParams.set('limit', String(options.limit));
   if (options.cursor) url.searchParams.set('cursor', options.cursor);
 
