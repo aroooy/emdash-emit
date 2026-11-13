@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-11-13
+
+### Added
+
+- **4-Tier Architectural Layering & Invariant Gates (`tests/layering.test.ts`)**:
+  - Formally established 4-tier layer isolation: Layer 0 (Primitives & Infra), Layer 1 (Sync Upstream), Layer 2 (Sync Downstream), and Layer 3 (Consumers & Presentation).
+  - Mechanically verified via Vitest:
+    - Axis 1: Layer 1 files never import Layer 2 modules.
+    - Axis 2: Layer 3 imports only allowed Layer 2 public symbols from an explicit allowlist snapshot.
+    - Axis 3: MCP tools (`src/mcp/`) never import from CLI command modules (`src/cli/commands/`).
+    - Layer 2 Sibling Coupling Gate: Layer 2 downstream modules never import from sibling modules except via a minimal, explicit coordinator snapshot (`orchestrator`, `doctor`, `push/media_stage`).
+- **Unified Presentation Layer (`src/presentation/article_report.ts`)**:
+  - Unified report formatters (`formatOrphanMediaWarning`, `formatMediaCoverageLine`, `formatArticleDiffReport`), ensuring CLI and MCP produce symmetric vocabulary and identical warning outputs.
+  - Added actionable `remediationFor(code)` in `src/sync/guards.ts` covering G1–G19 without adding new error codes.
+- **Branded Media ID Spaces & Strict Type Safety (`src/utils/media-id.ts`)**:
+  - Formally separated D1 record IDs (`MediaRecordId`) and R2 object keys (`StorageKey`) at the TypeScript type level.
+  - Added strict runtime validators `toMediaRecordId()` and `toStorageKey()`, validating extensions, paths, and Crockford Base32 syntax across supply boundaries.
+  - Centralized all REST endpoint URL builders in `src/client/endpoints.ts` with byte-identical regression tests in `tests/api.test.ts`.
+
+### Refactored
+
+- **Modular Push Pipeline Deconstruction (`src/sync/push/`)**:
+  - Decomposed `pushArticle` from a monolithic module into 9 focused pipeline stages: `types.ts`, `guards.ts`, `preflight_stage.ts`, `taxonomy_plan.ts`, `media_stage.ts`, `tax_audit.ts`, `transport.ts`, `merge_stage.ts`, `commit.ts`, coordinated by `index.ts`.
+  - Unified post-push commit processing via `pendingFlagsFor` (`PendingFlagsResult`), strictly guaranteeing symmetry and NULL rules across create, update, and conflict paths.
+  - Eliminated synthetic responses in taxonomy divergence audit.
+  - Established T2-1 regression lock guaranteeing preflight conflict markers check (G6) evaluates strictly before taxonomy conflict pending check (G16).
+- **Workspace Contracts & Media Refactoring**:
+  - Centralized filesystem mutations and hash contracts into `src/sync/workspace/index.ts`.
+  - Moved companion metadata parsing to `src/utils/media-companion.ts` (Layer 0), eliminating `./media.js` import from `preflight.ts`.
+  - Moved body scanning (`scanArticleMediaReferences`, `carriesDepthFreeMediaRef`, `shouldPreferLegacyRef`) to `src/utils/media-body-refs.ts` (Layer 0), eliminating sibling coupling between `delete.ts` and `media/body_scan.ts`.
+  - Consolidated Crockford Base32 ULID regexes and validation into `src/utils/ulid.ts` (30 call sites aggregated, `extractFilenameUlid` separated).
+
 ## [0.1.17] - 2026-11-12
 
 ### Fixed
