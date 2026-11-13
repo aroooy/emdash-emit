@@ -7,6 +7,7 @@ import { buildMediaMetaDoc } from './companions.js';
 import {
   cleanupDuplicateMediaFilesForId,
   mediaMirrorNames,
+  mediaRecordIdForStem,
   moveFileSafe,
 } from './naming_mirror.js';
 import type { EmDashMediaItem, PromoteDraftMediaOptions, PromotedMediaFile } from './types.js';
@@ -53,21 +54,22 @@ export async function syncSingleMediaItem(options: {
     }
   }
   if (!existingMeta) {
-    const matchingYaml = mediaFiles.find(
-      (f) =>
-        f.endsWith('.yaml') &&
-        !f.startsWith('legacy_') &&
-        f !== path.basename(yamlPath) &&
-        (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
-    );
-    if (matchingYaml) {
-      try {
-        existingMeta = yaml.load(
-          fs.readFileSync(path.join(mediaDir, matchingYaml), 'utf8'),
-        ) as Record<string, unknown> | null;
-        existingMetaPath = path.join(mediaDir, matchingYaml);
-      } catch {
-        existingMeta = null;
+    const wanted = item.id.toUpperCase();
+    for (const f of mediaFiles) {
+      if (!f.endsWith('.yaml') || f.startsWith('legacy_') || f === path.basename(yamlPath))
+        continue;
+      const stem = f.replace(/\.yaml$/, '');
+      if (mediaRecordIdForStem(mediaDir, stem) === wanted) {
+        try {
+          existingMeta = yaml.load(fs.readFileSync(path.join(mediaDir, f), 'utf8')) as Record<
+            string,
+            unknown
+          > | null;
+          existingMetaPath = path.join(mediaDir, f);
+          break;
+        } catch {
+          existingMeta = null;
+        }
       }
     }
   }
@@ -91,20 +93,24 @@ export async function syncSingleMediaItem(options: {
 
   // Rename an existing mirror into the new name before considering a download, so migrating a workspace
   // costs no bandwidth. Size must match: a same-stem file of a different size is not this asset.
+  // Candidates are strictly companion-backed mirrors (or official legacyBaseNames with confirmed companion):
+  // Never guess an unbacked binary by filename or file size alone (AGENTS.md §7).
   if (!fs.existsSync(targetFilePath)) {
-    const candidates = names.legacyBaseNames
-      .map((legacy) => path.join(mediaDir, `${legacy}${fileExt}`))
-      .concat(
-        mediaFiles
-          .filter(
-            (f) =>
-              !f.endsWith('.yaml') &&
-              !f.startsWith('legacy_') &&
-              (f.includes(`_${item.id}-`) || f.startsWith(`${item.id}-`)),
-          )
-          .map((f) => path.join(mediaDir, f)),
-      );
-    for (const candidate of candidates) {
+    const candidateStems: string[] = [];
+    for (const legacy of names.legacyBaseNames) {
+      if (fs.existsSync(path.join(mediaDir, `${legacy}.yaml`))) {
+        candidateStems.push(legacy);
+      }
+    }
+    if (existingMetaPath) {
+      const existingStem = path.basename(existingMetaPath, '.yaml');
+      if (!candidateStems.includes(existingStem) && existingStem !== baseName) {
+        candidateStems.push(existingStem);
+      }
+    }
+
+    for (const stem of candidateStems) {
+      const candidate = path.join(mediaDir, `${stem}${fileExt}`);
       if (candidate === targetFilePath || !fs.existsSync(candidate)) continue;
       try {
         const stat = fs.statSync(candidate);

@@ -247,31 +247,42 @@ function preserveOrResolveFeaturedImage(
     const mediaDir = path.join(workspaceRoot, 'media');
     const mirrored = fs.existsSync(mediaDir) ? fs.readdirSync(mediaDir) : [];
     if (mirrored.length > 0) {
-      // Anchored on the id segment so a ULID appearing inside another media item's
-      // filename can never be mistaken for its own metadata file.
-      const companion = mirrored.find(
-        (f) =>
-          f.endsWith('.yaml') && (f.includes(`_${targetUlid}-`) || f.startsWith(`${targetUlid}-`)),
-      );
-      if (companion) {
+      let companionFound = false;
+      let mismatchedCompanion: { name: string; metaId: string } | null = null;
+
+      for (const f of mirrored) {
+        if (!f.endsWith('.yaml') || f.startsWith('legacy_')) continue;
         try {
-          const meta = yaml.load(fs.readFileSync(path.join(mediaDir, companion), 'utf8')) as Record<
+          const meta = yaml.load(fs.readFileSync(path.join(mediaDir, f), 'utf8')) as Record<
             string,
             unknown
           > | null;
           const metaId = typeof meta?.id === 'string' ? meta.id.trim().toUpperCase() : undefined;
-          if (metaId && metaId !== targetUlid) {
-            warnings.push(
-              `Local media metadata '${companion}' describes a different media ID (${metaId}); it was ignored for featuredImage ${targetUlid}.`,
-            );
+          if (metaId === targetUlid) {
+            companionFound = true;
+            break;
+          }
+          if (
+            (f.includes(`_${targetUlid}-`) || f.startsWith(`${targetUlid}-`)) &&
+            metaId &&
+            metaId !== targetUlid
+          ) {
+            mismatchedCompanion = { name: f, metaId };
           }
         } catch (err: unknown) {
           // Non-fatal: metadata inspection is advisory only.
           warnings.push(
-            `[push] Failed to read local media metadata '${companion}': ${(err as Error).message}`,
+            `[push] Failed to read local media metadata '${f}': ${(err as Error).message}`,
           );
         }
-      } else {
+      }
+
+      if (!companionFound) {
+        if (mismatchedCompanion) {
+          warnings.push(
+            `Local media metadata '${mismatchedCompanion.name}' describes a different media ID (${mismatchedCompanion.metaId}); it was ignored for featuredImage ${targetUlid}.`,
+          );
+        }
         warnings.push(
           `featuredImage ${targetUlid} was not found in the mirrored media under media/, so Emit could not confirm this media ID exists. The ID is sent as-is and EmDash resolves it, but if the ID is wrong the hero image will be missing. Upload the image first (EmDash Admin or media_upload) and use the ULID it returns, or run "emit pull-media" to mirror remote media locally.`,
         );

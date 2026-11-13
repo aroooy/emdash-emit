@@ -350,4 +350,27 @@ describe('featuredImage Push Payload Shaping', () => {
     expect(contentOnDisk).toContain(`featuredImage: "${mediaUlid}"`);
     expect(contentOnDisk).not.toContain(mediaUlid.toLowerCase());
   });
+
+  it('verifies featuredImage against a storageKey-named companion YAML without relying on filename stem', async () => {
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    // Companion whose filename is derived purely from storageKey (no media ID in filename)
+    fs.writeFileSync(
+      path.join(mediaDir, 'pure-storage-key-stem.yaml'),
+      `id: ${mediaUlid}\nfilename: hero.jpg\nmimeType: image/jpeg\nwidth: 1600\nheight: 900\n`,
+      'utf8',
+    );
+
+    seedTrackedArticle('featured-storagekey-companion', null);
+    const relPath = writeArticle('featured-storagekey-companion', mediaUlid);
+    const { fetchFn, payload } = pushMock();
+
+    const res = await pushArticle(relPath, { ...options, workspaceRoot: tempDir, cache, fetchFn });
+
+    expect(payload()!.data.featured_image).toEqual({ id: mediaUlid });
+    // Verified via YAML metadata id without warning!
+    expect(
+      res.warnings.filter((w) => w.includes('could not confirm this media ID exists')),
+    ).toHaveLength(0);
+  });
 });

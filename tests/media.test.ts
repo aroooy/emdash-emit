@@ -1769,5 +1769,66 @@ locale: ja
         cache.close();
       }
     });
+
+    it('refuses to guess or rename unbacked binary without companion YAML even if filename contains media id and size matches', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      const targetId = '01M6TESTMEDIAID00000000001';
+      const targetKey = '01M6TESTSTORAGEKEY000000001.png';
+      const unbackedBinary = path.join(mediaDir, `20261101_${targetId}-old.png`);
+      const binaryContent = Buffer.from('FAKE-IMAGE-BYTES-12345');
+      fs.writeFileSync(unbackedBinary, binaryContent);
+
+      const mockFetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/_emdash/api/media?')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              items: [
+                {
+                  id: targetId,
+                  storageKey: targetKey,
+                  filename: 'test.png',
+                  mimeType: 'image/png',
+                  size: binaryContent.length,
+                  url: `/_emdash/api/media/file/${targetKey}`,
+                },
+              ],
+              total: 1,
+            }),
+          });
+        }
+        if (url.includes(targetKey)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => binaryContent.buffer,
+          });
+        }
+        return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+      });
+
+      const cache = new CacheDatabase(path.join(tempDir, 'cache.db'));
+      try {
+        await pullMedia({
+          workspaceRoot: tempDir,
+          origin: 'https://emdash.test',
+          token: 'token',
+          storageKeys: [targetKey],
+          cache,
+          fetchFn: mockFetch as unknown as typeof fetch,
+        });
+
+        // The unbacked binary must NOT be moved/renamed (remains intact)
+        expect(fs.existsSync(unbackedBinary)).toBe(true);
+        // The new mirror was downloaded from remote because the unbacked file had no companion to attribute ownership
+        const canonicalMirror = path.join(mediaDir, '01M6TESTSTORAGEKEY000000001.png');
+        expect(fs.existsSync(canonicalMirror)).toBe(true);
+      } finally {
+        cache.close();
+      }
+    });
   });
 });
