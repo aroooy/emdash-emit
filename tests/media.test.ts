@@ -42,6 +42,7 @@ import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,
 } from '../src/cli/commands/pull.js';
+import * as remoteIndexModule from '../src/sync/media/remote_index.js';
 import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
@@ -52,8 +53,11 @@ import { CacheDatabase } from '../src/db/cache.js';
 const OLD_RECORD = '01MJZZDRECRD99999999999999';
 const OLD_DISK_KEY = '01MJZZDDSKKEY9999999999999';
 const OLD_ARTICLE = '01MJZZARTCED99999999999999';
-const REMOTE_KEY = '01MJZZREMTEKEY9999999991';
-const LOCAL_ONLY_KEY = '01MJZZLCLYZ999999999999';
+// Census keys must be valid 26-char storageKey ULIDs (Crockford Base32: no I, O, L, or U):
+// `collectArticleStorageKeys()` matches a body reference against that exact shape, so an invalid fixture key
+// silently collects as nothing and the census assertion below would pass for the wrong reason.
+const REMOTE_KEY = '01MJZZREMTEKEY999999999999';
+const LOCAL_ONLY_KEY = '01MJZZKCAKNAY9999999999999';
 const NOWHERE_KEY = '01MJZZNWHEREKY999999999999';
 
 describe('Media Sync Engine', () => {
@@ -154,6 +158,115 @@ describe('Media Sync Engine', () => {
     });
     expect(res2.downloaded).toBe(0);
     expect(res2.skipped).toBe(1);
+  });
+
+  it('reports a referenced storageKey no walked record and no companion names, and stays silent for one a companion confirms', async () => {
+    // The census is the only signal that tells an agent "this body reference mirrors nothing local". If it
+    // were fed a key set seeded from a scan of existing companions, every already-mirrored asset would be
+    // self-exempt and the census would report no absence at all — the failure mode AGENTS.md §7 forbids for
+    // pruning applies to the census too. Confirmation must come from exactly two sources: a key the complete
+    // walk reported, or a key a companion YAML records.
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    const postsDir = path.join(tempDir, 'posts', 'draft');
+    fs.mkdirSync(postsDir, { recursive: true });
+
+    // A mirror this run's walk never reaches. Its companion records the key, so a reference it satisfies is
+    // confirmed local and must not be reported — but a companion alone must not vouch for anything else.
+    const mirroredArticle = '01MJZZMRRDRRRT999999999999';
+    const mirroredKey = `${LOCAL_ONLY_KEY}`;
+    fs.writeFileSync(path.join(mediaDir, `${mirroredKey}.jpg`), 'local bytes');
+    fs.writeFileSync(
+      path.join(mediaDir, `${mirroredKey}.yaml`),
+      ['id: OLD_RECORD', `storageKey: ${mirroredKey}.jpg`, ''].join('\n'),
+    );
+
+    // Three body references across two articles: a key the walk reports, a key a companion records, and a
+    // key nothing names at all.
+    fs.writeFileSync(
+      path.join(postsDir, `20261112_${mirroredArticle}-mirrored.md`),
+      [
+        '---',
+        `id: ${mirroredArticle}`,
+        'slug: mirrored',
+        'title: "Mirrored"',
+        'collection: posts',
+        'status: draft',
+        'locale: ja',
+        '---',
+        '',
+        `![local](/_emdash/api/media/file/${mirroredKey}.jpg)`,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(postsDir, `20261112_${OLD_ARTICLE}-census.md`),
+      [
+        '---',
+        `id: ${OLD_ARTICLE}`,
+        'slug: census',
+        'title: "Census"',
+        'collection: posts',
+        'status: draft',
+        'locale: ja',
+        '---',
+        '',
+        `![walked](/_emdash/api/media/file/${REMOTE_KEY}.jpg)`,
+        '',
+        `![nowhere](/_emdash/api/media/file/${NOWHERE_KEY}.jpg)`,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const mockFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              items: [
+                {
+                  id: OLD_RECORD,
+                  filename: 'walked.jpg',
+                  mimeType: 'image/jpeg',
+                  size: 5,
+                  storageKey: `${REMOTE_KEY}.jpg`,
+                  createdAt: '2026-11-08T00:00:00.000Z',
+                },
+              ],
+              nextCursor: null,
+            },
+          }),
+        ),
+      ),
+    );
+
+    const censusSpy = vi.spyOn(remoteIndexModule, 'findUnmirroredStorageKeys');
+
+    const res = await pullMedia({
+      workspaceRoot: tempDir,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      all: true,
+      downloadFiles: false,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    // The walked key is satisfied by the walk and the companion-owned key by recorded metadata, so only the
+    // orphan survives. A locally seeded index would have swallowed both of the last two, reporting a clean
+    // library while the reference to `${NOWHERE_KEY}.jpg` silently mirrored nothing.
+    expect(res.referencedUnmirroredStorageKeys).toEqual([`${NOWHERE_KEY}.jpg`]);
+
+    // Regression lock for M1 census self-exemption:
+    // remoteIndex.storageKeys must ONLY record keys reported by the remote walk.
+    // It must NEVER be seeded from local companions (pruning & census authority invariant).
+    expect(censusSpy).toHaveBeenCalled();
+    const [, companionKeys, passedRemoteIndex] = censusSpy.mock.calls[0];
+    expect(passedRemoteIndex.storageKeys.has(`${mirroredKey}.jpg`)).toBe(false);
+    expect(passedRemoteIndex.storageKeys.has(`${REMOTE_KEY}.jpg`)).toBe(true);
+    expect(new Set(companionKeys).has(`${mirroredKey}.jpg`)).toBe(true);
   });
 
   it('preserves media/drafts/ untouched during pullMedia with prune: true', async () => {

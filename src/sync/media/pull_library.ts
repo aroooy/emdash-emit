@@ -102,18 +102,19 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
 
   const mediaDir = path.join(options.workspaceRoot, 'media');
   fs.mkdirSync(mediaDir, { recursive: true });
-  // Every mirrored companion is a confirmed storageKey source, including the ones written before Emit
-  // persisted the field, whose `url:` still names the key. Seeding from disk means `--prune` never
-  // deletes an asset that this run's media window simply did not reach.
-  const activeStorageKeys = new Set<string>();
+  // Companion YAMLs are confirmed storageKey sources, including the ones written before Emit persisted the
+  // field, whose `url:` still names the key. They belong in the resolution index so a body reference to an
+  // asset this run's window never reached is still recognized as local — but they must never enter the walk's
+  // own key set or the census treats every existing mirror as accounted for and reports no absence at all.
+  const companionStorageKeys = new Set<string>();
   for (const candidate of collectLocalMediaMirrorCandidates(mediaDir).values()) {
-    if (candidate.storageKey) activeStorageKeys.add(candidate.storageKey);
+    if (candidate.storageKey) companionStorageKeys.add(candidate.storageKey);
   }
 
   // Metadata for the coverage report and the storageKey census. `pullMedia` already walks the library
   // cursor-by-cursor, so it owns the index instead of paying for a second one.
   const remoteIndex: RemoteStorageKeyIndex = {
-    storageKeys: activeStorageKeys,
+    storageKeys: new Set<string>(),
     mediaIdsByStorageKey: new Map<string, string>(),
     recordsByStorageKey: new Map<string, EmDashMediaItem>(),
     recordsById: new Map<string, EmDashMediaItem>(),
@@ -123,8 +124,9 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   };
 
   const activeMediaBaseNames = new Set<string>();
-  // Only records the remote walk actually reports may authorise a mirror to stay. Seeding this from local
-  // companions instead would make every existing file self-exempt and prune nothing at all.
+  // Only records the remote walk actually reports may authorise a mirror to stay, and only those same keys
+  // may satisfy the census below. Seeding either from a local scan instead would make every existing mirror
+  // self-exempt: pruning would delete nothing that mattered and the census would report no absence at all.
   const activeMediaIds = new Set<string>();
 
   let totalProcessed = 0;
@@ -181,7 +183,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       }
       activeMediaIds.add(item.id);
       if (item.storageKey) {
-        activeStorageKeys.add(item.storageKey);
+        remoteIndex.storageKeys.add(item.storageKey);
         remoteIndex.mediaIdsByStorageKey.set(item.storageKey, item.id);
       }
 
@@ -261,9 +263,11 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       }
     }
     if (referenced.size > 0) {
+      // Two distinct sources of confirmation, and only these two: a key the complete remote walk reported,
+      // or a key a local companion records as mirrored. A reference neither names is what the census reports.
       referencedUnmirroredStorageKeys = findUnmirroredStorageKeys(
         referenced,
-        activeStorageKeys,
+        companionStorageKeys,
         remoteIndex,
       );
     }
