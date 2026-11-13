@@ -67,6 +67,11 @@ v0.1.15 のリファクタ計画 (`docs/v0115-refactor-plan/REVISED_PLAN_v4.md`)
 - 実測違反: `src/mcp/tools/sync-pull.ts:34` が `formatMediaCoverageLine` / `formatOrphanMediaWarning` を `../../cli/commands/pull.js`（Layer 3 → Layer 3）から import している。
 - 層表は同レイヤ内参照を自動検出しないため、`tests/layering.test.ts` の 2 軸検査では捕捉されない。**P3 で新設する `src/presentation/article_report.ts` 経由に集約して解消する**（C2 の検証ゲートに組み込み）。
 
+#### Layer 2 内参照の規定（P2 まで暫定許可）
+
+- 実測参照: `src/sync/media/body_scan.ts:4` が `scanArticleMediaReferences` を `../delete.js`（Layer 2 → Layer 2 兄弟）から import している。
+- 方向としては Layer 2 同士のため後述の禁止方向検査（Layer 1 → Layer 2）には抵触しないが、**P2 で `scanArticleMediaReferences` を `src/utils/media-body-refs.ts`（Layer 0）へ移管して兄弟依存を解消**する。
+
 #### 既存レイヤリング違反の是正（B1 完了条件）
 1. **`preflight.ts` からの Layer 2 パス import 完全削除**:
    - `src/sync/media/companions.ts:81` の `storageKeyFromMediaMeta`（YAML / URL から storageKey を正規化する純粋関数）を **`src/utils/media-companion.ts`（Layer 0）へ移管**する。
