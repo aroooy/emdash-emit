@@ -28,6 +28,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/pull.js';
+import { pushArticle } from '../src/sync/push.js';
 import {
   listConflicts,
   diffConflict,
@@ -583,5 +584,111 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(state?.conflictPending).toBe(0);
     // Quarantined copy is removed
     expect(fs.existsSync(fullConflict)).toBe(false);
+  });
+
+  it('aligns quarantine hash strictly NULL when push encounters a taxonomy-only divergence without body conflict (v0.1.14 backlog §2)', async () => {
+    const { relCanonical } = setupArticleFixture();
+    const fullCanonical = path.join(tempDir, relCanonical);
+    const bodyContent = 'Line 1\nLine 2\n';
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'sample-conflict-article',
+      title: 'Sample Conflict Article',
+      collection: 'posts',
+      status: 'draft',
+      locale: 'ja',
+      taxonomies: { categories: ['local-category'] },
+      bylines: [],
+    };
+    fs.writeFileSync(fullCanonical, serializeMarkdown(fm, bodyContent), 'utf8');
+
+    // Baseline has categories: ['base-category']
+    const baseFm: Frontmatter = { ...fm, taxonomies: { categories: ['base-category'] } };
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: 'rev-base',
+      bodyMarkdown: bodyContent,
+      frontmatterYaml: JSON.stringify(baseFm),
+      hash: calculateHash(serializeMarkdown(baseFm, bodyContent)),
+      savedAt: Math.floor(Date.now() / 1000),
+    });
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relCanonical,
+      localHash: calculateHash(serializeMarkdown(fm, bodyContent)),
+      remoteRev: 'rev-base',
+      status: 'draft',
+      slug: fm.slug,
+      lastSyncedAt: Math.floor(Date.now() / 1000),
+      remoteTaxonomyHash: 'base-tax-hash',
+    });
+
+    // Remote has out-of-band categories: ['remote-category'], but same body
+    const mockFetch = (async (urlStr: string, init?: { method?: string }) => {
+      const url = new URL(urlStr);
+      if (url.pathname.includes('/terms/')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            terms: [{ id: 'term-remote', slug: 'remote-category', name: 'Remote' }],
+          }),
+        };
+      }
+      if (url.pathname.endsWith(`/posts/${articleId}`) && init?.method === 'PUT') {
+        // Return 409 conflict
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: { code: 'CONFLICT' } }),
+          text: async () => '',
+        };
+      }
+      if (url.pathname.endsWith(`/posts/${articleId}`)) {
+        // GET remote
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            item: {
+              id: articleId,
+              slug: fm.slug,
+              title: fm.title,
+              rev: 'rev-remote-diverged',
+              data: {
+                title: fm.title,
+                body: bodyContent,
+              },
+              taxonomies: {
+                categories: ['remote-category'],
+              },
+            },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+
+    const res = await pushArticle(relCanonical, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://emdash.test',
+      token: 'token',
+      fetchFn: mockFetch,
+      allowPublish: true,
+    });
+
+    expect(res.conflict).toBe(true);
+    expect(res.taxonomyConflict).toBe(true);
+
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.conflictPending).toBe(1);
+    expect(syncState?.taxonomyConflictPending).toBe(1);
+    expect(syncState?.bodyConflictPending).toBe(0);
+    // Since there was no body conflict, no quarantine copy was created:
+    // conflictCopyPath, conflictCopyHash, and conflictAt MUST be strictly null (preventing phantom rescue iterations)
+    expect(syncState?.conflictCopyPath).toBeNull();
+    expect(syncState?.conflictCopyHash).toBeNull();
+    expect(syncState?.conflictAt).toBeNull();
   });
 });

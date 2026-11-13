@@ -1360,7 +1360,13 @@ export async function pushArticle(
           fs.writeFileSync(fullPath, conflictedMarkdown, 'utf8');
         }
 
-        const conflictedHash = calculateHash(conflictedMarkdown);
+        let actualConflictCopyHash: string | null = null;
+        if (quarantineRel) {
+          const qFull = path.join(options.workspaceRoot, quarantineRel);
+          if (fs.existsSync(qFull)) {
+            actualConflictCopyHash = calculateHash(fs.readFileSync(qFull, 'utf8'));
+          }
+        }
 
         // Update sync state:
         // Do NOT overwrite localHash with marker hash, so `status` remains clean when markers are cleaned up!
@@ -1375,9 +1381,9 @@ export async function pushArticle(
           conflictPending: 1,
           bodyConflictPending: hasBodyConflict ? 1 : 0,
           taxonomyConflictPending: isTaxonomyConflict ? 1 : 0,
-          conflictCopyHash: conflictedHash,
+          conflictCopyHash: actualConflictCopyHash,
           conflictCopyPath: quarantineRel,
-          conflictAt: Math.floor(Date.now() / 1000),
+          conflictAt: quarantineRel ? Math.floor(Date.now() / 1000) : null,
           remoteTaxonomyHash: computeTaxonomyHash(
             remoteParsed.frontmatter.taxonomies?.categories,
             remoteParsed.frontmatter.taxonomies?.tags,

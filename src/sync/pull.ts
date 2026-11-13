@@ -28,7 +28,7 @@ import { createBaseSnapshot } from '../db/baseline.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
-import { unwrapEnvelope, extractRev, normalizeRev } from '../client/api.js';
+import { unwrapEnvelope, unwrapItem, extractRev, normalizeRev } from '../client/api.js';
 import {
   computeArticleRelativePath,
   extractDatePrefixFromPath,
@@ -230,6 +230,23 @@ export function shouldPreferLegacyRef(workspaceRoot: string, existingRelPaths: s
  * silently discarded during a pull.
  * Returns the relative path of the preserved copy, or null when preservation failed.
  */
+/**
+ * Resolves the canonical article title from remote data symmetrically across
+ * fast-path and full-pull (EMIT-005 / v0.1.14 backlog §1).
+ */
+export function extractCanonicalRemoteTitle(
+  rawObj: Record<string, unknown>,
+  fallbackSlug?: string,
+): string {
+  const item = unwrapItem<Record<string, unknown>>(rawObj);
+  const data = ((item.data || {}) as Record<string, unknown>) || {};
+  const rawTitle = String(data.title || item.title || '').trim();
+  if (rawTitle) return rawTitle;
+  const rawSlug = String(item.slug || fallbackSlug || '').trim();
+  if (rawSlug) return rawSlug;
+  return 'Untitled';
+}
+
 /**
  * Resolves canonical relative path for an article symmetrically between
  * batch fast-path and full pull (EMIT-005 / R7).
@@ -638,10 +655,8 @@ export async function pullArticle(
 
       // Check if file path matches current naming standard
       const existingPrefix = extractDatePrefixFromPath(existingSync.localFilePath);
-      const rawData = ((rawObj.data || rawObj.item || {}) as Record<string, unknown>) || {};
-      const rawTitle = String(
-        rawData.title || rawObj.title || item.title || rawObj.slug || item.slug || '',
-      );
+      const fallbackSlug = String(item.slug || existingSync.slug || '');
+      const rawTitle = extractCanonicalRemoteTitle(rawObj, fallbackSlug);
       const targetStatus = String(rawObj.status || item.status || 'draft');
       const expectedRelPath = resolveCanonicalArticlePath(
         collection,
@@ -1017,15 +1032,19 @@ export async function pullArticle(
       ? extractDatePrefixFromPath(preferredDiskMatch)
       : null;
 
+  const canonicalTitle = rawItem
+    ? extractCanonicalRemoteTitle(rawItem, frontmatter.slug)
+    : frontmatter.title || frontmatter.slug;
+
   const relPath = resolveCanonicalArticlePath(
     frontmatter.collection,
     frontmatter.status,
     frontmatter.id,
-    frontmatter.title || frontmatter.slug,
+    canonicalTitle,
     {
-      publishedAt: (frontmatter.publishedAt as string) || (rawItem.publishedAt as string) || null,
-      createdAt: (rawItem.createdAt as string) || null,
-      updatedAt: (rawItem.updatedAt as string) || null,
+      publishedAt: (frontmatter.publishedAt as string) || (rawItem?.publishedAt as string) || null,
+      createdAt: (rawItem?.createdAt as string) || null,
+      updatedAt: (rawItem?.updatedAt as string) || null,
     },
     existingPrefix,
   );

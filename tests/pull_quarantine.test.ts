@@ -31,6 +31,8 @@ import {
   formatQuarantineNotice,
   isQuarantinedRelativePath,
   pullArticle,
+  extractCanonicalRemoteTitle,
+  resolveCanonicalArticlePath,
 } from '../src/sync/pull.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
@@ -556,5 +558,50 @@ Unpushed edits to be preserved
     expect(syncState?.bodyConflictPending).toBe(1);
     expect(syncState?.conflictPending).toBe(1);
     expect(syncState?.conflictCopyPath).toBe(res.quarantined![0].quarantineFilePath);
+  });
+
+  it('guarantees deterministic title precedence symmetry between fast-path and full-pull (v0.1.14 backlog §1)', () => {
+    // 1. Data payload with nested data.title
+    const itemWithDataTitle = {
+      id: '01M6TESTTITLEPRECEDENCE01',
+      slug: 'sample-slug',
+      title: 'Top-Level Title',
+      data: { title: 'Nested Data Title' },
+    };
+    expect(extractCanonicalRemoteTitle(itemWithDataTitle)).toBe('Nested Data Title');
+
+    // 2. Data payload with top-level title only
+    const itemWithTopTitle = {
+      id: '01M6TESTTITLEPRECEDENCE02',
+      slug: 'sample-slug',
+      title: 'Top-Level Title',
+      data: {},
+    };
+    expect(extractCanonicalRemoteTitle(itemWithTopTitle)).toBe('Top-Level Title');
+
+    // 3. Data payload with no title but slug
+    const itemWithSlugOnly = {
+      id: '01M6TESTTITLEPRECEDENCE03',
+      slug: 'sample-slug',
+      data: {},
+    };
+    expect(extractCanonicalRemoteTitle(itemWithSlugOnly)).toBe('sample-slug');
+
+    // 4. Data payload with nothing
+    const itemEmpty = {
+      id: '01M6TESTTITLEPRECEDENCE04',
+      data: {},
+    };
+    expect(extractCanonicalRemoteTitle(itemEmpty)).toBe('Untitled');
+
+    // 5. Symmetric canonical path resolution across dates
+    const path1 = resolveCanonicalArticlePath(
+      'posts',
+      'draft',
+      '01M6TESTTITLEPRECEDENCE01',
+      extractCanonicalRemoteTitle(itemWithDataTitle),
+      { publishedAt: null, createdAt: '2026-11-01T00:00:00.000Z' },
+    );
+    expect(path1).toBe('posts/draft/20261101_01M6TESTTITLEPRECEDENCE01-Nested-Data-Title.md');
   });
 });
