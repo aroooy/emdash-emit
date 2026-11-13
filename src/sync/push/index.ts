@@ -33,9 +33,8 @@ import { loadLocalTaxonomyCandidates, loadLocalTaxonomyMaps } from '../taxonomie
 import {
   PushValidationError,
   assertNotQuarantinedCopy,
-  checkDeletePendingGuard,
-  checkTaxonomyApplyGuard,
-  checkTaxonomyConflictGuard,
+  evaluatePrePreflightGuards,
+  evaluatePostPreflightGuards,
 } from './guards.js';
 import { executePreflightStage } from './preflight_stage.js';
 import { canonicalizeFrontmatterTaxonomies, syncArticleTaxonomies } from './taxonomy_plan.js';
@@ -114,9 +113,9 @@ export async function pushArticle(
   }
 
   // 1. Guard against blind re-push when article is marked delete_pending (G15)
-  checkDeletePendingGuard(syncState, options, collection, id, targetFilePath);
+  evaluatePrePreflightGuards(syncState, options, collection, id, targetFilePath);
 
-  // 2. Preflight Guards (including G6: UNRESOLVED_CONFLICT_MARKERS)
+  // 2. Preflight Guards (including G6: UNRESOLVED_CONFLICT_MARKERS - T2-1 invariant)
   const preflight = executePreflightStage(
     targetFilePath,
     parsed,
@@ -126,11 +125,8 @@ export async function pushArticle(
     knownTaxonomies,
   );
 
-  // 3. Guard against blind re-push when taxonomy conflict is still pending (G16)
-  checkTaxonomyConflictGuard(syncState, options, collection, id, targetFilePath);
-
-  // 4. Guard against blind re-push when previous taxonomy update failed (G17)
-  checkTaxonomyApplyGuard(syncState, options, collection, id, targetFilePath);
+  // 3 & 4. Post-preflight guards (G16: taxonomy conflict pending, G17: taxonomy apply pending)
+  evaluatePostPreflightGuards(syncState, options, collection, id, targetFilePath);
 
   const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
   const warnings = [...preflight.warnings];

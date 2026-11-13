@@ -127,3 +127,31 @@ export function checkTaxonomyApplyGuard(
     });
   }
 }
+
+/**
+ * Declarative pipeline: evaluates pre-preflight guards (G15).
+ */
+export function evaluatePrePreflightGuards(
+  syncState: SyncState | null | undefined,
+  options: PushOptions,
+  collection: string,
+  id: string,
+  targetFilePath: string,
+): void {
+  checkDeletePendingGuard(syncState, options, collection, id, targetFilePath);
+}
+
+/**
+ * Declarative pipeline: evaluates post-preflight guards (G16, G17).
+ * T2-1 invariant: preflight (including G6 conflict markers) MUST precede G16.
+ */
+export function evaluatePostPreflightGuards(
+  syncState: SyncState | null | undefined,
+  options: PushOptions,
+  collection: string,
+  id: string,
+  targetFilePath: string,
+): void {
+  checkTaxonomyConflictGuard(syncState, options, collection, id, targetFilePath);
+  checkTaxonomyApplyGuard(syncState, options, collection, id, targetFilePath);
+}
