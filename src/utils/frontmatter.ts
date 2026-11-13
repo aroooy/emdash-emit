@@ -23,6 +23,7 @@
 import path from 'node:path';
 import matter from 'gray-matter';
 import { z } from 'zod';
+import { CANONICAL_ULID_REGEX } from './ulid.js';
 
 export const FrontmatterSeoSchema = z.object({
   title: z.string().nullable().optional(),
@@ -65,10 +66,6 @@ export interface ParsedMarkdown {
   body: string;
   rawYaml: string;
 }
-
-// Canonical ULID shape (Crockford base32: excludes I and O; 26 characters).
-// Emitted uppercase by EmDash, so local frontmatter is normalized to match.
-const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
 
 /**
  * Error thrown when frontmatter parsing or schema validation fails.

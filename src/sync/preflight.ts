@@ -42,6 +42,7 @@ import {
 } from '../utils/frontmatter.js';
 import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
+import { CANONICAL_ULID_REGEX, CANONICAL_ULID_EXACT_REGEX } from '../utils/ulid.js';
 import {
   findClosestTaxonomySuggestions,
   getLocalTaxonomiesSummary,
@@ -105,9 +106,6 @@ const STANDALONE_IMAGE_LINE_REGEX = /^!\[([^\]]*)\]\(([^)]+)\)$/;
 const REMOTE_OR_DATA_URL_REGEX = /^(?:https?:\/\/|data:|\/_emdash\/api\/media\/file\/)/i;
 const ANY_LOCAL_IMAGE_REGEX =
   /!\[([^\]]*)\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/)([^)]+)\)/g;
-// Canonical ULID shape (Crockford base32: 26 chars, excludes I and O). Casing is
-// case-insensitive here because parseMarkdown() normalizes local frontmatter to uppercase.
-const CANONICAL_ULID_REGEX = /^[0-9A-HJ-NP-Z]{26}$/i;
 
 interface ResolvedDraftPathInfo {
   isInsideDraftsDir: boolean;
@@ -412,7 +410,7 @@ export function runPreflightChecks(
           if (!allowed.includes(term)) {
             // Term IDs are canonical 26-char ULIDs: uppercase Crockford base32 (excludes I, L, O, U).
             // Restricting to that alphabet prevents 26-character slugs from being mislabeled as IDs.
-            const isTermId = /^[0-9A-HJ-NP-Z]{26}$/.test(term);
+            const isTermId = CANONICAL_ULID_EXACT_REGEX.test(term);
             const staleNote = isTermId
               ? ' (term ID was not found in local definitions and may be stale or deleted)'
               : '';

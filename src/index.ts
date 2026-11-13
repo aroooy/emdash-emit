@@ -26,6 +26,8 @@ export * from './client/http.js';
 export * from './client/lock.js';
 export * from './client/mapper.js';
 export * from './client/media.js';
+export * from './client/media-id.js';
+export * from './client/endpoints.js';
 export * from './client/portable-text.js';
 export {
   ContentItemSchema,
@@ -55,4 +57,5 @@ export * from './sync/bylines.js';
 export * from './utils/config.js';
 export * from './utils/frontmatter.js';
 export * from './utils/profile.js';
+export * from './utils/ulid.js';
 export * from './utils/workspace.js';

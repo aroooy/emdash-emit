@@ -21,6 +21,7 @@
  */
 
 import path from 'node:path';
+import { extractFilenameUlid } from './ulid.js';
 
 /**
  * Default maximum UTF-8 byte length for the title portion in generated filenames.
@@ -200,8 +201,8 @@ export function collisionSuffixedMarkdownRef(markdownRef: string, mediaId: strin
  */
 export function extractUlidFromFilename(filenameOrPath: string): string | null {
   const baseWithoutDate = stripDatePrefix(filenameOrPath);
-  const match = baseWithoutDate.match(/^([0-9A-Za-z_-]{26})(?:-|\.|$)/);
-  if (match) return match[1];
+  const match = extractFilenameUlid(baseWithoutDate);
+  if (match) return match;
 
   const firstHyphen = baseWithoutDate.indexOf('-');
   const candidate = firstHyphen !== -1 ? baseWithoutDate.slice(0, firstHyphen) : baseWithoutDate;

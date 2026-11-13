@@ -27,6 +27,7 @@ import {
 } from './portable-text.js';
 import { unwrapEnvelope, unwrapItem, extractRev } from './api.js';
 import type { Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
+import { isCanonicalUlid, toCanonicalUlid } from '../utils/ulid.js';
 
 export interface ContentBylineInput {
   bylineId: string;
@@ -71,8 +72,9 @@ export function extractMediaUlid(val: unknown): string | null {
 
   if (typeof val === 'string') {
     const trimmed = val.trim();
-    if (/^[0-9A-HJ-NP-Z]{26}$/i.test(trimmed)) {
-      return trimmed.toUpperCase();
+    const canonical = toCanonicalUlid(trimmed);
+    if (canonical) {
+      return canonical;
     }
     const match = trimmed.match(/\/([0-9A-HJ-NP-Z]{26})(?:\.[a-zA-Z0-9]+)?(?:$|\?)/i);
     if (match) return match[1].toUpperCase();
@@ -82,8 +84,8 @@ export function extractMediaUlid(val: unknown): string | null {
   if (typeof val === 'object') {
     const obj = val as Record<string, unknown>;
     // 1. Direct ULID id field (provider: 'local')
-    if (typeof obj.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(obj.id.trim())) {
-      return obj.id.trim().toUpperCase();
+    if (isCanonicalUlid(obj.id)) {
+      return (obj.id as string).trim().toUpperCase();
     }
     // 2. src URL in object (provider: 'external')
     if (typeof obj.src === 'string') {

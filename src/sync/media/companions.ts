@@ -71,6 +71,7 @@ export function buildMediaMetaDoc(
 }
 
 import { storageKeyFromMediaMeta } from '../../utils/media-companion.js';
+import { isCanonicalUlid } from '../../utils/ulid.js';
 export { storageKeyFromMediaMeta };
 
 /**
@@ -100,10 +101,7 @@ export function collectLocalMediaMirrorCandidates(
     const storageKey = storageKeyFromMediaMeta(doc);
     const stem = file.replace(/\.yaml$/, '');
     const idMatch = stem.replace(/^\d{8}_/, '').match(/^([0-9A-HJ-NP-Z]{26})/i);
-    const docId =
-      typeof doc.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(doc.id.trim())
-        ? doc.id.trim().toUpperCase()
-        : undefined;
+    const docId = isCanonicalUlid(doc.id) ? doc.id.trim().toUpperCase() : undefined;
     const mediaId = docId || (idMatch ? idMatch[1].toUpperCase() : '');
     if (!mediaId) continue;
     const candidate: LocalMediaMirrorCandidate = { mediaId, storageKey, metaFile: file };
@@ -259,10 +257,7 @@ export function collectLocalMirrorIndex(
       if (!storageKey) continue;
 
       const stem = file.replace(/\.yaml$/, '');
-      const docId =
-        typeof doc.id === 'string' && /^[0-9A-HJ-NP-Z]{26}$/i.test(doc.id.trim())
-          ? doc.id.trim().toUpperCase()
-          : '';
+      const docId = isCanonicalUlid(doc.id) ? doc.id.trim().toUpperCase() : '';
 
       let binaryPath: string | null = null;
       for (const f of files) {
