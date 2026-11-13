@@ -29,6 +29,13 @@ import { createAuthedFetch } from './http.js';
 import { mediaDetailEndpoint, mediaConfirmEndpoint, mediaUploadUrlEndpoint } from './endpoints.js';
 import type { CacheDatabase } from '../db/cache.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
+import {
+  asMediaRecordId,
+  asStorageKey,
+  toStorageKey,
+  type MediaRecordId,
+  type StorageKey,
+} from '../utils/media-id.js';
 
 /**
  * Maximum media upload size allowed by EmDash OpenAPI 3.1.0 schema (MediaUploadUrlBody.size.maximum).
@@ -98,15 +105,15 @@ export interface MediaUploadUrlResponse {
   uploadUrl: string;
   method: 'PUT';
   headers: Record<string, string>;
-  mediaId: string;
-  storageKey: string;
+  mediaId: MediaRecordId;
+  storageKey: StorageKey;
   expiresAt: string;
 }
 
 export interface MediaExistingResponse {
   existing: true;
-  mediaId: string;
-  storageKey: string;
+  mediaId: MediaRecordId;
+  storageKey: StorageKey;
   url: string;
 }
 
@@ -126,9 +133,9 @@ export interface UploadMediaOptions {
 
 export interface UploadMediaResult {
   /** Media record ULID (used for frontmatter `featuredImage` and promoted filename prefix) */
-  mediaId: string;
+  mediaId: MediaRecordId;
   /** Confirmed storage key (used for `/_emdash/api/media/file/<storageKey>`) */
-  storageKey: string;
+  storageKey: StorageKey;
   /** Canonical root-relative URL `/_emdash/api/media/file/<storageKey>` */
   url: string;
   /** SHA-256 hex of the binary file */
@@ -167,7 +174,7 @@ export interface RemoteMediaDetail {
   height?: number | null;
   alt?: string | null;
   caption?: string | null;
-  storageKey?: string;
+  storageKey?: StorageKey;
   contentHash?: string | null;
   status?: string;
   createdAt?: string;
@@ -230,7 +237,7 @@ export async function fetchRemoteMediaDetail(
         height: typeof raw.height === 'number' ? raw.height : null,
         alt: typeof raw.alt === 'string' ? raw.alt : null,
         caption: typeof raw.caption === 'string' ? raw.caption : null,
-        storageKey: typeof raw.storageKey === 'string' ? raw.storageKey : undefined,
+        storageKey: toStorageKey(raw.storageKey) ?? undefined,
         contentHash: typeof raw.contentHash === 'string' ? raw.contentHash : null,
         status: typeof raw.status === 'string' ? raw.status : undefined,
         createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : undefined,
@@ -370,12 +377,34 @@ async function requestUploadTarget(
   const data = unwrapEnvelope<Record<string, unknown>>(json);
 
   if (data.existing === true) {
+    const existingMediaId = asMediaRecordId(String(data.mediaId));
+    const existingStorageKey = toStorageKey(String(data.storageKey));
+    if (!existingStorageKey) {
+      throw new ApiError({
+        message: `Media upload target for "${params.filename}" carried an unusable storageKey.`,
+        code: 'MEDIA_UPLOAD_URL_FAILED',
+        status: 502,
+        endpoint: mediaUploadUrlEndpoint(options.origin),
+        suggestion: 'Retry the push; EmDash returned a malformed media key.',
+      });
+    }
     return {
       existing: true,
-      mediaId: String(data.mediaId),
-      storageKey: String(data.storageKey),
-      url: String(data.url || `${MEDIA_FILE_ROUTE_PREFIX}${String(data.storageKey)}`),
+      mediaId: existingMediaId,
+      storageKey: existingStorageKey,
+      url: String(data.url || `${MEDIA_FILE_ROUTE_PREFIX}${existingStorageKey}`),
     };
+  }
+
+  const uploadStorageKey = toStorageKey(String(data.storageKey));
+  if (!uploadStorageKey) {
+    throw new ApiError({
+      message: `Media upload target for "${params.filename}" carried an unusable storageKey.`,
+      code: 'MEDIA_UPLOAD_URL_FAILED',
+      status: 502,
+      endpoint: mediaUploadUrlEndpoint(options.origin),
+      suggestion: 'Retry the push; EmDash returned a malformed media key.',
+    });
   }
 
   return {
@@ -385,8 +414,8 @@ async function requestUploadTarget(
       data.headers && typeof data.headers === 'object'
         ? (data.headers as Record<string, string>)
         : {},
-    mediaId: String(data.mediaId),
-    storageKey: String(data.storageKey),
+    mediaId: asMediaRecordId(String(data.mediaId)),
+    storageKey: uploadStorageKey,
     expiresAt: String(data.expiresAt || ''),
   };
 }
@@ -675,9 +704,12 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
     }
 
     // IMPORTANT: Use the confirmed storageKey and url (EmDash rewrites storageKey to a double-ULID on confirm)
-    const confirmedMediaId = typeof item.id === 'string' && item.id ? item.id : pendingMediaId;
-    const confirmedStorageKey =
-      typeof item.storageKey === 'string' && item.storageKey ? item.storageKey : initialStorageKey;
+    const confirmedMediaId = asMediaRecordId(
+      typeof item.id === 'string' && item.id ? item.id : pendingMediaId,
+    );
+    const confirmedStorageKey = asStorageKey(
+      typeof item.storageKey === 'string' && item.storageKey ? item.storageKey : initialStorageKey,
+    );
     const confirmedUrl = toRootRelativeMediaUrl(
       typeof item.url === 'string' ? item.url : undefined,
       confirmedStorageKey,
@@ -732,12 +764,14 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
     if (comp.alreadyReadyItem) {
       const readyItem = comp.alreadyReadyItem;
-      const confirmedMediaId =
-        typeof readyItem.id === 'string' && readyItem.id ? readyItem.id : pendingMediaId;
-      const confirmedStorageKey =
+      const confirmedMediaId = asMediaRecordId(
+        typeof readyItem.id === 'string' && readyItem.id ? readyItem.id : pendingMediaId,
+      );
+      const confirmedStorageKey = asStorageKey(
         typeof readyItem.storageKey === 'string' && readyItem.storageKey
           ? readyItem.storageKey
-          : initialStorageKey;
+          : initialStorageKey,
+      );
       const confirmedUrl = toRootRelativeMediaUrl(
         typeof readyItem.url === 'string' ? readyItem.url : undefined,
         confirmedStorageKey,

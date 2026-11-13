@@ -2,13 +2,14 @@ import yaml from 'js-yaml';
 import { extractMediaUlid } from '../../client/mapper.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../../utils/frontmatter.js';
 import { scanArticleMediaReferences } from '../../utils/media-body-refs.js';
+import { asStorageKey } from '../../utils/media-id.js';
 import type { OrphanMediaDescriptor } from './types.js';
 
 /** Builds a descriptor from a ULID-segment storageKey, defaulting to `.jpg` when no extension is present. */
 function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor {
   const extMatch = storageKey.match(/\.[a-z]+$/i);
   return {
-    storageKey,
+    storageKey: asStorageKey(storageKey),
     ext: extMatch ? extMatch[0].toLowerCase() : '.jpg',
     ulids: Array.from(storageKey.matchAll(/[0-9A-HJ-NP-Z]{26}/gi), (m) => m[0].toUpperCase()),
   };

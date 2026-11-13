@@ -24,6 +24,12 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getPackageVersion } from '../utils/version.js';
+import {
+  asMediaRecordId,
+  toStorageKey,
+  type MediaRecordId,
+  type StorageKey,
+} from '../utils/media-id.js';
 
 export interface CachedEntry {
   id: string;
@@ -84,8 +90,8 @@ export interface MediaStateRecord {
   localHash?: string;
   localContentHash?: string | null;
   remoteRecordRef?: string | null;
-  mediaId: string;
-  storageKey: string;
+  mediaId: MediaRecordId;
+  storageKey: StorageKey;
   url: string;
   workspacePath?: string | null;
   /**
@@ -994,8 +1000,8 @@ export class CacheDatabase {
       localHash,
       localContentHash,
       remoteRecordRef,
-      mediaId: String(row.media_id),
-      storageKey: String(row.storage_key),
+      mediaId: asMediaRecordId(String(row.media_id)),
+      storageKey: toStorageKey(String(row.storage_key)) ?? (String(row.storage_key) as StorageKey),
       url: String(row.url),
       workspacePath:
         row.workspace_path !== null && row.workspace_path !== undefined

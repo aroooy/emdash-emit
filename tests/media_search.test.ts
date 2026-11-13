@@ -4,6 +4,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import {
   collectLocalMirrorIndex,
   collectRemoteStorageKeys,
@@ -33,13 +34,13 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
   // T1-1: remote にのみ存在する資産（media_state なし・companion なし）を検索
   it('T1-1: searches remote-only asset returning mirrored: false and localPath: null', async () => {
     const remoteItem: EmDashMediaItem = {
-      id: '01M67P08DXFTYDPFRTJCC4XMP8',
+      id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP8'),
       filename: 'remote-sunset.jpg',
       mimeType: 'image/jpeg',
       size: 10240,
       alt: '夕焼け空',
       caption: '綺麗な夕焼け',
-      storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+      storageKey: asStorageKey('01M67P07X2VPW0MYRRRGMA6T5A.jpg'),
     };
 
     const mockFetch = vi.fn().mockResolvedValue({
@@ -83,7 +84,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       size: 2048,
       alt: 'harbour sunset view',
       caption: null,
-      storageKey: '01ARZ3NDEKTSV4RRFFQ69G5FAV.jpg',
+      storageKey: asStorageKey('01ARZ3NDEKTSV4RRFFQ69G5FAV.jpg'),
     };
 
     const mockFetch = vi.fn().mockResolvedValue({
@@ -129,7 +130,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       filename: 'unrelated.png',
       mimeType: 'image/png',
       size: 4096,
-      storageKey: 'uploads/2026/09/dusk_harbour.png',
+      storageKey: asStorageKey('uploads/2026/09/dusk_harbour.png'),
     };
 
     const mockFetch = vi.fn().mockResolvedValue({
@@ -158,8 +159,8 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
 
   // T1-4: mirror 済み資産（schema v5 media_state + companion YAML）
   it('T1-4: decorates mirrored asset with companion metadata and localPath', async () => {
-    const storageKey = '01M67P07X2VPW0MYRRRGMA6T5A.jpg';
-    const mediaId = '01M67P08DXFTYDPFRTJCC4XMP8';
+    const storageKey = asStorageKey('01M67P07X2VPW0MYRRRGMA6T5A.jpg');
+    const mediaId = asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP8');
 
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -229,8 +230,8 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
 
   // T1-5: media_state 行はあるが companion YAML が無い資産
   it('T1-5: returns null metadata and localPath: null when companion YAML and binary are missing', async () => {
-    const storageKey = '01M67P07X2VPW0MYRRRGMA6T5B.jpg';
-    const mediaId = '01M67P08DXFTYDPFRTJCC4XMP9';
+    const storageKey = asStorageKey('01M67P07X2VPW0MYRRRGMA6T5B.jpg');
+    const mediaId = asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP9');
 
     cache.saveMediaState({
       localHash: `media-record:${mediaId}`,
@@ -253,8 +254,8 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
 
   // T1-6: 旧式 mirror を持つ workspace
   it('T1-6: recovers legacy mirror via companion storageKey without guessing filename', async () => {
-    const storageKey = '01M6LEGACYSTORAGEKEY000001.png';
-    const mediaId = '01M6LEGACYREC0000000000001';
+    const storageKey = asStorageKey('01M6LEGACYSTORAGEKEY000001.png');
+    const mediaId = asMediaRecordId('01M6LEGACYREC0000000000001');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
 
@@ -288,7 +289,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       mimeType: 'image/png',
       size: 1024,
       alt: 'test.*[a-z]+(group)',
-      storageKey: 'chart.png',
+      storageKey: asStorageKey('chart.png'),
     };
 
     const mockFetch = vi.fn().mockResolvedValue({
@@ -338,7 +339,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
         filename: `match-${i}.png`,
         mimeType: 'image/png',
         size: 100,
-        storageKey: `match-${i}.png`,
+        storageKey: asStorageKey(`match-${i}.png`),
       });
     }
 
@@ -583,12 +584,12 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
 
   // T1-15: mirroredOnly: true
   it('T1-15: mirroredOnly filters hits to mirrored assets while scanning full remote window', async () => {
-    const storageKeyMirrored = 'mirrored.png';
-    const storageKeyRemoteOnly = 'remote.png';
+    const storageKeyMirrored = asStorageKey('mirrored.png');
+    const storageKeyRemoteOnly = asStorageKey('remote.png');
 
     cache.saveMediaState({
       localHash: 'hash-1',
-      mediaId: '01M6MIRRORED0000000000000',
+      mediaId: asMediaRecordId('01M6MIRRORED0000000000000'),
       storageKey: storageKeyMirrored,
       url: `/_emdash/api/media/file/${storageKeyMirrored}`,
       workspacePath: 'media/mirrored.png',
@@ -754,8 +755,8 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
 
-    const mediaId = '01M6TESTCACHELESS000000001';
-    const storageKey = 'cacheless-photo.jpg';
+    const mediaId = asMediaRecordId('01M6TESTCACHELESS000000001');
+    const storageKey = asStorageKey('cacheless-photo.jpg');
     fs.writeFileSync(
       path.join(mediaDir, 'cacheless-photo.yaml'),
       yaml.dump({
@@ -783,8 +784,8 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
 
-    const mediaId = '01M6COLLISIONRECORD0000001';
-    const storageKey = 'photo.jpg';
+    const mediaId = asMediaRecordId('01M6COLLISIONRECORD0000001');
+    const storageKey = asStorageKey('photo.jpg');
     const collisionStem = `photo--${mediaId}`;
 
     // Register media state with standard storageKey, but no direct photo.yaml
@@ -827,7 +828,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       filename: 'sample-a.jpg',
       mimeType: 'image/jpeg',
       size: 1024,
-      storageKey: 'sample-a.jpg',
+      storageKey: asStorageKey('sample-a.jpg'),
       alt: '共通検索テスト',
     };
     const itemB: EmDashMediaItem = {
@@ -835,7 +836,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       filename: 'sample-b.png',
       mimeType: 'image/png',
       size: 2048,
-      storageKey: 'sample-b.png',
+      storageKey: asStorageKey('sample-b.png'),
       alt: '共通検索テストB',
     };
 

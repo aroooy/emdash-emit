@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { initWorkspace, loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/pull.js';
@@ -473,8 +474,8 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
 
     cache.saveMediaState({
       localHash: 'd'.repeat(64),
-      mediaId: '01M67MEDIA0000000000000DD',
-      storageKey: '01M67LQCALKEY556YVG6RBT0J0.png',
+      mediaId: asMediaRecordId('01M67MEDIA0000000000000DD'),
+      storageKey: asStorageKey('01M67LQCALKEY556YVG6RBT0J0.png'),
       url: '/_emdash/api/media/file/01M67LQCALKEY556YVG6RBT0J0.png',
       workspacePath: null,
       markdownRef: 'media/01M67LQCALKEY556YVG6RBT0J0',
@@ -520,8 +521,8 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
 
     cache.saveMediaState({
       localHash: 'c'.repeat(64),
-      mediaId: '01M67MEDIA0000000000000CC',
-      storageKey: '01M67MEDIDDD00000000000000.png',
+      mediaId: asMediaRecordId('01M67MEDIA0000000000000CC'),
+      storageKey: asStorageKey('01M67MEDIDDD00000000000000.png'),
       url: '/_emdash/api/media/file/01M67MEDIDDD00000000000000.png',
       workspacePath: null,
       status: 'ready',

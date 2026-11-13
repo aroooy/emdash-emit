@@ -32,6 +32,7 @@ import {
   type CachedEntry,
   type SyncState,
 } from '../src/db/cache.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 
 describe('SQLite CacheDatabase (node:sqlite)', () => {
   let tempDir: string;
@@ -142,12 +143,12 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
   it('tracks media_state records for local draft upload idempotency and orphan recovery', () => {
     const localHash = 'a'.repeat(64);
-    const initialKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
-    const confirmedKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
+    const initialKey = asStorageKey('01M6TF1XXBSC06QQG9M648B4K3.png');
+    const confirmedKey = asStorageKey('01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png');
 
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
       storageKey: initialKey,
       url: `/_emdash/api/media/file/${initialKey}`,
       status: 'pending',
@@ -162,7 +163,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     cache.deleteMediaState(initialKey);
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
       storageKey: confirmedKey,
       url: `/_emdash/api/media/file/${confirmedKey}`,
       workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
@@ -185,11 +186,11 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
   it('keeps workspace_path when a later media_state upsert omits it (R-5)', () => {
     const localHash = 'b'.repeat(64);
-    const key = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
+    const key = asStorageKey('01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png');
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: key,
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
+      storageKey: asStorageKey(key),
       url: `/_emdash/api/media/file/${key}`,
       workspacePath: 'media/20261107_01M6TF1XXBS2KC9EVYG6RBT0J0-spike.png',
       status: 'ready',
@@ -201,8 +202,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // can still resolve the asset from media_state.
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: key,
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
+      storageKey: asStorageKey(key),
       url: `/_emdash/api/media/file/${key}`,
       status: 'uploaded',
       uploadedAt: 1730550400,
@@ -216,8 +217,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // clearing a media_state row is always done via deleteMediaState(), never via upsert.
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
-      storageKey: key,
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
+      storageKey: asStorageKey(key),
       url: `/_emdash/api/media/file/${key}`,
       workspacePath: null,
       status: 'uploaded',
@@ -232,10 +233,10 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
   it('records markdown_ref and resolves a mirror through the storage_key index', () => {
     const localHash = 'c'.repeat(64);
-    const storageKey = 'uploads/2026/11/sample.png';
+    const storageKey = asStorageKey('uploads/2026/11/sample.png');
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
       storageKey,
       url: `/_emdash/api/media/file/${storageKey}`,
       workspacePath: 'media/sample.png',
@@ -252,7 +253,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
     cache.saveMediaState({
       localHash,
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0'),
       storageKey,
       url: `/_emdash/api/media/file/${storageKey}`,
       status: 'uploaded',
@@ -263,8 +264,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // A record written without a mirror yet reports null rather than a fabricated path.
     cache.saveMediaState({
       localHash: 'd'.repeat(64),
-      mediaId: '01M6TF1XXBS2KC9EVYG6RBT0J1',
-      storageKey: 'pending-upload.png',
+      mediaId: asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J1'),
+      storageKey: asStorageKey('pending-upload.png'),
       url: '/_emdash/api/media/file/pending-upload.png',
       status: 'pending',
     });

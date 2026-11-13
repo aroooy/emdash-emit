@@ -44,6 +44,7 @@ import {
 } from '../src/cli/commands/pull.js';
 import * as remoteIndexModule from '../src/sync/media/remote_index.js';
 import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
 /**
@@ -320,7 +321,7 @@ describe('Media Sync Engine', () => {
         width: 100,
         height: 80,
         alt: 'Sunset over clouds',
-        storageKey: '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
+        storageKey: asStorageKey('01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png'),
         contentHash: 'sha1:4a5eb7171b58e08a6881721e3b43d5a44419a2be',
         status: 'ready',
         url: '/_emdash/api/media/file/01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png',
@@ -1314,19 +1315,19 @@ locale: ja
     fs.mkdirSync(mediaDir, { recursive: true });
 
     const referencedItem = {
-      id: '01M67WALKEDIDAAAAAAAAAAAA4',
+      id: asMediaRecordId('01M67WALKEDIDAAAAAAAAAAAA4'),
       filename: 'walked-hero.jpg',
       mimeType: 'image/jpeg',
       size: 8,
-      storageKey: 'uploads/2026/walked-hero.jpg',
+      storageKey: asStorageKey('uploads/2026/walked-hero.jpg'),
       url: '/_emdash/api/media/file/uploads/2026/walked-hero.jpg',
     };
     const unreferencedItem = {
-      id: '01M67WALKEDIDAAAAAAAAAAAA5',
+      id: asMediaRecordId('01M67WALKEDIDAAAAAAAAAAAA5'),
       filename: 'unused-side.jpg',
       mimeType: 'image/jpeg',
       size: 8,
-      storageKey: 'uploads/2026/unused-side.jpg',
+      storageKey: asStorageKey('uploads/2026/unused-side.jpg'),
       url: '/_emdash/api/media/file/uploads/2026/unused-side.jpg',
     };
 
@@ -1608,7 +1609,7 @@ locale: ja
 
   describe('Targeted StorageKey Pull (v0.1.16 / M5)', () => {
     it('T5-1: mirrors targeted storageKey via library walk without re-fetching GET /media/{id}', async () => {
-      const targetKey = '01M6TARGETKEY0000000000001.jpg';
+      const targetKey = asStorageKey('01M6TARGETKEY0000000000001.jpg');
       const targetId = '01M6TARGETID00000000000001';
       const targetItem: EmDashMediaItem = {
         id: targetId,
@@ -1698,7 +1699,7 @@ locale: ja
         workspaceRoot: tempDir,
         origin: 'https://emdash.test',
         token: 'token',
-        storageKeys: ['nonexistent.png'],
+        storageKeys: [asStorageKey('nonexistent.png')],
         fetchFn: mockFetch as unknown as typeof fetch,
       });
 
@@ -1709,7 +1710,7 @@ locale: ja
     });
 
     it('T5-3: re-running existing targeted mirror is idempotent (skipped)', async () => {
-      const targetKey = '01M6TARGETKEY0000000000002.png';
+      const targetKey = asStorageKey('01M6TARGETKEY0000000000002.png');
       const targetId = '01M6TARGETID00000000000002';
       const targetItem: EmDashMediaItem = {
         id: targetId,
@@ -1775,7 +1776,7 @@ locale: ja
       fs.mkdirSync(mediaDir, { recursive: true });
 
       const targetId = '01M6TESTMEDIAID00000000001';
-      const targetKey = '01M6TESTSTORAGEKEY000000001.png';
+      const targetKey = asStorageKey('01M6TESTSTORAGEKEY000000001.png');
       const unbackedBinary = path.join(mediaDir, `20261101_${targetId}-old.png`);
       const binaryContent = Buffer.from('FAKE-IMAGE-BYTES-12345');
       fs.writeFileSync(unbackedBinary, binaryContent);

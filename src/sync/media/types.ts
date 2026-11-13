@@ -1,4 +1,5 @@
 import type { CacheDatabase } from '../../db/cache.js';
+import type { StorageKey } from '../../utils/media-id.js';
 
 export const MEDIA_BINARY_EXTENSIONS = [
   '.jpg',
@@ -22,7 +23,7 @@ export interface EmDashMediaItem {
   alt?: string | null;
   caption?: string | null;
   url?: string;
-  storageKey?: string;
+  storageKey?: StorageKey;
   contentHash?: string | null;
   status?: 'pending' | 'ready' | 'failed';
   createdAt?: string;
@@ -51,7 +52,7 @@ export interface PromoteDraftMediaOptions {
 /** A body image reference whose media record could not be resolved. */
 export interface OrphanMediaDescriptor {
   /** The storageKey taken from the article body URL `/_emdash/api/media/file/<storageKey>`. */
-  storageKey: string;
+  storageKey: StorageKey;
   /** ULID segment(s) found inside the storageKey, uppercased, in document order. */
   ulids: string[];
   ext: string;
@@ -95,7 +96,7 @@ export interface PullMediaOptions {
   limit?: number;
   all?: boolean;
   /** Mirror exactly these storageKeys, resolved from the library walk. */
-  storageKeys?: string[];
+  storageKeys?: StorageKey[];
   downloadFiles?: boolean;
   prune?: boolean;
   fetchFn?: typeof fetch;

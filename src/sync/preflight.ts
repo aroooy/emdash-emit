@@ -42,6 +42,8 @@ import {
 } from '../utils/frontmatter.js';
 import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
+import { asMediaRecordId, asStorageKey } from '../utils/media-id.js';
+import type { MediaRecordId, StorageKey } from '../utils/media-id.js';
 import { CANONICAL_ULID_REGEX, CANONICAL_ULID_EXACT_REGEX } from '../utils/ulid.js';
 import {
   findClosestTaxonomySuggestions,
@@ -60,8 +62,8 @@ export interface PreflightOptions {
 }
 
 export interface PromotedMediaMatch {
-  mediaId: string;
-  storageKey: string;
+  mediaId: MediaRecordId;
+  storageKey: StorageKey;
   url: string;
   promotedRelPath: string;
 }
@@ -260,8 +262,8 @@ function findAlreadyPromotedMedia(
 
       const binaryName = `${file.replace(/\.yaml$/, '')}${ext || path.extname(metaFilename) || '.jpg'}`;
       return {
-        mediaId: meta.id,
-        storageKey: storageKey || path.basename(canonicalUrl),
+        mediaId: asMediaRecordId(meta.id),
+        storageKey: asStorageKey(storageKey || path.basename(canonicalUrl)),
         url: canonicalUrl,
         promotedRelPath: path.posix.join('media', binaryName),
       };
@@ -322,7 +324,7 @@ function findPromotedMediaByStorageKey(
   if (state && state.mediaId && state.url) {
     return {
       mediaId: state.mediaId,
-      storageKey: state.storageKey || storageKey,
+      storageKey: state.storageKey || asStorageKey(storageKey),
       url: state.url,
       promotedRelPath: state.markdownRef || state.workspacePath || `media/${storageKey}`,
     };
@@ -341,8 +343,8 @@ function findPromotedMediaByStorageKey(
     if (!meta || typeof meta.id !== 'string') return null;
     const companionKey = storageKeyFromMediaMeta(meta) || storageKey;
     return {
-      mediaId: meta.id.toUpperCase(),
-      storageKey: companionKey,
+      mediaId: asMediaRecordId(meta.id.toUpperCase()),
+      storageKey: asStorageKey(companionKey),
       url: `${MEDIA_FILE_ROUTE_PREFIX}${companionKey}`,
       promotedRelPath: `media/${stem}`,
     };

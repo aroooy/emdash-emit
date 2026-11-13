@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { ApiError } from '../src/client/error.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { computeMediaHashes, uploadMediaFile } from '../src/client/media.js';
 
 // Exact 1x1 PNG buffer used in Phase 0 production spike (70 bytes)
@@ -306,11 +307,11 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
 
   it('re-uploads when local media_state references a mediaId that was deleted on remote (GET returns 404, B-4)', async () => {
     const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
-    const staleMediaId = '01M6DELETED000000000000000';
+    const staleMediaId = asMediaRecordId('01M6DELETED000000000000000');
     cache.saveMediaState({
       localHash,
       mediaId: staleMediaId,
-      storageKey: '01M6DELETED000000000000000.png',
+      storageKey: asStorageKey('01M6DELETED000000000000000.png'),
       url: '/_emdash/api/media/file/01M6DELETED000000000000000.png',
       status: 'ready',
     });

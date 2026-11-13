@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
+import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
@@ -33,8 +34,8 @@ import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 
 const ARTICLE_ID = '01M67LQCALREF556YVG6RBT0J0';
-const MEDIA_ID = '01M6TF1XXBS2KC9EVYG6RBT0J0';
-const STORAGE_KEY = '01M67P0JW605ZJ5GV4YXB7W400.jpg';
+const MEDIA_ID = asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0');
+const STORAGE_KEY = asStorageKey('01M67P0JW605ZJ5GV4YXB7W400.jpg');
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
 /** How an article under `<collection>/draft|published/` spells its own mirror on disk. */
 const LOCAL_REF = `../../media/${STORAGE_KEY}`;

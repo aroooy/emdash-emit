@@ -38,6 +38,7 @@ import {
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';
+import { asStorageKey } from '../../utils/media-id.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
@@ -371,7 +372,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             origin: ctx.origin,
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
-            storageKeys: [args.storageKey],
+            storageKeys: [asStorageKey(args.storageKey)],
             downloadFiles: args.downloadFiles,
             cache: ctx.cache,
           });
