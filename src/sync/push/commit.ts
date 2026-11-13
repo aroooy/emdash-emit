@@ -44,6 +44,96 @@ import { transitionContentStatus } from './transport.js';
 import type { PushOptions, PushResult, ResolvedTaxonomyItem } from './types.js';
 import type { TaxonomySyncFailure } from './taxonomy_plan.js';
 
+export interface PendingFlagsResult {
+  conflictPending: number;
+  bodyConflictPending: number;
+  taxonomyConflictPending: number;
+  conflictCopyHash: string | null;
+  conflictCopyPath: string | null;
+  conflictAt: number | null;
+  taxonomyApplyPending: number;
+  remoteTaxonomyHash: string | null;
+}
+
+/**
+ * Computes sync state pending flags and conflict/taxonomy hashes symmetrically.
+ */
+export function pendingFlagsFor(params: {
+  mode: 'create' | 'update' | 'conflict';
+  syncState?: SyncState | null;
+  hasTaxFailures?: boolean;
+  hasBodyConflict?: boolean;
+  isTaxonomyConflict?: boolean;
+  conflictedHash?: string | null;
+  quarantineRelPath?: string | null;
+  remoteTaxonomyHash?: string | null;
+}): PendingFlagsResult {
+  const {
+    mode,
+    syncState,
+    hasTaxFailures,
+    hasBodyConflict,
+    isTaxonomyConflict,
+    conflictedHash,
+    quarantineRelPath,
+    remoteTaxonomyHash,
+  } = params;
+
+  if (mode === 'create') {
+    return {
+      conflictPending: 0,
+      bodyConflictPending: 0,
+      taxonomyConflictPending: 0,
+      conflictCopyHash: null,
+      conflictCopyPath: null,
+      conflictAt: null,
+      taxonomyApplyPending: hasTaxFailures ? 1 : 0,
+      remoteTaxonomyHash: hasTaxFailures ? null : (remoteTaxonomyHash ?? null),
+    };
+  }
+
+  if (mode === 'conflict') {
+    const isTax = isTaxonomyConflict ? 1 : 0;
+    const isBody = hasBodyConflict ? 1 : 0;
+    const hasAnyConflict = isTax === 1 || isBody === 1;
+    return {
+      conflictPending: 1,
+      bodyConflictPending: isBody,
+      taxonomyConflictPending: isTax,
+      conflictCopyHash: hasAnyConflict ? (conflictedHash ?? null) : null,
+      conflictCopyPath: hasAnyConflict ? (quarantineRelPath ?? null) : null,
+      conflictAt: hasAnyConflict && quarantineRelPath ? Math.floor(Date.now() / 1000) : null,
+      taxonomyApplyPending: 0,
+      remoteTaxonomyHash: remoteTaxonomyHash ?? null,
+    };
+  }
+
+  // update mode
+  if (hasTaxFailures) {
+    return {
+      conflictPending: syncState?.conflictPending ?? 0,
+      bodyConflictPending: syncState?.bodyConflictPending ?? 0,
+      taxonomyConflictPending: syncState?.taxonomyConflictPending ?? 0,
+      conflictCopyHash: syncState?.conflictCopyHash ?? null,
+      conflictCopyPath: syncState?.conflictCopyPath ?? null,
+      conflictAt: syncState?.conflictAt ?? null,
+      taxonomyApplyPending: 1,
+      remoteTaxonomyHash: remoteTaxonomyHash ?? null,
+    };
+  }
+
+  return {
+    conflictPending: 0,
+    bodyConflictPending: 0,
+    taxonomyConflictPending: 0,
+    conflictCopyHash: null,
+    conflictCopyPath: null,
+    conflictAt: null,
+    taxonomyApplyPending: 0,
+    remoteTaxonomyHash: remoteTaxonomyHash ?? null,
+  };
+}
+
 export interface CommitPostPushParams {
   mode: 'create' | 'update';
   actualId: string;
@@ -215,17 +305,20 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     savedFrontmatter.taxonomies = { ...baseFm.taxonomies };
   }
 
-  const finalTaxHash = hasTaxFailures
-    ? mode === 'create'
-      ? null
-      : syncState?.remoteTaxonomyHash ||
+  const calculatedTaxHash = computeTaxonomyHash(
+    parsed.frontmatter.taxonomies?.categories,
+    parsed.frontmatter.taxonomies?.tags,
+  );
+
+  const fallbackTaxHash =
+    mode === 'update'
+      ? syncState?.remoteTaxonomyHash ||
         (baseFm?.taxonomies
           ? computeTaxonomyHash(baseFm.taxonomies.categories, baseFm.taxonomies.tags)
           : null)
-    : computeTaxonomyHash(
-        parsed.frontmatter.taxonomies?.categories,
-        parsed.frontmatter.taxonomies?.tags,
-      );
+      : null;
+
+  const targetRemoteTaxHash = hasTaxFailures ? fallbackTaxHash : calculatedTaxHash;
 
   options.cache.saveBaseSnapshot(
     createBaseSnapshot({
@@ -237,43 +330,25 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     }),
   );
 
-  // Update sync state
-  if (mode === 'create') {
-    options.cache.saveSyncState({
-      id: actualId,
-      localFilePath: newRelPath,
-      localHash: newHash,
-      remoteRev: finalRev,
-      status: parsed.frontmatter.status,
-      slug: parsed.frontmatter.slug,
-      lastSyncedAt: Math.floor(Date.now() / 1000),
-      conflictPending: 0,
-      bodyConflictPending: 0,
-      taxonomyConflictPending: 0,
-      conflictCopyHash: null,
-      conflictCopyPath: null,
-      conflictAt: null,
-      remoteTaxonomyHash: finalTaxHash,
-      taxonomyApplyPending: hasTaxFailures ? 1 : 0,
-    });
-  } else {
-    options.cache.saveSyncState({
-      id: actualId,
-      localFilePath: newRelPath,
-      localHash: newHash,
-      remoteRev: finalRev,
-      status: parsed.frontmatter.status,
-      slug: parsed.frontmatter.slug,
-      lastSyncedAt: Math.floor(Date.now() / 1000),
-      conflictPending: hasTaxFailures ? (syncState?.conflictPending ?? 0) : 0,
-      bodyConflictPending: hasTaxFailures ? (syncState?.bodyConflictPending ?? 0) : 0,
-      taxonomyConflictPending: hasTaxFailures ? (syncState?.taxonomyConflictPending ?? 0) : 0,
-      conflictCopyHash: hasTaxFailures ? syncState?.conflictCopyHash : null,
-      conflictCopyPath: hasTaxFailures ? syncState?.conflictCopyPath : null,
-      conflictAt: hasTaxFailures ? syncState?.conflictAt : null,
-      remoteTaxonomyHash: finalTaxHash,
-      taxonomyApplyPending: hasTaxFailures ? 1 : 0,
-    });
+  const flags = pendingFlagsFor({
+    mode,
+    syncState,
+    hasTaxFailures,
+    remoteTaxonomyHash: targetRemoteTaxHash,
+  });
+
+  options.cache.saveSyncState({
+    id: actualId,
+    localFilePath: newRelPath,
+    localHash: newHash,
+    remoteRev: finalRev,
+    status: parsed.frontmatter.status,
+    slug: parsed.frontmatter.slug,
+    lastSyncedAt: Math.floor(Date.now() / 1000),
+    ...flags,
+  });
+
+  if (mode === 'update') {
     updateConfigSyncedVersion(options.workspaceRoot);
   }
 

@@ -35,6 +35,7 @@ import { hybrid3WayMerge, type MergeResult } from '../merge.js';
 import { fetchAssignedTaxonomies, computeTaxonomyHash } from '../terms.js';
 import { calculateHash, quarantineLocalCopy } from '../workspace/index.js';
 import { throwRemoteArticleDeleted } from './transport.js';
+import { pendingFlagsFor } from './commit.js';
 import type { PushOptions, PushResult } from './types.js';
 
 export interface ConflictResolutionOutcome {
@@ -56,7 +57,8 @@ export async function resolveConflictAndMerge(params: {
   targetFilePath: string;
   fullPath: string;
   putUrl: string;
-  res: Response;
+  res?: Response | null;
+  taxonomyDivergenceDetected?: boolean;
   parsed: ParsedMarkdown;
   syncState: SyncState | null | undefined;
   baseSnapshot: BaseSnapshot | null | undefined;
@@ -73,6 +75,7 @@ export async function resolveConflictAndMerge(params: {
     fullPath,
     putUrl,
     res,
+    taxonomyDivergenceDetected,
     parsed,
     syncState,
     baseSnapshot,
@@ -83,20 +86,22 @@ export async function resolveConflictAndMerge(params: {
     warnings,
   } = params;
 
-  const errJson = (await res.json().catch(() => ({}))) as {
-    error?: { code?: string; message?: string; holder?: unknown };
-  };
-  const errorCode = errJson.error?.code || 'CONFLICT';
+  if (res && !taxonomyDivergenceDetected) {
+    const errJson = (await res.json().catch(() => ({}))) as {
+      error?: { code?: string; message?: string; holder?: unknown };
+    };
+    const errorCode = errJson.error?.code || 'CONFLICT';
 
-  if (errorCode === 'ENTRY_LOCKED') {
-    throw new ApiError({
-      message: `Entry is currently locked by another user. (${errJson.error?.message || ''})`,
-      code: 'ENTRY_LOCKED',
-      status: 409,
-      endpoint: putUrl,
-      suggestion:
-        'Wait for the other user to finish editing or release their lock before retrying.',
-    });
+    if (errorCode === 'ENTRY_LOCKED') {
+      throw new ApiError({
+        message: `Entry is currently locked by another user. (${errJson.error?.message || ''})`,
+        code: 'ENTRY_LOCKED',
+        status: 409,
+        endpoint: putUrl,
+        suggestion:
+          'Wait for the other user to finish editing or release their lock before retrying.',
+      });
+    }
   }
 
   // True revision mismatch conflict or taxonomy divergence: fetch remote latest and run Hybrid 3-Way Merge
@@ -269,6 +274,20 @@ export async function resolveConflictAndMerge(params: {
       }
     }
 
+    const remoteTaxHash = computeTaxonomyHash(
+      remoteParsed.frontmatter.taxonomies?.categories,
+      remoteParsed.frontmatter.taxonomies?.tags,
+    );
+
+    const flags = pendingFlagsFor({
+      mode: 'conflict',
+      hasBodyConflict,
+      isTaxonomyConflict,
+      conflictedHash: actualConflictCopyHash,
+      quarantineRelPath: quarantineRel,
+      remoteTaxonomyHash: remoteTaxHash,
+    });
+
     // Update sync state:
     // Do NOT overwrite localHash with marker hash, so `status` remains clean when markers are cleaned up!
     options.cache.saveSyncState({
@@ -279,17 +298,7 @@ export async function resolveConflictAndMerge(params: {
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
-      conflictPending: 1,
-      bodyConflictPending: hasBodyConflict ? 1 : 0,
-      taxonomyConflictPending: isTaxonomyConflict ? 1 : 0,
-      conflictCopyHash: actualConflictCopyHash,
-      conflictCopyPath: quarantineRel,
-      conflictAt: quarantineRel ? Math.floor(Date.now() / 1000) : null,
-      remoteTaxonomyHash: computeTaxonomyHash(
-        remoteParsed.frontmatter.taxonomies?.categories,
-        remoteParsed.frontmatter.taxonomies?.tags,
-      ),
-      taxonomyApplyPending: 0,
+      ...flags,
     });
 
     options.cache.saveBaseSnapshot(

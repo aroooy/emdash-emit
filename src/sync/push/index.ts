@@ -311,28 +311,24 @@ export async function pushArticle(
       warnings,
     });
 
-    let res = taxonomyDivergenceDetected
-      ? ({
-          status: 409,
-          ok: false,
-          json: async () => ({ error: { code: 'TAXONOMY_DIVERGENCE' } }),
-          text: async () => '',
-        } as unknown as Response)
-      : await fetchFn(putUrl, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${options.token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
+    let res: Response | null = null;
+    if (!taxonomyDivergenceDetected) {
+      res = await fetchFn(putUrl, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${options.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
 
-    if (!taxonomyDivergenceDetected && (res.status === 404 || res.status === 410)) {
-      throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+      if (res.status === 404 || res.status === 410) {
+        throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+      }
     }
 
-    // Handle 409 Conflict
-    if (res.status === 409) {
+    // Handle 409 Conflict or detected taxonomy divergence
+    if (taxonomyDivergenceDetected || res?.status === 409) {
       const conflictOutcome = await resolveConflictAndMerge({
         collection,
         id,
@@ -340,6 +336,7 @@ export async function pushArticle(
         fullPath,
         putUrl,
         res,
+        taxonomyDivergenceDetected,
         parsed,
         syncState,
         baseSnapshot,
@@ -414,15 +411,15 @@ export async function pushArticle(
       }
     }
 
-    if (!res.ok) {
-      if (res.status === 404 || res.status === 410) {
+    if (!res || !res.ok) {
+      if (res && (res.status === 404 || res.status === 410)) {
         throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
       }
-      const errText = await res.text().catch(() => '');
+      const errText = res ? await res.text().catch(() => '') : '';
       throw new ApiError({
-        message: `Push failed: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
+        message: `Push failed: ${res ? res.statusText : 'Request failed'}${errText ? ` - ${errText}` : ''}`,
         code: 'PUSH_FAILED',
-        status: res.status,
+        status: res ? res.status : 500,
         endpoint: putUrl,
         suggestion: 'Verify network connectivity, token permissions, and article status.',
       });
