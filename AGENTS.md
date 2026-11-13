@@ -21,6 +21,43 @@ This document defines the **official workflow rules (The Golden Path) and coding
 
 - **`docs/media-id-spaces.md`** — the authoritative specification of EmDash's two media identifier spaces (D1 record `id` vs R2 `storageKey`), which endpoint accepts which, and how migrated corpora behave. Read it before debugging any missing or unresolved image.
 
+### Architectural Layering & Dependency Invariants
+
+The codebase strictly enforces a 4-tier architectural layering model verified via `tests/layering.test.ts`:
+
+| Layer | Responsibility & Modules | Allowed Inbound Dependencies | Prohibited Inbound Dependencies |
+|---|---|---|---|
+| **Layer 0: Primitives & Infra** | `src/utils/`, `src/db/`, `src/client/` — Core types, SQLite cache (`cache.db`, baseline snapshot reconstruction via `src/db/baseline.ts`), HTTP clients, centralized endpoint URL builders (`src/client/endpoints.ts`), media ID branded types (`MediaRecordId`, `StorageKey` in `src/utils/media-id.ts`), and canonical ULID helpers (`src/utils/ulid.ts`). | Layers 1, 2, 3 | Never imports Layer 1, 2, or 3. |
+| **Layer 1: Sync Upstream** | `src/sync/{status, diff, merge, preflight, guards, taxonomies, terms, bylines}` — Pure computation, status calculation, diff inspection, taxonomy term matching, and preflight safety verification. | Layers 2, 3 | **NEVER imports Layer 2 or Layer 3.** |
+| **Layer 2: Sync Downstream** | `src/sync/{orchestrator, push, pull, new, delete, conflicts, doctor, media}` — Orchestration, remote sync execution, 3-way merge conflict handling, and local file mutations. | Layer 3 (strictly restricted to public API symbols) | Never imports Layer 3. |
+| **Layer 3: Consumers & Presentation** | `src/cli/`, `src/mcp/`, `src/presentation/` — User interfaces, CLI commands, MCP tools, and unified report formatters (`src/presentation/article_report.ts`). | Top-level entry points | Never imported by Layer 0, 1, or 2. |
+
+- **Layer 0 `node:fs` Scope Exception**: `node:fs` is explicitly allowed in Layer 0 for file-based configuration (`utils/config.ts`) and article media reference detection (`utils/media-body-refs.ts` via `shouldPreferLegacyRef`), which require reading workspace files without domain logic.
+- **Layer 1 -> Layer 2 Prohibition (Axis 1)**: Layer 1 modules must remain side-effect-free and upstream-focused. They must never import Layer 2 modules (`pull`, `push`, `orchestrator`, `delete`, `doctor`, `conflicts`, `new`, `media`).
+- **Layer 3 -> Layer 2 Controlled Access (Axis 2)**: Consumers in Layer 3 may only import public API symbols explicitly declared in the Layer 2 allowlist (verified by `tests/layering.test.ts`).
+- **Layer 3 Intra-Layer Isolation (Axis 3)**: MCP tools (`src/mcp/`) must never import from CLI command modules (`src/cli/commands/`). Shared formatting logic must be placed in `src/presentation/` (e.g. `article_report.ts`).
+- **Workspace Contracts (`src/sync/workspace/`)**: Workspace-level filesystem mutations and invariants (`calculateHash`, `findLocalFilesByUlid`, `CONFLICTS_SUBDIR`, `isQuarantinedRelativePath`, `resolveCanonicalArticlePath`, `quarantineLocalCopy`) are centralized in `src/sync/workspace/` and must not be imported from `src/sync/pull.ts`.
+- **Media Companion & Ref Separation**: Companion parsing (`storageKeyFromMediaMeta`) resides in `src/utils/media-companion.ts` (Layer 0), and Markdown body ref analysis resides in `src/utils/media-body-refs.ts` (Layer 0), keeping Layer 1 free of Layer 2 media imports.
+
+### Modular Push Architecture (`src/sync/push/`)
+
+`pushArticle` is decomposed into 9 focused modules under `src/sync/push/` (with `src/sync/push.ts` acting as a backward-compatible barrel re-export):
+
+1. `types.ts`: Internal and public push options and result types.
+2. `guards.ts`: Standalone evaluation rails for G12, G15, G16, G17, and G19.
+3. `preflight_stage.ts`: Orchestrates `runPreflightChecks`, applies title auto-trim, and discovers offline draft images.
+4. `taxonomy_plan.ts`: Resolves taxonomy term IDs and canonicalizes categories/tags.
+5. `media_stage.ts`: Executes draft image auto-upload, rewrites Markdown body links, and tracks promoted media state.
+6. `tax_audit.ts`: Audits taxonomy changes against remote state, detecting divergence without synthetic responses.
+7. `transport.ts`: Pure HTTP transports for article creation, updates, taxonomy synchronization, and publish state transitions.
+8. `merge_stage.ts`: Handles 409 conflicts and taxonomy divergence via 3-way merge, preventing destructive overwrites.
+9. `commit.ts`: Post-push finalization; encapsulates `pendingFlagsFor` (`PendingFlagsResult`), Markdown serialization, local hash updates, file relocation, and base snapshot/sync state updates.
+10. `index.ts`: The top-level pipeline orchestrator coordinating the stages in strict sequence.
+
+- **Preflight Evaluation Precedence**: In accordance with T2-1 and Guard G6/G16 invariants, `runPreflightChecks` (including G6 `UNRESOLVED_CONFLICT_MARKERS`) is evaluated **strictly before** G16 (`TAXONOMY_CONFLICT_PENDING`).
+- **Flag Symmetry & NULL Rules (`PendingFlagsResult`)**: `conflictCopyPath`, `conflictCopyHash`, and `conflictAt` are set to `null` if and only if both `bodyConflictPending` and `taxonomyConflictPending` are 0.
+
+
 ---
 
 ## 2. Workspace Structure (Git-style)
