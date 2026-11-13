@@ -31,7 +31,10 @@ import {
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { formatMediaCoverageLine, formatOrphanMediaWarning } from '../../cli/commands/pull.js';
+import {
+  formatMediaCoverageLine,
+  formatOrphanMediaWarning,
+} from '../../presentation/article_report.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';

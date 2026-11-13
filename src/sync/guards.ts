@@ -260,3 +260,95 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     description: 'タクソノミー全削除等の破壊的操作抑止',
   },
 ] as const;
+
+/**
+ * Actionable remediation recommendations for known guard, protection, and operational error codes.
+ *
+ * Mapped exhaustively to existing codes without introducing new error codes.
+ */
+const REMEDIATION_MAP: Record<string, string> = {
+  // G2
+  ID_MISMATCH_ERROR:
+    'Do not rename or move article files manually. Update the frontmatter and run "emit push" to let Emit manage canonical file locations.',
+  // G3
+  UNINTENDED_PUBLISH_GUARD:
+    'To promote a draft article to published status, provide explicit confirmation with allowPublish: true (or --allow-publish flag in CLI).',
+  // G4
+  INVALID_TAXONOMY_ERROR:
+    'Check categories/ and tags/ YAML definitions or run "emit pull" to refresh local taxonomy terms before pushing.',
+  // G5
+  LOCAL_IMAGE_DETECTED:
+    'Place offline images in media/drafts/<filename> and reference them on a standalone line, or run "emit pull-media" to mirror remote assets.',
+  INLINE_LOCAL_IMAGE_NOT_SUPPORTED:
+    'Place local draft images on their own standalone line as a block image, not inline within paragraph text.',
+  // G6
+  UNRESOLVED_CONFLICT_MARKERS:
+    'Resolve all 3-way merge conflict markers (<<<<<<<, =======, >>>>>>>) in the article body before pushing.',
+  // G9
+  MODIFIED_OPAQUE_BLOCK:
+    'Preserve <!--ec:block ... --> opaque extension blocks verbatim without editing their contents or tags.',
+  // G10
+  INVALID_FEATURED_IMAGE:
+    'Set featuredImage to a 26-character media record ULID or null. Local paths and URL strings are rejected.',
+  // G11
+  MISSING_LOCAL_IMAGE_FILE:
+    'Ensure the referenced local image exists in media/drafts/<filename> before pushing.',
+  INVALID_LOCAL_IMAGE_TYPE:
+    'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg) for draft images.',
+  LOCAL_IMAGE_SIZE_EXCEEDED:
+    'Ensure draft image files are within the 50 MiB per-file upload size limit.',
+  PROMOTED_MEDIA_NOT_FOUND_REMOTE:
+    'The media record does not exist on remote. Re-place the original image file in media/drafts/ to upload anew.',
+  // G12
+  QUARANTINED_COPY_NOT_PUSHABLE:
+    'Do not push quarantined conflict files under posts/conflicts/ directly. Use "emit conflicts resolve" or merge changes into the canonical article.',
+  // G13
+  CANONICAL_HAS_UNPUSHED_EDITS:
+    'Push or stash local modifications on the canonical article before resolving or overwriting it from a conflict copy.',
+  // G14
+  QUARANTINED_PATH_REQUIRED:
+    'Specify a valid quarantined conflict copy path under posts/conflicts/ to perform conflict operations.',
+  // G15
+  DELETE_PENDING_ARTICLE:
+    'The article is marked as pending deletion on remote. Pull the latest workspace state or resolve deletion status before pushing.',
+  // G16
+  TAXONOMY_CONFLICT_PENDING:
+    'Local taxonomy conflict is pending. Resolve conflicting taxonomy assignments or run "emit pull" to synchronize.',
+  // G17
+  TAXONOMY_APPLY_PENDING:
+    'Remote taxonomy updates are pending application. Run "emit pull" to synchronize local taxonomy definitions.',
+  // G18
+  DUPLICATE_SLUG_CONFLICT:
+    'An article with this slug already exists locally or in the workspace index. Choose a unique slug.',
+  // G19
+  DESTRUCTIVE_TAXONOMY_WIPE:
+    'Pushing with an empty taxonomy set would wipe all remote categories/tags. Verify taxonomy assignments or specify explicit terms.',
+  // Standing protections
+  UNPUSHED_CHANGES_PROTECTION:
+    'The article has unpushed modifications. Push changes first with "emit push" or specify force if deletion is intentional.',
+  PUBLISHED_ARTICLE_PROTECTION:
+    'Deleting a published article is forbidden by default. Unpublish or unpublish remotely before deleting.',
+  FRONTMATTER_PARSE_ERROR:
+    'Fix YAML frontmatter syntax errors between the opening and closing --- fences.',
+  // Operational errors
+  PUSH_CREATE_FAILED:
+    'Remote article creation failed. Check network connectivity, permissions, and verify that the slug is not taken on remote.',
+  PUSH_FAILED:
+    'Remote article update failed. Check network connectivity or pull the latest version to resolve divergences.',
+  ENTRY_LOCKED:
+    'The article is currently locked by another operation or user. Wait for the lease to expire or try again later.',
+  MEDIA_UPLOAD_URL_FAILED:
+    'Failed to obtain media upload URL from remote. Check remote permissions and storage settings.',
+  MEDIA_BINARY_UPLOAD_FAILED:
+    'Binary upload to remote storage failed. Check network stability and try pushing again.',
+  MEDIA_CONFIRM_FAILED:
+    'Failed to confirm media upload with remote CMS. Verify remote media service health.',
+};
+
+/**
+ * Returns an actionable remediation suggestion for a known guard, operational,
+ * or protection error code. Returns null if no specific remediation is registered.
+ */
+export function remediationFor(code: string): string | null {
+  return REMEDIATION_MAP[code] ?? null;
+}

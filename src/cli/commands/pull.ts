@@ -51,45 +51,12 @@ export function formatPullWindowLabel(status: string | undefined, limit: number)
  * the media library by storageKey (or the migration mapping) and only then register anything, since a
  * blind INSERT risks a duplicate registration. Emit mirrors records and never repairs server data.
  */
-export function formatOrphanMediaWarning(orphanStorageKeys: string[] | undefined): string {
-  if (!orphanStorageKeys || orphanStorageKeys.length === 0) return '';
-  const keyList = orphanStorageKeys.join(', ');
-  return (
-    `⚠️ [UNRESOLVED_MEDIA_ASSET] ${orphanStorageKeys.length} storageKey(s) referenced in article bodies ` +
-    `could not be matched to a media record or a local mirror and were not downloaded: ${keyList}. ` +
-    `These keys are R2 storage keys, not media record ids — GET /_emdash/api/media/{id} searches the ` +
-    `primary key, so a 404 here does not prove the record is missing. The library's own storageKeys are ` +
-    `reachable from Emit: run "emit doctor --check-media-library" (or "emit pull-media --all" for complete backup) to index ` +
-    `every record the server reports, which resolves these keys without any server-side query. Verify by ` +
-    `storageKey before registering anything: a blind INSERT can create a duplicate. Emit mirrors records ` +
-    `and never repairs server data.`
-  );
-}
+import {
+  formatOrphanMediaWarning,
+  formatMediaCoverageLine,
+} from '../../presentation/article_report.js';
 
-/**
- * Renders the coverage line for a library-wide media pull: how many records the server reports, how
- * many this run walked, and any referenced key that even a complete walk could not match.
- */
-export function formatMediaCoverageLine(res: {
-  total: number;
-  remoteTotalCount?: number | null;
-  referencedUnmirroredStorageKeys?: string[];
-}): string {
-  const parts: string[] = [];
-  const remoteTotal = res.remoteTotalCount;
-  if (typeof remoteTotal === 'number' && remoteTotal > 0) {
-    parts.push(
-      `remote library holds ${remoteTotal} record(s), of which this run walked ${res.total}`,
-    );
-  }
-  const unmirrored = res.referencedUnmirroredStorageKeys;
-  if (unmirrored && unmirrored.length > 0) {
-    parts.push(
-      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey (after the complete library walk above) before registering anything, because a blind INSERT can duplicate an existing record.`,
-    );
-  }
-  return parts.length > 0 ? `\n${parts.join('\n')}` : '';
-}
+export { formatOrphanMediaWarning, formatMediaCoverageLine };
 
 /**
  * Renders the per-article media summary. A migrated corpus bakes R2 storageKeys into body URLs, so the

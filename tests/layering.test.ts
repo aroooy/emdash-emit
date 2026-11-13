@@ -222,4 +222,31 @@ describe('Architectural Layering Invariants', () => {
           .join('\n'),
     ).toHaveLength(0);
   });
+
+  it('Axis 3: Layer 3 intra-layer isolation - MCP tools do not import from CLI commands', () => {
+    const mcpFiles = collectSourceFiles(path.join(SRC_ROOT, 'mcp'));
+    const violations: { file: string; line: number; source: string }[] = [];
+
+    for (const file of mcpFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+      const relFile = path.relative(SRC_ROOT, file);
+
+      for (const imp of imports) {
+        if (imp.source.includes('/cli/commands/') || imp.source.endsWith('/cli/commands')) {
+          violations.push({
+            file: relFile,
+            line: imp.line,
+            source: imp.source,
+          });
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `MCP tools importing from CLI commands (Layer 3 intra-layer violation):\n` +
+        violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
+    ).toHaveLength(0);
+  });
 });
