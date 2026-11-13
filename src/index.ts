@@ -40,6 +40,7 @@ export {
   type MediaItem,
 } from './client/schemas.js';
 export * from './db/cache.js';
+export * from './db/baseline.js';
 export * from './sync/diff.js';
 export * from './sync/media.js';
 export * from './sync/merge.js';

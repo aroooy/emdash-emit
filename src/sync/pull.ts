@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { CacheDatabase, SyncState } from '../db/cache.js';
+import { createBaseSnapshot } from '../db/baseline.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
@@ -806,14 +807,15 @@ export async function pullArticle(
 
             const existingBase = options.cache.getBaseSnapshot(id);
             if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
-              options.cache.saveBaseSnapshot({
-                id,
-                rev: remoteRev,
-                bodyMarkdown: remoteLocal.body,
-                frontmatterYaml: JSON.stringify(remoteLocal.frontmatter),
-                hash: remoteCanonHash,
-                savedAt: Math.floor(Date.now() / 1000),
-              });
+              options.cache.saveBaseSnapshot(
+                createBaseSnapshot({
+                  id,
+                  rev: remoteRev,
+                  bodyMarkdown: remoteLocal.body,
+                  frontmatter: remoteLocal.frontmatter,
+                  hash: remoteCanonHash,
+                }),
+              );
             }
 
             options.cache.saveSyncState({
@@ -1076,14 +1078,15 @@ export async function pullArticle(
   fs.writeFileSync(fullFilePath, markdownContent, 'utf8');
 
   // Update Base snapshot in cache
-  options.cache.saveBaseSnapshot({
-    id: frontmatter.id,
-    rev,
-    bodyMarkdown: body,
-    frontmatterYaml: JSON.stringify(frontmatter),
-    hash: contentHash,
-    savedAt: Math.floor(Date.now() / 1000),
-  });
+  options.cache.saveBaseSnapshot(
+    createBaseSnapshot({
+      id: frontmatter.id,
+      rev,
+      bodyMarkdown: body,
+      frontmatter,
+      hash: contentHash,
+    }),
+  );
 
   // Update sync state with explicit conflict pending preservation
   let conflictInfo: Partial<SyncState> = {};

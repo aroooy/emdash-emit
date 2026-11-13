@@ -24,8 +24,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
+import { baselineMarkdown } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { serializeMarkdown, type Frontmatter } from '../utils/frontmatter.js';
 import { calculateHash, carriesDepthFreeMediaRef } from './pull.js';
 import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
@@ -159,16 +159,11 @@ export function inspectArticleDiff(options: {
   const syncState = options.cache.getSyncState(targetId);
   const currentHash = calculateHash(localContent);
   const isModified = syncState ? syncState.localHash !== currentHash : true;
-  // base_snapshots.frontmatterYaml stores a JSON-encoded Frontmatter (see pull.ts / push.ts).
   // Rebuild the base document with the exact same serializer and taxonomy candidates used to write the local file so the
   // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML,
   // preventing phantom diffs caused by taxonomy inline comments.
   const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
-  const baseFullMarkdown = serializeMarkdown(
-    JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter,
-    baseSnapshot.bodyMarkdown,
-    candidates,
-  );
+  const baseFullMarkdown = baselineMarkdown(baseSnapshot, candidates);
   // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as local
   // references (`../../media/<storageKey>`, or the older depth-free `media/<storageKey>`). Comparing those two
   // spellings directly reports a change on every untouched article. Decide the spelling from the disk file

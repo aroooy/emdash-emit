@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { CacheDatabase } from '../db/cache.js';
+import { readBaselineFrontmatter } from '../db/baseline.js';
 import type { EmitConfig } from '../utils/config.js';
 import { getPackageVersion } from '../utils/version.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
@@ -586,16 +587,12 @@ export async function runWorkspaceDoctor(
   const knownFeaturedStorageKeys = new Set<string>();
   for (const state of options.cache.getAllSyncStates()) {
     const snapshot = options.cache.getBaseSnapshot(state.id);
-    if (!snapshot?.frontmatterYaml) continue;
-    try {
-      const fm = JSON.parse(snapshot.frontmatterYaml) as Record<string, unknown>;
-      const fi = fm.featuredImage ?? fm.featured_image;
-      const meta = (fi as Record<string, unknown> | null)?.meta as Record<string, unknown> | null;
-      if (typeof meta?.storageKey === 'string' && meta.storageKey) {
-        knownFeaturedStorageKeys.add(meta.storageKey);
-      }
-    } catch {
-      // baseline frontmatter is JSON-encoded by contract; ignore unreadable snapshots
+    const fm = readBaselineFrontmatter(snapshot) as Record<string, unknown> | null;
+    if (!fm) continue;
+    const fi = fm.featuredImage ?? fm.featured_image;
+    const meta = (fi as Record<string, unknown> | null)?.meta as Record<string, unknown> | null;
+    if (typeof meta?.storageKey === 'string' && meta.storageKey) {
+      knownFeaturedStorageKeys.add(meta.storageKey);
     }
   }
 

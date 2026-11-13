@@ -23,12 +23,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
+import { baselineMarkdown } from '../db/baseline.js';
 import {
   formatFrontmatterParseError,
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
-  serializeMarkdown,
-  type Frontmatter,
 } from '../utils/frontmatter.js';
 import { calculateHash, carriesDepthFreeMediaRef, CONFLICTS_SUBDIR } from './pull.js';
 import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
@@ -154,11 +153,7 @@ function isBaselineSpellingMatch(
 
   try {
     const candidates = loadLocalTaxonomyCandidates(workspaceRoot);
-    const baseMarkdown = serializeMarkdown(
-      JSON.parse(snapshot.frontmatterYaml) as Frontmatter,
-      snapshot.bodyMarkdown,
-      candidates,
-    );
+    const baseMarkdown = baselineMarkdown(snapshot, candidates);
     const localizedBase = localizeArticleMediaRefs(baseMarkdown, {
       workspaceRoot,
       articleRelPath: relPath,

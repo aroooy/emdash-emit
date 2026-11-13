@@ -25,6 +25,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
+import {
+  createBaseSnapshot,
+  readBaseline,
+  readBaselineFrontmatter,
+  baselineMarkdown,
+} from '../src/db/baseline.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
@@ -121,5 +127,79 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
     expect(status.summary.modified).toBe(0);
     expect(status.summary.invalid).toBe(0);
     expect(status.summary.untracked).toBe(0);
+  });
+
+  it('guarantees bidirectional byte-identical baseline reconstruction (pull output and push write paths)', () => {
+    const fm: Frontmatter = {
+      id: '01M67MP2W0VKCK2DFWM166CR30',
+      slug: 'baseline-invariant-article',
+      title: 'Baseline Invariant Article',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: {
+        categories: ['tech'],
+        tags: ['typescript', 'sqlite'],
+      },
+      bylines: ['author-1'],
+    };
+    const body = '# Heading 2\n\nArticle body with paragraph and list:\n\n- item 1\n- item 2\n';
+
+    // 1. Simulate pull writing to disk
+    const diskContent = serializeMarkdown(fm, body);
+    const diskHash = calculateHash(diskContent);
+
+    // 2. Save snapshot via createBaseSnapshot (pull / push write pattern)
+    const snapshot = createBaseSnapshot({
+      id: fm.id,
+      rev: 'rev_pull_100',
+      bodyMarkdown: body,
+      frontmatter: fm,
+      hash: diskHash,
+    });
+    cache.saveBaseSnapshot(snapshot);
+
+    // 3. Read back from database and decode
+    const retrieved = cache.getBaseSnapshot(fm.id);
+    expect(retrieved).not.toBeNull();
+    const decoded = readBaseline(retrieved!);
+    expect(decoded.frontmatter).toEqual(fm);
+    expect(decoded.body).toBe(body);
+
+    const decodedFm = readBaselineFrontmatter(retrieved!);
+    expect(decodedFm).toEqual(fm);
+
+    // 4. Assert bidirectional byte-identical reconstruction
+    const reconstructed = baselineMarkdown(retrieved!);
+    expect(reconstructed).toBe(diskContent);
+    expect(calculateHash(reconstructed)).toBe(diskHash);
+    expect(calculateHash(reconstructed)).toBe(retrieved!.hash);
+
+    // 5. Simulate push update: modifying frontmatter and updating baseline
+    const updatedFm: Frontmatter = {
+      ...fm,
+      title: 'Updated Title',
+      status: 'published',
+      publishedAt: '2026-11-13T00:00:00.000Z',
+    };
+    const updatedDiskContent = serializeMarkdown(updatedFm, body);
+    const updatedDiskHash = calculateHash(updatedDiskContent);
+
+    const pushSnapshot = createBaseSnapshot({
+      id: fm.id,
+      rev: 'rev_push_200',
+      bodyMarkdown: body,
+      frontmatter: updatedFm,
+      hash: updatedDiskHash,
+    });
+    cache.saveBaseSnapshot(pushSnapshot);
+
+    const pushRetrieved = cache.getBaseSnapshot(fm.id);
+    expect(pushRetrieved).not.toBeNull();
+    const pushReconstructed = baselineMarkdown(pushRetrieved!);
+    expect(pushReconstructed).toBe(updatedDiskContent);
+    expect(calculateHash(pushReconstructed)).toBe(updatedDiskHash);
+    expect(calculateHash(pushReconstructed)).toBe(pushRetrieved!.hash);
   });
 });

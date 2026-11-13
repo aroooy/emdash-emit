@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { CacheDatabase } from '../db/cache.js';
+import { createBaseSnapshot, readBaseline, readBaselineFrontmatter } from '../db/baseline.js';
 import { withEntryLock } from '../client/lock.js';
 import {
   apiResponseToLocal,
@@ -791,9 +792,7 @@ export async function pushArticle(
 
       if (resolvedTermIds.length === 0) {
         // Check if remote previously had assignments in baseline
-        const baseFm = baseSnapshot?.frontmatterYaml
-          ? (JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter)
-          : null;
+        const baseFm = readBaselineFrontmatter(baseSnapshot);
         const prevTerms =
           taxonomyName === 'category' ? baseFm?.taxonomies?.categories : baseFm?.taxonomies?.tags;
         if (prevTerms && prevTerms.length > 0) {
@@ -1018,14 +1017,15 @@ export async function pushArticle(
         );
 
     // Update Base snapshot and Sync state
-    options.cache.saveBaseSnapshot({
-      id: actualId,
-      rev: finalRev,
-      bodyMarkdown: parsed.body,
-      frontmatterYaml: JSON.stringify(parsed.frontmatter),
-      hash: newHash,
-      savedAt: Math.floor(Date.now() / 1000),
-    });
+    options.cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: actualId,
+        rev: finalRev,
+        bodyMarkdown: parsed.body,
+        frontmatter: parsed.frontmatter,
+        hash: newHash,
+      }),
+    );
 
     options.cache.saveSyncState({
       id: actualId,
@@ -1096,9 +1096,7 @@ export async function pushArticle(
     let remoteTaxAudit: { categories: string[] | null; tags: string[] | null } | null = null;
     let taxonomyDivergenceDetected = false;
 
-    const baseFm = baseSnapshot?.frontmatterYaml
-      ? (JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter)
-      : null;
+    const baseFm = readBaselineFrontmatter(baseSnapshot);
     const hasLocalTaxonomies = Boolean(
       parsed.frontmatter.taxonomies &&
       (parsed.frontmatter.taxonomies.categories !== undefined ||
@@ -1225,30 +1223,20 @@ export async function pushArticle(
       if (!remoteParsed.frontmatter.taxonomies) {
         remoteParsed.frontmatter.taxonomies = {};
       }
+      const baseFm = readBaselineFrontmatter(baseSnapshot);
       if (remoteTax.categories !== null) {
         remoteParsed.frontmatter.taxonomies.categories = remoteTax.categories;
-      } else if (baseSnapshot) {
-        const baseFm = JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter;
-        if (baseFm.taxonomies?.categories) {
-          remoteParsed.frontmatter.taxonomies.categories = baseFm.taxonomies.categories;
-        }
+      } else if (baseFm?.taxonomies?.categories) {
+        remoteParsed.frontmatter.taxonomies.categories = baseFm.taxonomies.categories;
       }
       if (remoteTax.tags !== null) {
         remoteParsed.frontmatter.taxonomies.tags = remoteTax.tags;
-      } else if (baseSnapshot) {
-        const baseFm = JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter;
-        if (baseFm.taxonomies?.tags) {
-          remoteParsed.frontmatter.taxonomies.tags = baseFm.taxonomies.tags;
-        }
+      } else if (baseFm?.taxonomies?.tags) {
+        remoteParsed.frontmatter.taxonomies.tags = baseFm.taxonomies.tags;
       }
 
       // Perform Hybrid 3-Way Merge
-      const baseInfo = baseSnapshot
-        ? {
-            frontmatter: JSON.parse(baseSnapshot.frontmatterYaml) as Frontmatter,
-            body: baseSnapshot.bodyMarkdown,
-          }
-        : null;
+      const baseInfo = baseSnapshot ? readBaseline(baseSnapshot) : null;
 
       const mergeResult = hybrid3WayMerge(
         parsed,
@@ -1386,16 +1374,17 @@ export async function pushArticle(
           taxonomyApplyPending: 0,
         });
 
-        options.cache.saveBaseSnapshot({
-          id,
-          rev: remoteParsed.rev,
-          bodyMarkdown: remoteParsed.body,
-          frontmatterYaml: JSON.stringify(remoteParsed.frontmatter),
-          hash: calculateHash(
-            serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body, candidates),
-          ),
-          savedAt: Math.floor(Date.now() / 1000),
-        });
+        options.cache.saveBaseSnapshot(
+          createBaseSnapshot({
+            id,
+            rev: remoteParsed.rev,
+            bodyMarkdown: remoteParsed.body,
+            frontmatter: remoteParsed.frontmatter,
+            hash: calculateHash(
+              serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body, candidates),
+            ),
+          }),
+        );
 
         return {
           success: false,
@@ -1583,14 +1572,15 @@ export async function pushArticle(
           parsed.frontmatter.taxonomies?.tags,
         );
 
-    options.cache.saveBaseSnapshot({
-      id,
-      rev: finalRev,
-      bodyMarkdown: parsed.body,
-      frontmatterYaml: JSON.stringify(savedFrontmatter),
-      hash: newHash,
-      savedAt: Math.floor(Date.now() / 1000),
-    });
+    options.cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id,
+        rev: finalRev,
+        bodyMarkdown: parsed.body,
+        frontmatter: savedFrontmatter,
+        hash: newHash,
+      }),
+    );
 
     // Update sync state
     options.cache.saveSyncState({
