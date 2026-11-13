@@ -9,7 +9,7 @@
 
 ## 1. 概要と背景
 
-v0.1.15 のリファクタ計画 (`docs/v0115-refactor-plan/REVISED_PLAN_v4.md`) により、Guard Registry（G1–G19）、`src/sync/media/` の 8 モジュール分割、`media-refs.ts` 共通パーサ、Cache Schema v5（`storageKey` 主キー化）が完了しています。
+v0.1.15 のリファクタ計画 (`docs/v0115-refactor-plan/README.md`) により、Guard Registry（G1–G19）、`src/sync/media/` の 8 モジュール分割、`media-refs.ts` 共通パーサ、Cache Schema v5（`storageKey` 主キー化）が完了しています。
 
 本計画は、EMIT の振る舞い（Behavior）および公開インターフェース・バイナリ規則を 100% 維持したまま、**`pushArticle` の 1,079 行モノリス解消**、**`pull.ts` からのドメイン語彙独立とレイヤリング完全是正**、および **2 重 ID 空間の型安全化** を安全に完遂するための確定仕様です。本書をベースに各タスクを段階的に実装します。
 
