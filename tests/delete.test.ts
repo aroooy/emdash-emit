@@ -27,10 +27,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import {
   deleteArticle,
-  scanArticleMediaReferences,
   UnpushedModificationsError,
   PublishedArticleDeletionForbiddenError,
 } from '../src/sync/delete.js';
+import { scanArticleMediaReferences } from '../src/utils/media-body-refs.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { ApiError } from '../src/client/error.js';

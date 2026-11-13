@@ -72,15 +72,7 @@ export class PublishedArticleDeletionForbiddenError extends Error {
 /**
  * Scans article Markdown body to detect referenced media files in media/.
  */
-import { scanRawMediaReferences } from '../utils/media-refs.js';
-
-/**
- * Scans article markdown body for local or same-origin media references.
- * Compatibility shim delegating to scanRawMediaReferences in utils/media-refs.ts.
- */
-export function scanArticleMediaReferences(bodyMarkdown: string): string[] {
-  return scanRawMediaReferences(bodyMarkdown);
-}
+import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
 
 export interface DeleteArticleOptions {
   workspaceRoot: string;

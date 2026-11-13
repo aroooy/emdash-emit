@@ -45,6 +45,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { storageKeyToMarkdownRef } from './naming.js';
+import { FENCE_POLICY, scanRawMediaReferences, type FencePolicyType } from './media-refs.js';
 
 /** Canonical root-relative media route prefix EmDash writes into Portable Text image blocks. */
 export const MEDIA_FILE_ROUTE_PREFIX = '/_emdash/api/media/file/';
@@ -194,6 +195,22 @@ export function storageKeyFromMirrorRef(
     if (ref && (ref === stem || ref === bareStem)) return key;
   }
   return null;
+}
+
+/**
+ * Scans a Markdown article body for every media reference it carries.
+ *
+ * This is the workspace-contract entry point Layer 2 consumers (delete, doctor, media) call instead of
+ * reaching into each other: markdown images and HTML `<img>` tags anywhere in the body, including inside
+ * opaque `<!--ec:block ... -->` fences and legacy container lines such as `[dimage url="..." control=true]`.
+ * External `http(s)` and `data:` URLs are excluded because they name no local mirror. The fence policy is
+ * delegated to `utils/media-refs.ts` so the guard/diagnostic distinction stays declared in exactly one place.
+ */
+export function scanArticleMediaReferences(
+  bodyMarkdown: string,
+  fencePolicy: FencePolicyType = FENCE_POLICY.guard,
+): string[] {
+  return scanRawMediaReferences(bodyMarkdown, fencePolicy);
 }
 
 /**

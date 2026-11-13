@@ -29,7 +29,9 @@ import {
   mediaRefPrefixForArticle,
   storageKeyFromCanonicalUrl,
   storageKeyFromMirrorRef,
+  scanArticleMediaReferences,
 } from '../src/utils/media-body-refs.js';
+import { FENCE_POLICY } from '../src/utils/media-refs.js';
 
 const STORAGE_KEY = '01M67P0JW605ZJ5GV4YXB7W400.jpg';
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
@@ -229,5 +231,38 @@ describe('localizeArticleMediaRefs', () => {
       fs: fsWithFiles('media/drafts/shot.png'),
     });
     expect(localized).toBe(`![alt](${CANONICAL_URL})`);
+  });
+});
+
+describe('scanArticleMediaReferences (Layer 0 workspace contract)', () => {
+  it('collects markdown and HTML media refs from the body, skipping external URLs', () => {
+    const body = [
+      'Intro text',
+      '![Hero](media/01M6_hero.jpg)',
+      '![Ext](https://example.com/logo.png)',
+      '<img src="../../media/banner.png" alt="Banner" />',
+      '![Again](media/01M6_hero.jpg)',
+    ].join('\n');
+
+    expect(scanArticleMediaReferences(body)).toEqual([
+      '../../media/banner.png',
+      'media/01M6_hero.jpg',
+    ]);
+  });
+
+  it('honours the declared fence policy: backtick-only for guards, backtick-or-tilde for diagnostics', () => {
+    const body = [
+      '```',
+      '![fenced](media/fenced.png)',
+      '```',
+      '~~~',
+      '![tilde](media/tilde.png)',
+      '~~~',
+    ].join('\n');
+
+    // Guard policy exempts only backtick fences, so the tilde-fenced ref is still reported.
+    expect(scanArticleMediaReferences(body)).toEqual(['media/tilde.png']);
+    // Diagnostic policy treats both fence kinds as code, so nothing is reported.
+    expect(scanArticleMediaReferences(body, FENCE_POLICY.diagnostic)).toEqual([]);
   });
 });

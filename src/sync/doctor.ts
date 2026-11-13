@@ -31,7 +31,7 @@ import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontm
 import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
-import { scanArticleMediaReferences } from './delete.js';
+import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
 import { calculateHash } from './workspace/index.js';
 import {
   collectRemoteStorageKeys,

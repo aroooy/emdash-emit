@@ -1,7 +1,7 @@
 import yaml from 'js-yaml';
 import { extractMediaUlid } from '../../client/mapper.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../../utils/frontmatter.js';
-import { scanArticleMediaReferences } from '../delete.js';
+import { scanArticleMediaReferences } from '../../utils/media-body-refs.js';
 import type { OrphanMediaDescriptor } from './types.js';
 
 /** Builds a descriptor from a ULID-segment storageKey, defaulting to `.jpg` when no extension is present. */

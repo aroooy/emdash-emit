@@ -223,6 +223,61 @@ describe('Architectural Layering Invariants', () => {
     ).toHaveLength(0);
   });
 
+  it('Layer 2 modules never import from a sibling Layer 2 module (no intra-layer coupling)', () => {
+    const layer2Dirs = [
+      path.join(SRC_ROOT, 'sync'),
+      path.join(SRC_ROOT, 'sync', 'push'),
+      path.join(SRC_ROOT, 'sync', 'media'),
+      path.join(SRC_ROOT, 'sync', 'workspace'),
+    ];
+    const layer2Files = new Set(
+      layer2Dirs
+        .flatMap((d) => collectSourceFiles(d))
+        .map((f) => path.normalize(f).replace(/\.js$/, '')),
+    );
+    const l2ModulePaths = LAYER_2_MODULE_NAMES.map((l2) =>
+      path.normalize(path.join(SRC_ROOT, 'sync', l2)),
+    );
+
+    // Layer 2 sibling coupling permitted on the current axis, recorded as an explicit snapshot so a NEW
+    // sibling dependency fails the gate. Each entry is resolved by name, never by wildcard: `orchestrator`
+    // is the designated coordinator of Layer 2 (pull/push/media), `doctor` reads the conflict inventory from
+    // `conflicts`, and `push/media_stage` reaches the media barrel that re-exports its own directory.
+    const ALLOWED_LAYER_2_SIBLING_IMPORTS: Record<string, ReadonlySet<string>> = {
+      'sync/orchestrator.ts': new Set(['./pull.js', './push.js', './media.js']),
+      'sync/doctor.ts': new Set(['./conflicts.js', './media.js']),
+      'sync/push/media_stage.ts': new Set(['../media.js']),
+    };
+
+    const violations: { file: string; line: number; source: string }[] = [];
+
+    for (const file of layer2Files) {
+      const normalizedFile = path.normalize(file).replace(/\.js$/, '');
+      const relFile = path.relative(SRC_ROOT, file);
+      const allowedSiblings = ALLOWED_LAYER_2_SIBLING_IMPORTS[relFile] || new Set<string>();
+
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+
+      for (const imp of imports) {
+        const resolved = path.normalize(
+          path.join(path.dirname(file), imp.source).replace(/\.js$/, ''),
+        );
+        if (!layer2Files.has(resolved) && !l2ModulePaths.includes(resolved)) continue;
+        // Importing one's own module is not sibling coupling.
+        if (resolved === normalizedFile) continue;
+        if (allowedSiblings.has(imp.source)) continue;
+        violations.push({ file: relFile, line: imp.line, source: imp.source });
+      }
+    }
+
+    expect(
+      violations,
+      `Layer 2 -> Layer 2 sibling imports found:\n` +
+        violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
+    ).toHaveLength(0);
+  });
+
   it('Axis 3: Layer 3 intra-layer isolation - MCP tools do not import from CLI commands', () => {
     const mcpFiles = collectSourceFiles(path.join(SRC_ROOT, 'mcp'));
     const violations: { file: string; line: number; source: string }[] = [];
