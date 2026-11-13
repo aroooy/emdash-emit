@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown } from '../utils/frontmatter.js';
-import { calculateHash, CONFLICTS_SUBDIR } from './pull.js';
+import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
 import { resolveArticleTarget } from './diff.js';
 import { ApiError } from '../client/error.js';
 

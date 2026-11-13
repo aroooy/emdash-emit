@@ -70,22 +70,8 @@ export function buildMediaMetaDoc(
   };
 }
 
-/**
- * Recovers the storageKey a companion YAML actually refers to. Older mirrors — most visibly the ones
- * written before Emit persisted the field — carry no `storageKey:` key at all, yet their `url:` is the
- * canonical `/_emdash/api/media/file/<storageKey>` route, which is confirmed metadata written from the
- * server response and not an inference from a body reference. Absolute and root-relative forms are both
- * accepted because either can appear depending on how the record was mirrored. `legacy_*` residue is
- * never read here: it backs no real record, so it must not serve as verification evidence.
- */
-export function storageKeyFromMediaMeta(doc: Record<string, unknown>): string | undefined {
-  if (typeof doc.storageKey === 'string' && doc.storageKey.trim()) {
-    return doc.storageKey.trim();
-  }
-  if (typeof doc.url !== 'string' || !doc.url.trim()) return undefined;
-  const match = doc.url.match(/(?:^|\/)media\/file\/([^?#]+)/);
-  return match ? match[1] : undefined;
-}
+import { storageKeyFromMediaMeta } from '../../utils/media-companion.js';
+export { storageKeyFromMediaMeta };
 
 /**
  * Indexes every locally mirrored media asset (`media/<markdownRef>.yaml`, plus legacy companion names) so a body

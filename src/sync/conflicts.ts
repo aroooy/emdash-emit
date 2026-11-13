@@ -25,7 +25,7 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
 import { computeContextDiff } from './diff.js';
-import { calculateHash } from './pull.js';
+import { calculateHash } from './workspace/index.js';
 
 export type ConflictFileType = 'conflict' | 'dropped' | 'deleted' | 'unknown';
 

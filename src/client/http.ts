@@ -33,10 +33,13 @@ export interface AuthenticatedFetchOptions extends RequestInit {
   fetchFn?: typeof fetch;
 }
 
-export interface AuthedFetchFactoryOptions {
+export interface SyncCredentials {
+  origin?: string;
   token?: string;
   refreshToken?: string;
-  origin?: string;
+}
+
+export interface AuthedFetchFactoryOptions extends SyncCredentials {
   auth?: ResolvedAuth;
   timeoutMs?: number;
   onTokenRefreshed?: (newAuth: ResolvedAuth) => void;

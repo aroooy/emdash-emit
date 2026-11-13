@@ -41,7 +41,7 @@ import {
   type ParsedMarkdown,
 } from '../utils/frontmatter.js';
 import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
-import { storageKeyFromMediaMeta } from './media.js';
+import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
 import {
   findClosestTaxonomySuggestions,
   getLocalTaxonomiesSummary,

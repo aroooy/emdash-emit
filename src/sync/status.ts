@@ -29,8 +29,8 @@ import {
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
 } from '../utils/frontmatter.js';
-import { calculateHash, carriesDepthFreeMediaRef, CONFLICTS_SUBDIR } from './pull.js';
-import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
+import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import {
   compareArticleFilenameDesc,

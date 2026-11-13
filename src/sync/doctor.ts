@@ -32,7 +32,7 @@ import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { scanArticleMediaReferences } from './delete.js';
-import { calculateHash } from './pull.js';
+import { calculateHash } from './workspace/index.js';
 import {
   collectRemoteStorageKeys,
   findUnmirroredStorageKeys,

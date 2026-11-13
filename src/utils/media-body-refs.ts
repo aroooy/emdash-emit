@@ -42,6 +42,8 @@
  * are re-spelled on the next pull rather than reported as edits.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { storageKeyToMarkdownRef } from './naming.js';
 
 /** Canonical root-relative media route prefix EmDash writes into Portable Text image blocks. */
@@ -267,4 +269,39 @@ export function localizeArticleMediaRefs(
     fs: options.fs,
     articleRelPath: options.preferLegacyRef ? undefined : options.articleRelPath,
   });
+}
+
+/**
+ * Detects whether a document body carries any depth-free `media/<storageKey>` references.
+ *
+ * Used by pull to preserve the depth-free spelling for articles that already carry it, because the cache
+ * records exactly those bytes — re-spelling an untouched file would report a media rewrite nobody made. Once a
+ * document carries the article-relative form (or no local ref at all), the article-relative spelling takes over.
+ */
+export function carriesDepthFreeMediaRef(content: string): boolean {
+  for (const rawLine of content.split('\n')) {
+    const match = rawLine.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (!match) continue;
+    const ref = match[2].trim();
+    // A depth-free `media/...` reference is the legacy spelling; anything carrying `../` already migrated.
+    if (isLocalMediaRef(ref) && ref.startsWith('media/')) return true;
+  }
+  return false;
+}
+
+/**
+ * Reports whether any local copy of an article still carries the depth-free spelling, deciding which form a
+ * re-pull must reproduce. A genuinely new article has no local copy, so it gets the article-relative form.
+ */
+export function shouldPreferLegacyRef(workspaceRoot: string, existingRelPaths: string[]): boolean {
+  for (const relPath of existingRelPaths) {
+    try {
+      if (carriesDepthFreeMediaRef(fs.readFileSync(path.join(workspaceRoot, relPath), 'utf8'))) {
+        return true;
+      }
+    } catch {
+      // Ignore unreadable files
+    }
+  }
+  return false;
 }

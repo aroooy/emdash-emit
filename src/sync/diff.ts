@@ -26,8 +26,8 @@ import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
 import { baselineMarkdown } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { calculateHash, carriesDepthFreeMediaRef } from './pull.js';
-import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { calculateHash } from './workspace/index.js';
+import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 
 export interface DiffResult {

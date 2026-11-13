@@ -38,7 +38,31 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { isLocalMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import {
+  isLocalMediaRef,
+  localizeArticleMediaRefs,
+  carriesDepthFreeMediaRef,
+  shouldPreferLegacyRef,
+} from '../utils/media-body-refs.js';
+import {
+  CONFLICTS_SUBDIR,
+  calculateHash,
+  findLocalFilesByUlid,
+  isQuarantinedRelativePath,
+  quarantineLocalCopy,
+  resolveCanonicalArticlePath,
+} from './workspace/index.js';
+
+export {
+  CONFLICTS_SUBDIR,
+  calculateHash,
+  findLocalFilesByUlid,
+  isQuarantinedRelativePath,
+  quarantineLocalCopy,
+  resolveCanonicalArticlePath,
+  carriesDepthFreeMediaRef,
+  shouldPreferLegacyRef,
+};
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
@@ -99,26 +123,6 @@ export interface QuarantinedLocalCopy {
   reason: 'no-cache-baseline' | 'diverged-from-baseline';
 }
 
-/** Subdirectory (under a collection) reserved for preserved divergent local copies. */
-export const CONFLICTS_SUBDIR = 'conflicts';
-
-/**
- * Detects a workspace-relative rescue-copy path (`<collection>/conflicts/<file>.md`).
- *
- * Canonical articles always live at `<collection>/draft|published/<file>.md`, so matching the
- * second path segment is sufficient and avoids false positives from a slug that merely contains
- * the word "conflicts". Used by the push guard (QUARANTINED_COPY_NOT_PUSHABLE) so a rescue copy
- * can never silently overwrite the canonical article it was preserved from.
- */
-export function isQuarantinedRelativePath(relPath: string): boolean {
-  const segments = relPath
-    .split(path.sep)
-    .join('/')
-    .split('/')
-    .filter((seg) => seg.length > 0);
-  return segments.length >= 3 && segments[1] === CONFLICTS_SUBDIR;
-}
-
 /**
  * Human/agent readable notice describing preserved local copies.
  * Returns an empty string when nothing was preserved.
@@ -155,75 +159,6 @@ export interface ListRemoteArticlesOptions {
 }
 
 /**
- * Calculates SHA-256 hash of a string.
- */
-export function calculateHash(content: string): string {
-  return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-}
-
-/**
- * Finds all existing Markdown files in `<collection>/{draft,published}/` whose filename
- * contains the given 26-character ULID. Used to preserve date prefixes and clean up
- * stale duplicate files when pulling an uncached article.
- */
-export function findLocalFilesByUlid(
-  workspaceRoot: string,
-  collection: string,
-  id: string,
-): string[] {
-  const matches: string[] = [];
-  for (const sub of ['draft', 'published']) {
-    const subDir = path.join(workspaceRoot, collection, sub);
-    if (!fs.existsSync(subDir)) continue;
-    try {
-      for (const file of fs.readdirSync(subDir)) {
-        if (!file.endsWith('.md')) continue;
-        if (extractUlidFromFilename(file) === id) {
-          matches.push(path.join(collection, sub, file));
-        }
-      }
-    } catch {
-      // Ignore directory read errors
-    }
-  }
-  return matches;
-}
-
-/**
- * Reports whether a Markdown document spells its mirrored images with the depth-free `media/<storageKey>` form.
- * That spelling is what a workspace built before article-relative refs carried on disk, and `sync_state.local_hash`
- * records exactly those bytes — re-spelling an untouched file would report a media rewrite nobody made. Once a
- * document carries the article-relative form (or no local ref at all), the article-relative spelling takes over.
- */
-export function carriesDepthFreeMediaRef(content: string): boolean {
-  for (const rawLine of content.split('\n')) {
-    const match = rawLine.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-    if (!match) continue;
-    const ref = match[2].trim();
-    // A depth-free `media/...` reference is the legacy spelling; anything carrying `../` already migrated.
-    if (isLocalMediaRef(ref) && ref.startsWith('media/')) return true;
-  }
-  return false;
-}
-
-/**
- * Reports whether any local copy of an article still carries the depth-free spelling, deciding which form a
- * re-pull must reproduce. A genuinely new article has no local copy, so it gets the article-relative form.
- */
-export function shouldPreferLegacyRef(workspaceRoot: string, existingRelPaths: string[]): boolean {
-  for (const relPath of existingRelPaths) {
-    try {
-      if (carriesDepthFreeMediaRef(fs.readFileSync(path.join(workspaceRoot, relPath), 'utf8'))) {
-        return true;
-      }
-    } catch {
-      // Ignore unreadable files
-    }
-  }
-  return false;
-}
-
-/**
  * Preserves a local Markdown copy verbatim under `<collection>/conflicts/` before Emit
  * overwrites or removes the original path. Used to guarantee that no divergent local
  * content (e.g. an uncached file written by another tool or an older serializer) is
@@ -245,77 +180,6 @@ export function extractCanonicalRemoteTitle(
   const rawSlug = String(item.slug || fallbackSlug || '').trim();
   if (rawSlug) return rawSlug;
   return 'Untitled';
-}
-
-/**
- * Resolves canonical relative path for an article symmetrically between
- * batch fast-path and full pull (EMIT-005 / R7).
- */
-export function resolveCanonicalArticlePath(
-  collection: string,
-  status: string,
-  id: string,
-  title: string,
-  dates: {
-    publishedAt?: string | null;
-    createdAt?: string | null;
-    updatedAt?: string | null;
-  },
-  existingPrefix?: string | null,
-): string {
-  const dateInput =
-    dates.publishedAt || existingPrefix || dates.createdAt || dates.updatedAt || null;
-  return computeArticleRelativePath(collection, status, id, title, dateInput);
-}
-
-export function quarantineLocalCopy(
-  workspaceRoot: string,
-  collection: string,
-  sourceRelPath: string,
-  content: string,
-  options?: {
-    isForce?: boolean;
-    existingCopyHash?: string | null;
-  },
-): string | null {
-  const conflictsDir = path.join(workspaceRoot, collection, CONFLICTS_SUBDIR);
-  const baseName = path.basename(sourceRelPath).replace(/\.md$/i, '');
-  const suffixExt = options?.isForce ? '.local-dropped.md' : '.conflict.md';
-  let quarantineRel = path.join(collection, CONFLICTS_SUBDIR, `${baseName}${suffixExt}`);
-  const quarantineFull = path.join(workspaceRoot, quarantineRel);
-
-  try {
-    fs.mkdirSync(conflictsDir, { recursive: true });
-
-    // Deduplication check: if canonical conflict file exists and is unedited, overwrite without incrementing
-    if (!options?.isForce && fs.existsSync(quarantineFull)) {
-      const existingDiskHash = calculateHash(fs.readFileSync(quarantineFull, 'utf8'));
-      if (
-        (options?.existingCopyHash && existingDiskHash === options.existingCopyHash) ||
-        existingDiskHash === calculateHash(content)
-      ) {
-        fs.writeFileSync(quarantineFull, content, 'utf8');
-        return quarantineRel;
-      }
-    }
-
-    let suffix = 2;
-    while (fs.existsSync(path.join(workspaceRoot, quarantineRel))) {
-      quarantineRel = path.join(
-        collection,
-        CONFLICTS_SUBDIR,
-        options?.isForce
-          ? `${baseName}.local-dropped-${suffix}.md`
-          : `${baseName}.conflict-${suffix}.md`,
-      );
-      suffix += 1;
-      if (suffix > 100) return null;
-    }
-    fs.writeFileSync(path.join(workspaceRoot, quarantineRel), content, 'utf8');
-    return quarantineRel;
-  } catch {
-    return null;
-  }
 }
 
 /**
