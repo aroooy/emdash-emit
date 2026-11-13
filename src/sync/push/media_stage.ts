@@ -32,7 +32,6 @@ import {
   type UploadMediaResult,
 } from '../../client/media.js';
 import { classifyCodeFenceLines } from '../../client/portable-text.js';
-import { asMediaRecordId } from '../../utils/media-id.js';
 import { promoteDraftMediaFile } from '../media.js';
 import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
@@ -358,7 +357,7 @@ export async function uploadAndRewriteDraftImages(
       const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
       const promotedStorageKey = detail?.storageKey || promoted.storageKey;
       uploadedByAbsPath.set(draftRef.resolvedAbsPath, {
-        mediaId: asMediaRecordId(promoted.mediaId),
+        mediaId: promoted.mediaId,
         storageKey: promotedStorageKey,
         url: toRootRelativeMediaUrl(
           detail?.url || promoted.url,

@@ -2,14 +2,16 @@ import yaml from 'js-yaml';
 import { extractMediaUlid } from '../../client/mapper.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../../utils/frontmatter.js';
 import { scanArticleMediaReferences } from '../../utils/media-body-refs.js';
-import { asStorageKey } from '../../utils/media-id.js';
+import { toStorageKey } from '../../utils/media-id.js';
 import type { OrphanMediaDescriptor } from './types.js';
 
 /** Builds a descriptor from a ULID-segment storageKey, defaulting to `.jpg` when no extension is present. */
-function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor {
+function descriptorFromStorageKey(storageKey: string): OrphanMediaDescriptor | null {
+  const key = toStorageKey(storageKey);
+  if (!key) return null;
   const extMatch = storageKey.match(/\.[a-z]+$/i);
   return {
-    storageKey: asStorageKey(storageKey),
+    storageKey: key,
     ext: extMatch ? extMatch[0].toLowerCase() : '.jpg',
     ulids: Array.from(storageKey.matchAll(/[0-9A-HJ-NP-Z]{26}/gi), (m) => m[0].toUpperCase()),
   };
@@ -62,7 +64,8 @@ export function collectArticleStorageKeys(content: string): OrphanMediaDescripto
 
   const descriptors: OrphanMediaDescriptor[] = [];
   for (const storageKey of keys) {
-    descriptors.push(descriptorFromStorageKey(storageKey));
+    const desc = descriptorFromStorageKey(storageKey);
+    if (desc) descriptors.push(desc);
   }
   return dedupeDescriptorsByStorageKey(descriptors);
 }

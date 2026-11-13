@@ -42,7 +42,7 @@ import {
 } from '../utils/frontmatter.js';
 import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
-import { asMediaRecordId, asStorageKey } from '../utils/media-id.js';
+import { toMediaRecordId, toStorageKey } from '../utils/media-id.js';
 import type { MediaRecordId, StorageKey } from '../utils/media-id.js';
 import { CANONICAL_ULID_REGEX, CANONICAL_ULID_EXACT_REGEX } from '../utils/ulid.js';
 import {
@@ -260,10 +260,14 @@ function findAlreadyPromotedMedia(
           : '';
       if (!canonicalUrl) continue;
 
+      const mediaId = toMediaRecordId(meta.id);
+      const targetKey = toStorageKey(storageKey || path.basename(canonicalUrl));
+      if (!mediaId || !targetKey) continue;
+
       const binaryName = `${file.replace(/\.yaml$/, '')}${ext || path.extname(metaFilename) || '.jpg'}`;
       return {
-        mediaId: asMediaRecordId(meta.id),
-        storageKey: asStorageKey(storageKey || path.basename(canonicalUrl)),
+        mediaId,
+        storageKey: targetKey,
         url: canonicalUrl,
         promotedRelPath: path.posix.join('media', binaryName),
       };
@@ -324,7 +328,7 @@ function findPromotedMediaByStorageKey(
   if (state && state.mediaId && state.url) {
     return {
       mediaId: state.mediaId,
-      storageKey: state.storageKey || asStorageKey(storageKey),
+      storageKey: state.storageKey,
       url: state.url,
       promotedRelPath: state.markdownRef || state.workspacePath || `media/${storageKey}`,
     };
@@ -341,10 +345,14 @@ function findPromotedMediaByStorageKey(
       unknown
     > | null;
     if (!meta || typeof meta.id !== 'string') return null;
+    const mediaId = toMediaRecordId(meta.id);
+    if (!mediaId) return null;
     const companionKey = storageKeyFromMediaMeta(meta) || storageKey;
+    const validKey = toStorageKey(companionKey);
+    if (!validKey) return null;
     return {
-      mediaId: asMediaRecordId(meta.id.toUpperCase()),
-      storageKey: asStorageKey(companionKey),
+      mediaId,
+      storageKey: validKey,
       url: `${MEDIA_FILE_ROUTE_PREFIX}${companionKey}`,
       promotedRelPath: `media/${stem}`,
     };

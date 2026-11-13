@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { CacheDatabase } from '../../db/cache.js';
-import { asMediaRecordId } from '../../utils/media-id.js';
+import { toMediaRecordId, asMediaRecordId } from '../../utils/media-id.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../../utils/media-refs.js';
 import { buildMediaMetaDoc } from './companions.js';
 import {
@@ -163,7 +163,7 @@ export async function syncSingleMediaItem(options: {
         : `${MEDIA_FILE_ROUTE_PREFIX}${item.storageKey}`;
     cache.saveMediaState({
       localHash: `media-record:${item.id}`,
-      mediaId: asMediaRecordId(item.id),
+      mediaId: toMediaRecordId(item.id) ?? asMediaRecordId(item.id),
       storageKey: item.storageKey,
       url: mirrorUrl,
       workspacePath: path.posix.join('media', `${baseName}${fileExt}`),

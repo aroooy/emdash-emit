@@ -30,7 +30,7 @@ import {
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
 import { persistLocalMediaRefs, DEFAULT_CONFIG } from '../../utils/config.js';
-import { asStorageKey } from '../../utils/media-id.js';
+import { toStorageKey, type StorageKey } from '../../utils/media-id.js';
 import { ApiError } from '../../client/error.js';
 import type { CliContextResolver } from '../context.js';
 
@@ -452,7 +452,15 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
       try {
         if (options.storageKey && options.storageKey.length > 0) {
-          const keys = (options.storageKey as string[]).map(asStorageKey);
+          const keys: StorageKey[] = [];
+          for (const raw of options.storageKey as string[]) {
+            const parsed = toStorageKey(raw);
+            if (!parsed) {
+              console.error(`❌ Error: Invalid storageKey format: "${raw}"`);
+              process.exit(1);
+            }
+            keys.push(parsed);
+          }
           console.log(`Pulling ${keys.length} targeted media asset(s)...`);
           const res = await pullMedia({
             workspaceRoot: ctx.root,

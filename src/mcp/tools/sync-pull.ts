@@ -38,7 +38,7 @@ import {
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError } from '../tool-errors.js';
-import { asStorageKey } from '../../utils/media-id.js';
+import { toStorageKey } from '../../utils/media-id.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
@@ -367,12 +367,24 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
 
         if (args.storageKey) {
+          const key = toStorageKey(args.storageKey);
+          if (!key) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ Error: Invalid storageKey format: "${args.storageKey}". Storage keys must be formatted as <ulid>.<ext> or <ulid1>.<ulid2>.<ext>.`,
+                },
+              ],
+            };
+          }
           const res = await pullMedia({
             workspaceRoot: ctx.root,
             origin: ctx.origin,
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
-            storageKeys: [asStorageKey(args.storageKey)],
+            storageKeys: [key],
             downloadFiles: args.downloadFiles,
             cache: ctx.cache,
           });

@@ -32,6 +32,7 @@ import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
 import {
   asMediaRecordId,
   asStorageKey,
+  toMediaRecordId,
   toStorageKey,
   type MediaRecordId,
   type StorageKey,
@@ -377,7 +378,16 @@ async function requestUploadTarget(
   const data = unwrapEnvelope<Record<string, unknown>>(json);
 
   if (data.existing === true) {
-    const existingMediaId = asMediaRecordId(String(data.mediaId));
+    if (!data.mediaId || typeof data.mediaId !== 'string') {
+      throw new ApiError({
+        message: `Media upload target for "${params.filename}" carried an unusable mediaId.`,
+        code: 'MEDIA_UPLOAD_URL_FAILED',
+        status: 502,
+        endpoint: mediaUploadUrlEndpoint(options.origin),
+        suggestion: 'Retry the push; EmDash returned a malformed media id.',
+      });
+    }
+    const existingMediaId = toMediaRecordId(data.mediaId) ?? asMediaRecordId(data.mediaId);
     const existingStorageKey = toStorageKey(String(data.storageKey));
     if (!existingStorageKey) {
       throw new ApiError({
@@ -395,6 +405,17 @@ async function requestUploadTarget(
       url: String(data.url || `${MEDIA_FILE_ROUTE_PREFIX}${existingStorageKey}`),
     };
   }
+
+  if (!data.mediaId || typeof data.mediaId !== 'string') {
+    throw new ApiError({
+      message: `Media upload target for "${params.filename}" carried an unusable mediaId.`,
+      code: 'MEDIA_UPLOAD_URL_FAILED',
+      status: 502,
+      endpoint: mediaUploadUrlEndpoint(options.origin),
+      suggestion: 'Retry the push; EmDash returned a malformed media id.',
+    });
+  }
+  const uploadMediaId = toMediaRecordId(data.mediaId) ?? asMediaRecordId(data.mediaId);
 
   const uploadStorageKey = toStorageKey(String(data.storageKey));
   if (!uploadStorageKey) {
@@ -414,7 +435,7 @@ async function requestUploadTarget(
       data.headers && typeof data.headers === 'object'
         ? (data.headers as Record<string, string>)
         : {},
-    mediaId: asMediaRecordId(String(data.mediaId)),
+    mediaId: uploadMediaId,
     storageKey: uploadStorageKey,
     expiresAt: String(data.expiresAt || ''),
   };
@@ -704,12 +725,10 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
     }
 
     // IMPORTANT: Use the confirmed storageKey and url (EmDash rewrites storageKey to a double-ULID on confirm)
-    const confirmedMediaId = asMediaRecordId(
-      typeof item.id === 'string' && item.id ? item.id : pendingMediaId,
-    );
-    const confirmedStorageKey = asStorageKey(
-      typeof item.storageKey === 'string' && item.storageKey ? item.storageKey : initialStorageKey,
-    );
+    const confirmedMediaId =
+      (typeof item.id === 'string' && toMediaRecordId(item.id)) || pendingMediaId;
+    const confirmedStorageKey =
+      (typeof item.storageKey === 'string' && toStorageKey(item.storageKey)) || initialStorageKey;
     const confirmedUrl = toRootRelativeMediaUrl(
       typeof item.url === 'string' ? item.url : undefined,
       confirmedStorageKey,
@@ -764,14 +783,11 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
     if (comp.alreadyReadyItem) {
       const readyItem = comp.alreadyReadyItem;
-      const confirmedMediaId = asMediaRecordId(
-        typeof readyItem.id === 'string' && readyItem.id ? readyItem.id : pendingMediaId,
-      );
-      const confirmedStorageKey = asStorageKey(
-        typeof readyItem.storageKey === 'string' && readyItem.storageKey
-          ? readyItem.storageKey
-          : initialStorageKey,
-      );
+      const confirmedMediaId =
+        (typeof readyItem.id === 'string' && toMediaRecordId(readyItem.id)) || pendingMediaId;
+      const confirmedStorageKey =
+        (typeof readyItem.storageKey === 'string' && toStorageKey(readyItem.storageKey)) ||
+        initialStorageKey;
       const confirmedUrl = toRootRelativeMediaUrl(
         typeof readyItem.url === 'string' ? readyItem.url : undefined,
         confirmedStorageKey,
