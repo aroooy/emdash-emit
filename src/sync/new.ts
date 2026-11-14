@@ -31,6 +31,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { CANONICAL_ULID_REGEX } from '../utils/ulid.js';
 import type { CacheDatabase } from '../db/cache.js';
 
 export interface DuplicateSlugInfo {
@@ -156,6 +157,10 @@ export interface CreateArticleOptions {
   byline?: string;
   cache?: CacheDatabase;
   candidates?: TaxonomyCandidates;
+  categories?: string[] | string;
+  tags?: string[] | string;
+  description?: string;
+  featuredImage?: string;
 }
 
 export interface CreateArticleResult {
@@ -163,6 +168,27 @@ export interface CreateArticleResult {
   slug: string;
   filePath: string;
   fullPath: string;
+  warnings: string[];
+  assigned: {
+    categories: string[];
+    tags: string[];
+    featuredImage?: string;
+    description?: string;
+  };
+}
+
+function normalizeStringList(input?: string[] | string): string[] {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input
+      .flatMap((item) => item.split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return input
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -198,6 +224,51 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     }
   }
 
+  const normalizedCategories = normalizeStringList(options.categories);
+  const normalizedTags = normalizeStringList(options.tags);
+
+  let initialFeaturedImage: string | undefined;
+  if (options.featuredImage) {
+    const trimmed = options.featuredImage.trim();
+    if (trimmed) {
+      initialFeaturedImage = CANONICAL_ULID_REGEX.test(trimmed) ? trimmed.toUpperCase() : trimmed;
+    }
+  }
+
+  let initialSeo: Frontmatter['seo'];
+  if (options.description) {
+    const trimmedDesc = options.description.trim();
+    if (trimmedDesc) {
+      initialSeo = {
+        description: trimmedDesc,
+      };
+    }
+  }
+
+  const candidates = options.candidates || loadLocalTaxonomyCandidates(options.workspaceRoot);
+  const warnings: string[] = [];
+  const candidateCategories = candidates.categories ?? [];
+  const candidateTags = candidates.tags ?? [];
+
+  // Epistemic check: Only audit terms if local definitions exist
+  if (candidateCategories.length > 0) {
+    for (const cat of normalizedCategories) {
+      if (!candidateCategories.includes(cat)) {
+        warnings.push(
+          `Unknown category slug '${cat}' (not found in local categories/*.yaml definitions).`,
+        );
+      }
+    }
+  }
+
+  if (candidateTags.length > 0) {
+    for (const tag of normalizedTags) {
+      if (!candidateTags.includes(tag)) {
+        warnings.push(`Unknown tag slug '${tag}' (not found in local tags/*.yaml definitions).`);
+      }
+    }
+  }
+
   const frontmatter: Frontmatter = {
     id,
     slug,
@@ -207,14 +278,15 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     publishedAt: null,
     locale,
     taxonomies: {
-      categories: [],
-      tags: [],
+      categories: normalizedCategories,
+      tags: normalizedTags,
     },
     bylines: initialBylines,
+    ...(initialFeaturedImage ? { featuredImage: initialFeaturedImage } : {}),
+    ...(initialSeo ? { seo: initialSeo } : {}),
   };
 
   const initialBody = 'Write article body content here...\n';
-  const candidates = options.candidates || loadLocalTaxonomyCandidates(options.workspaceRoot);
   const markdownContent = serializeMarkdown(frontmatter, initialBody, candidates);
 
   const relPath = computeArticleRelativePath(collection, 'draft', id, title || slug, new Date());
@@ -228,5 +300,12 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     slug,
     filePath: relPath,
     fullPath,
+    warnings,
+    assigned: {
+      categories: normalizedCategories,
+      tags: normalizedTags,
+      ...(initialFeaturedImage ? { featuredImage: initialFeaturedImage } : {}),
+      ...(initialSeo?.description ? { description: initialSeo.description } : {}),
+    },
   };
 }

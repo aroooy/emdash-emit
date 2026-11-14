@@ -624,25 +624,32 @@ emit profile use <name>
 
 ### `emit new`
 
-Scaffolds a new draft article with a canonical 26-character ULID timestamp.
+Scaffolds a new draft article with a canonical 26-character ULID timestamp. Supports one-shot frontmatter initialization via optional metadata arguments.
 
 ```bash
-emit new <slug> [-t, --title <title>] [-c, --collection <collection>] [-l, --locale <locale>] [-b, --byline <slug>] [-p, --profile <name>]
-
+emit new <slug> [options]
 ```
 
 - `<slug>`: URL slug for the article (e.g., `modern-web-architecture`).
-- `-t, --title <title>`: Human-readable article title.
+- `-t, --title <title>`: Human-readable article title (defaults to slug).
 - `-c, --collection <name>`: Collection name (defaults to `posts`).
 - `-l, --locale <locale>`: Locale code (defaults to `ja` or config).
-- `-b, --byline <slug>`: Author byline slug (defaults to the first cached non-guest author ordered by `slug ASC`).
+- `-b, --byline <slug>`: Author byline slug (defaults to first cached non-guest author ordered by `slug ASC`).
+- `-C, --categories <categories...>`: Category slugs (comma-separated or space-separated multiple).
+- `-T, --tags <tags...>`: Tag slugs (comma-separated or space-separated multiple).
+- `-d, --description <desc>`: Article excerpt or SEO description (saved to `seo.description`).
+- `-f, --featured-image <pathOrId>`: Featured image (local draft path like `../../media/drafts/cover.jpg` or 26-char media ULID).
 - `-p, --profile <name>`: Explicitly target a specific connection profile.
 
 **Example:**
 
 ```bash
-emit new ai-workflow-guide --title "AI Workflow Guide"
-
+emit new ai-workflow-guide \
+  --title "AI Workflow Guide" \
+  --categories tech,guide \
+  --tags typescript,ai \
+  --featured-image "../../media/drafts/cover.jpg" \
+  --description "A complete guide to AI-driven workflows"
 ```
 
 **Output:**

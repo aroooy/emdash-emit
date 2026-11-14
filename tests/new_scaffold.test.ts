@@ -182,4 +182,148 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       }
     });
   });
+
+  describe('Scaffold Arguments Extension (v0.1.20)', () => {
+    it('preserves backward compatibility when extended arguments are omitted', () => {
+      const res = createArticleScaffold({ workspaceRoot: tempDir, slug: 'compat-test', cache });
+      const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
+
+      expect(parsed.frontmatter.taxonomies.categories).toEqual([]);
+      expect(parsed.frontmatter.taxonomies.tags).toEqual([]);
+      expect(parsed.frontmatter.seo).toBeUndefined();
+      expect(parsed.frontmatter.featuredImage).toBeUndefined();
+      expect(res.warnings).toEqual([]);
+      expect(res.assigned).toEqual({
+        categories: [],
+        tags: [],
+      });
+    });
+
+    it('populates categories and tags when passed as arrays', () => {
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'array-taxonomies',
+        categories: ['tech', 'news'],
+        tags: ['typescript', 'testing'],
+        cache,
+      });
+      const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
+
+      expect(parsed.frontmatter.taxonomies.categories).toEqual(['tech', 'news']);
+      expect(parsed.frontmatter.taxonomies.tags).toEqual(['typescript', 'testing']);
+      expect(res.assigned.categories).toEqual(['tech', 'news']);
+      expect(res.assigned.tags).toEqual(['typescript', 'testing']);
+    });
+
+    it('normalizes comma-separated string input for categories and tags', () => {
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'comma-taxonomies',
+        categories: 'tech, news, review',
+        tags: ['typescript, nodejs', 'testing'],
+        cache,
+      });
+      const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
+
+      expect(parsed.frontmatter.taxonomies.categories).toEqual(['tech', 'news', 'review']);
+      expect(parsed.frontmatter.taxonomies.tags).toEqual(['typescript', 'nodejs', 'testing']);
+      expect(res.assigned.categories).toEqual(['tech', 'news', 'review']);
+      expect(res.assigned.tags).toEqual(['typescript', 'nodejs', 'testing']);
+    });
+
+    it('populates seo.description when description is provided', () => {
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'with-description',
+        description: 'This is an article description.',
+        cache,
+      });
+      const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
+
+      expect(parsed.frontmatter.seo).toBeDefined();
+      expect(parsed.frontmatter.seo?.description).toBe('This is an article description.');
+      expect(res.assigned.description).toBe('This is an article description.');
+    });
+
+    it('populates featuredImage verbatim when a local draft path is given', () => {
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'with-local-fi',
+        featuredImage: '../../media/drafts/hero.png',
+        cache,
+      });
+      const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
+
+      expect(parsed.frontmatter.featuredImage).toBe('../../media/drafts/hero.png');
+      expect(res.assigned.featuredImage).toBe('../../media/drafts/hero.png');
+    });
+
+    it('uppercases 26-character ULID featuredImage before writing to disk (G4)', () => {
+      const lowerUlid = '01m67p0mbmjqqxh2k95hhcyryb';
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'with-ulid-fi',
+        featuredImage: lowerUlid,
+        cache,
+      });
+      const rawDiskContent = fs.readFileSync(res.fullPath, 'utf8');
+      const parsed = parseMarkdown(rawDiskContent);
+
+      expect(parsed.frontmatter.featuredImage).toBe(lowerUlid.toUpperCase());
+      expect(rawDiskContent).toContain(lowerUlid.toUpperCase());
+      expect(res.assigned.featuredImage).toBe(lowerUlid.toUpperCase());
+    });
+
+    it('collects epistemic warnings when unknown taxonomy terms are provided and local definitions exist (G3)', () => {
+      // Mock candidates with known categories and tags
+      const candidates = {
+        categories: ['tech', 'news'],
+        tags: ['typescript'],
+        slugToName: { category: {}, tag: {} },
+      };
+
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'unknown-taxonomy-test',
+        categories: ['tech', 'unknown-cat'],
+        tags: ['unknown-tag'],
+        candidates,
+        cache,
+      });
+
+      expect(res.warnings).toEqual([
+        "Unknown category slug 'unknown-cat' (not found in local categories/*.yaml definitions).",
+        "Unknown tag slug 'unknown-tag' (not found in local tags/*.yaml definitions).",
+      ]);
+    });
+
+    it('generates fully compliant one-shot frontmatter matching parse and serialize roundtrip', () => {
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'one-shot-complete',
+        title: 'One-Shot Complete Test',
+        categories: ['tech', 'gadget'],
+        tags: ['typescript', 'ai'],
+        description: 'Full featured article scaffold description.',
+        featuredImage: '../../media/drafts/cover.jpg',
+        byline: 'custom-author',
+        cache,
+      });
+
+      const raw = fs.readFileSync(res.fullPath, 'utf8');
+      const parsed = parseMarkdown(raw);
+
+      expect(parsed.frontmatter.id).toBe(res.id);
+      expect(parsed.frontmatter.slug).toBe('one-shot-complete');
+      expect(parsed.frontmatter.title).toBe('One-Shot Complete Test');
+      expect(parsed.frontmatter.status).toBe('draft');
+      expect(parsed.frontmatter.featuredImage).toBe('../../media/drafts/cover.jpg');
+      expect(parsed.frontmatter.taxonomies.categories).toEqual(['tech', 'gadget']);
+      expect(parsed.frontmatter.taxonomies.tags).toEqual(['typescript', 'ai']);
+      expect(parsed.frontmatter.seo?.description).toBe(
+        'Full featured article scaffold description.',
+      );
+      expect(parsed.frontmatter.bylines).toEqual(['custom-author']);
+    });
+  });
 });

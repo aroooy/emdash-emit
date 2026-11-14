@@ -43,6 +43,32 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         .string()
         .optional()
         .describe('Author byline slug (defaults to first cached non-guest author by slug)'),
+      categories: z
+        .array(z.string())
+        .or(z.string())
+        .optional()
+        .describe(
+          'Array of category slugs (e.g. ["tech"] or ["news", "gadget"]). Valid slugs are defined in categories/*.yaml. Can also be a comma-separated string.',
+        ),
+      tags: z
+        .array(z.string())
+        .or(z.string())
+        .optional()
+        .describe(
+          'Array of tag slugs (e.g. ["typescript", "ai"]). Valid slugs are defined in tags/*.yaml. Can also be a comma-separated string.',
+        ),
+      description: z
+        .string()
+        .optional()
+        .describe('Article excerpt or SEO description (saved to seo.description in frontmatter).'),
+      featuredImage: z
+        .string()
+        .optional()
+        .describe(
+          'Local draft image path (e.g. "../../media/drafts/cover.jpg" or "media/drafts/cover.jpg") ' +
+            'or a 26-char remote media record ULID (e.g. "01M67P0MBMJQQXH2K95HHCYRYB"). ' +
+            'If a local draft path is given, Emit will automatically upload it and resolve the canonical ULID on sync_push.',
+        ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) => {
@@ -63,8 +89,33 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
           title: args.title,
           locale: args.locale || ctx.config.defaultLocale,
           byline: args.byline,
+          categories: args.categories,
+          tags: args.tags,
+          description: args.description,
+          featuredImage: args.featuredImage,
           cache: ctx.cache,
         });
+
+        const assignedParts: string[] = [];
+        if (res.assigned.categories.length > 0) {
+          assignedParts.push(`categories=[${res.assigned.categories.join(', ')}]`);
+        }
+        if (res.assigned.tags.length > 0) {
+          assignedParts.push(`tags=[${res.assigned.tags.join(', ')}]`);
+        }
+        if (res.assigned.featuredImage) {
+          assignedParts.push(`featuredImage=${res.assigned.featuredImage}`);
+        }
+        if (res.assigned.description) {
+          assignedParts.push(`description="${res.assigned.description}"`);
+        }
+        const assignedBlock =
+          assignedParts.length > 0 ? `\n- Assigned: ${assignedParts.join(', ')}` : '';
+
+        const warningBlock =
+          res.warnings.length > 0
+            ? `\n\n⚠️ Warnings:\n${res.warnings.map((w) => `  👉 ${w}`).join('\n')}`
+            : '';
 
         const taxSummary = getLocalTaxonomiesSummary(ctx.root);
         const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
@@ -76,7 +127,7 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
           content: [
             {
               type: 'text',
-              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.${metaSuffix}`,
+              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${assignedBlock}${warningBlock}${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.${metaSuffix}`,
             },
           ],
         };

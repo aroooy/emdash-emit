@@ -1,0 +1,297 @@
+# EMIT v0.1.20 sync_new 引数拡張 実装計画書 (Rev.2)
+
+> **対象リポジトリ**: `emdash-emit`  
+> **起点バージョン**: `v0.1.19` (commit `c231b3c`, tag `v0.1.19`)  
+> **リリース目標バージョン**: `v0.1.20` (Git タグ: `v0.1.20`)  
+> **テスト健全性**: 46 files / 522 tests green (`npm run check` 通過確認済み)  
+> **文書種別**: 実装基準確定仕様書 (Fix-Spec)  
+> **対象要件**: 【要件B】`sync_new` / `emit new` の引数拡張（One-shot スキャフォールド生成）  
+> **改訂履歴**: Rev.1 (初版) → Rev.2 (テスト先訂正・v0.1.20 バンプ・戻り値拡張・正規化一元化・ULID 大文字化・Confirmation 分離の完全反映版)  
+
+---
+
+## 1. 概要と背景 (Context & Goal)
+
+### 背景と課題
+現在の `createArticleScaffold` (`src/sync/new.ts:209-212`) は、Frontmatter を以下の空の初期状態で生成します：
+```yaml
+taxonomies:
+  categories: []
+  tags: []
+```
+このため、記事作成直後に **AI エージェントや執筆者がローカルの Markdown ファイルを直接開き、Frontmatter を手動編集するステップが必須** となっていました。
+
+しかし、AI エージェントが Frontmatter を直接書き換える際、以下のような重大事故が頻発していました：
+1. **トップレベルへの誤配置**: `AGENTS.md` で厳重に禁止されている `categories:` / `tags:` のトップレベル配置を行い、次回 push/pull 時に Zod schema (`FrontmatterSchema`) によって**警告なしで静かに破棄される**。
+2. **キー名のタイポ・記号誤認**: `featuredImage` を `featured_image` と書いてしまい無視される。
+3. **YAML 構文エラー**: クォートの閉じ忘れや配列インデントの崩れ、既存の `id`（ULID）や `slug` の巻き込み消失。
+
+### 目的
+`sync_new`（MCP）および `emit new`（CLI）に引数拡張（`categories`, `tags`, `description`, `featuredImage`）を施し、**最初から正規スキーマに完全準拠した Frontmatter をワンショットで生成** できるようにします。
+
+これにより、AI エージェントが Frontmatter の YAML を 1 文字も直接編集することなく、安全に本文（Body）の執筆だけに集中できるワークフロー（One-shot スキャフォールド）を確立します。
+
+---
+
+## 2. 要件定義と仕様 (Specification)
+
+### 2.1 拡張引数一覧と型定義
+
+| 引数名 (Camel / Kebab) | MCP 型 (Zod) | CLI オプション | 格納先 (Frontmatter) | 必須/任意 | デフォルト値 |
+|---|---|---|---|---|---|
+| `slug` | `z.string()` | `<slug>` (引数) | `slug` | **必須** | - |
+| `title` | `z.string().optional()` | `-t, --title <title>` | `title` | 任意 | `slug` |
+| `categories` | `z.array(z.string()).or(z.string()).optional()` | `-C, --categories <list...>` | `taxonomies.categories` | 任意 | `[]` |
+| `tags` | `z.array(z.string()).or(z.string()).optional()` | `-T, --tags <list...>` | `taxonomies.tags` | 任意 | `[]` |
+| `description` | `z.string().optional()` | `-d, --description <text>` | `seo.description` | 任意 | `undefined` (未指定時は `seo` ブロック自体を省略) |
+| `featuredImage` | `z.string().optional()` | `-f, --featured-image <pathOrId>` | `featuredImage` | 任意 | `undefined` |
+| `collection` | `z.string().optional()` | `--collection <name>` | `collection` | 任意 | `"posts"` (設定準拠) |
+| `locale` | `z.string().optional()` | `-l, --locale <code>` | `locale` | 任意 | `"ja"` (設定準拠) |
+| `byline` | `z.string().optional()` | `-b, --byline <slug>` | `bylines` | 任意 | 先頭著者スラッグ |
+
+※ CLI の短縮オプションについて：既存の `-c` が `--collection` で使われているため、`--categories` は `-C, --categories`、`--tags` は `-T, --tags` を採用して衝突を回避します。
+
+---
+
+### 2.2 AI を迷わせない MCP Description 設計 (`src/mcp/tools/sync-new.ts`)
+
+AI エージェントがツール呼び出し時に引数形式（区切り文字、パス指定等）で迷走しないよう、Zod スキーマの `.describe()` に **具体的な入力例（`e.g.`）** と **動作予告** を明記します。
+
+#### ① `categories` & `tags`（区切り文字迷いの完全排除・G2 正規化一元化）
+MCP では配列型を主としつつ、文字列入力（カンマ区切り）も受容する Union 型を採用します：
+```ts
+categories: z
+  .array(z.string())
+  .or(z.string())
+  .optional()
+  .describe(
+    'Array of category slugs (e.g. ["tech"] or ["news", "gadget"]). Valid slugs are defined in categories/*.yaml. Can also be a comma-separated string.',
+  ),
+tags: z
+  .array(z.string())
+  .or(z.string())
+  .optional()
+  .describe(
+    'Array of tag slugs (e.g. ["typescript", "ai"]). Valid slugs are defined in tags/*.yaml. Can also be a comma-separated string.',
+  ),
+```
+- **正規化の責任（G2）**: MCP ハンドラー層および CLI 層はパース結果（`string[] | string`）をそのまま Layer 2 の `createArticleScaffold` に透過で引き渡します。Layer 2 内部の `normalizeStringList` が配列要素内のカンマ展開（`flatMap(s => s.split(','))`）および trim を一元的に実行します。
+
+#### ② `featuredImage`（変則パターンの明示 & G4 大文字正規化）
+ローカルパスとリモート ULID の 2 パターンを具体例付きで明記し、自動昇格挙動を予告します：
+```ts
+featuredImage: z
+  .string()
+  .optional()
+  .describe(
+    'Local draft image path (e.g. "../../media/drafts/cover.jpg" or "media/drafts/cover.jpg") ' +
+    'or a 26-char remote media record ULID (e.g. "01M67P0MBMJQQXH2K95HHCYRYB"). ' +
+    'If a local draft path is given, Emit will automatically upload it and resolve the canonical ULID on sync_push.',
+  ),
+```
+- **大文字正規化（G4）**: ULID 文字列（`CANONICAL_ULID_REGEX` マッチ）が指定された場合は、ディスク書き込み前に `.toUpperCase()` を適用して canonical 形式で Frontmatter に格納します。ローカルパス（`media/...`）はそのまま格納されます。
+
+#### ③ `description`（SEO / 抜粋）
+```ts
+description: z
+  .string()
+  .optional()
+  .describe(
+    'Article excerpt or SEO description (saved to seo.description in frontmatter).',
+  ),
+```
+
+---
+
+### 2.3 CLI コマンドインターフェース設計 (`src/cli/commands/new.ts`)
+
+既存のオプションと衝突しないよう設計します：
+- 既存:
+  - `-t, --title <title>`
+  - `-c, --collection <collection>`
+  - `-l, --locale <locale>`
+  - `-b, --byline <slug>`
+  - `-p, --profile <name>`
+- 新設:
+  - `-C, --categories <categories...>`: カンマ区切り（`--categories tech,news`）または variadic 複数指定（`--categories tech news`）を受容。
+  - `-T, --tags <tags...>`: 同上（`--tags typescript,ai` / `--tags typescript ai`）。
+  - `-d, --description <desc>`: 記事抜粋。
+  - `-f, --featured-image <pathOrId>`: アイキャッチ画像パスまたは ULID。
+
+---
+
+### 2.4 生成される Frontmatter の仕様
+
+#### パターン A: すべて指定した場合
+```yaml
+---
+id: 01M7BZG47BCPF5ZJP36PCXS0BG
+slug: new-feature-announcement
+title: '新機能のお知らせ'
+collection: posts
+status: draft
+publishedAt: null
+locale: ja
+featuredImage: '../../media/drafts/hero.png'
+taxonomies:
+  categories:
+    - news
+  tags:
+    - release
+    - emit
+seo:
+  description: 'Emit v0.1.20 の新機能に関するアナウンス記事です。'
+bylines:
+  - aroooy
+---
+Write article body content here...
+```
+
+#### パターン B: 省略した場合（従来完全互換）
+`categories: []`, `tags: []` となり、`seo` や `featuredImage` は生成されません。既存のテスト・既存の動作と 100% 互換性を維持します。
+
+---
+
+## 3. レイヤー別実装詳細 (Architecture & Implementation)
+
+### 3.1 Layer 2: `src/sync/new.ts`
+- **`CreateArticleOptions` インターフェースの拡張**:
+  ```ts
+  export interface CreateArticleOptions {
+    workspaceRoot: string;
+    slug: string;
+    title?: string;
+    collection?: string;
+    locale?: string;
+    byline?: string;
+    cache?: CacheDatabase;
+    candidates?: TaxonomyCandidates;
+    categories?: string[] | string;
+    tags?: string[] | string;
+    description?: string;
+    featuredImage?: string;
+  }
+  ```
+- **`CreateArticleResult` の拡張（G3）**:
+  ```ts
+  export interface CreateArticleResult {
+    id: string;
+    slug: string;
+    filePath: string;
+    fullPath: string;
+    warnings: string[];
+    assigned: {
+      categories: string[];
+      tags: string[];
+      featuredImage?: string;
+      description?: string;
+    };
+  }
+  ```
+- **入力正規化ヘルパー (`normalizeStringList`)**:
+  ```ts
+  function normalizeStringList(input?: string[] | string): string[] {
+    if (!input) return [];
+    if (Array.isArray(input)) {
+      return input
+        .flatMap((item) => item.split(','))
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return input
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  ```
+- **タクソノミー警告と Frontmatter 構築ロジック（G3, G4）**:
+  - `candidates = options.candidates || loadLocalTaxonomyCandidates(options.workspaceRoot)` を参照。
+  - ローカル定義（`candidates.categories` / `candidates.tags`）が存在する場合のみ、指定されたスラッグとの突合を行い、見つからない term を `warnings` に追加（例: `Unknown category slug 'foo' (not found in local categories/*.yaml definitions)`）。
+  - ローカル定義が存在しない場合は検証不能とし、エラーや警告を断定しない（epistemic 原則）。
+  - `featuredImage` は `CANONICAL_ULID_REGEX.test(trimmed) ? trimmed.toUpperCase() : trimmed` で大文字化正規化。
+
+### 3.2 Layer 3: `src/mcp/tools/sync-new.ts`
+- Zod スキーマに `categories`, `tags`, `description`, `featuredImage` を追加。
+- **Confirmation 行と Hint ブロックの分離（G6）**:
+  ```text
+  ✅ Created new draft article 'my-post' (ID: 01M...) at posts/draft/...
+  - Assigned: categories=[tech], tags=[typescript], featuredImage=../../media/drafts/cover.jpg
+
+  ⚠️ Warnings (if any):
+    - Unknown tag slug 'foo' (not found in local definitions)
+
+  Available Taxonomies (hint):
+    ...
+  ```
+  AI が「何が設定されたか」を明確に確認できるようにします。
+
+### 3.3 Layer 3: `src/cli/commands/new.ts`
+- Commander オプションに `-C, --categories`, `-T, --tags`, `-d, --description`, `-f, --featured-image` を登録。
+- パース結果をそのまま `createArticleScaffold` に引き渡し。
+- CLI 出力に確認サマリーと警告（存在時）を表示。
+
+---
+
+## 4. バリデーションと安全性 (Validation & Safety Guardrails)
+
+### 4.1 タクソノミー実在チェック（Guard G4 との連携）
+- `sync_new` 時点でのカテゴリ・タグ検証：
+  - **方針**: 作成自体はブロックせず、`CreateArticleResult.warnings` 経由で通知する。
+  - **理由**: 将来追加予定のタグを先に指定するワークフローを阻害せず、かつプッシュ時の Preflight Guard G4 (`INVALID_TAXONOMY_ERROR`) で最終防衛されるため安全。
+
+### 4.2 `featuredImage` ファイル存在チェック（Guard G10 との連携）
+- `sync_new` 時点での存在チェック：
+  - **方針**: 作成時点ではファイルが存在しなくてもエラーにしない。
+  - **理由**: 「先に記事スキャフォールドを作成し、その直後に画像を `media/drafts/` へ保存する」ワークフローを許容するため。プッシュ時の Preflight Guard G10/G11 で厳格に検証されます。
+
+---
+
+## 5. 影響モジュールと改修ファイル (Impact & Changeset)
+
+| ファイル | Layer | 変更内容 |
+|---|---|---|
+| `package.json` | Meta | バージョンを `0.1.20` へ更新 |
+| `src/sync/new.ts` | Layer 2 | `CreateArticleOptions`, `CreateArticleResult` 拡張、正規化ヘルパー、Frontmatter 設定ロジック、未知 term 警告生成 |
+| `src/cli/commands/new.ts` | Layer 3 | CLI オプション追加（`-C`, `-T`, `-d`, `-f`）、Assigned 表示と警告出力 |
+| `src/mcp/tools/sync-new.ts` | Layer 3 | Zod スキーマ拡張、Description 強化、Confirmation 行と Hint の分離出力 |
+| `tests/new_scaffold.test.ts` | Test | 引数指定時の Frontmatter 生成、配列/カンマ区切り入力、ULID 大文字化、Description/featuredImage、警告検証テスト |
+| `CHANGELOG.md` | Doc | `[0.1.20]` セクション新設 |
+| `AGENTS.md` | Doc | `sync_new` 引数拡張仕様と One-shot スキャフォールドの推奨ワークフローを追記 |
+| `README.md` | Doc | `emit new` の CLI オプション一覧を更新 |
+
+---
+
+## 6. テスト計画 (Test Matrix)
+
+### 6.1 `tests/new_scaffold.test.ts` の追加テストケース（G1 準拠）
+1. **従来互換テスト**: 引数省略時に `categories: []`, `tags: []`, `seo: undefined`, `featuredImage: undefined`, `warnings: []` で生成されること。
+2. **タクソノミー配列指定テスト**: `categories: ['tech', 'news']`, `tags: ['ts']` を渡した際、Frontmatter の `taxonomies` に反映されること。
+3. **タクソノミーカンマ区切り文字列指定テスト**: `categories: 'tech, news'`, `tags: 'ts, vitest'` を渡した際、配列として正規化されて格納されること。
+4. **Description 指定テスト**: `description: 'テスト概要'` を渡した際、`seo.description` に格納されること。
+5. **FeaturedImage 指定テスト (パス)**: `featuredImage: '../../media/drafts/hero.png'` がそのまま格納されること。
+6. **FeaturedImage 指定テスト (ULID 大文字正規化・G4)**: `featuredImage: '01m67p0mbmjqqxh2k95hhcyryb'`（小文字）を渡した際、Frontmatter に `'01M67P0MBMJQQXH2K95HHCYRYB'`（大文字）で格納されること。
+7. **未知タクソノミー警告テスト (G3)**: ローカル定義に存在しないスラッグを渡した際、`warnings` 配列に警告メッセージが含まれること。
+8. **全引数 One-shot 指定テスト**: すべてのオプションを同時に指定し、生成された Markdown の YAML Frontmatter がパース・シリアライズで完全に一致すること。
+
+### 6.2 `tests/layering.test.ts`
+- レイヤリング違反が発生していないことを確認（Layer 2, 3 の境界維持、新規 export なし）。
+
+---
+
+## 7. 実施手順 (Step-by-Step Execution)
+
+1. **レビューと計画承認**: 本計画書のレビュー・承認。
+2. **Layer 2 実装 (`src/sync/new.ts`)**:
+   - `CreateArticleOptions`, `CreateArticleResult` 拡張、正規化関数の実装、スキャフォールド組み立て、警告生成。
+   - `tests/new_scaffold.test.ts` のテスト追加と通過確認。
+3. **Layer 3 CLI 実装 (`src/cli/commands/new.ts`)**:
+   - コマンドライン引数定義の追加と動作確認。
+4. **Layer 3 MCP 実装 (`src/mcp/tools/sync-new.ts`)**:
+   - Zod スキーマ・Description・Confirmation 表示・ハンドラー実装。
+5. **全体検証 (`npm run check`)**:
+   - `format:check && typecheck && test` の全件 GREEN 確認。
+6. **実機動作確認**:
+   - `/Volumes/ext/github/emdash.aroooy.net` で `emit new` および MCP `sync_new` を実行し、生成された下書き記事の Frontmatter を確認。
+7. **ドキュメント更新・バージョンバンプ (`0.1.20`)・コミット・タグ発行**:
+   - `package.json`, `CHANGELOG.md`, `AGENTS.md`, `README.md` の更新。
+   - Git コミットおよび `v0.1.20` タグ付け。

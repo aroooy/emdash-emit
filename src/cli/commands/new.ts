@@ -50,6 +50,13 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
       '-b, --byline <slug>',
       'Author byline slug (defaults to first cached non-guest author by slug)',
     )
+    .option('-C, --categories <categories...>', 'Category slugs (comma-separated or multiple)')
+    .option('-T, --tags <tags...>', 'Tag slugs (comma-separated or multiple)')
+    .option('-d, --description <desc>', 'Article excerpt or SEO description')
+    .option(
+      '-f, --featured-image <pathOrId>',
+      'Featured image (local draft path like "../../media/drafts/cover.jpg" or 26-char media ULID)',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (slug, options) => {
       try {
@@ -63,12 +70,40 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
           collection,
           locale,
           byline: options.byline,
+          categories: options.categories,
+          tags: options.tags,
+          description: options.description,
+          featuredImage: options.featuredImage,
           workspaceRoot: ctx.root,
           cache: ctx.cache,
         });
 
         console.log(`✅ Created new article scaffold (ID: ${res.id})`);
         console.log(`   Path: ${res.filePath}`);
+
+        const assignedParts: string[] = [];
+        if (res.assigned.categories.length > 0) {
+          assignedParts.push(`categories=[${res.assigned.categories.join(', ')}]`);
+        }
+        if (res.assigned.tags.length > 0) {
+          assignedParts.push(`tags=[${res.assigned.tags.join(', ')}]`);
+        }
+        if (res.assigned.featuredImage) {
+          assignedParts.push(`featuredImage=${res.assigned.featuredImage}`);
+        }
+        if (res.assigned.description) {
+          assignedParts.push(`description="${res.assigned.description}"`);
+        }
+        if (assignedParts.length > 0) {
+          console.log(`   Assigned: ${assignedParts.join(', ')}`);
+        }
+
+        if (res.warnings.length > 0) {
+          console.log(`\n⚠️ Warnings:`);
+          for (const w of res.warnings) {
+            console.log(`   👉 ${w}`);
+          }
+        }
 
         const taxSummary = getLocalTaxonomiesSummary(ctx.root);
         const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });

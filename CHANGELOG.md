@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-11-14
+
+### Added
+
+- **One-shot Article Scaffolding via Extended Arguments (`sync_new` & `emit new`)**:
+  - Extended `createArticleScaffold` (`src/sync/new.ts`), CLI `emit new` (`src/cli/commands/new.ts`), and MCP `sync_new` (`src/mcp/tools/sync-new.ts`) with `-C, --categories`, `-T, --tags`, `-d, --description`, and `-f, --featured-image` arguments.
+  - Implemented centralized input normalization (`normalizeStringList`) supporting both array and comma-separated string inputs with whitespace trimming across MCP and CLI layers.
+  - Added uppercase Crockford Base32 normalization for 26-character ULID `featuredImage` values prior to disk write, keeping disk frontmatter immediately canonical.
+  - Added epistemic validation for taxonomy arguments: checks local `categories/` and `tags/` definitions when present and surfaces non-blocking warnings via `CreateArticleResult.warnings` without halting draft scaffolding.
+  - Enhanced CLI and MCP outputs with structured `Assigned: ...` confirmation line, separating assigned values, taxonomy warnings, and available hint summaries.
+  - Eliminates the error-prone post-creation Frontmatter manual editing step for AI agents and human authors.
+
 ## [0.1.19] - 2026-11-14
 
 ### Added

@@ -228,6 +228,61 @@ describe('Emit MCP Server', () => {
     expect(res.content[0].text).not.toContain('nodejs (nodejs)');
   });
 
+  it('sync_new accepts extended arguments (categories, tags, description, featuredImage) and shows Assigned confirmation and warnings (v0.1.20)', async () => {
+    const catDir = path.join(tempDir, 'categories');
+    const tagDir = path.join(tempDir, 'tags');
+    fs.mkdirSync(catDir, { recursive: true });
+    fs.mkdirSync(tagDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(catDir, '01M6CAT1-Tech.yaml'),
+      'id: 01M6CAT1\nname: 技術\nslug: tech\n',
+    );
+    fs.writeFileSync(
+      path.join(tagDir, '01M6TAG1-Node.yaml'),
+      'id: 01M6TAG1\nname: nodejs\nslug: nodejs\n',
+    );
+
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const res = await registered['sync_new'].handler({
+      slug: 'extended-post',
+      title: 'Extended Post',
+      categories: ['tech', 'unknown-cat'],
+      tags: 'nodejs, unknown-tag',
+      description: 'A test excerpt',
+      featuredImage: '../../media/drafts/eyecatch.jpg',
+    });
+
+    const text = res.content[0].text;
+    expect(text).toContain("Created new draft article 'extended-post'");
+    expect(text).toContain(
+      '- Assigned: categories=[tech, unknown-cat], tags=[nodejs, unknown-tag], featuredImage=../../media/drafts/eyecatch.jpg, description="A test excerpt"',
+    );
+    expect(text).toContain('⚠️ Warnings:');
+    expect(text).toContain("Unknown category slug 'unknown-cat'");
+    expect(text).toContain("Unknown tag slug 'unknown-tag'");
+    expect(text).toContain('Available Categories:');
+    expect(text).toContain('- tech (技術)');
+  });
+
   it('sync_pull batch mode includes taxonomies hint in response', async () => {
     const catDir = path.join(tempDir, 'categories');
     const tagDir = path.join(tempDir, 'tags');
