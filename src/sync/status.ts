@@ -25,6 +25,7 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { baselineMarkdown } from '../db/baseline.js';
 import {
+  carriesPercentEncodedTaxonomy,
   formatFrontmatterParseError,
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
@@ -153,7 +154,9 @@ function isBaselineSpellingMatch(
 
   try {
     const candidates = loadLocalTaxonomyCandidates(workspaceRoot);
-    const baseMarkdown = baselineMarkdown(snapshot, candidates);
+    const baseMarkdown = baselineMarkdown(snapshot, candidates, {
+      preferEncodedTaxonomy: carriesPercentEncodedTaxonomy(localContent),
+    });
     const localizedBase = localizeArticleMediaRefs(baseMarkdown, {
       workspaceRoot,
       articleRelPath: relPath,

@@ -256,10 +256,17 @@ describe('Taxonomies Sync Engine', () => {
     expect(maps.slugToId.tag['%E0%A4%A']).toBe('01M6TAG1');
     expect(maps.slugToId.tag['MalformedTag']).toBe('01M6TAG1');
 
-    // formatTaxonomiesHint quotes %-prefixed slugs so copy-pasting into YAML frontmatter is valid
+    // formatTaxonomiesHint decodes percent-encoded slugs and omits redundant name in parenthesis
     const summary = getLocalTaxonomiesSummary(tempDir);
     const hint = formatTaxonomiesHint(summary);
-    expect(hint).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e" (未分類)');
+    expect(hint).toContain('未分類');
+    expect(hint).not.toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e" (未分類)');
+
+    // loadLocalTaxonomyCandidates indexes both canonical and decoded slugs in slugToName
+    const candidates = loadLocalTaxonomyCandidates(tempDir);
+    expect(candidates.categories).toContain('%e6%9c%aa%e5%88%86%e9%a1%9e');
+    expect(candidates.slugToName?.category?.['%e6%9c%aa%e5%88%86%e9%a1%9e']).toBe('未分類');
+    expect(candidates.slugToName?.category?.['未分類']).toBe('未分類');
   });
 
   it('flattens hierarchical taxonomy terms (children) and writes them into local YAML definitions (EMIT-008)', async () => {

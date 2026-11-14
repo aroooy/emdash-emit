@@ -299,7 +299,14 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
 
   const baseFm = readBaselineFrontmatter(baseSnapshot);
 
-  // Update Base snapshot
+  // Update Base snapshot:
+  // Invariant (Layer A & B Separation):
+  // - Disk (Layer B): `serializeMarkdown(parsed.frontmatter, parsed.body, candidates)` outputs decoded
+  //   taxonomy terms (e.g. `    - 未分類`) to workspace markdown files.
+  // - Snapshot (Layer A): `savedFrontmatter` stored in `base_snapshots.frontmatter_yaml` strictly retains
+  //   canonical slugs (e.g. `["%e6%9c%aa%e5%88%86%e9%a1%9e"]`).
+  // Because `canonicalizeFrontmatterTaxonomies` already canonicalized `parsed.frontmatter.taxonomies`
+  // in-place prior to payload creation and preflight, `parsed.frontmatter.taxonomies` holds canonical slugs.
   const savedFrontmatter: Frontmatter = { ...parsed.frontmatter };
   if (mode === 'update' && hasTaxFailures && baseFm?.taxonomies) {
     savedFrontmatter.taxonomies = { ...baseFm.taxonomies };

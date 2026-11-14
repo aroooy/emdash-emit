@@ -31,6 +31,7 @@ import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
 import { unwrapEnvelope, unwrapItem, extractRev, normalizeRev } from '../client/api.js';
 import { articleContentEndpoint, openApiEndpoint } from '../client/endpoints.js';
 import {
+  carriesPercentEncodedTaxonomy,
   computeArticleRelativePath,
   extractDatePrefixFromPath,
   parseMarkdown,
@@ -579,7 +580,48 @@ export async function pullArticle(
 
         if (currentDiskHash === existingSync.localHash) {
           try {
-            parseMarkdown(currentDiskContent);
+            const parsedCurrent = parseMarkdown(currentDiskContent);
+            // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms -> heal to decoded
+            if (carriesPercentEncodedTaxonomy(currentDiskContent)) {
+              const respelledCanon = serializeMarkdown(
+                parsedCurrent.frontmatter,
+                parsedCurrent.body,
+                getTaxonomyCandidates(),
+              );
+              const respelled = localizeDiskMarkdown(respelledCanon, existingSync.localFilePath);
+              if (respelled !== currentDiskContent) {
+                try {
+                  parseMarkdown(respelled);
+                  fs.writeFileSync(fullExistingPath, respelled, 'utf8');
+                  const healedHash = calculateHash(respelled);
+                  const existingBase = options.cache.getBaseSnapshot(id);
+                  if (existingBase) {
+                    options.cache.saveBaseSnapshot({
+                      ...existingBase,
+                      hash: healedHash,
+                    });
+                  }
+                  options.cache.saveSyncState({
+                    ...existingSync,
+                    localHash: healedHash,
+                    lastSyncedAt: Math.floor(Date.now() / 1000),
+                  });
+                  return {
+                    id,
+                    slug: existingSync.slug,
+                    status: existingSync.status,
+                    filePath: existingSync.localFilePath,
+                    updated: true,
+                    healed: true,
+                    meaningChanged: false,
+                    title: rawTitle,
+                  };
+                } catch {
+                  // Re-spelling broke the parse (should not happen): fall through to skip
+                }
+              }
+            }
+
             return {
               id,
               slug: existingSync.slug,
@@ -590,19 +632,28 @@ export async function pullArticle(
               title: rawTitle,
             };
           } catch {
-            // Disk content is byte-identical to the cached baseline but its frontmatter no longer parses.
-            // Legacy serialization left unquoted %-prefixed (percent-encoded) taxonomy slugs, which js-yaml
-            // rejects as a directive indicator: such files stay hash-matched forever and would be skipped by
-            // every pull, so status reports them invalid while pull does nothing. Heal them in place with the
-            // syntax-only lenient repair instead of falling through to a full remote re-pull.
+            // Branch 2: Broken YAML on hash-matched untouched file.
+            // Heal syntax via lenient repair, then serialize cleanly to decoded representation with zero network fetches.
             const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
             if (repaired !== null) {
-              fs.writeFileSync(fullExistingPath, repaired, 'utf8');
               const parsedRepaired = parseMarkdown(repaired);
-              const repairedHash = calculateHash(repaired);
+              const decodedCanon = serializeMarkdown(
+                parsedRepaired.frontmatter,
+                parsedRepaired.body,
+                getTaxonomyCandidates(),
+              );
+              const decodedDisk = localizeDiskMarkdown(decodedCanon, existingSync.localFilePath);
+              fs.writeFileSync(fullExistingPath, decodedDisk, 'utf8');
+              const repairedHash = calculateHash(decodedDisk);
+              const existingBase = options.cache.getBaseSnapshot(id);
+              if (existingBase) {
+                options.cache.saveBaseSnapshot({
+                  ...existingBase,
+                  hash: repairedHash,
+                });
+              }
 
-              // Re-track the repaired file against its own repaired hash so it reads as synced. The
-              // remote baseline stays untouched: healing only re-quotes frontmatter syntax, never values.
+              // Re-track the repaired file against its own repaired hash so it reads as synced.
               const healedAt = Math.floor(Date.now() / 1000);
               options.cache.saveSyncState({
                 ...existingSync,

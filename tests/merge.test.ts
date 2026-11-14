@@ -387,5 +387,15 @@ describe('Hybrid 3-Way Merge Engine', () => {
       const resUnion = mergeTaxonomies(local, base, remote);
       expect(resUnion.conflicts).toContain('tags');
     });
+
+    it('deduplicates decoded and percent-encoded taxonomy terms prioritizing canonical slug representation', () => {
+      const base = { categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'] };
+      const local = { categories: ['未分類'] }; // decoded form entered locally
+      const remote = { categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e', 'tech'] };
+
+      const res = mergeTaxonomies(local, base, remote);
+      expect(res.conflicts).toHaveLength(0);
+      expect(res.merged.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e', 'tech']);
+    });
   });
 });

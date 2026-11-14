@@ -27,6 +27,7 @@ import {
   computeArticleRelativePath,
   parseMarkdown,
   serializeMarkdown,
+  tryDecodeTaxonomyTerm,
   type Frontmatter,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
@@ -250,10 +251,31 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   const candidateCategories = candidates.categories ?? [];
   const candidateTags = candidates.tags ?? [];
 
+  const isKnownTerm = (
+    term: string,
+    canonicalList: string[],
+    slugToNameMap?: Record<string, string>,
+  ): boolean => {
+    if (canonicalList.includes(term)) return true;
+    const tNorm = tryDecodeTaxonomyTerm(term).normalize('NFC').toLowerCase();
+    if (
+      canonicalList.some((c) => tryDecodeTaxonomyTerm(c).normalize('NFC').toLowerCase() === tNorm)
+    ) {
+      return true;
+    }
+    if (slugToNameMap) {
+      for (const [k, v] of Object.entries(slugToNameMap)) {
+        if (tryDecodeTaxonomyTerm(k).normalize('NFC').toLowerCase() === tNorm) return true;
+        if (v && v.normalize('NFC').toLowerCase() === tNorm) return true;
+      }
+    }
+    return false;
+  };
+
   // Epistemic check: Only audit terms if local definitions exist
   if (candidateCategories.length > 0) {
     for (const cat of normalizedCategories) {
-      if (!candidateCategories.includes(cat)) {
+      if (!isKnownTerm(cat, candidateCategories, candidates.slugToName?.category)) {
         warnings.push(
           `Unknown category slug '${cat}' (not found in local categories/*.yaml definitions).`,
         );
@@ -263,7 +285,7 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
 
   if (candidateTags.length > 0) {
     for (const tag of normalizedTags) {
-      if (!candidateTags.includes(tag)) {
+      if (!isKnownTerm(tag, candidateTags, candidates.slugToName?.tag)) {
         warnings.push(`Unknown tag slug '${tag}' (not found in local tags/*.yaml definitions).`);
       }
     }

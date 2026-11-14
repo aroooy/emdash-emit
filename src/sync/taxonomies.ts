@@ -26,6 +26,7 @@ import yaml from 'js-yaml';
 import {
   formatYamlScalar,
   sanitizeTitleForFilename,
+  tryDecodeTaxonomyTerm,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 
@@ -331,11 +332,11 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
     const aliasToIds = new Map<string, Set<string>>();
     const recordAliasCandidate = (alias: string | undefined, id: string) => {
       if (!alias || !alias.trim()) return;
-      const trimmed = alias.trim();
-      let set = aliasToIds.get(trimmed);
+      const normalized = alias.trim().normalize('NFC');
+      let set = aliasToIds.get(normalized);
       if (!set) {
         set = new Set<string>();
-        aliasToIds.set(trimmed, set);
+        aliasToIds.set(normalized, set);
       }
       set.add(id);
     };
@@ -386,11 +387,23 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
     const summary = getLocalTaxonomiesSummary(workspaceRoot);
     const catMap: Record<string, string> = {};
     for (const c of summary.categories) {
-      if (c.name && c.slug) catMap[c.slug] = c.name;
+      if (c.name && c.slug) {
+        catMap[c.slug] = c.name;
+        const decoded = tryDecodeTaxonomyTerm(c.slug);
+        if (decoded !== c.slug) {
+          catMap[decoded] = c.name;
+        }
+      }
     }
     const tagMap: Record<string, string> = {};
     for (const t of summary.tags) {
-      if (t.name && t.slug) tagMap[t.slug] = t.name;
+      if (t.name && t.slug) {
+        tagMap[t.slug] = t.name;
+        const decoded = tryDecodeTaxonomyTerm(t.slug);
+        if (decoded !== t.slug) {
+          tagMap[decoded] = t.name;
+        }
+      }
     }
     return {
       categories: Array.from(new Set(summary.categories.map((c) => c.slug))),
@@ -464,8 +477,9 @@ export function formatTaxonomiesHint(
   const maxTags = options?.maxTags ?? DEFAULT_MAX_TAGS;
 
   const formatItem = (item: LocalTaxonomyItem): string => {
-    const formattedSlug = formatYamlScalar(item.slug);
-    return item.slug.toLowerCase() === item.name.toLowerCase()
+    const decodedSlug = tryDecodeTaxonomyTerm(item.slug);
+    const formattedSlug = formatYamlScalar(decodedSlug);
+    return decodedSlug.trim().toLowerCase() === item.name.trim().toLowerCase()
       ? formattedSlug
       : `${formattedSlug} (${item.name})`;
   };

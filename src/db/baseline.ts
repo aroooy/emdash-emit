@@ -23,6 +23,7 @@
 import {
   type Frontmatter,
   type TaxonomyCandidates,
+  type SerializeMarkdownOptions,
   serializeMarkdown,
 } from '../utils/frontmatter.js';
 import type { BaseSnapshot } from './cache.js';
@@ -31,6 +32,8 @@ export interface DecodedBaseline {
   frontmatter: Frontmatter;
   body: string;
 }
+
+export type BaselineSerializeOptions = SerializeMarkdownOptions;
 
 /**
  * Read and decode the frontmatter and body from a baseline snapshot.
@@ -87,7 +90,11 @@ export function createBaseSnapshot(params: {
  * Invariant: serializeMarkdown(readBaseline(snapshot).frontmatter, snapshot.bodyMarkdown)
  * must be byte-identical to the baseline hash and disk representation.
  */
-export function baselineMarkdown(snapshot: BaseSnapshot, candidates?: TaxonomyCandidates): string {
+export function baselineMarkdown(
+  snapshot: BaseSnapshot,
+  candidates?: TaxonomyCandidates,
+  options?: BaselineSerializeOptions,
+): string {
   const { frontmatter, body } = readBaseline(snapshot);
-  return serializeMarkdown(frontmatter, body, candidates);
+  return serializeMarkdown(frontmatter, body, candidates, options);
 }

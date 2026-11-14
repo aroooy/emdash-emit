@@ -151,10 +151,10 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     expect(fs.existsSync(quarantineFull)).toBe(true);
     expect(fs.readFileSync(quarantineFull, 'utf8')).toBe(brokenFileContent(localValue));
 
-    // The canonical file was repaired into valid, parseable frontmatter.
+    // The canonical file was repaired into valid, parseable frontmatter with decoded taxonomy terms.
     const repaired = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(() => parseMarkdown(repaired)).not.toThrow();
-    expect(repaired).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(repaired).toContain('    - 未分類');
     expect(repaired).toContain('Canonical remote body.');
 
     // The stale broken path is gone; the rescue copy is not counted as an article.
@@ -209,7 +209,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     expect(articleFetches).toHaveLength(0);
     const repaired = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(() => parseMarkdown(repaired)).not.toThrow();
-    expect(repaired).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(repaired).toContain('    - 未分類');
   });
 
   it('preserves a cached-but-divergent local copy when the canonical path changes', async () => {
@@ -329,7 +329,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
       'utf8',
     );
     expect(() => parseMarkdown(repaired)).not.toThrow();
-    expect(repaired).toContain('"%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(repaired).toContain('    - 未分類');
     expect(fs.existsSync(brokenFullPath)).toBe(false);
 
     const status = getWorkspaceStatus(tempDir, cache);

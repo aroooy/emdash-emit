@@ -354,10 +354,72 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
   }
 }
 
+export interface SerializeMarkdownOptions {
+  preferEncodedTaxonomy?: boolean;
+}
+
+/**
+ * Attempts to decode a taxonomy term if it contains percent-encoding.
+ * Returns the original term if decoding fails or if no % is present.
+ */
+export function tryDecodeTaxonomyTerm(term: string): string {
+  if (!term.includes('%')) return term;
+  try {
+    return decodeURIComponent(term);
+  } catch {
+    return term;
+  }
+}
+
+/**
+ * Checks if the markdown frontmatter taxonomies section contains any percent-encoded terms.
+ * Strictly scopes inspection to the frontmatter's `taxonomies:` section list items,
+ * ignoring article slugs, bylines, and markdown body. Only returns true if decoding alters the string.
+ */
+export function carriesPercentEncodedTaxonomy(markdown: string): boolean {
+  if (!markdown.startsWith('---')) return false;
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return false;
+  const fmLines = match[1].split(/\r?\n/);
+  let inTaxonomies = false;
+  for (const line of fmLines) {
+    if (/^[a-zA-Z0-9_-]+:/.test(line)) {
+      inTaxonomies = line.startsWith('taxonomies:');
+      continue;
+    }
+    if (inTaxonomies) {
+      const itemMatch = line.match(/^\s+-\s+(.+)$/);
+      if (itemMatch) {
+        let rawScalar = itemMatch[1].trim();
+        // Strip trailing comment if present
+        const hashIdx = rawScalar.indexOf('#');
+        if (hashIdx !== -1) {
+          rawScalar = rawScalar.slice(0, hashIdx).trim();
+        }
+        // Strip enclosing quotes
+        if (
+          (rawScalar.startsWith('"') && rawScalar.endsWith('"')) ||
+          (rawScalar.startsWith("'") && rawScalar.endsWith("'"))
+        ) {
+          rawScalar = rawScalar.slice(1, -1);
+        }
+        if (rawScalar.includes('%') && tryDecodeTaxonomyTerm(rawScalar) !== rawScalar) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Formats a frontmatter object into clean YAML with helpful candidate comments.
  */
-export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCandidates): string {
+export function formatFrontmatterYaml(
+  data: Frontmatter,
+  candidates?: TaxonomyCandidates,
+  options?: SerializeMarkdownOptions,
+): string {
   const lines: string[] = ['---'];
 
   lines.push(`id: ${formatYamlScalar(data.id)}`);
@@ -389,12 +451,16 @@ export function formatFrontmatterYaml(data: Frontmatter, candidates?: TaxonomyCa
       const slugMap = candidates?.slugToName?.[singularKey] || candidates?.slugToName?.[taxKey];
 
       for (const term of terms) {
-        const humanName = slugMap?.[term];
+        const displayTerm = options?.preferEncodedTaxonomy ? term : tryDecodeTaxonomyTerm(term);
+        const decoded = tryDecodeTaxonomyTerm(term);
+        const humanName = slugMap?.[displayTerm] || slugMap?.[term] || slugMap?.[decoded];
         const comment =
-          humanName && humanName.trim() && humanName.trim().toLowerCase() !== term.toLowerCase()
+          humanName &&
+          humanName.trim() &&
+          humanName.trim().toLowerCase() !== displayTerm.toLowerCase()
             ? ` # ${humanName.trim()}`
             : '';
-        lines.push(`    - ${formatYamlScalar(term)}${comment}`);
+        lines.push(`    - ${formatYamlScalar(displayTerm)}${comment}`);
       }
     }
   }
@@ -433,8 +499,9 @@ export function serializeMarkdown(
   frontmatter: Frontmatter,
   body: string,
   candidates?: TaxonomyCandidates,
+  options?: SerializeMarkdownOptions,
 ): string {
-  const yaml = formatFrontmatterYaml(frontmatter, candidates);
+  const yaml = formatFrontmatterYaml(frontmatter, candidates, options);
   const cleanBody = body.startsWith('\n') ? body : `\n${body}`;
   return `${yaml}${cleanBody.endsWith('\n') ? cleanBody : cleanBody + '\n'}`;
 }

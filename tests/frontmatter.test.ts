@@ -22,6 +22,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  carriesPercentEncodedTaxonomy,
   computeArticleRelativePath,
   formatFrontmatterParseError,
   formatFrontmatterYaml,
@@ -29,6 +30,7 @@ import {
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
   serializeMarkdown,
+  tryDecodeTaxonomyTerm,
   type Frontmatter,
 } from '../src/utils/frontmatter.js';
 
@@ -252,16 +254,13 @@ describe('Frontmatter & Markdown Serialization', () => {
 
     const serialized = serializeMarkdown(fm, 'Adversarial YAML body.\n');
     expect(serialized).toContain(`id: "${allDigitUlid}"`);
-    expect(serialized).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    // Default serialization decodes percent-encoded taxonomy terms to clean CJK scalars
     expect(serialized).toContain('    - 未分類');
 
     const reparsed = parseMarkdown(serialized);
     expect(reparsed.frontmatter.id).toBe(allDigitUlid);
     expect(reparsed.frontmatter.slug).toBe('%e6%97%a5%e6%9c%ac%e8%aa%9e-slug');
-    expect(reparsed.frontmatter.taxonomies?.categories).toEqual([
-      '%e6%9c%aa%e5%88%86%e9%a1%9e',
-      '未分類',
-    ]);
+    expect(reparsed.frontmatter.taxonomies?.categories).toEqual(['未分類', '未分類']);
     expect(reparsed.frontmatter.taxonomies?.tags).toEqual([
       '50%off',
       'true',
@@ -269,6 +268,18 @@ describe('Frontmatter & Markdown Serialization', () => {
       'foo: bar',
     ]);
     expect(reparsed.frontmatter.bylines).toEqual(['%e8%91%97%e8%80%85']);
+
+    // With preferEncodedTaxonomy: true, percent-encoded taxonomy slugs are preserved verbatim
+    const serializedEncoded = serializeMarkdown(fm, 'Adversarial YAML body.\n', undefined, {
+      preferEncodedTaxonomy: true,
+    });
+    expect(serializedEncoded).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(serializedEncoded).toContain('    - 未分類');
+    const reparsedEncoded = parseMarkdown(serializedEncoded);
+    expect(reparsedEncoded.frontmatter.taxonomies?.categories).toEqual([
+      '%e6%9c%aa%e5%88%86%e9%a1%9e',
+      '未分類',
+    ]);
   });
 
   it('formatFrontmatterParseError formats ZodError issues into a concise single line instead of "["', () => {
@@ -433,5 +444,55 @@ describe('Frontmatter & Markdown Serialization', () => {
 
     // Lenient repair rejects it because the parsed taxonomy term would contain '#'
     expect(lenientRepairMarkdownFrontmatter(corruptedValues)).toBeNull();
+  });
+
+  describe('tryDecodeTaxonomyTerm', () => {
+    it('decodes percent-encoded UTF-8 strings accurately', () => {
+      expect(tryDecodeTaxonomyTerm('%e6%9c%aa%e5%88%86%e9%a1%9e')).toBe('未分類');
+      expect(tryDecodeTaxonomyTerm('%e5%8f%b0%e6%b9%be')).toBe('台湾');
+    });
+
+    it('returns unmodified term if no % is present or on malformed percent sequence', () => {
+      expect(tryDecodeTaxonomyTerm('plain-slug')).toBe('plain-slug');
+      expect(tryDecodeTaxonomyTerm('50%off')).toBe('50%off');
+      expect(tryDecodeTaxonomyTerm('%E0%A4%A')).toBe('%E0%A4%A'); // malformed UTF-8 sequence
+    });
+  });
+
+  describe('carriesPercentEncodedTaxonomy', () => {
+    it('detects percent-encoded taxonomy terms in taxonomies section', () => {
+      const doc = [
+        '---',
+        `id: ${validUlid}`,
+        'slug: my-post',
+        'title: "Title"',
+        'taxonomies:',
+        '  categories:',
+        '    - "%e6%9c%aa%e5%88%86%e9%a1%9e"',
+        '---',
+        'Body',
+      ].join('\n');
+      expect(carriesPercentEncodedTaxonomy(doc)).toBe(true);
+    });
+
+    it('ignores article slug, bylines, and body percentages', () => {
+      const doc = [
+        '---',
+        `id: ${validUlid}`,
+        'slug: %e6%97%a5%e6%9c%ac%e8%aa%9e-slug',
+        'title: "Title"',
+        'taxonomies:',
+        '  categories:',
+        '    - 未分類',
+        '  tags:',
+        '    - "50%off"',
+        '    - "%E0%A4%A"', // malformed: decode does not change string
+        'bylines:',
+        '  - "%e8%91%97%e8%80%85"',
+        '---',
+        'Body content with %ef%bc%81 and 50% discount.',
+      ].join('\n');
+      expect(carriesPercentEncodedTaxonomy(doc)).toBe(false);
+    });
   });
 });

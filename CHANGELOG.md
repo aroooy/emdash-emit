@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-11-14
+
+### Added
+
+- **Frontmatter Taxonomy Japanese Decoded Display & Two-Layer Representation**:
+  - Implemented human-readable Japanese decoded display (`    - 未分類`, `    - カメラ`) in Markdown frontmatter `taxonomies:` by default instead of percent-encoded slugs (`    - "%e6%9c%aa%e5%88%86%e9%a1%9e"`).
+  - Established strict Two-Layer Representation Invariant:
+    - **Layer A (Internal Data Layer)**: Remote API payloads, `computeTaxonomyHash`, and SQLite baseline snapshots (`base_snapshots.frontmatter_yaml`) strictly preserve canonical percent-encoded slugs, preventing hash divergence, 409 conflicts, and Guard G16 triggers.
+    - **Layer B (Presentation & Serialization Layer)**: Disk Markdown files (`serializeMarkdown`, `formatFrontmatterYaml`) and hint formatters (`formatTaxonomiesHint`) render decoded terms using safe unquoted CJK scalars or auto-quoted YAML strings via `formatYamlScalar`.
+  - Added Phantom Diff Prevention: `isBaselineSpellingMatch` (`src/sync/status.ts`) and `inspectArticleDiff` (`src/sync/diff.ts`) detect percent-encoded disk content via `carriesPercentEncodedTaxonomy` and selectively serialize baseline markdown with matching encoding (`preferEncodedTaxonomy`), ensuring untouched files never report spurious `modified` status.
+  - Implemented Self-Healing on Pull (`src/sync/pull.ts`):
+    - **Branch 1 (Valid frontmatter)**: Upgrades percent-encoded taxonomy terms to decoded format in-place on disk and bumps baseline snapshot hash atomically without remote refetching.
+    - **Branch 2 (Broken/unquoted legacy syntax)**: Leniently repairs invalid frontmatter via `lenientRepairMarkdownFrontmatter` -> `parseMarkdown` -> `serializeMarkdown` to clean decoded YAML and synchronizes baseline snapshot atomically.
+    - **Branch 3 (Unpushed local modifications)**: Preserves local edits intact without touching disk.
+    - Achieves complete idempotency: subsequent pull runs are zero-overhead no-ops (`0 updated, N skipped/up-to-date`).
+  - Added NFC Unicode normalization for taxonomy alias resolution in `loadLocalTaxonomyMaps` and `createArticleScaffold`, accepting raw Japanese terms (`-C 未分類 -T カメラレビュー`) seamlessly without spurious warnings.
+  - Dual-indexed candidates in `loadLocalTaxonomyCandidates` and refined human-readable name comments in frontmatter YAML (`# 日本語名`), automatically omitting redundant comments when term equals display name.
+
+
 ## [0.1.20] - 2026-11-14
 
 ### Added

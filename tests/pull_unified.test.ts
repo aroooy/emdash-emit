@@ -25,6 +25,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { pullTaxonomies } from '../src/sync/taxonomies.js';
+import { CacheDatabase } from '../src/db/cache.js';
+import { pullArticle, calculateHash } from '../src/sync/pull.js';
+import { createBaseSnapshot } from '../src/db/baseline.js';
+import { serializeMarkdown, parseMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
 describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
   let tempDir: string;
@@ -146,5 +150,166 @@ describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
     expect(res.tagsCount).toBe(0);
     expect(fs.existsSync(path.join(tempDir, 'categories'))).toBe(true);
     expect(fs.existsSync(path.join(tempDir, 'tags'))).toBe(true);
+  });
+
+  it('heals valid legacy percent-encoded taxonomy article to decoded on 1st pull and no-ops on 2nd pull', async () => {
+    const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+    const articleId = '01M67HEALVALID000000000001';
+    const relPath = `posts/draft/20261114_${articleId}-Heal-Valid.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'heal-valid',
+      title: 'Heal Valid',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'] },
+      bylines: [],
+    };
+
+    // Valid YAML serialized in legacy percent-encoded format
+    const legacyContent = serializeMarkdown(fm, 'Body content.\n', undefined, {
+      preferEncodedTaxonomy: true,
+    });
+    fs.writeFileSync(fullPath, legacyContent, 'utf8');
+    const legacyHash = calculateHash(legacyContent);
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: legacyHash,
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug: 'heal-valid',
+      lastSyncedAt: 1730000000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: 'rev_1',
+        bodyMarkdown: 'Body content.\n',
+        frontmatter: fm,
+        hash: legacyHash,
+      }),
+    );
+
+    const rawItem = {
+      id: articleId,
+      slug: 'heal-valid',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: { title: 'Heal Valid', body: 'Body content.\n' },
+    };
+
+    const mockFetch = vi.fn();
+
+    // 1st pull: fast-path heal promotes disk to decoded representation with zero network requests
+    const res1 = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      rawItem,
+      origin: 'https://example.com',
+      token: 'fake',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res1.updated).toBe(true);
+    expect(res1.healed).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    const healedContent = fs.readFileSync(fullPath, 'utf8');
+    expect(healedContent).toContain('    - 未分類');
+    expect(cache.getSyncState(articleId)!.localHash).toBe(calculateHash(healedContent));
+    // Base snapshot frontmatter JSON remains canonical slug
+    const baseFm = JSON.parse(cache.getBaseSnapshot(articleId)!.frontmatterYaml);
+    expect(baseFm.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(cache.getBaseSnapshot(articleId)!.hash).toBe(calculateHash(healedContent));
+
+    // 2nd pull: clean no-op skip, no rewrite, no lastSyncedAt churn
+    const syncBefore2 = cache.getSyncState(articleId)!;
+    const res2 = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      rawItem,
+      origin: 'https://example.com',
+      token: 'fake',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res2.skipped).toBe(true);
+    expect(res2.updated).toBe(false);
+    expect(res2.healed).toBeUndefined();
+    expect(cache.getSyncState(articleId)!.lastSyncedAt).toBe(syncBefore2.lastSyncedAt);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    cache.close();
+  });
+
+  it('does not re-heal articles where article slug is percent-encoded but taxonomies are already decoded', async () => {
+    const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+    const articleId = '01M67SLUGENC00000000000001';
+    const slug = '%e6%97%a5%e6%9c%ac%e8%aa%9e-slug';
+    const relPath = `posts/draft/20261114_${articleId}-Japanese-Slug.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug,
+      title: 'Japanese Slug',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['未分類'] },
+      bylines: [],
+    };
+
+    const diskContent = serializeMarkdown(fm, 'Body content.\n');
+    fs.writeFileSync(fullPath, diskContent, 'utf8');
+    const diskHash = calculateHash(diskContent);
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: diskHash,
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug,
+      lastSyncedAt: 1730000000,
+    });
+
+    const rawItem = {
+      id: articleId,
+      slug,
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: { title: 'Japanese Slug', body: 'Body content.\n' },
+    };
+
+    const mockFetch = vi.fn();
+    const res = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      rawItem,
+      origin: 'https://example.com',
+      token: 'fake',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.skipped).toBe(true);
+    expect(res.updated).toBe(false);
+    expect(res.healed).toBeUndefined();
+
+    cache.close();
   });
 });

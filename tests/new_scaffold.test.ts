@@ -325,5 +325,42 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       );
       expect(parsed.frontmatter.bylines).toEqual(['custom-author']);
     });
+
+    it('accepts decoded taxonomy term or human name without spurious warnings against percent-encoded local definitions', () => {
+      const candidates = {
+        categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'],
+        tags: ['%e3%82%ab%e3%83%a1%e3%83%a9'],
+        slugToName: {
+          category: {
+            '%e6%9c%aa%e5%88%86%e9%a1%9e': '未分類',
+            未分類: '未分類',
+          },
+          tag: {
+            '%e3%82%ab%e3%83%a1%e3%83%a9': 'カメラ',
+            カメラ: 'カメラ',
+          },
+        },
+      };
+
+      const res = createArticleScaffold({
+        workspaceRoot: tempDir,
+        slug: 'japanese-scaffold',
+        title: 'Japanese Scaffold Test',
+        categories: ['未分類'],
+        tags: ['カメラ'],
+        candidates,
+        cache,
+      });
+
+      expect(res.warnings).toEqual([]);
+
+      const raw = fs.readFileSync(res.fullPath, 'utf8');
+      expect(raw).toContain('    - 未分類');
+      expect(raw).toContain('    - カメラ');
+
+      const parsed = parseMarkdown(raw);
+      expect(parsed.frontmatter.taxonomies.categories).toEqual(['未分類']);
+      expect(parsed.frontmatter.taxonomies.tags).toEqual(['カメラ']);
+    });
   });
 });

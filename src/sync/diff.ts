@@ -27,6 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { baselineMarkdown } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { calculateHash } from './workspace/index.js';
+import { carriesPercentEncodedTaxonomy } from '../utils/frontmatter.js';
 import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 
@@ -163,7 +164,9 @@ export function inspectArticleDiff(options: {
   // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML,
   // preventing phantom diffs caused by taxonomy inline comments.
   const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
-  const baseFullMarkdown = baselineMarkdown(baseSnapshot, candidates);
+  const baseFullMarkdown = baselineMarkdown(baseSnapshot, candidates, {
+    preferEncodedTaxonomy: carriesPercentEncodedTaxonomy(localContent),
+  });
   // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as local
   // references (`../../media/<storageKey>`, or the older depth-free `media/<storageKey>`). Comparing those two
   // spellings directly reports a change on every untouched article. Decide the spelling from the disk file

@@ -157,14 +157,28 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
         },
       });
 
-      expect(serialized).toContain('    - "%e5%8f%b0%e6%b9%be" # 台湾');
+      expect(serialized).toContain('    - 台湾');
+      expect(serialized).not.toContain('    - 台湾 # 台湾'); // redundant comment omitted
       expect(serialized).toContain('    - nodejs # Node.js');
       expect(serialized).toContain('    - travel\n'); // no redundant comment
       expect(serialized).not.toContain('    - travel # travel');
 
+      // With preferEncodedTaxonomy: true, canonical slug and comment are retained
+      const serializedEncoded = formatFrontmatterYaml(
+        fm,
+        {
+          slugToName: {
+            category: { '%e5%8f%b0%e6%b9%be': '台湾' },
+            tag: { nodejs: 'Node.js', travel: 'travel' },
+          },
+        },
+        { preferEncodedTaxonomy: true },
+      );
+      expect(serializedEncoded).toContain('    - "%e5%8f%b0%e6%b9%be" # 台湾');
+
       // Parse markdown must ignore YAML comments and extract pristine values
       const parsed = parseMarkdown(serialized);
-      expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e5%8f%b0%e6%b9%be']);
+      expect(parsed.frontmatter.taxonomies?.categories).toEqual(['台湾']);
       expect(parsed.frontmatter.taxonomies?.tags).toEqual(['nodejs', 'travel']);
 
       // Lenient repair returns null because the commented document is already valid YAML
@@ -255,9 +269,9 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
       expect(tagCall).toBeDefined();
       expect(tagCall?.body.termIds).toContain(nodejsTagId);
 
-      // Verify disk file was serialized with canonical slugs and # <Name> comments
+      // Verify disk file was serialized with decoded slugs
       const diskContent = fs.readFileSync(fullPath, 'utf8');
-      expect(diskContent).toContain('    - "%e5%8f%b0%e6%b9%be" # 台湾');
+      expect(diskContent).toContain('    - 台湾');
       expect(diskContent).toContain('    - nodejs # Node.js');
     });
 
@@ -347,8 +361,8 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
       const fullDiskPath = path.join(tempDir, res.filePath);
       const diskContent = fs.readFileSync(fullDiskPath, 'utf8');
 
-      // Comments are injected based on local taxonomy YAML definitions
-      expect(diskContent).toContain('    - "%e5%8f%b0%e6%b9%be" # 台湾');
+      // Decoded slugs are emitted on disk
+      expect(diskContent).toContain('    - 台湾');
       expect(diskContent).toContain('    - nodejs # Node.js');
     });
   });

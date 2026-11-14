@@ -31,6 +31,8 @@ import { calculateHash, pullArticle } from '../src/sync/pull.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { computeTaxonomyHash } from '../src/sync/terms.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
+import { inspectArticleDiff } from '../src/sync/diff.js';
+import { createBaseSnapshot } from '../src/db/baseline.js';
 import {
   formatDatePrefix,
   parseMarkdown,
@@ -941,9 +943,9 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.meaningChanged).toBe(false);
 
     const healedContent = fs.readFileSync(fullPath, 'utf8');
-    expect(healedContent).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+    expect(healedContent).toContain('    - 未分類');
     const parsed = parseMarkdown(healedContent);
-    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['%e6%9c%aa%e5%88%86%e9%a1%9e']);
+    expect(parsed.frontmatter.taxonomies?.categories).toEqual(['未分類']);
 
     // Heal happens locally on the fast path: NO article/terms/bylines request is issued (H1)
     expect(mockFetch).not.toHaveBeenCalled();
@@ -1076,7 +1078,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
     for (const [index, brokenId] of brokenIds.entries()) {
       const healedContent = fs.readFileSync(path.join(tempDir, relPaths[index]), 'utf8');
-      expect(healedContent).toContain('    - "%e6%9c%aa%e5%88%86%e9%a1%9e"');
+      expect(healedContent).toContain('    - 未分類');
       expect(parseMarkdown(healedContent).body.trim()).toBe(`Batch heal body for ${brokenId}.`);
       expect(cache.getSyncState(brokenId)!.localHash).toBe(calculateHash(healedContent));
     }
@@ -3368,5 +3370,81 @@ Body
     } catch (err: any) {
       expect(err.code).toBe('REMOTE_ARTICLE_DELETED');
     }
+  });
+
+  it('keeps legacy percent-encoded taxonomy disk files clean in status and diff, preventing phantom diffs', () => {
+    const articleId = '01M67LEGACYSTAT00000000001';
+    const relPath = `posts/draft/20261114_${articleId}-legacy-status.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'legacy-status',
+      title: 'Legacy Status',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'] },
+      bylines: [],
+    };
+
+    // Untouched disk file serialized in legacy percent-encoded taxonomy spelling
+    const legacyContent = serializeMarkdown(fm, 'Initial body content.\n', undefined, {
+      preferEncodedTaxonomy: true,
+    });
+    fs.writeFileSync(fullPath, legacyContent, 'utf8');
+
+    const legacyHash = calculateHash(legacyContent);
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: legacyHash,
+      remoteRev: 'rev_1',
+      status: 'draft',
+      slug: 'legacy-status',
+      lastSyncedAt: 1730000000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: 'rev_1',
+        bodyMarkdown: 'Initial body content.\n',
+        frontmatter: fm,
+        hash: legacyHash,
+      }),
+    );
+
+    // 1. Untouched article reads clean in status
+    const statusBefore = getWorkspaceStatus(tempDir, cache, 'posts');
+    expect(statusBefore.summary.total).toBe(1);
+    expect(statusBefore.summary.synced).toBe(1);
+    expect(statusBefore.summary.modified).toBe(0);
+
+    // 2. Diff on untouched article is completely clean
+    const diffUntouched = inspectArticleDiff({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relPath,
+    });
+    expect(diffUntouched.diff?.hasChanges).toBe(false);
+
+    // 3. User edits only body before running pull: diff only reports body change, no taxonomy diff!
+    const editedBodyContent = legacyContent.replace(
+      'Initial body content.',
+      'Initial body content.\nNew paragraph.',
+    );
+    fs.writeFileSync(fullPath, editedBodyContent, 'utf8');
+
+    const diffEdited = inspectArticleDiff({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relPath,
+    });
+    expect(diffEdited.diff?.hasChanges).toBe(true);
+    expect(diffEdited.diff?.unifiedDiff).toContain('+New paragraph.');
+    expect(diffEdited.diff?.unifiedDiff).not.toContain('未分類'); // No phantom taxonomy diff!
   });
 });

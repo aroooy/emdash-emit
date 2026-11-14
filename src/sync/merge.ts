@@ -21,7 +21,11 @@
  */
 
 import { merge as diff3Merge } from 'node-diff3';
-import type { Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
+import {
+  tryDecodeTaxonomyTerm,
+  type Frontmatter,
+  type ParsedMarkdown,
+} from '../utils/frontmatter.js';
 
 export interface MergeResult {
   hasConflict: boolean;
@@ -40,9 +44,18 @@ export interface MergeResult {
 }
 
 /** Order-insensitive normalization for a taxonomy term list (undefined stays undefined). */
-function normalizeTermList(val: unknown): string[] | undefined {
+function normalizeTermList(val: unknown, preferredMap?: Map<string, string>): string[] | undefined {
   if (!Array.isArray(val)) return undefined;
-  return [...new Set(val.map((v) => String(v)))].sort();
+  return [
+    ...new Set(
+      val.map((v) => {
+        const s = String(v);
+        if (!preferredMap) return s;
+        const key = tryDecodeTaxonomyTerm(s).normalize('NFC');
+        return preferredMap.get(key) || s;
+      }),
+    ),
+  ].sort();
 }
 
 export interface TaxonomyMergeItem {
@@ -136,13 +149,41 @@ export function mergeTaxonomies(
       continue;
     }
 
+    const lRaw = local?.[name];
+    const rRaw = remote?.[name];
+    const bRaw = base?.[name];
+
+    // Build preferredTermMap across all candidates: canonical slug (%-encoded) takes precedence
+    const preferredTermMap = new Map<string, string>();
+    const allTerms = [
+      ...(Array.isArray(bRaw) ? bRaw : []),
+      ...(Array.isArray(rRaw) ? rRaw : []),
+      ...(Array.isArray(lRaw) ? lRaw : []),
+    ];
+    for (const t of allTerms) {
+      const s = String(t);
+      const key = tryDecodeTaxonomyTerm(s).normalize('NFC');
+      const isPercentEncoded = tryDecodeTaxonomyTerm(s) !== s;
+      const existing = preferredTermMap.get(key);
+      if (!existing) {
+        preferredTermMap.set(key, s);
+      } else if (isPercentEncoded && tryDecodeTaxonomyTerm(existing) === existing) {
+        // Upgrade to canonical slug if currently mapped to plain/decoded string
+        preferredTermMap.set(key, s);
+      }
+    }
+
+    const lNormalized = normalizeTermList(lRaw, preferredTermMap);
+    const rNormalized = normalizeTermList(rRaw, preferredTermMap);
+    const bNormalized = normalizeTermList(bRaw, preferredTermMap);
+
     // Case 2: Only local defined this taxonomy (remote omitted or deleted)
     if (lDefined && !rDefined) {
       if (!bDefined) {
         merged[name] = local![name];
       } else {
-        const l = normalizeTermList(local![name]);
-        const b = normalizeTermList(base![name]);
+        const l = lNormalized;
+        const b = bNormalized;
         if (eq(l, b)) {
           // Local didn't change it, remote deleted it
         } else {
@@ -180,24 +221,22 @@ export function mergeTaxonomies(
     }
 
     // Case 4: Both local and remote defined this taxonomy
-    const lRaw = local![name];
-    const rRaw = remote![name];
-    const l = normalizeTermList(lRaw) ?? [];
-    const r = normalizeTermList(rRaw) ?? [];
+    const l = lNormalized ?? [];
+    const r = rNormalized ?? [];
 
     if (eq(l, r)) {
-      merged[name] = lRaw;
+      merged[name] = l;
       continue;
     }
 
     // (iii) Base is null / missing: cannot compute 3-way -> conservative conflict
     if (!bDefined) {
       conflicts.push(name);
-      merged[name] = lRaw;
+      merged[name] = l;
       continue;
     }
 
-    const b = normalizeTermList(base![name]) ?? [];
+    const b = bNormalized ?? [];
     const baseSet = new Set(b);
     const localSet = new Set(l);
     const remoteSet = new Set(r);
@@ -212,19 +251,19 @@ export function mergeTaxonomies(
 
     // 1. localChanged = false -> Keep remote (local untouched)
     if (!localChanged) {
-      merged[name] = rRaw;
+      merged[name] = r;
       continue;
     }
 
     // 2. remoteChanged = false -> Push local (clean single-side edit)
     if (!remoteChanged) {
-      merged[name] = lRaw;
+      merged[name] = l;
       continue;
     }
 
     // (a) Explicit strategy takes precedence before union evaluation
     if (options?.strategy === 'local') {
-      merged[name] = lRaw;
+      merged[name] = l;
       strategyAdoptions.push({
         name,
         side: 'local',
@@ -234,7 +273,7 @@ export function mergeTaxonomies(
       continue;
     }
     if (options?.strategy === 'remote') {
-      merged[name] = rRaw;
+      merged[name] = r;
       strategyAdoptions.push({
         name,
         side: 'remote',
@@ -258,7 +297,7 @@ export function mergeTaxonomies(
     const isUnionEqualLocal =
       unionSet.size === localSet.size && [...unionSet].every((x) => localSet.has(x));
     if (isUnionEqualLocal) {
-      merged[name] = lRaw;
+      merged[name] = l;
       continue;
     }
 
@@ -275,7 +314,7 @@ export function mergeTaxonomies(
     const isRemoteReplacement = remoteRemoved.length > 0 && remoteAdded.length > 0;
     if (isRemoteReplacement && options?.strictRenameConflict) {
       conflicts.push(name);
-      merged[name] = lRaw;
+      merged[name] = l;
       continue;
     }
 
