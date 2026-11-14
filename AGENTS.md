@@ -114,7 +114,7 @@ collection: posts # Default: "posts"
 status: draft # "draft" or "published"
 publishedAt: null # ISO 8601 timestamp string or null
 locale: ja # Default: "ja"
-featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # Optional: 26-char media record ULID or null
+featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # Optional: 26-char media record ULID, local draft path (e.g. "../../media/drafts/eyecatch.jpg"), or null
 taxonomies: # Nested map of taxonomy key -> array of term slugs (or term ULIDs)
   categories:
     - tech
@@ -170,7 +170,7 @@ These rules are enforced at the code level via Safety Guards (G1–G19) declared
 ### 6. Media References, Two ID Spaces & Offline Draft Images (Guard G5 / G10 / G11)
 
 - **Two distinct ID spaces (Critical):** EmDash separates **media record IDs** (`id`) from **storage keys** (`storageKey`). Never interchange them. The full specification — identifier matrix, endpoints, migrated-corpus behavior, and resolution order — is documented in `docs/media-id-spaces.md`; read it before debugging any media reference:
-  - **Frontmatter `featuredImage`** uses the **26-character media record `id`** (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`) or `null`. Preflight Guard **G10** rejects local file paths (`./hero.png`), made-up IDs, and malformed values before pushing.
+  - **Frontmatter `featuredImage`** accepts a **26-character media record `id`** (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`), a **local draft image path** (e.g. `../../media/drafts/eyecatch.jpg` or an already-promoted mirror under `media/`), or `null`. When a local draft path is specified, Emit automatically uploads the image and resolves its D1 `mediaId` during `emit push` / `sync_push`, committing the canonical ULID on disk. Preflight Guard **G10** rejects invalid file paths outside `media/` (e.g. `./hero.png`), missing draft files, and malformed IDs before pushing.
   - **Markdown body images `![alt](...)`** use the **`storageKey`-based public route** `/_emdash/api/media/file/<storageKey>` (where `<storageKey>` is `<ulid>.<ext>` or `<ulid1>.<ulid2>.<ext>`). Passing a media record `id` into `/_emdash/api/media/file/<id>.<ext>` returns **HTTP 404**.
 - **Offline draft image auto-upload (G5 / G11):**
   - Place new local images in `media/drafts/<filename>` and reference them on a **standalone line** in the Markdown body: `![alt text](../../media/drafts/<filename>)` (or `media/drafts/<filename>`).

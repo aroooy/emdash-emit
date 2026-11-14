@@ -1,0 +1,183 @@
+# EMIT v0.1.19 実装計画書 (Rev.3 最終確定版)
+
+> **対象リポジトリ**: `emdash-emit`  
+> **起点バージョン**: `v0.1.18` (HEAD)  
+> **リリース目標バージョン**: `v0.1.19` (Git タグ: `v0.1.19`)  
+> **テスト健全性**: 46 files / 512 tests green (`npm run check` 通過確認済み)  
+> **文書種別**: 実装基準確定仕様書 (Fix-Spec)  
+> **改訂履歴**: Rev.1 (初版) → Rev.2 (コードベース照合版) → Rev.3 (競合マージ副作用・誤警告防止・二段構え検索の完全反映版)  
+
+---
+
+## 1. 概要と背景 (Context & Goal)
+
+### 背景と課題
+Markdown 本文内のローカルドラフト画像（`![alt](../../media/drafts/photo.jpg)`）は、`emit push` / `sync_push` 時に自動的に EmDash R2 へアップロードされ、`storageKey` を基にした正規リモート URL へ置換された上で `media/` 直下へ昇格（移動）されます。
+
+一方、Frontmatter の `featuredImage`（アイキャッチ）は、EmDash 内部の **「26文字の D1 メディアレコード ID（ULID）」** を手動で調べて直書きする必要がありました（Guard G10: `INVALID_FEATURED_IMAGE` による強制）。このため、下書き執筆時にアイキャッチを直感的に設定できず、Web 管理画面で後から設定する二度手間や、AI エージェントの自律執筆における摩擦となっていました。
+
+### 目的
+Frontmatter の `featuredImage` にも本文画像と同様に **ローカル相対パス（ドラフト画像パス / 昇格済み画像パス）** を直接指定できるようにし、プッシュ時に自動アップロード・昇格・ID解決・コミット完了時の ULID 確定保存を実現します。
+
+---
+
+## 2. 要件定義と仕様 (Specification)
+
+### 2.1 執筆時の Frontmatter 入力仕様
+`src/utils/frontmatter.ts` の Schema は `z.string().nullable().optional()` のため、パース時点でローカルパスは既に許容されています。Frontmatter に以下のいずれの形式も指定可能とします：
+
+```yaml
+---
+# パターン1: 新規ローカルドラフト画像（Push時に自動アップロード＆昇格）
+featuredImage: "../../media/drafts/eyecatch.jpg"
+
+# パターン2: 既にローカル昇格済みの画像（既存アセットを再利用）
+# (a) markdownRef / stem 形式:
+featuredImage: "../../media/01M77VFPJJT29ZG1NKYM3BKC5A.01M77VFPSNCWF049AKMGCDM43R.jpg"
+# (b) storageKey 直呼び形式:
+featuredImage: "../../media/01M77VFPJJT29ZG1NKYM3BKC5A.jpg"
+
+# パターン3: 従来の正規メディアレコードULID（完全互換）
+featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"
+
+# パターン4: 未設定 / 解除
+featuredImage: null
+---
+```
+
+### 2.2 プッシュ時（`sync_push` / `emit push`）の処理パイプライン
+
+```text
+[1. Preflight 検証 (src/sync/preflight.ts)]
+    ├─ ① 本文スキャン（G5/G11）:
+    │   本文内の ![alt](...) を走査し、draftImages 配列へ収集。
+    └─ ② featuredImage 検証（G10 拡張）:
+        ├─ 26文字ULID または null の場合: 従来通り G10 をパス。
+        └─ ローカルパスの場合:
+            ├─ 記事ファイル基準で絶対パス（candidateAbs）を解決。
+            ├─ 本文スキャン済みの draftImages 内に同一 candidateAbs が存在するか確認（R2 dedup）。
+            │   ├─ 存在する場合: 本文の既存 DraftImageReference を featuredImage 用としても紐付け（重複登録・検証スキップ）。
+            │   └─ 存在しない場合:
+            │       ├─ ファイル存在・拡張子・50MB上限チェック（G11 エラーコード準拠）。
+            │       ├─ 存在しない場合: 二段構え（R3）で昇格済みアセットを検索:
+            │       │   1. storageKeyFromMirrorRef() + findPromotedMediaByStorageKey() (storageKey直呼び)
+            │       │   2. findAlreadyPromotedMedia() (filename / stem ベース)
+            │       │   ├─ 昇格済みアセットが見つかった場合: alreadyPromoted を付与して draftImages に登録。
+            │       │   └─ 見つからない場合: MISSING_LOCAL_IMAGE_FILE エラーを発火（※要 options.workspaceRoot）。
+            │       └─ 正常な新規ドラフト画像の場合: draftImages に登録。
+             │
+[2. メディアアップロード & ID解決 (src/sync/push/media_stage.ts)]
+    ├─ uploadedByAbsPath: Map<string, UploadMediaResult> を本文画像と featuredImage で完全共有。
+    ├─ 本文画像と featuredImage のアップロード・昇格前リモート存在確認（fetchRemoteMediaDetail）を一元実行。
+    │   └─ 同一画像は 1 回のみアップロード（dedup）。
+    ├─ featuredImage に指定されたローカルパスの UploadMediaResult から mediaId (D1 ULID) を取得。
+    ├─ ★【重要: Baseline 整合性 (G6)】送信ペイロード作成前に parsed.frontmatter を更新:
+    │   parsed.frontmatter.featuredImage = resolvedMediaId (26文字ULID)
+    │   payload.data.featured_image = { id: resolvedMediaId }
+    └─ ★【重要: 誤警告防止 (R1)】直前にアップロード・解決した mediaId については、
+        preserveOrResolveFeaturedImage() における media/ コンパニオン未存在警告（could not confirm this media ID exists）をスキップ。
+             │
+[3. 記事本体の POST / PUT (src/sync/push/transport.ts)]
+    EmDash サーバーへ記事本文および featured_image: { id: resolvedMediaId } を送信。
+    ※【重要: 競合マージの副作用 (G7)】:
+      409 Conflict 発生時の 3-way merge（mergeFrontmatter）では、featuredImage は既存のスカラー競合ルールに従います。
+      リモート側でも featured_image が変更されていた場合（衝突時）は Remote 優先（remote takes precedence）となり、
+      「Conflict on frontmatter field 'featuredImage'」警告が出力されてローカルの指定は破棄されます。
+      （※アップロードされたドラフト画像は uploaded のまま media_state に残りますが、記事本文・Frontmatter からは参照されません）
+             │
+[4. コミット & ローカル保存 (src/sync/push/commit.ts)]
+    ├─ finalizePromotedDraftImages() により、ドラフト画像を media/drafts/ から media/ へ移動（昇格）。
+    │   ※ processedAbsPaths Set により、本文と重複していてもファイル移動は 1 回のみ実行。
+    └─ serializeMarkdown(parsed.frontmatter, parsed.body, candidates) でディスクへ保存。
+        ※ parsed.frontmatter.featuredImage は既に ULID 化されているため、ディスク・base_snapshots（キャッシュDB）
+           ともに同一の ULID で確定保存され、次回 push での phantom diff を完全防止。
+```
+
+---
+
+## 3. 重複考慮とエッジケース設計 (Duplication & Edge Cases)
+
+### 3.1 共通アップロード管理プールによる重複排除マトリクス
+
+`src/sync/push/media_stage.ts` の `uploadedByAbsPath: Map<string, UploadMediaResult>` を本文画像と `featuredImage` で共有します。
+
+| パターン | 本文の指定 | featuredImage の指定 | アップロード回数 (upload-url POST) | リモート存在確認 (GET) | 昇格移動回数 | 解決結果 |
+|---|---|---|:---:|:---:|:---:|---|
+| **ケース 1** | `../../media/drafts/hero.png` | `../../media/drafts/hero.png` (同一) | **1回のみ** | 0回 | **1回のみ** | 本文は `storageKey` (URL) へ置換、featuredImage は `mediaId` (ULID) へ解決 |
+| **ケース 2** | `../../media/drafts/hero.png` (複数箇所) | `../../media/drafts/hero.png` | **1回のみ** | 0回 | **1回のみ** | 本文全箇所置換 ＋ featuredImage 解決 |
+| **ケース 3** | 本文に画像なし | `../../media/drafts/eyecatch.jpg` | **1回** | 0回 | **1回** | featuredImage が `mediaId` に解決され、画像が `media/` 直下に昇格 |
+| **ケース 4** | `../../media/hero.jpg` (昇格済み) | `../../media/hero.jpg` (昇格済み) | 0回 | **1回のみ** (共有) | 0回 | 既存 `mediaId` / `storageKey` を再利用 |
+| **ケース 4b** | 本文に画像なし | `../../media/hero.jpg` (昇格済み) | 0回 | **1回** | 0回 | 既存 `mediaId` を再利用（リモート存在確認 1 回） |
+| **ケース 5** | 任意 | 存在しないローカルパス | - | - | - | Preflight で `MISSING_LOCAL_IMAGE_FILE` エラー遮断 |
+| **ケース 6** | 任意 | 50MB 超過 / 不正拡張子 | - | - | - | Preflight で `LOCAL_IMAGE_SIZE_EXCEEDED` / `INVALID_LOCAL_IMAGE_TYPE` 遮断 |
+| **ケース 7** | 任意 | ULIDでもローカルパスでもない文字列 | - | - | - | Preflight で `INVALID_FEATURED_IMAGE` 遮断 |
+| **ケース 8** | 任意 | `../../media/drafts/...`（リモート側も同時変更で409） | 1回 | 0回 | 1回 | 3-way merge で **Remote 優先**。警告ログ出力の上、リモート ULID で確定保存（ローカル指定は破棄） |
+
+### 3.2 ガードレジストリ整合性（G1〜G19 体系の維持）
+`tests/guards.test.ts` の網羅性検査を破壊しないため、**新規エラーコードは一切追加しません**。
+- ローカルパス解決エラー時は、既存の G11 エラーコード（`MISSING_LOCAL_IMAGE_FILE`, `INVALID_LOCAL_IMAGE_TYPE`, `LOCAL_IMAGE_SIZE_EXCEEDED`）を使用。
+- 不正形式文字列時は、既存の G10 エラーコード（`INVALID_FEATURED_IMAGE`）を使用し、remediation suggestion 文面のみを更新。
+
+---
+
+## 4. 影響モジュールと修正対象ファイル (Target Files)
+
+| ファイルパス | レイヤ | 改修内容 |
+|---|---|---|
+| `src/sync/guards.ts` | Layer 1 | Guard G10（`INVALID_FEATURED_IMAGE`）の説明文および suggestion 文面の更新（ローカルパス許容に関する補足）。 |
+| `src/sync/preflight.ts` | Layer 1 | G10 内にローカルパス判定を追加。先行する本文スキャン結果（`draftImages`）との dedup（R2）、二段構え（R3: `storageKeyFromMirrorRef` + `findAlreadyPromotedMedia`）での昇格済みアセット検索、`draftImages` への追加。 |
+| `src/sync/push/media_stage.ts` | Layer 2 | `uploadAndRewriteDraftImages` または featuredImage 解決処理において、`uploadedByAbsPath` を共有し `mediaId` を取得。直前に解決した `mediaId` に対する `preserveOrResolveFeaturedImage()` の誤警告（R1）を抑止。 |
+| `src/sync/push/index.ts` | Layer 2 | `create` (:172), `update` (:289), `conflict retry` (:356) の全 3 経路において、payload 作成前に `parsed.frontmatter.featuredImage = resolvedMediaId` を代入して確定（R5, G6）。 |
+| `src/sync/push/commit.ts` | Layer 2 | コミット処理（`commitPostPush`）で受け取る `parsed.frontmatter` が確実に ULID 化されていることを前提にシリアライズ＆スナップショット保存。 |
+| `package.json` | - | バージョンを `0.1.18` → `0.1.19` にバンプ。 |
+| `CHANGELOG.md` | - | `[0.1.19]` セクションを追加（featuredImage の Local-First 自動解決）。 |
+| `AGENTS.md` | - | Guard G10 の記述および Frontmatter 例のコメントを更新。 |
+| `README.md` | - | G10 ガード説明表の更新。 |
+| `docs/media-id-spaces.md` | - | identifier matrix の featuredImage 欄を更新。 |
+| `tests/preflight.test.ts` | テスト | `featuredImage` にドラフト画像、昇格済み画像（stem形式および storageKey 直呼び形式）、存在しない画像、不正拡張子、50MB超過が指定された場合の単体テスト。 |
+| `tests/push_featured_image.test.ts` | テスト | featuredImage の自動アップロード、本文と同一画像時の重複排除（`upload-url` 呼び出し 1 回検証）、コミット後のFrontmatter ULID更新保存、競合マージ時の Remote 優先検証（ケース 8）の結合テスト。 |
+
+---
+
+## 5. テスト計画と検証マトリクス (Test Matrix)
+
+### 5.1 単体テスト (`tests/preflight.test.ts`)
+> **注記 (R4)**: ローカルパス検証（ファイル存在チェック等）を発火させるため、テスト実行時は必ず `options.workspaceRoot` を明示して `runPreflightChecks()` を呼び出すこと。
+
+- [ ] 正常系: 26文字 ULID が指定されている場合、従来通り G10 パス。
+- [ ] 正常系: `null` が指定されている場合、G10 パス。
+- [ ] 正常系: 有効な `../../media/drafts/eyecatch.jpg` が指定された場合、Preflight パスし `draftImages` に登録されること。
+- [ ] 正常系: 本文と `featuredImage` で同一の `../../media/drafts/eyecatch.jpg` が指定された場合、重複なく登録されること。
+- [ ] 正常系: すでに昇格済みの `../../media/<markdownRef>.jpg`（stem形式）が指定された場合、`alreadyPromoted` として解決されること。
+- [ ] 正常系: すでに昇格済みの `../../media/<storageKey>.jpg`（storageKey直呼び形式）が指定された場合、`alreadyPromoted` として解決されること (R3)。
+- [ ] 異常系: 存在しないローカルパスが指定された場合、`MISSING_LOCAL_IMAGE_FILE` でエラーになること。
+- [ ] 異常系: 非対応拡張子（`.txt` 等）が指定された場合、`INVALID_LOCAL_IMAGE_TYPE` でエラーになること。
+- [ ] 異常系: 50MB 超過ファイルの場合、`LOCAL_IMAGE_SIZE_EXCEEDED` でエラーになること。
+- [ ] 異常系: ULIDでもローカルパスでもない無効文字列の場合、`INVALID_FEATURED_IMAGE` でエラーになること。
+
+### 5.2 結合テスト (`tests/push_featured_image.test.ts`)
+- [ ] `featuredImage` にドラフト画像パスを指定して新規記事をプッシュした際、画像がアップロードされ、送信ペイロードの `featured_image.id` に `mediaId` が設定されること。
+- [ ] プッシュ完了後のローカル Markdown ファイルで、Frontmatter の `featuredImage` が正式な 26文字 ULID に書き換えられて保存されること。
+- [ ] **重複排除検証 (R6)**: 本文と `featuredImage` に同一のドラフト画像パスを指定した場合、**`/_emdash/api/media/upload-url` への POST 回数が 1 回のみ** であること。
+- [ ] **誤警告防止検証 (R1)**: 自動アップロードされた `featuredImage` に対して `could not confirm this media ID exists` 警告が出力されないこと。
+- [ ] **昇格移動検証**: ファイルの移動処理が 1 回のみ実行され、ENOENT 等のエラーが発生しないこと。
+- [ ] **競合マージ検証 (G7, ケース 8)**: リモート側でも `featured_image` が変更されて 409 Conflict が発生した場合、3-way merge で Remote 優先となり、警告ログが出力され、ディスクにはリモートの ULID が保存されること。
+- [ ] 既存記事の更新プッシュ（PUT）でも同様にドラフト画像から ULID への解決・更新が正常に完了すること。
+
+### 5.3 回帰検証 (`npm run check`)
+- [ ] `npm run format:check` の通過
+- [ ] `npm run typecheck` の通過
+- [ ] `npm test`（46 files / 512+ tests）の All Green 通過
+- [ ] `tests/layering.test.ts`（アーキテクチャ依存方向検証）の通過
+- [ ] `tests/guards.test.ts`（全ガードメタデータ網羅性検証）の通過
+
+---
+
+## 6. リリース手順 (Release Checklist)
+
+1. `package.json` のバージョンを `0.1.19` に更新
+2. 実装およびテストの作成
+3. ドキュメント更新（`CHANGELOG.md`, `README.md`, `AGENTS.md`, `docs/media-id-spaces.md`）
+4. `npm run check` (`npm run format:check && npm run typecheck && npm test`) の全件通過確認
+5. Git コミット: `feat(push): support local-first featuredImage auto-upload and resolution (v0.1.19)`
+6. Git タグ発行: `git tag v0.1.19`

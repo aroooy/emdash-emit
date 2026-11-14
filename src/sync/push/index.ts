@@ -39,7 +39,11 @@ import {
 } from './guards.js';
 import { executePreflightStage } from './preflight_stage.js';
 import { canonicalizeFrontmatterTaxonomies, syncArticleTaxonomies } from './taxonomy_plan.js';
-import { preserveOrResolveFeaturedImage, uploadAndRewriteDraftImages } from './media_stage.js';
+import {
+  preserveOrResolveFeaturedImage,
+  resolveFeaturedImageMediaId,
+  uploadAndRewriteDraftImages,
+} from './media_stage.js';
 import { auditRemoteTaxonomies } from './tax_audit.js';
 import { resolveConflictAndMerge } from './merge_stage.js';
 import { commitPostPush } from './commit.js';
@@ -167,6 +171,16 @@ export async function pushArticle(
     );
     parsed.body = rewrittenBody;
 
+    const fiResolution = resolveFeaturedImageMediaId(
+      parsed.frontmatter.featuredImage,
+      uploadedByAbsPath,
+      targetFilePath,
+      options.workspaceRoot,
+    );
+    if (fiResolution) {
+      parsed.frontmatter.featuredImage = fiResolution.mediaId;
+    }
+
     const payload = localToApiPayload(parsed, '', effectiveOptions);
     warnings.push(
       ...preserveOrResolveFeaturedImage(
@@ -175,6 +189,7 @@ export async function pushArticle(
         options.cache,
         id,
         options.workspaceRoot,
+        { skipCompanionCheck: fiResolution?.autoUploaded },
       ),
     );
     const postUrl = articleContentEndpoint(options.origin, collection);
@@ -284,6 +299,16 @@ export async function pushArticle(
     );
     parsed.body = rewrittenBody;
 
+    const fiResolution = resolveFeaturedImageMediaId(
+      parsed.frontmatter.featuredImage,
+      uploadedByAbsPath,
+      targetFilePath,
+      options.workspaceRoot,
+    );
+    if (fiResolution) {
+      parsed.frontmatter.featuredImage = fiResolution.mediaId;
+    }
+
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
     warnings.push(
       ...preserveOrResolveFeaturedImage(
@@ -292,6 +317,7 @@ export async function pushArticle(
         options.cache,
         id,
         options.workspaceRoot,
+        { skipCompanionCheck: fiResolution?.autoUploaded },
       ),
     );
     const putUrl = articleContentEndpoint(options.origin, collection, id);
@@ -359,6 +385,11 @@ export async function pushArticle(
             options.cache,
             id,
             options.workspaceRoot,
+            {
+              skipCompanionCheck:
+                fiResolution?.mediaId === parsed.frontmatter.featuredImage &&
+                fiResolution?.autoUploaded,
+            },
           ),
         );
 

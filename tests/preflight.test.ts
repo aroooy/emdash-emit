@@ -487,4 +487,155 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       fs.rmSync(tempWs, { recursive: true, force: true });
     }
   });
+
+  describe('G10 featuredImage local-first resolution & validation', () => {
+    it('accepts a valid draft image path in featuredImage and collects it into draftImages', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fi-'));
+      const draftsDir = path.join(tempWs, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'eyecatch.jpg'), 'fake-image-bytes');
+
+      try {
+        const parsed: ParsedMarkdown = {
+          ...validParsed,
+          frontmatter: {
+            ...validParsed.frontmatter,
+            featuredImage: '../../media/drafts/eyecatch.jpg',
+          },
+        };
+
+        const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
+        expect(res.valid).toBe(true);
+        expect(res.draftImages).toHaveLength(1);
+        expect(res.draftImages[0].filename).toBe('eyecatch.jpg');
+        expect(res.draftImages[0].resolvedAbsPath).toBe(path.join(draftsDir, 'eyecatch.jpg'));
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
+
+    it('deduplicates when body and featuredImage reference the identical draft image', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fi-dedup-'));
+      const draftsDir = path.join(tempWs, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'hero.png'), 'fake-png-bytes');
+
+      try {
+        const parsed: ParsedMarkdown = {
+          ...validParsed,
+          frontmatter: {
+            ...validParsed.frontmatter,
+            featuredImage: '../../media/drafts/hero.png',
+          },
+          body: '![Hero](../../media/drafts/hero.png)',
+        };
+
+        const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
+        expect(res.valid).toBe(true);
+        // Only 1 draft image entry despite referenced in both body and featuredImage
+        expect(res.draftImages).toHaveLength(1);
+        expect(res.draftImages[0].filename).toBe('hero.png');
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
+
+    it('resolves an already-promoted asset in media/ via filename/stem lookup', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fi-promoted-'));
+      const mediaDir = path.join(tempWs, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const targetUlid = '01M67P0MBMJQQXH2K95HHCYRYB';
+      const storageKey = '01M67P0MBMJQQXH2K95HHCYRYB.01M67P0MBMJQQXH2K95HHCYRYC.jpg';
+      fs.writeFileSync(
+        path.join(mediaDir, `${storageKey}.yaml`),
+        `id: ${targetUlid}\nstorageKey: ${storageKey}\nfilename: eyecatch.jpg\n`,
+      );
+      fs.writeFileSync(path.join(mediaDir, storageKey), 'fake-bytes');
+
+      try {
+        const parsed: ParsedMarkdown = {
+          ...validParsed,
+          frontmatter: {
+            ...validParsed.frontmatter,
+            featuredImage: `../../media/${storageKey}`,
+          },
+        };
+
+        const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
+        expect(res.valid).toBe(true);
+        expect(res.draftImages).toHaveLength(1);
+        expect(res.draftImages[0].alreadyPromoted).toBeDefined();
+        expect(res.draftImages[0].alreadyPromoted?.mediaId).toBe(targetUlid);
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
+
+    it('blocks with MISSING_LOCAL_IMAGE_FILE when featuredImage draft image is missing on disk', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fi-missing-'));
+      try {
+        const parsed: ParsedMarkdown = {
+          ...validParsed,
+          frontmatter: {
+            ...validParsed.frontmatter,
+            featuredImage: '../../media/drafts/non-existent.jpg',
+          },
+        };
+
+        const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
+        expect(res.valid).toBe(false);
+        expect(res.errors.some((e) => e.code === 'MISSING_LOCAL_IMAGE_FILE')).toBe(true);
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
+
+    it('blocks with INVALID_LOCAL_IMAGE_TYPE when featuredImage has an unsupported extension', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-fi-ext-'));
+      const draftsDir = path.join(tempWs, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'eyecatch.pdf'), 'fake-pdf');
+
+      try {
+        const parsed: ParsedMarkdown = {
+          ...validParsed,
+          frontmatter: {
+            ...validParsed.frontmatter,
+            featuredImage: '../../media/drafts/eyecatch.pdf',
+          },
+        };
+
+        const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
+        expect(res.valid).toBe(false);
+        expect(res.errors.some((e) => e.code === 'INVALID_LOCAL_IMAGE_TYPE')).toBe(true);
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
+
+    it('blocks with INVALID_FEATURED_IMAGE when featuredImage is an invalid string or path outside media/', () => {
+      const parsedBadPath: ParsedMarkdown = {
+        ...validParsed,
+        frontmatter: {
+          ...validParsed.frontmatter,
+          featuredImage: './outside-media.png',
+        },
+      };
+
+      const resBad = runPreflightChecks(filePath, parsedBadPath);
+      expect(resBad.valid).toBe(false);
+      expect(resBad.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+
+      const parsedBadId: ParsedMarkdown = {
+        ...validParsed,
+        frontmatter: {
+          ...validParsed.frontmatter,
+          featuredImage: 'not-a-valid-ulid',
+        },
+      };
+      const resBadId = runPreflightChecks(filePath, parsedBadId);
+      expect(resBadId.valid).toBe(false);
+      expect(resBadId.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+    });
+  });
 });

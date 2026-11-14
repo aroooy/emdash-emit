@@ -170,7 +170,8 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     stage: 'preflight',
     severity: 'error',
     source: 'src/sync/preflight.ts:630',
-    description: 'アイキャッチ画像 ID の形式検証（26 文字 ULID または null）',
+    description:
+      'アイキャッチ画像 ID の形式検証（26 文字 ULID、ローカル画像相対パス、または null）',
   },
   {
     id: 11,

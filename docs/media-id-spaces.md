@@ -41,7 +41,7 @@ Both ULIDs point at the same image, and neither is a typo of the other. A worksp
 
 | Location | Correct identifier | Wrong identifier symptom |
 | --- | --- | --- |
-| Frontmatter `featuredImage:` | record `id` (or `null`) | A `storageKey` here fails preflight Guard **G10** (`INVALID_FEATURED_IMAGE`), or pushes a hero image the admin UI cannot resolve |
+| Frontmatter `featuredImage:` | record `id`, local draft path (`../../media/drafts/...`), or `null` | A bare `storageKey` here fails preflight Guard **G10** (`INVALID_FEATURED_IMAGE`), or pushes a hero image the admin UI cannot resolve |
 | Body `![alt](/_emdash/api/media/file/<...>)` | `storageKey` | A record `id` here returns **HTTP 404** from the public file route |
 | Search output (`emit media-search` / `sync_media_search`) | Both shown side-by-side (`mediaId` + `storageKey`) | Copying the `mediaId` into the article body instead of `storageKey` returns **HTTP 404** |
 | Local mirror filename `media/<markdownRef>.<ext>` | `storageKey` (sanitized basename via `storageKeyToMarkdownRef`) | A record `id` here is the legacy shape; it stays readable for migration but a body URL never equals such a path |
@@ -49,7 +49,7 @@ Both ULIDs point at the same image, and neither is a typo of the other. A worksp
 | `.emit/cache.db` → `media_state.media_id` / `workspace_path` | record `id` | — |
 | `.emit/cache.db` → `media_state.storage_key` | `storageKey` | — |
 
-`featuredImage: null` clears the hero image; omitting the field leaves the remote value untouched. A URL that happens to contain a media ULID is accepted with a warning and normalized to the bare ULID, but the canonical form is the bare 26-character record id.
+`featuredImage: null` clears the hero image; omitting the field leaves the remote value untouched. A local draft image path (e.g. `../../media/drafts/hero.png` or already-promoted mirror) is automatically uploaded and resolved to its canonical record id on push. A URL that happens to contain a media ULID is accepted with a warning and normalized to the bare ULID, but the canonical form is the bare 26-character record id.
 
 
 ## 3. Why mixing them up looks like data loss

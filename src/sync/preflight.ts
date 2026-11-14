@@ -109,14 +109,14 @@ const REMOTE_OR_DATA_URL_REGEX = /^(?:https?:\/\/|data:|\/_emdash\/api\/media\/f
 const ANY_LOCAL_IMAGE_REGEX =
   /!\[([^\]]*)\]\((?!https?:\/\/|data:|\/_emdash\/api\/media\/file\/)([^)]+)\)/g;
 
-interface ResolvedDraftPathInfo {
+export interface ResolvedDraftPathInfo {
   isInsideDraftsDir: boolean;
   isInsideMediaDir: boolean;
   candidateAbs: string;
   filename: string;
 }
 
-function resolveDraftImagePath(
+export function resolveDraftImagePath(
   articleFilePath: string,
   rawImagePath: string,
   workspaceRoot?: string,
@@ -622,7 +622,7 @@ export function runPreflightChecks(
     }
   }
 
-  // G10: featuredImage must reference a canonical 26-character media ULID (or null).
+  // G10: featuredImage must reference a canonical 26-character media ULID, a local draft image, or null.
   // A root-relative or absolute media URL that unambiguously contains a media ULID is
   // accepted with a warning, because Emit resolves it to the canonical ULID on push.
   if (frontmatter.featuredImage !== undefined && frontmatter.featuredImage !== null) {
@@ -634,12 +634,118 @@ export function runPreflightChecks(
           `featuredImage '${rawFeaturedImage}' was resolved to the canonical media ULID '${resolved}'. Prefer writing the bare 26-character ULID in frontmatter.`,
         );
       } else {
-        errors.push({
-          code: 'INVALID_FEATURED_IMAGE',
-          message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID or null.`,
-          suggestion:
-            'Upload the image first using EmDash Admin or MCP "media_upload", then specify the returned 26-character ULID (e.g. 01M67P0MBMJQQXH2K95HHCYRYB). To remove the featured image, set featuredImage: null. Local file paths are never allowed.',
-        });
+        const resolvedPath = resolveDraftImagePath(
+          filePath,
+          rawFeaturedImage,
+          options?.workspaceRoot,
+        );
+
+        if (resolvedPath.isInsideDraftsDir || resolvedPath.isInsideMediaDir) {
+          if (options?.workspaceRoot) {
+            // Check if this image was already scanned from body (R2 dedup)
+            const existingDraft = draftImages.find(
+              (d) => d.resolvedAbsPath === resolvedPath.candidateAbs,
+            );
+            if (!existingDraft) {
+              if (resolvedPath.isInsideDraftsDir) {
+                if (!fs.existsSync(resolvedPath.candidateAbs)) {
+                  const promotedMatch = findAlreadyPromotedMedia(
+                    resolvedPath.filename,
+                    options.workspaceRoot,
+                    options.cache,
+                  );
+                  if (promotedMatch) {
+                    draftImages.push({
+                      line: `featuredImage: ${rawFeaturedImage}`,
+                      alt: 'featured image',
+                      rawPath: rawFeaturedImage,
+                      filename: resolvedPath.filename,
+                      resolvedAbsPath: resolvedPath.candidateAbs,
+                      alreadyPromoted: promotedMatch,
+                    });
+                  } else {
+                    errors.push({
+                      code: 'MISSING_LOCAL_IMAGE_FILE',
+                      message: `Draft image file specified in featuredImage not found on disk: '${rawFeaturedImage}' (resolved to '${resolvedPath.candidateAbs}', and no promoted asset matching '${resolvedPath.filename}' was found in media/).`,
+                      suggestion: `Place "${resolvedPath.filename}" inside "media/drafts/", or if it was already promoted, look for a mirror in "media/".`,
+                    });
+                  }
+                } else {
+                  const stat = fs.statSync(resolvedPath.candidateAbs);
+                  if (!stat.isFile()) {
+                    errors.push({
+                      code: 'MISSING_LOCAL_IMAGE_FILE',
+                      message: `Draft image path specified in featuredImage is not a regular file: '${rawFeaturedImage}'.`,
+                      suggestion: `Ensure "${resolvedPath.filename}" is a valid image file inside "media/drafts/".`,
+                    });
+                  } else if (!resolveImageMimeType(resolvedPath.filename)) {
+                    errors.push({
+                      code: 'INVALID_LOCAL_IMAGE_TYPE',
+                      message: `Unsupported image file extension for featuredImage: '${resolvedPath.filename}'.`,
+                      suggestion:
+                        'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
+                    });
+                  } else if (stat.size > MAX_MEDIA_UPLOAD_BYTES) {
+                    errors.push({
+                      code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
+                      message: `Draft image specified in featuredImage exceeds the 50 MiB limit: '${resolvedPath.filename}' (${stat.size} bytes).`,
+                      suggestion: 'Compress or resize the image before pushing.',
+                    });
+                  } else {
+                    draftImages.push({
+                      line: `featuredImage: ${rawFeaturedImage}`,
+                      alt: 'featured image',
+                      rawPath: rawFeaturedImage,
+                      filename: resolvedPath.filename,
+                      resolvedAbsPath: resolvedPath.candidateAbs,
+                    });
+                  }
+                }
+              } else if (resolvedPath.isInsideMediaDir) {
+                // Already-promoted mirror lookup (R3: two-stage lookup)
+                let promotedMatch = findAlreadyPromotedMedia(
+                  resolvedPath.filename,
+                  options.workspaceRoot,
+                  options.cache,
+                );
+                if (!promotedMatch) {
+                  const directKey = storageKeyFromMirrorRef(
+                    rawFeaturedImage,
+                    confirmedStorageKeys(options),
+                  );
+                  if (directKey) {
+                    promotedMatch = findPromotedMediaByStorageKey(directKey, options);
+                  }
+                }
+
+                if (promotedMatch) {
+                  draftImages.push({
+                    line: `featuredImage: ${rawFeaturedImage}`,
+                    alt: 'featured image',
+                    rawPath: rawFeaturedImage,
+                    filename: resolvedPath.filename,
+                    resolvedAbsPath: resolvedPath.candidateAbs,
+                    alreadyPromoted: promotedMatch,
+                  });
+                } else {
+                  errors.push({
+                    code: 'MISSING_LOCAL_IMAGE_FILE',
+                    message: `Mirrored media asset specified in featuredImage not found: '${rawFeaturedImage}' (no promoted asset matching '${resolvedPath.filename}' was found in media/ or recorded metadata).`,
+                    suggestion:
+                      'Ensure the image is mirrored under media/ or run "emit pull-media".',
+                  });
+                }
+              }
+            }
+          }
+        } else {
+          errors.push({
+            code: 'INVALID_FEATURED_IMAGE',
+            message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID, a local draft image path inside "media/drafts/", or null.`,
+            suggestion:
+              'Place the image in "media/drafts/<filename>" (e.g. ../../media/drafts/eyecatch.jpg), or upload first using EmDash Admin or MCP "media_upload" and specify the returned 26-character ULID. To remove the featured image, set featuredImage: null. Local file paths outside "media/" are never allowed.',
+          });
+        }
       }
     }
   }

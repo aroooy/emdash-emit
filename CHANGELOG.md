@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-11-14
+
+### Added
+
+- **Local-First Featured Image Auto-Upload & ID Resolution (Guard G10 Extension)**:
+  - Allowed direct local image paths (`../../media/drafts/<filename>` or already-promoted `../../media/<filename>`) in frontmatter `featuredImage`.
+  - During `emit push` / `sync_push`, local draft featured images are automatically uploaded via EmDash Media API (`upload-url` → `PUT` → `confirm`) and resolved to their canonical 26-character D1 `mediaId` (ULID) in the remote push payload.
+  - On push completion, frontmatter `featuredImage` on disk and in baseline snapshots is committed as the canonical media record ULID, maintaining byte-identical baseline synchronization.
+  - Implemented shared upload pool deduplication: referencing the identical image in both article body and `featuredImage` executes binary upload and file promotion exactly once without duplicating remote assets or triggering filesystem collisions.
+  - Added two-stage lookup for already-promoted mirrors (supporting both stem-based and direct `storageKey` filename references) and suppressed spurious companion verification warnings for newly uploaded assets.
+  - Guarded against 409 conflict: 3-way merge strictly honors scalar conflict rules (Remote takes precedence with warning log), keeping baseline snapshots and disk state fully aligned.
+
 ## [0.1.18] - 2026-11-13
 
 ### Added

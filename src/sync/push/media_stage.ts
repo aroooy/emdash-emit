@@ -35,8 +35,46 @@ import { classifyCodeFenceLines } from '../../client/portable-text.js';
 import { promoteDraftMediaFile } from '../media.js';
 import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
-import type { DraftImageReference } from '../preflight.js';
+import { resolveDraftImagePath, type DraftImageReference } from '../preflight.js';
+import { CANONICAL_ULID_REGEX } from '../../utils/ulid.js';
 import type { PushOptions } from './types.js';
+
+export interface FeaturedImageResolveOptions {
+  skipCompanionCheck?: boolean;
+}
+
+/**
+ * Resolves the canonical media record ULID for frontmatter featuredImage.
+ *
+ * If featuredImage is a local path (draft or promoted), it resolves the mediaId from
+ * the shared uploadedByAbsPath map. Returns autoUploaded: true when resolved from
+ * a newly uploaded or reused draft image reference so that advisory verification
+ * warnings can be suppressed.
+ */
+export function resolveFeaturedImageMediaId(
+  featuredImage: string | null | undefined,
+  uploadedByAbsPath: Map<string, UploadMediaResult>,
+  filePath: string,
+  workspaceRoot?: string,
+): { mediaId: string; autoUploaded: boolean } | null {
+  if (!featuredImage) return null;
+  const trimmed = featuredImage.trim();
+  if (CANONICAL_ULID_REGEX.test(trimmed)) {
+    return { mediaId: trimmed.toUpperCase(), autoUploaded: false };
+  }
+  const extracted = extractMediaUlid(trimmed);
+  if (extracted) {
+    return { mediaId: extracted.toUpperCase(), autoUploaded: false };
+  }
+
+  const resolved = resolveDraftImagePath(filePath, trimmed, workspaceRoot);
+  const uploaded = uploadedByAbsPath.get(resolved.candidateAbs);
+  if (uploaded) {
+    return { mediaId: uploaded.mediaId, autoUploaded: true };
+  }
+
+  return null;
+}
 
 /**
  * Featured-image preservation / resolution helper.
@@ -52,6 +90,7 @@ export function preserveOrResolveFeaturedImage(
   cache: CacheDatabase | undefined,
   id: string,
   workspaceRoot?: string,
+  options?: FeaturedImageResolveOptions,
 ): string[] {
   const warnings: string[] = [];
   if (featuredImage === undefined) return warnings;
@@ -91,7 +130,8 @@ export function preserveOrResolveFeaturedImage(
   //    EmDash resolves. It only means Emit cannot confirm the media exists, which is exactly
   //    where a hallucinated or mistyped ULID would surface. A workspace that does not mirror
   //    media (no media/, or an empty one) is not warned about.
-  if (workspaceRoot) {
+  //    Skipped when featuredImage was just auto-uploaded from drafts (R1).
+  if (workspaceRoot && !options?.skipCompanionCheck) {
     const mediaDir = path.join(workspaceRoot, 'media');
     const mirrored = fs.existsSync(mediaDir) ? fs.readdirSync(mediaDir) : [];
     if (mirrored.length > 0) {

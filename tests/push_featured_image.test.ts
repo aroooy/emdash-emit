@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
+import { createBaseSnapshot } from '../src/db/baseline.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { formatDatePrefix, serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
@@ -372,5 +373,336 @@ describe('featuredImage Push Payload Shaping', () => {
     expect(
       res.warnings.filter((w) => w.includes('could not confirm this media ID exists')),
     ).toHaveLength(0);
+  });
+
+  describe('Local-First featuredImage auto-upload and resolution (v0.1.19)', () => {
+    const autoMediaId = '01M7FEATURED000000000000001';
+    const autoStorageKey = '01M7FEATUREDKEY1.01M7FEATUREDKEY2.png';
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+
+    function createMediaPushMock(optionsMock?: {
+      conflictOnPut?: boolean;
+      remoteFiOnConflict?: string;
+    }) {
+      let capturedPayload: Record<string, any> | null = null;
+      let uploadUrlCalls = 0;
+      let putArticleCalls = 0;
+
+      const fetchFn = vi
+        .fn()
+        .mockImplementation((url: string, init: { method?: string; body?: string }) => {
+          const urlStr = String(url);
+          const method = init?.method || 'GET';
+
+          // Lock acquire/release
+          if (urlStr.includes('/lock')) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ status: 'acquired' }), { status: 200 }),
+            );
+          }
+          // Terms sync
+          if (urlStr.includes('/terms/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ success: true }), { status: 200 }),
+            );
+          }
+          // Media Phase A: upload-url
+          if (method === 'POST' && urlStr.endsWith('/_emdash/api/media/upload-url')) {
+            uploadUrlCalls++;
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  data: {
+                    uploadUrl: `/_emdash/api/media/${autoMediaId}/upload`,
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'image/png' },
+                    mediaId: autoMediaId,
+                    storageKey: 'pending.png',
+                  },
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+          // Media Phase B: PUT binary
+          if (method === 'PUT' && urlStr.endsWith(`/_emdash/api/media/${autoMediaId}/upload`)) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ success: true, data: { uploaded: true, size: tinyPng.length } }),
+                {
+                  status: 200,
+                },
+              ),
+            );
+          }
+          // Media Phase C: confirm
+          if (method === 'POST' && urlStr.endsWith(`/_emdash/api/media/${autoMediaId}/confirm`)) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  data: {
+                    id: autoMediaId,
+                    storageKey: autoStorageKey,
+                    url: `/_emdash/api/media/file/${autoStorageKey}`,
+                    filename: 'eyecatch.png',
+                    mimeType: 'image/png',
+                    size: tinyPng.length,
+                  },
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+
+          // Article POST (Create)
+          if (method === 'POST' && !urlStr.includes('/media')) {
+            capturedPayload = JSON.parse(String(init.body));
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  data: { id: validUlid, createdAt: '2026-11-14T00:00:00.000Z' },
+                  _rev: 'rev_v2',
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+
+          // Article PUT (Update / Conflict)
+          if (method === 'PUT' && !urlStr.includes('/media')) {
+            putArticleCalls++;
+            if (optionsMock?.conflictOnPut && putArticleCalls === 1) {
+              // First PUT returns 409 conflict
+              return Promise.resolve(
+                new Response(
+                  JSON.stringify({
+                    code: 'CONFLICT',
+                    message: 'Version conflict',
+                    remoteItem: {
+                      id: validUlid,
+                      data: {
+                        title: 'Remote Title',
+                        featured_image: {
+                          id: optionsMock.remoteFiOnConflict || '01M7REMOTE0000000000000000',
+                        },
+                      },
+                      _rev: 'rev_remote',
+                    },
+                  }),
+                  { status: 409 },
+                ),
+              );
+            }
+            capturedPayload = JSON.parse(String(init.body));
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  data: { id: validUlid },
+                  _rev: 'rev_v3',
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+
+          // GET remote article detail on conflict or other GETs
+          if (method === 'GET' && urlStr.includes(validUlid)) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  item: {
+                    id: validUlid,
+                    _rev: 'rev_remote',
+                    collection: 'posts',
+                    status: 'draft',
+                    data: {
+                      title: 'Remote Title',
+                      content: 'Body text referencing a remote media ULID.',
+                      featured_image: {
+                        id: optionsMock?.remoteFiOnConflict || '01M7REMOTE0000000000000000',
+                      },
+                    },
+                  },
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+
+          return Promise.resolve(
+            new Response(JSON.stringify({ success: true, data: { bylines: [] } }), { status: 200 }),
+          );
+        });
+
+      return {
+        fetchFn,
+        getPayload: () => capturedPayload,
+        getUploadUrlCalls: () => uploadUrlCalls,
+      };
+    }
+
+    it('auto-uploads draft image in featuredImage, resolves to mediaId, and rewrites disk frontmatter to ULID', async () => {
+      const draftsDir = path.join(tempDir, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'eyecatch.png'), tinyPng);
+
+      const relPath = writeArticle('fi-auto-upload', '../../media/drafts/eyecatch.png');
+      const mock = createMediaPushMock();
+
+      const res = await pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mock.fetchFn,
+      });
+
+      // 1. Sent payload has resolved mediaId
+      expect(mock.getPayload()!.data.featured_image).toEqual({ id: autoMediaId });
+
+      // 2. Upload-url was called exactly once
+      expect(mock.getUploadUrlCalls()).toBe(1);
+
+      // 3. No spurious 'could not confirm this media ID exists' warning (R1)
+      expect(
+        res.warnings.filter((w) => w.includes('could not confirm this media ID exists')),
+      ).toHaveLength(0);
+
+      // 4. On-disk markdown frontmatter was rewritten to canonical ULID
+      const fullPath = path.join(tempDir, res.filePath);
+      const onDisk = fs.readFileSync(fullPath, 'utf8');
+      expect(onDisk).toContain(`featuredImage: "${autoMediaId}"`);
+      expect(onDisk).not.toContain('media/drafts/eyecatch.png');
+    });
+
+    it('deduplicates upload when body and featuredImage specify the identical draft image (R6)', async () => {
+      const draftsDir = path.join(tempDir, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'shared-hero.png'), tinyPng);
+
+      // Create article referencing shared-hero.png in both body and featuredImage
+      const fm: Frontmatter = {
+        id: validUlid,
+        slug: 'fi-shared-dedup',
+        title: 'Shared Hero Test',
+        collection: 'posts',
+        status: 'draft',
+        locale: 'ja',
+        taxonomies: {},
+        bylines: [],
+        featuredImage: '../../media/drafts/shared-hero.png',
+      };
+      const relPath = `posts/draft/${todayPrefix}${validUlid}-fi-shared-dedup.md`;
+      const fullPath = path.join(tempDir, relPath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(
+        fullPath,
+        serializeMarkdown(
+          fm,
+          'Here is hero:\n\n![Hero](../../media/drafts/shared-hero.png)\n\nMore text.',
+        ),
+        'utf8',
+      );
+
+      const mock = createMediaPushMock();
+      const res = await pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mock.fetchFn,
+      });
+
+      // Upload-url POST must be called exactly ONCE (deduplicated!)
+      expect(mock.getUploadUrlCalls()).toBe(1);
+
+      // Payload has mediaId
+      expect(mock.getPayload()!.data.featured_image).toEqual({ id: autoMediaId });
+
+      // Disk frontmatter rewritten to ULID
+      const onDisk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+      expect(onDisk).toContain(`featuredImage: "${autoMediaId}"`);
+      expect(onDisk).toContain(`/_emdash/api/media/file/${autoStorageKey}`);
+    });
+
+    it('handles 409 conflict by preferring Remote featured_image while keeping disk in sync (Case 8 & G7)', async () => {
+      const draftsDir = path.join(tempDir, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'conflict-eyecatch.png'), tinyPng);
+
+      const oldUlid = '01M70000000000000000000001';
+      const remoteUlid = otherMediaUlid;
+      const bodyText = 'Body text referencing a remote media ULID.';
+      seedTrackedArticle('fi-conflict', oldUlid);
+      cache.saveBaseSnapshot(
+        createBaseSnapshot({
+          id: validUlid,
+          rev: 'rev_v1',
+          bodyMarkdown: bodyText,
+          frontmatter: {
+            id: validUlid,
+            slug: 'fi-conflict',
+            title: 'Featured Image Payload Test',
+            collection: 'posts',
+            status: 'draft',
+            locale: 'ja',
+            taxonomies: {},
+            bylines: [],
+            featuredImage: oldUlid,
+          },
+          hash: 'hash_old',
+        }),
+      );
+
+      const relPath = writeArticle('fi-conflict', '../../media/drafts/conflict-eyecatch.png');
+
+      const mock = createMediaPushMock({ conflictOnPut: true, remoteFiOnConflict: remoteUlid });
+
+      const res = await pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mock.fetchFn,
+      });
+
+      // Remote value took precedence
+      expect(
+        res.warnings.some((w) => w.includes("Conflict on frontmatter field 'featuredImage'")),
+      ).toBe(true);
+
+      // Disk has Remote ULID
+      const fullPath = path.join(tempDir, res.filePath);
+      const onDisk = fs.readFileSync(fullPath, 'utf8');
+      expect(onDisk).toContain(`featuredImage: "${remoteUlid}"`);
+    });
+
+    it('handles existing article update (PUT) with local draft featuredImage', async () => {
+      const draftsDir = path.join(tempDir, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+      fs.writeFileSync(path.join(draftsDir, 'update-eyecatch.png'), tinyPng);
+
+      seedTrackedArticle('fi-update', null);
+      const relPath = writeArticle('fi-update', '../../media/drafts/update-eyecatch.png');
+
+      const mock = createMediaPushMock();
+      const res = await pushArticle(relPath, {
+        ...options,
+        workspaceRoot: tempDir,
+        cache,
+        fetchFn: mock.fetchFn,
+      });
+
+      expect(mock.getPayload()!.data.featured_image).toEqual({ id: autoMediaId });
+      expect(mock.getUploadUrlCalls()).toBe(1);
+
+      const fullPath = path.join(tempDir, res.filePath);
+      const onDisk = fs.readFileSync(fullPath, 'utf8');
+      expect(onDisk).toContain(`featuredImage: "${autoMediaId}"`);
+    });
   });
 });
