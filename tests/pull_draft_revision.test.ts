@@ -154,4 +154,279 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(result2.updated).toBe(false);
     expect(result2.skipped).toBe(true);
   });
+
+  it('discards stale rawItem from list API on draft update and fetches full content via single GET', async () => {
+    const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
+    const relPath = `posts/draft/20261114_${articleId}-draft-batch-test.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const oldDraftRevId = '01M7OLDREV0000000000000000';
+    const newDraftRevId = '01M7NEWREV0000000000000000';
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'draft-batch-test',
+      title: 'Draft Batch Test',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['test'], tags: [] },
+      bylines: ['aroooy'],
+    };
+
+    const initialBody = 'Initial 3-block body.\n';
+    const initialMarkdown = serializeMarkdown(fm, initialBody);
+    fs.writeFileSync(fullPath, initialMarkdown, 'utf8');
+    const initialHash = calculateHash(initialMarkdown);
+
+    // Initial state: tracked with OLD composite rev
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: '3',
+        bodyMarkdown: initialBody,
+        frontmatter: fm,
+        hash: initialHash,
+      }),
+    );
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: initialHash,
+      remoteRev: `3@draft:${oldDraftRevId}`,
+      status: 'draft',
+      slug: 'draft-batch-test',
+      lastSyncedAt: 1000,
+    });
+
+    // Stale rawItem from List API: has new draftRevisionId, but OLD 3-block content!
+    const staleListRawItem = {
+      id: articleId,
+      version: 3,
+      draftRevisionId: newDraftRevId,
+      liveRevisionId: null,
+      status: 'draft',
+      slug: 'draft-batch-test',
+      updatedAt: '2026-11-14T02:52:29.779Z',
+      data: {
+        title: 'Draft Batch Test',
+        content: [
+          {
+            _type: 'block',
+            _key: 'b1',
+            children: [{ _type: 'span', text: 'Stale 3-block content from list API.' }],
+          },
+        ],
+      },
+    };
+
+    let singleGetCallCount = 0;
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/category/terms') || url.includes('/tag/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+
+      if (url.endsWith(`/posts/${articleId}`)) {
+        singleGetCallCount++;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 3,
+                draftRevisionId: newDraftRevId,
+                liveRevisionId: null,
+                status: 'draft',
+                slug: 'draft-batch-test',
+                updatedAt: '2026-11-14T02:52:29.779Z',
+                data: {
+                  title: 'Draft Batch Test',
+                  content: [
+                    {
+                      _type: 'block',
+                      _key: 'b1',
+                      children: [
+                        { _type: 'span', text: 'Full 7-block content with image from single GET.' },
+                      ],
+                    },
+                    {
+                      _type: 'block',
+                      _key: 'b2',
+                      children: [{ _type: 'span', text: '追加テキスト' }],
+                    },
+                  ],
+                },
+              },
+              _rev: 'MzoyMDI2LTExLTE0VDAyOjUyOjI5Ljc3OVo=',
+            },
+          }),
+        });
+      }
+
+      if (url.includes(`/posts/${articleId}/terms/`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { terms: [] },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    // Execute pullArticle passing the STALE list rawItem (simulating batch pull)
+    const result = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      rawItem: staleListRawItem,
+      fetchFn: mockFetch,
+    });
+
+    expect(result.updated).toBe(true);
+    // Single GET MUST have been called exactly once because draft list item was discarded
+    expect(singleGetCallCount).toBe(1);
+
+    // Verify disk content contains the full content from single GET, NOT the stale list content
+    const updatedContent = fs.readFileSync(fullPath, 'utf8');
+    expect(updatedContent).toContain('Full 7-block content with image from single GET.');
+    expect(updatedContent).toContain('追加テキスト');
+    expect(updatedContent).not.toContain('Stale 3-block content from list API.');
+  });
+
+  it('safely quarantines unpushed local edits and flags bodyConflictPending when remote draft advances', async () => {
+    const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
+    const relPath = `posts/draft/20261114_${articleId}-draft-conflict-test.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const oldDraftRevId = '01M7OLDREV0000000000000000';
+    const newDraftRevId = '01M7NEWREV0000000000000000';
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'draft-conflict-test',
+      title: 'Draft Conflict Test',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      locale: 'ja',
+      taxonomies: { categories: ['test'], tags: [] },
+      bylines: ['aroooy'],
+    };
+
+    const initialBody = 'Initial baseline content.\n';
+    const initialMarkdown = serializeMarkdown(fm, initialBody);
+    const initialHash = calculateHash(initialMarkdown);
+
+    // Seed baseline with initial content
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: '3',
+        bodyMarkdown: initialBody,
+        frontmatter: fm,
+        hash: initialHash,
+      }),
+    );
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: initialHash,
+      remoteRev: `3@draft:${oldDraftRevId}`,
+      status: 'draft',
+      slug: 'draft-conflict-test',
+      lastSyncedAt: 1000,
+    });
+
+    // Write UNPUSHED local edits to disk
+    const unpushedBody = 'My unpushed precious local edits that must not be lost!\n';
+    const unpushedMarkdown = serializeMarkdown(fm, unpushedBody);
+    fs.writeFileSync(fullPath, unpushedMarkdown, 'utf8');
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/category/terms') || url.includes('/tag/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+
+      if (url.includes(`/posts/${articleId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 3,
+                draftRevisionId: newDraftRevId,
+                liveRevisionId: null,
+                status: 'draft',
+                slug: 'draft-conflict-test',
+                updatedAt: '2026-11-14T02:52:29.779Z',
+                data: {
+                  title: 'Draft Conflict Test',
+                  content: [
+                    {
+                      _type: 'block',
+                      _key: 'b1',
+                      children: [
+                        { _type: 'span', text: 'Server content advancing draft revision.' },
+                      ],
+                    },
+                  ],
+                },
+              },
+              _rev: 'MzoyMDI2LTExLTE0VDAyOjUyOjI5Ljc3OVo=',
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    // Execute pull
+    const result = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+    });
+
+    expect(result.updated).toBe(true);
+
+    // Verify unpushed local edits were quarantined to posts/conflicts/
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    expect(fs.existsSync(conflictsDir)).toBe(true);
+    const conflictFiles = fs.readdirSync(conflictsDir);
+    expect(conflictFiles.length).toBeGreaterThan(0);
+    const rescueContent = fs.readFileSync(path.join(conflictsDir, conflictFiles[0]), 'utf8');
+    expect(rescueContent).toContain('My unpushed precious local edits that must not be lost!');
+
+    // Verify bodyConflictPending was set to 1
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.bodyConflictPending).toBe(1);
+    expect(syncState?.conflictCopyPath).toBeTruthy();
+
+    // Verify canonical disk file has the server content
+    const canonicalContent = fs.readFileSync(fullPath, 'utf8');
+    expect(canonicalContent).toContain('Server content advancing draft revision.');
+  });
 });

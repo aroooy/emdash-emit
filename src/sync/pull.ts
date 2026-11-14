@@ -803,9 +803,28 @@ export async function pullArticle(
   if (rawItem) {
     const fastResult = await tryFastPathOrHeal(rawItem);
     if (fastResult) return fastResult;
+
+    // Fast-path missed: remote content changed or local repair required.
+    // EmDash list API returns stale creation-time posts.data for drafts when the draft was updated on remote.
+    // For published articles, EmDash list API returns the up-to-date committed content (no extra GET needed).
+    // Therefore, if this is an existing tracked draft article whose remote revision has advanced, we must discard
+    // the stale list rawItem so Step 2 fetches the full canonical item via single GET!
+    const rawObj = rawItem as Record<string, unknown>;
+    const itemStatus = String(rawObj.status || 'draft');
+    const existingSync = options.cache.getSyncState(id);
+    const rawRevCandidate = String(
+      rawItem._rev || rawItem.rev || rawItem.version || rawObj._rev || '',
+    );
+    const remoteRev = extractRev(rawObj, rawRevCandidate);
+    const remoteComparisonRev = extractComparisonRev(rawObj, remoteRev);
+    const remoteChanged = !existingSync || !isSameRev(existingSync.remoteRev, remoteComparisonRev);
+
+    if (itemStatus !== 'published' && existingSync && remoteChanged) {
+      rawItem = undefined;
+    }
   }
 
-  // 2. Fetch raw item if not passed in options
+  // 2. Fetch raw item if not passed in options (or discarded above for draft updates)
   if (!rawItem) {
     const url = articleContentEndpoint(options.origin, collection, id);
     const res = await fetchFn(url, {

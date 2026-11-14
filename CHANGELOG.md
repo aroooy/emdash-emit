@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-11-14
+
+### Added
+
+- **Selective Single-Article GET Fallthrough for Updated Drafts (`src/sync/pull.ts`)**:
+  - Resolved architectural discrepancy where EmDash's list API (`GET /posts?status=draft`) returns stale creation-time `posts.data` while the latest content resides in the `revisions` table, which previously caused `emit pull` to overwrite local draft files with outdated content and mark them up-to-date.
+  - Implemented selective fallthrough in `pullArticle`:
+    - **Draft articles with advanced remote revisions**: Automatically discards the incomplete list `rawItem` and fetches the full canonical article via single GET (`articleContentEndpoint`), accurately reflecting added blocks, images, and edits.
+    - **Published articles**: Fully preserves the zero-overhead fast-path—uses the list `rawItem` directly without extra single GET requests, maintaining byte-identical consistency and zero additional network calls.
+    - **Fail-safe fallback**: Any article with missing or undefined status defaults safely to `'draft'`, ensuring single GET retrieval rather than writing incomplete content.
+  - Hardened unpushed edit protection: Divergent local copies continue to be safely quarantined under `posts/conflicts/*.conflict.md` with `body_conflict_pending = 1` and Guard G12 push protection across both draft and published states.
+
+
 ## [0.1.22] - 2026-11-14
 
 ### Added
