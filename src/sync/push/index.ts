@@ -179,6 +179,11 @@ export async function pushArticle(
     );
     if (fiResolution) {
       parsed.frontmatter.featuredImage = fiResolution.mediaId;
+    } else if (parsed.frontmatter.featuredImage) {
+      // Defensive guard (W1): preflight guarantees resolution, but fail-fast if an unresolved value reaches push
+      throw new Error(
+        `Failed to resolve featuredImage '${parsed.frontmatter.featuredImage}' to a media record ID during push.`,
+      );
     }
 
     const payload = localToApiPayload(parsed, '', effectiveOptions);
@@ -307,6 +312,11 @@ export async function pushArticle(
     );
     if (fiResolution) {
       parsed.frontmatter.featuredImage = fiResolution.mediaId;
+    } else if (parsed.frontmatter.featuredImage) {
+      // Defensive guard (W1): preflight guarantees resolution, but fail-fast if an unresolved value reaches push
+      throw new Error(
+        `Failed to resolve featuredImage '${parsed.frontmatter.featuredImage}' to a media record ID during push.`,
+      );
     }
 
     let payload = localToApiPayload(parsed, currentRev, effectiveOptions);

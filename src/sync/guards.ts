@@ -290,7 +290,7 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Preserve <!--ec:block ... --> opaque extension blocks verbatim without editing their contents or tags.',
   // G10
   INVALID_FEATURED_IMAGE:
-    'Set featuredImage to a 26-character media record ULID or null. Local paths and URL strings are rejected.',
+    'Set featuredImage to a 26-character media record ULID, a local image relative path inside "media/drafts/", or null. Local paths outside "media/" and raw URL strings are rejected.',
   // G11
   MISSING_LOCAL_IMAGE_FILE:
     'Ensure the referenced local image exists in media/drafts/<filename> before pushing.',
