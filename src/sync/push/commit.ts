@@ -266,7 +266,11 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
           'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
         );
       }
-    } else if (parsed.frontmatter.status === 'published' && !options.allowPublish) {
+    } else if (
+      parsed.frontmatter.status === 'published' &&
+      !options.allowPublish &&
+      hadRemoteDraft
+    ) {
       warnings.push(
         'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
       );

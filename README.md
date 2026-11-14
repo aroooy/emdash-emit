@@ -867,14 +867,18 @@ emit status [-c, --collection <collection>] [-p, --profile <name>]
 --- Workspace Status (posts | origin: https://your-blog.example.com) ---
   🟡 [modified] draft     posts/draft/20261104_01M6BBB...-AI-Workflow-Guide.md (AI Workflow Guide)
   ⚪ [untracked] draft     posts/draft/20261104_01M6AAA...-Draft-Notes.md (Draft Notes)
+  🟣 [synced  ] published* posts/published/20261020_01M5YYY...-Review-Notes.md (Review Notes) [has unpublished draft]
   🟢 [synced  ] published posts/published/20261015_01M5ZZZ...-Getting-Started.md (Getting Started)
   🔴 [invalid ] published posts/published/20190405_01M6CCC...-Broken-Post.md (Broken-Post) [uncached] — bad indentation of a mapping entry at line 5
 
-Summary: 4 total (1 synced, 1 modified, 1 untracked, 1 invalid)
+Summary: 5 total (2 synced, 1 modified, 1 untracked, 1 invalid)
 ```
 
 > [!NOTE]
 > Articles are sorted newest-first by date prefix and ULID. The date prefix reflects the article's publication or creation date, not the last-modified time. To locate currently active edits, look for files marked `[modified]`.
+
+> [!NOTE]
+> `published* [has unpublished draft]` (🟣) indicates a published article that has uncommitted/staged draft revisions on EmDash. The status icon prioritizes local sync state (e.g. 🟡 `[modified]` if edited locally), while the `published*` label and `[has unpublished draft]` badge clearly highlight pending remote draft content.
 
 > [!NOTE]
 > `[invalid]` marks a file whose YAML frontmatter could not be parsed (usually an older serializer wrote unquoted percent-encoded taxonomy slugs). Batch `emit pull` self-heals cached invalid files; files outside the sliding window are marked `[uncached]` and are repaired with `emit pull <ULID>` (MCP: `sync_pull` with `id: "<ULID>"`). When `<collection>/conflicts/` holds rescue copies, the count is reported separately (`conflicts`) and never counted as an article.

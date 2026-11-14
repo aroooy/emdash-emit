@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - MCP `sync_status` transparently exposes `hasUnpublishedDraft: true` in JSON payloads.
 - **Push Semantics Documentation & Safety Rails for Published Drafts**:
   - Documented push semantics: EmDash stages PUT updates as drafts when `status` is omitted (Emit's default). To publish changes live to web, `--allow-publish` must be explicitly passed.
+  - Added contextual safety warnings during push (`src/sync/push/commit.ts`): when pushing published articles that carry remote draft revisions (`hadRemoteDraft`), Emit warns if changes were staged as drafts (without `--allow-publish`) or published live to web (with `--allow-publish`). Clean published articles remain warning-free.
   - Verified and tested that unpushed local edits during draft advancement are safely preserved in `posts/conflicts/*.conflict.md` with `body_conflict_pending = 1` and Guard G12 rescue copy protection.
 
 ## [0.1.23] - 2026-11-14

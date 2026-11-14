@@ -298,4 +298,107 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
       'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
     );
   });
+
+  it('does NOT emit draft staging warning when pushing a clean published article without remote draft (@live:)', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCP1';
+    const relPath = `posts/published/20261113_${articleId}-clean-pub.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const rawServerToken = 'MTk6MjAyNi0xMS0xNFQwNzoxMDowMC4wMDBa';
+    const compositeRev = '19@live:01M7CCGC748FQWMC3FDBP4WDY7';
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'clean-pub',
+      title: 'Clean Published Article',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: ['aroooy'],
+    };
+
+    const body = 'Clean published body edited locally.\n';
+    const markdown = serializeMarkdown(fm, body);
+    fs.writeFileSync(fullPath, markdown, 'utf8');
+    const hash = calculateHash(markdown);
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: hash,
+      remoteRev: compositeRev,
+      status: 'published',
+      slug: 'clean-pub',
+      lastSyncedAt: 1000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: rawServerToken,
+        frontmatter: fm,
+        bodyMarkdown: body,
+        hash,
+      }),
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/lock')) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true }) });
+      }
+      if (url.includes('/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+      if (url.endsWith(`/posts/${articleId}`) && (!init || init.method === 'GET')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 19,
+                status: 'published',
+                slug: 'clean-pub',
+                data: { title: 'Clean Published Article', content: [] },
+              },
+            },
+          }),
+        });
+      }
+      if (url.endsWith(`/posts/${articleId}`) && init?.method === 'PUT') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: articleId,
+            version: 20,
+            status: 'published',
+            _rev: 'MjA6MjAyNi0xMS0xNFQwODowMDowMC4wMDBa',
+          }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const result = await pushArticle(relPath, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      allowPublish: false,
+    });
+
+    expect(result.success).toBe(true);
+    // Crucial check: No draft staging warning should be emitted for clean published articles!
+    expect(result.warnings).not.toContain(
+      'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
+    );
+  });
 });
