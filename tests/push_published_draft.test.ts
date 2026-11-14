@@ -157,6 +157,9 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(putCalled).toBe(true);
     // Crucial invariant: Without allowPublish: true, /publish endpoint MUST NOT be called!
     expect(publishTransitionCalled).toBe(false);
+    expect(result.warnings).toContain(
+      'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
+    );
   });
 
   it('calls status transition /publish endpoint when allowPublish is true', async () => {
@@ -291,5 +294,8 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(putCalled).toBe(true);
     // With allowPublish: true, /publish endpoint MUST be called!
     expect(publishTransitionCalled).toBe(true);
+    expect(result.warnings).toContain(
+      'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
+    );
   });
 });

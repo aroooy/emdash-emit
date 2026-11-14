@@ -247,6 +247,8 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     }
   } else {
     const previousStatus = syncState?.status || 'draft';
+    const hadRemoteDraft = Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'));
+
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
       const transitionRes = await transitionContentStatus(
         collection,
@@ -259,6 +261,15 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
       );
       finalRev = transitionRes.rev;
       finalRawItem = transitionRes.rawJson ?? finalRawItem;
+      if (hadRemoteDraft) {
+        warnings.push(
+          'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
+        );
+      }
+    } else if (parsed.frontmatter.status === 'published' && !options.allowPublish) {
+      warnings.push(
+        'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
+      );
     } else if (parsed.frontmatter.status === 'draft' && previousStatus === 'published') {
       const transitionRes = await transitionContentStatus(
         collection,
