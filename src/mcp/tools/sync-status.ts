@@ -125,6 +125,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
 
       const responsePayload = {
         summary: status.summary,
+        hasUnpublishedDraftCount: status.summary.flags?.hasUnpublishedDraft || 0,
         actionRequired,
         actionRequiredTruncated,
         recentArticles,

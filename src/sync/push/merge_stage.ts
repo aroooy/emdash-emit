@@ -37,6 +37,7 @@ import { hybrid3WayMerge, type MergeResult } from '../merge.js';
 import { fetchAssignedTaxonomies, computeTaxonomyHash } from '../terms.js';
 import { calculateHash, quarantineLocalCopy, commitArticleSnapshot } from '../workspace/index.js';
 import { hasUncommittedDraftRevision } from '../../utils/draft-revision.js';
+import { resolveDiskSpelling, renderForDisk } from '../../utils/disk-spelling.js';
 import { throwRemoteArticleDeleted } from './transport.js';
 import { pendingFlagsFor } from './commit.js';
 import type { PushOptions, PushResult } from './types.js';
@@ -263,6 +264,8 @@ export async function resolveConflictAndMerge(params: {
       { hasDraftRevision: hasDraft },
     );
     let quarantineRel: string | null = null;
+    let activeDiskContent = conflictedMarkdown;
+
     // Only write conflict markers into the article body if body actually has conflicts
     if (!isTaxonomyOnlyConflict) {
       const currentDisk = fs.readFileSync(fullPath, 'utf8');
@@ -273,7 +276,15 @@ export async function resolveConflictAndMerge(params: {
         currentDisk,
         { isForce: false },
       );
-      fs.writeFileSync(fullPath, conflictedMarkdown, 'utf8');
+      const spelling = resolveDiskSpelling(currentDisk, syncState);
+      activeDiskContent = renderForDisk(conflictedMarkdown, spelling, {
+        workspaceRoot: options.workspaceRoot,
+        articleRelPath: targetFilePath,
+        fs,
+      });
+      fs.writeFileSync(fullPath, activeDiskContent, 'utf8');
+    } else {
+      activeDiskContent = fs.readFileSync(fullPath, 'utf8');
     }
 
     let actualConflictCopyHash: string | null = null;
@@ -299,10 +310,6 @@ export async function resolveConflictAndMerge(params: {
     });
 
     // Update sync state and base snapshot via centralized commitArticleSnapshot
-    const activeDiskContent = isTaxonomyOnlyConflict
-      ? fs.readFileSync(fullPath, 'utf8')
-      : conflictedMarkdown;
-
     commitArticleSnapshot(options.cache, options.workspaceRoot, {
       id,
       relPath: targetFilePath,

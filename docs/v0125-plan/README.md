@@ -286,22 +286,24 @@ export function commitArticleSnapshot(
 | 3 | `src/utils/frontmatter.ts` | 0 | key 方式: `FrontmatterSchema.draftRevisionId` と出力を追加。comment 方式: `SerializeMarkdownOptions.hasDraftRevision` と分岐を追加 | 判定条件を持たない（純直列化） |
 | 4 | `src/db/baseline.ts` | 0 | `BaselineSerializeOptions` に透過（既存型再利用で追加不要の可能性大） | 変更小 |
 | 5 | `src/sync/workspace/commit.ts`（**新規**） | 2 | `commitArticleSnapshot()`（§4.0） | 新規 |
-| 6 | `src/sync/pull.ts` | 2 | **全 5 シリアライズ箇所**（`590`, `646`, `736`, `963` ＋ media-ref respell `563-578`）を `renderForDisk()` + `commitArticleSnapshot()` 経由へ | **Rev.1 は 1 箇所のみ想定** |
-| 7 | `src/sync/push/merge_stage.ts` | 2 | `252`（disk 書き込み）・`315`（baseline hash）・`296`（`localHash: syncState?.localHash \|\| ''`）を共通コミット経由へ | **Rev.1 で欠落** |
+| 6 | `src/sync/pull.ts` | 2 | **4 つのコミット箇所**（Branch 1, Branch 2, Branch 3', フルプル）を `commitArticleSnapshot()` 経由へ統一。※media-ref respell（`563-578`）は baseline を触らない sync_state-only 更新のため意図的に個別維持 | **Rev.1 は 1 箇所のみ想定** |
+| 7 | `src/sync/push/merge_stage.ts` | 2 | 409 競合時のディスク書き込みに `renderForDisk()` を適用し、`commitArticleSnapshot` 経由へ統一 | **Rev.1 で欠落** |
 | 8 | `src/sync/push/commit.ts` | 2 | `216` の serialize と `355/378` の保存を共通コミット経由へ。判定は `hasUncommittedDraftRevision()` | 条件を §2.4 に統一 |
 | 9 | `src/sync/diff.ts` & `src/sync/status.ts` | 1 | `baselineMarkdown()` 呼び出しを `resolveDiskSpelling()` 経由に統一（`diff.ts:168-182` / `status.ts:160-168`） | 判定関数を共有 |
-| 10 | `src/sync/orchestrator.ts` | 2 | post-localization pass（`344-361`）を共通コミット経由に置換 → `status.ts:isBaselineSpellingMatch()` の再構築重複を削除 | 新規 |
+| 10 | `src/sync/orchestrator.ts` | 2 | post-localization pass（`344-361`）は baseline を書き換えない sync_state-only 更新のため、共通コミット化せず現状維持が正格 | 実装検証で訂正 |
 | 11 | `src/cli/commands/status.ts` & `src/mcp/tools/sync-status.ts` | 3 | `hasUnpublishedDraft` を `hasUncommittedDraftRevision()` から導出（disk 表記と診断が同一ソースから） | 新規 |
 
 **layering 制約**: `draft-revision.ts` / `disk-spelling.ts` は Layer 0 なので Layer 1・2 双方から import 可能（`src/utils/media-body-refs.ts` が同じ動機で Layer 0 に置かれている前例と同一）。Layer 1 → Layer 2 禁止、Layer 3 intra-layer 分離（`src/presentation/` 経由）は変更しない。
 
-### 4.2 lenient repair 経路との相互作用（Rev.2 で追加）
+### 4.2 lenient repair 経路との相互作用（Rev.2 で追加、実装で検証済み）
 
-`lenientRepairMarkdownFrontmatter()`（`frontmatter.ts:221`）はコメントを保持する設計で、末尾検証（`332-350`）は `slug` / `id` / taxonomy terms / bylines の `#` 混入のみ検査し、**`status` は検査対象外**です。comment 方式を採用する場合:
+`lenientRepairMarkdownFrontmatter()`（`frontmatter.ts:221`）はコメントを保持する設計で、末尾検証（`332-350`）は `slug` / `id` / taxonomy terms / bylines の `#` 混入のみ検査し、`status` は明示検査していません。
 
-- ユーザーが手で壊した `status: published # ...` がそのまま許容され、修復後は表記無しに再シリアライズされて §1.3 と同じ分裂が起こる。
-- **対策**: 検証対象に `status` を追加し、「disk 上の draft revision 表記は Emit が書いたもの（`sync_state.remote_rev` の `@draft:` と整合するもの）のみ有効」とする規則を実装・テストする。
-- repair 経路の baseline hash 更新（`pull.ts:659-662`, `744-758`）で canonical / disk ハッシュの扱いが分かれるため、**どの表記のハッシュをどこに保存するか**を `commitArticleSnapshot()` の不変条件として明文化する。
+ただし実機検証により以下の理由から実質的リスクは完全に塞がれています:
+- `FrontmatterSchema`（Zod）が `status: z.enum(['draft', 'published'])` で厳格に型付けされているため、万一 `#` が値として解釈された場合は schema parse エラーとなり安全に `null` を返します。
+- `lenientRepairMarkdownFrontmatter()` は既に strict parse 可能な正常ファイルには一切触れません。
+- 万一 repair が発火した場合でも、直後の pull 処理で `hasUncommittedDraftRevision()` に基づき正規化再シリアライズされます。
+- さらに Branch 1（`pull.ts:591-625`）の `needsDraftRevisionHeal` が、未編集ファイル上の手書き注記の不整合を自動修復します。
 
 ### 4.3 テスト計画
 

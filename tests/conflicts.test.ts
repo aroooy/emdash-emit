@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { toStorageKey, toMediaRecordId } from '../src/utils/media-id.js';
 import { calculateHash } from '../src/sync/pull.js';
 import { pushArticle } from '../src/sync/push.js';
 import {
@@ -690,5 +691,138 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(syncState?.conflictCopyPath).toBeNull();
     expect(syncState?.conflictCopyHash).toBeNull();
     expect(syncState?.conflictAt).toBeNull();
+  });
+
+  it('localizes media refs in conflicted disk file and aligns localHash during 409 body conflict', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
+    const relCanonical = `posts/published/20261113_${articleId}-conflict-media.md`;
+    const fullCanonical = path.join(tempDir, relCanonical);
+    fs.mkdirSync(path.dirname(fullCanonical), { recursive: true });
+
+    // Set up local mirror media file
+    const mediaStorageKey = '01M6TESTMEDIA000000000000.jpg';
+    const mediaRelPath = `media/${mediaStorageKey}`;
+    const mediaFullPath = path.join(tempDir, mediaRelPath);
+    fs.mkdirSync(path.dirname(mediaFullPath), { recursive: true });
+    fs.writeFileSync(mediaFullPath, 'fake-media-bytes', 'utf8');
+
+    const localMediaRef = `../../media/${mediaStorageKey}`;
+    const remoteMediaRef = `/_emdash/api/media/file/${mediaStorageKey}`;
+
+    const mediaId = toMediaRecordId('01M6TESTMED1A0000000000000')!;
+    cache.saveMediaState({
+      storageKey: toStorageKey(mediaStorageKey)!,
+      mediaId,
+      url: remoteMediaRef,
+      workspacePath: mediaRelPath,
+      localHash: 'fake-hash',
+      status: 'ready',
+    });
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'conflict-media',
+      title: 'Conflict Media Test',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T07:54:00.000Z',
+      locale: 'ja',
+      taxonomies: { categories: [], tags: [] },
+      bylines: [],
+    };
+
+    const baseBody = `![photo](${localMediaRef})\n\nBase paragraph.\n`;
+    const localBody = `![photo](${localMediaRef})\n\nLocal divergent paragraph.\n`;
+    const remoteBody = `![photo](${remoteMediaRef})\n\nRemote divergent paragraph.\n`;
+
+    const localMarkdown = serializeMarkdown(fm, localBody);
+    fs.writeFileSync(fullCanonical, localMarkdown, 'utf8');
+
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '10',
+      bodyMarkdown: baseBody,
+      frontmatterYaml: JSON.stringify(fm),
+      hash: calculateHash(serializeMarkdown(fm, baseBody)),
+      savedAt: 1000,
+    });
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relCanonical,
+      localHash: calculateHash(localMarkdown),
+      remoteRev: '10',
+      status: 'published',
+      slug: fm.slug,
+      lastSyncedAt: 1000,
+    });
+
+    const mockFetch = (async (urlStr: string, init?: { method?: string }) => {
+      const url = new URL(urlStr);
+      if (url.pathname.endsWith('/lock')) {
+        return { ok: true, status: 200, json: async () => ({ acquired: true }) };
+      }
+      if (url.pathname.endsWith(`/posts/${articleId}`) && init?.method === 'PUT') {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: { code: 'CONFLICT' } }),
+          text: async () => '',
+        };
+      }
+      if (url.pathname.endsWith(`/posts/${articleId}`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            item: {
+              id: articleId,
+              slug: fm.slug,
+              title: fm.title,
+              version: 11,
+              rev: '11',
+              status: 'published',
+              data: {
+                title: fm.title,
+                content: [
+                  {
+                    _type: 'block',
+                    _key: 'b1',
+                    children: [{ _type: 'span', text: 'Remote divergent paragraph.' }],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+
+    const res = await pushArticle(relCanonical, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://emdash.test',
+      token: 'token',
+      fetchFn: mockFetch,
+      allowPublish: true,
+      localMediaRefs: true,
+    });
+
+    expect(res.conflict).toBe(true);
+
+    // Verify disk content carries conflict markers
+    const diskContent = fs.readFileSync(fullCanonical, 'utf8');
+    expect(diskContent).toContain('<<<<<<< LOCAL');
+    expect(diskContent).toContain('>>>>>>> REMOTE');
+
+    // Verify disk content retains local media ref spelling
+    expect(diskContent).toContain(`![photo](${localMediaRef})`);
+
+    // Verify localHash in sync_state strictly matches disk bytes
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.localHash).toBe(calculateHash(diskContent));
+    expect(syncState?.bodyConflictPending).toBe(1);
+    expect(syncState?.conflictCopyPath).toBeTruthy();
   });
 });

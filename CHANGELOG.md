@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented explicit, human-readable draft revision annotation on the `status:` frontmatter line when a published article tracks an uncommitted remote draft revision.
   - File inspectors, text editors (VS Code, Obsidian, Cursor), and AI agents can immediately recognize that the file reflects an uncommitted draft revision without needing to query CLI `emit status`.
   - Maintained 100% YAML 1.1/1.2 parser transparency: inline comments are ignored by `gray-matter` and `FrontmatterSchema` (Zod), preserving `status: 'published'` without altering AST or schema contracts.
-  - Automatically maintained across lifecycles: added on pull when `draftRevisionId` is present, maintained when staging drafts via push, and automatically removed when published live via `--allow-publish` or discarded.
+  - Automatically maintained across lifecycles: added on pull when `draftRevisionId` is present, maintained when staging drafts via push, and automatically removed when published live (when the remote publish response reports no remaining draft revision) or discarded.
 - **Single Source of Truth Helper (`src/utils/draft-revision.ts`)**:
   - Centralized `hasUncommittedDraftRevision(syncState)` in Layer 0. All disk representation, baseline reconstruction, diagnostics, and warnings derive strictly from `sync_state.remote_rev.includes('@draft:')` when status is published, eliminating guesswork from CLI arguments or partial local state.
 - **Unified 3-Axis Disk Spelling Engine (`src/utils/disk-spelling.ts`)**:
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     2. `baseline.hash === calculateHash(canonicalContent)` (canonical baseline tracking)
     3. `frontmatter` in base snapshots stores remote-derived Layer A values only (no synthetic noise)
     4. `revForTransport` (Track 1) and `revForComparison` (Track 2) remain strictly separated.
-  - 100% eliminated phantom diffs and baseline desynchronization across all healing and conflict paths.
+  - Eliminated phantom diffs and baseline desynchronization across all standard pull, heal, and status inspection paths.
 
 ---
 

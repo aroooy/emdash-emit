@@ -79,6 +79,7 @@ export interface WorkspaceStatusResult {
       orphan: number;
       deletePending: number;
       taxonomyApplyPending: number;
+      hasUnpublishedDraft?: number;
     };
   };
 }
@@ -308,6 +309,7 @@ export function getWorkspaceStatus(
       orphan: items.filter((i) => i.orphan).length,
       deletePending: items.filter((i) => i.deletePending).length,
       taxonomyApplyPending: items.filter((i) => i.taxonomyApplyPending).length,
+      hasUnpublishedDraft: items.filter((i) => i.hasUnpublishedDraft).length,
     },
   };
 
