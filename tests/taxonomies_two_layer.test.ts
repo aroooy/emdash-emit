@@ -428,8 +428,9 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       expect(maps.slugToId.category[sharedRawSlug]).toBe('01WINNER');
       expect(maps.slugToId.category['共有スラッグ']).toBe('01WINNER');
 
-      // 2. Querying shared slug resolves to winner (silent assignment)
+      // 2. Querying shared slug (both decoded and canonical) resolves to winner (silent assignment)
       expect(maps.slugToId.category['共有スラッグ']).not.toBe('01LOSER');
+      expect(maps.slugToId.category[sharedRawSlug]).not.toBe('01LOSER');
 
       // 3. Unique name alias of loser allows reaching loser without ULID
       expect(maps.slugToId.category['敗者カテゴリ']).toBe('01LOSER');
