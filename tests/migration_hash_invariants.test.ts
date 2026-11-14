@@ -202,4 +202,39 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
     expect(calculateHash(pushReconstructed)).toBe(updatedDiskHash);
     expect(calculateHash(pushReconstructed)).toBe(pushRetrieved!.hash);
   });
+
+  it('guarantees bidirectional byte-identical reconstruction with hasDraftRevision: true', () => {
+    const fm: Frontmatter = {
+      id: '01M6TESTULID00000000000000',
+      slug: 'test-draft-rev',
+      title: 'Draft Rev Invariant',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T00:00:00.000Z',
+      locale: 'ja',
+      taxonomies: { categories: ['%e6%9c%aa%e5%88%86%e9%a1%9e'] },
+      bylines: ['aroooy'],
+    };
+    const body = 'Body with draft changes.\n';
+    const diskContent = serializeMarkdown(fm, body, undefined, { hasDraftRevision: true });
+    expect(diskContent).toContain('status: published # draft revision');
+    const diskHash = calculateHash(diskContent);
+
+    const snapshot = createBaseSnapshot({
+      id: fm.id,
+      rev: 'rev_1',
+      bodyMarkdown: body,
+      frontmatter: fm,
+      hash: diskHash,
+    });
+    cache.saveBaseSnapshot(snapshot);
+
+    const retrieved = cache.getBaseSnapshot(fm.id);
+    expect(retrieved).not.toBeNull();
+
+    const reconstructed = baselineMarkdown(retrieved!, undefined, { hasDraftRevision: true });
+    expect(reconstructed).toBe(diskContent);
+    expect(calculateHash(reconstructed)).toBe(diskHash);
+    expect(calculateHash(reconstructed)).toBe(retrieved!.hash);
+  });
 });

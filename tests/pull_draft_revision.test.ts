@@ -573,10 +573,11 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     // Single GET MUST have been called exactly once to discard the stale list item!
     expect(singleGetCallCount).toBe(1);
 
-    // Verify local markdown file now contains the full 10-block draft content
+    // Verify local markdown file now contains the full 10-block draft content and draft revision comment
     const updatedDisk = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(updatedDisk).toContain('10-block latest unpublished draft content!');
     expect(updatedDisk).not.toContain('7-block old live content from list API.');
+    expect(updatedDisk).toContain('status: published # draft revision');
 
     // Verify publishedAt is preserved in frontmatter
     const updatedParsed = parseMarkdown(updatedDisk);
@@ -756,5 +757,87 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     // Verify canonical disk file was updated with the server draft content
     const canonicalContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(canonicalContent).toContain('Server content with advancing draft revision.');
+  });
+
+  it('heals missing `# draft revision` in-place on untouched published file without extra network fetch', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
+    const relPath = `posts/published/20261113_${articleId}-kingfisher.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const draftRevId = '01M77VFTDRAFTREV00000000000';
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'kingfisher',
+      title: 'カワセミの佇まい',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T07:54:00.000Z',
+      locale: 'ja',
+      taxonomies: { categories: ['camera'], tags: [] },
+      bylines: ['aroooy'],
+    };
+
+    const body = 'Published content with uncommitted remote draft.\n';
+    // Disk content created prior to v0.1.25 WITHOUT the comment
+    const diskContentWithoutComment = serializeMarkdown(fm, body, undefined, {
+      hasDraftRevision: false,
+    });
+    fs.writeFileSync(fullPath, diskContentWithoutComment, 'utf8');
+    const diskHash = calculateHash(diskContentWithoutComment);
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: '26',
+        bodyMarkdown: body,
+        frontmatter: fm,
+        hash: diskHash,
+      }),
+    );
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: diskHash,
+      remoteRev: `26@draft:${draftRevId}`,
+      status: 'published',
+      slug: 'kingfisher',
+      lastSyncedAt: 1000,
+    });
+
+    const mockFetch = vi.fn(); // Should not be called!
+
+    const rawItem = {
+      id: articleId,
+      version: 26,
+      draftRevisionId: draftRevId,
+      liveRevisionId: '01M77VFTLIVEREV00000000000',
+      status: 'published',
+      slug: 'kingfisher',
+      updatedAt: '2026-11-13T07:54:00.000Z',
+      createdAt: '2026-11-13T07:54:00.000Z',
+      publishedAt: '2026-11-13T07:54:00.000Z',
+      data: { title: 'kingfisher' },
+    };
+
+    const result = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      rawItem,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(result.healed).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    const healedContent = fs.readFileSync(fullPath, 'utf8');
+    expect(healedContent).toContain('status: published # draft revision');
+
+    const updatedSync = cache.getSyncState(articleId);
+    expect(updatedSync?.localHash).toBe(calculateHash(healedContent));
   });
 });

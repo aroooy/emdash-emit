@@ -157,3 +157,9 @@ export function quarantineLocalCopy(
     return null;
   }
 }
+
+export {
+  commitArticleSnapshot,
+  type ArticleCommitInput,
+  type ArticleCommitResult,
+} from './commit.js';

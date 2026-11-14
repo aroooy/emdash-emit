@@ -35,7 +35,8 @@ import {
 } from '../../utils/frontmatter.js';
 import { hybrid3WayMerge, type MergeResult } from '../merge.js';
 import { fetchAssignedTaxonomies, computeTaxonomyHash } from '../terms.js';
-import { calculateHash, quarantineLocalCopy } from '../workspace/index.js';
+import { calculateHash, quarantineLocalCopy, commitArticleSnapshot } from '../workspace/index.js';
+import { hasUncommittedDraftRevision } from '../../utils/draft-revision.js';
 import { throwRemoteArticleDeleted } from './transport.js';
 import { pendingFlagsFor } from './commit.js';
 import type { PushOptions, PushResult } from './types.js';
@@ -249,10 +250,17 @@ export async function resolveConflictAndMerge(params: {
     );
     const isTaxonomyOnlyConflict = isTaxonomyConflict && !hasBodyConflict;
 
+    const remoteComparisonRev = extractComparisonRev(remoteItem, remoteParsed.rev);
+    const hasDraft = hasUncommittedDraftRevision({
+      status: remoteParsed.frontmatter.status,
+      remoteRev: remoteComparisonRev,
+    });
+
     const conflictedMarkdown = serializeMarkdown(
       mergeResult.frontmatter,
       mergeResult.body,
       options.candidates,
+      { hasDraftRevision: hasDraft },
     );
     let quarantineRel: string | null = null;
     // Only write conflict markers into the article body if body actually has conflicts
@@ -290,32 +298,25 @@ export async function resolveConflictAndMerge(params: {
       remoteTaxonomyHash: remoteTaxHash,
     });
 
-    // Update sync state:
-    // Track 2 (Comparison Key): Save composite comparison key in sync_state for fast-path parity
-    const remoteComparisonRev = extractComparisonRev(remoteItem, remoteParsed.rev);
-    options.cache.saveSyncState({
-      id,
-      localFilePath: targetFilePath,
-      localHash: syncState?.localHash || '',
-      remoteRev: remoteComparisonRev,
-      status: parsed.frontmatter.status,
-      slug: parsed.frontmatter.slug,
-      lastSyncedAt: Math.floor(Date.now() / 1000),
-      ...flags,
-    });
+    // Update sync state and base snapshot via centralized commitArticleSnapshot
+    const activeDiskContent = isTaxonomyOnlyConflict
+      ? fs.readFileSync(fullPath, 'utf8')
+      : conflictedMarkdown;
 
-    // Track 1 (Transport Token): Save raw remote token in base_snapshots
-    options.cache.saveBaseSnapshot(
-      createBaseSnapshot({
-        id,
-        rev: remoteParsed.rev,
-        bodyMarkdown: remoteParsed.body,
-        frontmatter: remoteParsed.frontmatter,
-        hash: calculateHash(
-          serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body, candidates),
-        ),
+    commitArticleSnapshot(options.cache, options.workspaceRoot, {
+      id,
+      relPath: targetFilePath,
+      diskContent: activeDiskContent,
+      canonicalContent: serializeMarkdown(remoteParsed.frontmatter, remoteParsed.body, candidates, {
+        hasDraftRevision: hasDraft,
       }),
-    );
+      frontmatter: remoteParsed.frontmatter,
+      bodyMarkdown: remoteParsed.body,
+      revForTransport: remoteParsed.rev,
+      revForComparison: remoteComparisonRev,
+      flags,
+      skipDiskWrite: true,
+    });
 
     return {
       handled: true,

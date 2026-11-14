@@ -878,7 +878,7 @@ Summary: 5 total (2 synced, 1 modified, 1 untracked, 1 invalid)
 > Articles are sorted newest-first by date prefix and ULID. The date prefix reflects the article's publication or creation date, not the last-modified time. To locate currently active edits, look for files marked `[modified]`.
 
 > [!NOTE]
-> `published* [has unpublished draft]` (🟣) indicates a published article that has uncommitted/staged draft revisions on EmDash. The status icon prioritizes local sync state (e.g. 🟡 `[modified]` if edited locally), while the `published*` label and `[has unpublished draft]` badge clearly highlight pending remote draft content.
+> `published* [has unpublished draft]` (🟣) indicates a published article that has uncommitted/staged draft revisions on EmDash. The status icon prioritizes local sync state (e.g. 🟡 `[modified]` if edited locally), while the `published*` label and `[has unpublished draft]` badge clearly highlight pending remote draft content. Inside the file, the frontmatter explicitly states `status: published # draft revision` so authors and AI agents know the file contains unpublished draft revisions even when inspecting the file directly.
 
 > [!NOTE]
 > `[invalid]` marks a file whose YAML frontmatter could not be parsed (usually an older serializer wrote unquoted percent-encoded taxonomy slugs). Batch `emit pull` self-heals cached invalid files; files outside the sliding window are marked `[uncached]` and are repaired with `emit pull <ULID>` (MCP: `sync_pull` with `id: "<ULID>"`). When `<collection>/conflicts/` holds rescue copies, the count is reported separately (`conflicts`) and never counted as an article.

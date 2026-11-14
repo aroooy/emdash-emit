@@ -31,7 +31,8 @@ import {
   parseMarkdown,
 } from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
-import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { resolveDiskSpelling, renderForDisk } from '../utils/disk-spelling.js';
+import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { formatRevForDisplay } from '../client/api.js';
 import {
@@ -156,15 +157,17 @@ function isBaselineSpellingMatch(
   if (!snapshot) return false;
 
   try {
+    const syncState = cache.getSyncState(id);
     const candidates = loadLocalTaxonomyCandidates(workspaceRoot);
+    const spelling = resolveDiskSpelling(localContent, syncState);
     const baseMarkdown = baselineMarkdown(snapshot, candidates, {
-      preferEncodedTaxonomy: carriesPercentEncodedTaxonomy(localContent),
+      preferEncodedTaxonomy: spelling.preferEncodedTaxonomy,
+      hasDraftRevision: spelling.hasDraftRevision,
     });
-    const localizedBase = localizeArticleMediaRefs(baseMarkdown, {
+    const localizedBase = renderForDisk(baseMarkdown, spelling, {
       workspaceRoot,
       articleRelPath: relPath,
       fs,
-      preferLegacyRef: carriesDepthFreeMediaRef(localContent),
     });
     return calculateHash(localizedBase) === currentHash;
   } catch {
@@ -220,9 +223,7 @@ export function getWorkspaceStatus(
         const conflictPending = syncState?.conflictPending === 1;
         const deletePending = syncState?.deletePending === 1;
         const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
-        const hasUnpublishedDraft =
-          parsed.frontmatter.status === 'published' &&
-          Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'));
+        const hasUnpublishedDraft = hasUncommittedDraftRevision(syncState);
 
         if (syncState) {
           // `local_hash` is supposed to record the exact bytes on disk, but a workspace whose articles were

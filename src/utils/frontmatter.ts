@@ -356,6 +356,11 @@ export function lenientRepairMarkdownFrontmatter(content: string): string | null
 
 export interface SerializeMarkdownOptions {
   preferEncodedTaxonomy?: boolean;
+  /**
+   * Whether the article is published but currently reflects an uncommitted remote draft revision.
+   * When true and status is 'published', emits: `status: published # draft revision`.
+   */
+  hasDraftRevision?: boolean;
 }
 
 /**
@@ -426,7 +431,11 @@ export function formatFrontmatterYaml(
   lines.push(`slug: ${formatYamlScalar(data.slug)}`);
   lines.push(`title: ${JSON.stringify(data.title)}`);
   lines.push(`collection: ${formatYamlScalar(data.collection)}`);
-  lines.push(`status: ${data.status}`);
+  if (data.status === 'published' && options?.hasDraftRevision) {
+    lines.push('status: published # draft revision');
+  } else {
+    lines.push(`status: ${data.status}`);
+  }
   lines.push(`publishedAt: ${data.publishedAt ? JSON.stringify(data.publishedAt) : 'null'}`);
   lines.push(`locale: ${formatYamlScalar(data.locale)}`);
   if (data.featuredImage !== undefined) {

@@ -1,0 +1,370 @@
+# v0.1.25 実装計画書: フロントマターにおけるドラフトリビジョンの明示 (Rev.2)
+
+**バージョン**: v0.1.25  
+**作成日**: 2026-11-14 (Rev.2、Rev.1 レビュー反映版)  
+**ステータス**: 実装計画レビュー（訂正済み）  
+**対象リポジトリ**: `emdash-emit` (`emit`)
+
+## Rev.1 → Rev.2 変更サマリ
+
+Rev.1 は「disk に書く表記」と「baseline から再構築する表記」を一致させる仕組みが、
+(a) 判定条件が 3 種類に分散している、(b) 書き込み経路の列挙が漏れている、という理由で
+**ファントム diff を防止できません**（Rev.1 §2.3 の主張は不成立）。原因は個別のバグではなく、
+**同じコミット処理（disk 書き込み + baseline 保存 + sync_state 保存）が 6 箇所に複製されている構造**にあります。
+
+| 論点 | Rev.1 | Rev.2 |
+|---|---|---|
+| disk 表記の表現手段 | `status: published # draft revision`（インラインコメント） | **`draftRevisionId` キー追加を第一候補**、コメント方式はフォールバック |
+| 判定条件 | 3 箇所が別条件（`rawObj.draftRevisionId` / `remoteRev.includes('@draft:')` / `!allowPublish`） | **`hasUncommittedDraftRevision()` 1 本に集約**（Layer 0） |
+| disk 書き込み + ハッシュ記録 | 各経路が個別に実装（pull 内 4 複製 + commit + merge_stage） | **`commitArticleSnapshot()` に集約**（Layer 2 / workspace 配下） |
+| 変更対象モジュール | 5 ファイル | **11 項目（新規 3 + 既存 8）**（fast-path heal ×4 と `merge_stage.ts`、`orchestrator.ts`、presentation 層を追加） |
+| publish 時のコメント除去 | `--allow-publish` を渡したら除去（remote を見ていない） | **保存後の `sync_state.remote_rev` に `@draft:` が無ければ除去** |
+| テスト計画 | 4 件 | **10 件**（heal 4 経路・merge_stage・publish 応答分岐・repair 経路・invariant テスト更新） |
+
+---
+
+## 1. 背景と課題分析
+
+### 1.1 背景
+v0.1.24 では、公開記事上の未公開ドラフト（`draftRevisionId`）の自動単体 GET 同期と、CLI / MCP ステータスにおける可視化（`🟣 [synced  ] published* [has unpublished draft]`）が実現しました。
+
+これにより、Cloudflare D1 リモートとローカル Markdown の間で、未公開ドラフトが欠落することなく同期されるようになりました。
+
+### 1.2 現状の課題（ファイル単体でのコンテキスト不足）
+しかし、実際に運用を開始したところ、以下の UI/UX 上の課題が浮き彫りになりました：
+
+1. **ファイル単体から状態が判別できない**:
+   - `emit status` を実行したユーザーにはドラフトの存在が分かりますが、エディタ（VS Code, Obsidian, Cursor 等）で直接 `.md` ファイルを開いたユーザーや、個別の記事ファイルを読み込んだ AI エージェントには、YAML フロントマターが `status: published` としか見えません。
+   - その結果、「このファイルは現在公開されている内容そのものなのか？ それとも未公開ドラフトの編集内容が含まれているのか？」がファイル単体では分かりません。
+
+2. **客観的・外部的な表現による誤認リスク**:
+   - 単に `# [has unpublished draft]` のようなコメントだと、「サーバー側（リモート）に下書きがあって、手元のファイルは古いまま（まだ pull していない？）」「Web 側で誰かが別の下書きを書いている？」という **「ドラフトが外部に存在する」という誤解** を与えかねません。
+   - 実際には、**「手元のこのファイル自体に、すでに最新の未公開ドラフト（リビジョン）の内容が丸ごと反映されている」** のが事実です。
+
+3. **EmDash のシステムモデルとの一致**:
+   - EmDash（D1）では、記事は `posts.status = 'published'`（公開中）でありながら、`posts.draftRevisionId` が存在し、ファイル本文はまさにその **Draft Revision（下書きリビジョン）** を追跡しています。
+   - したがって、リモートの実値 `draftRevisionId` を frontmatter に保ち、**「このファイルはそのドラフトリビジョンの内容そのものである」** を明示することが、EmDash のシステムモデル（Revision モデル）と完全に合致する表現です。具体的な表記手段（キー追加 / インラインコメント）は §2.2 で比較検討します。
+
+### 1.3 構造的分析: ファントム diff が再発する根本原因（Rev.2 で追加）
+
+Rev.1 は「未編集ファイルでファントム diff を出さない」ことを不変条件として掲げましたが、その不変条件を担保するコードは **1 本ではなく複製**になっています。実測結果:
+
+| 処理 | 重複箇所数 | 実測位置 |
+|---|---|---|
+| `serializeMarkdown(...)` 呼び出し | 8 | `pull.ts:590, 646, 736, 963` / `push/commit.ts:216` / `push/merge_stage.ts:252, 315` / `new.ts:312` |
+| `saveSyncState({...})` | 10 | `pull.ts:564, 609, 666, 761, 1132` / `status.ts:243` / `orchestrator.ts:359` / `push/commit.ts:378` / `push/merge_stage.ts:296` / `conflicts.ts:505` |
+| `saveBaseSnapshot` / `createBaseSnapshot` | 6 | `pull.ts:604, 659, 750, 1048` / `push/commit.ts:355` / `push/merge_stage.ts:308` |
+| 「disk の表記を読んで baseline をその表記に寄せる」判定 | 4 | `status.ts:160-168` / `diff.ts:168-182` / `orchestrator.ts:344-349` / `pull.ts:550-583` |
+| `PullResult` リテラル（うち `healed: true`） | 10（うち 4） | `pull.ts` 全体（`grep -c 'return {' = 10`、`healed: true` は 575 / 621 / 683 / 788） |
+
+**pull.ts 内の 4 複製**（同じ「書き込み → ハッシュ再計算 → baseline hash 更新 → sync_state 更新 → PullResult 返却」ブロック）:
+
+| # | 位置 | 経路 |
+|---|---|---|
+| 1 | `pull.ts:563-578` | media-ref respell ヒール（depth-free → article-relative） |
+| 2 | `pull.ts:596-624` | Branch 1: percent-encoded taxonomy ヒール（未編集ファイル） |
+| 3 | `pull.ts:644-687` | Branch 2: lenient repair 後の decoded 再シリアライズ（未編集ファイル） |
+| 4 | `pull.ts:736-790` | Branch 3': invalid frontmatter repair + remote 再構成 |
+
+Branch 1 と Branch 2 は変数名（`healedHash`↔`repairedHash`、`respelled`↔`decodedDisk`）を除き約 20 行が逐語一致します。
+
+さらに **複製ごとに baseline hash / localHash の関係が違う**ため、「どの表記のハッシュをどこに保存するか」という同一知識が 4〜6 か所に別々 hardcoded されています:
+
+```ts
+// Branch 1 / 2（pull.ts:604-607, 659-662）: baseline は JSON frontmatter をそのまま残し hash だけ上書き
+options.cache.saveBaseSnapshot({ ...existingBase, hash: healedHash });
+
+// Branch 3'（pull.ts:741-758）: canonical hash を baseline に、disk hash を sync_state に分けて保存
+hash: remoteCanonHash       // base_snapshots（canonical spelling）
+localHash: remoteDiskHash   // sync_state（localize 後の disk spelling）
+```
+
+**結論**: 新しい disk 表記を追加するたびに同じ修正を 8 か所（`serializeMarkdown` 呼び出し）＋ 6 か所（snapshot 保存）へ波及させ、1 か所漏らすとファントム diff が出る、という構造が taxonomy percent-encoding（v0.1.21）→ media-ref localization（v0.1.23）→ draft revision（v0.1.25）と 3 回繰り返されています。AGENTS.md の **Diagnostic alignment invariant (status vs doctor)** が明文化されていること自体が、この分裂が過去にも起きた証拠です。
+
+したがって v0.1.25 は **「機能追加」ではなく「表記追加を 1 箇所で完結させる集約」を先に実施する**ことで、ファントム diff 防止を人間依存の全経路列挙から構造保証へ変更します（§4）。
+
+---
+
+## 2. 設計方針とアーキテクチャ不変条件
+
+### 2.1 YAML 構文とパーサーの透過性（Layer 0）— 実測結果
+
+YAML 1.1 / 1.2 の規格上、スカラー値の後ろにスペースを空けて記述された `#` 以降は **インラインコメント** として扱われます。gray-matter（`matter()`）で実測した挙動:
+
+| 入力 frontmatter | パース結果 |
+|---|---|
+| `status: published # draft revision` | `data.status === 'published'`（コメント無視）✅ 安全 |
+| `# draft revision`（キーより前の standalone 行） | キーへの影響なし、コメント無視 ✅ 安全 |
+| 末尾 standalone 行 `# draft revision`（最終キーの後） | キーには影響なしだが **コメント行が本文側へ押し出される** ❌ |
+
+- **`matter(content)`（gray-matter / js-yaml）でのパース結果**: インラインコメント方式であれば `parsed.data.status` は厳密に文字列 `'published'` となり、コメント部分は完全に無視されます。
+- **`FrontmatterSchema`（Zod）での検証**: `status: z.enum(['draft', 'published'])` を一切変更することなく通過します。
+- **外部ツール互換性**: Astro, Next.js (Contentlayer), Hugo, Jekyll, Obsidian 等でも標準的な YAML コメントとして無視され、互換性を保ちます。
+
+> ⚠️ **重要（Rev.2 で追加）**: frontmatter 末尾の standalone コメント行は gray-matter が `m.content`（本文側）へ移動します。`base_snapshots.bodyMarkdown` は remote の canonical 本文であり disk 本文と byte-identical でなければならないため、**standalone コメント行方式は採用不可**です。コメントを使う場合は必ず **スカラー値に添えたインラインコメント**でなければなりません。
+
+### 2.2 disk 表記の表現手段: 第一候補は `draftRevisionId` キー追加（Rev.2 で変更）
+
+Rev.1 のインラインコメント案には、Layer A/B をまたぐ構造的弱点があります。`base_snapshots.frontmatter_yaml` は **JSON エンコードされた `Frontmatter`** でありコメントを保持できないため、disk 側にだけ存在する表記は baseline 再構築時に **side-channel（`sync_state.remote_rev` の文字列 inspect）** で復元するほかなく、その復元を全経路で漏らさないことを人間が保証し続ける必要があります。
+
+**第一候補（Rev.2 推奨）— Layer A に載る実キー**:
+
+```yaml
+---
+id: 01M77VFT15HSH2M1XW8MJPTCPQ
+slug: kingfisher-photography
+title: '【野鳥撮影】枝にとまるカワセミの静寂な佇まいに出会った日'
+collection: posts
+status: published
+publishedAt: "2026-11-13T08:00:00.000Z"
+locale: ja
+draftRevisionId: 01M7CD9YGWNPAEP1Z7NC8600ZD # EmDash の実値そのもの（合成値は書かない）
+...
+---
+```
+
+- `FrontmatterSchema` に `draftRevisionId: z.string().nullable().optional()` を追加するだけで Zod は透過。
+- **Layer A（JSON）に自然に載る**ため `baselineMarkdown()` の再構築が disk と自動一致し、side-channel が不要になる → §2.4 の不変条件が構造的に担保される。
+- 値は EmDash の `posts.draftRevisionId` そのもの（Track 1/2 で生成する合成キーではない）なので、**「remote 由来の値のみ保存し合成値を作らない」という Track 1 不変条件と衝突しない**。
+- 既存の `featuredImage: null` / `seo.canonical` と同じ扱いで AGENTS.md の説明ルールも容易く、未知キーを無視する外部ツールではコメント方式と同等以上の互換性を持つ。
+
+**フォールバック案（コメント方式）**: スキーマ変更が受け入れられない場合のみ採用し、その場合は §2.4 の side-channel 復元を **全経路（pull 5 箇所 + `merge_stage.ts` + `commit.ts`）** で実装必須とする。
+
+### 2.3 直列化層（Layer B）の拡張
+
+`src/utils/frontmatter.ts` の `formatFrontmatterYaml` および `serializeMarkdown` にオプションを追加します（方式共通）。
+
+```typescript
+export interface SerializeMarkdownOptions {
+  preferEncodedTaxonomy?: boolean;
+  /**
+   * Whether the article is published but currently reflects an uncommitted remote draft revision.
+   * - key 方式: `draftRevisionId` を frontmatter に出力する（Layer A にも保存される）。
+   * - comment 方式: status が 'published' の行に ` # draft revision` を添える。
+   */
+  hasDraftRevision?: boolean;
+}
+```
+
+key 方式では `data.draftRevisionId` を `formatYamlScalar()` 経由で出力します（ULID は `SAFE_PLAIN_SCALAR_RE` を通るため既存の `id` と同じく非クォートになり、baseline hash 互換が保たれます）。
+
+comment 方式の場合の分岐:
+
+```typescript
+if (data.status === 'published' && options?.hasDraftRevision) {
+  lines.push('status: published # draft revision');
+} else {
+  lines.push(`status: ${data.status}`);
+}
+```
+
+### 2.4 ベースライン再構築と SHA-256 不変条件（ファントム diff の構造保証）
+
+Emit の Git-like 設計において最も重要な原則は **「未編集のファイルでファントム diff（身に覚えのない変更）を絶対に発生させない」** ことです。
+
+- **Layer A（SQLite `base_snapshots`）**: `frontmatterYaml` カラムには `Frontmatter` オブジェクトが JSON 形式で保存されます。
+  - key 方式: `draftRevisionId` は Layer A に保存される → 再構築は disk と自動一致。
+  - comment 方式: コメントは JSON に含まれないため、`baselineMarkdown()` に `hasDraftRevision` を明示伝達する必要がある。
+- **Layer B（Markdown 再構築）**: `src/db/baseline.ts` の `baselineMarkdown` は snapshot から Markdown テキストを再構築します。
+
+**判定の真相源は 1 本のみ**（Rev.2 で新設。Rev.1 が持っていた 3 種類の別条件を廃止）:
+
+```typescript
+// src/utils/draft-revision.ts（Layer 0, 新規）
+/**
+ * 未コミットドラフトのリビジョンが remote に存在するかを判定する唯一の関数。
+ * 真相源は保存済みの sync_state.remote_rev（Track 2 複合キー）のみ。
+ * disk 表記・baseline 再構築・診断出力・警告文はすべてこの関数の結果から導出される。
+ */
+export function hasUncommittedDraftRevision(
+  syncState: { remoteRev?: string; status?: string } | null | undefined,
+): boolean {
+  return (
+    syncState?.status === 'published' &&
+    Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'))
+  );
+}
+```
+
+- **`--allow-publish` を渡したかどうかでは判定しない**（Rev.1 の欠陥）。EmDash が publish 後も応答に `draftRevisionId` を返すケースでは、推測で除去すると disk 表記と `sync_state.remote_rev` が不整合になり、次回 pull / status で必ず分裂します（§3）。
+- これにより `calculateHash(baselineMarkdown(...))` とディスク上の `calculateHash(diskContent)` が **完全に同一の SHA-256 ハッシュ** になり、`emit status` / `emit diff` / `emit doctor` の三者が常に一致します。
+
+### 2.5 disk 表記解決の集約（Rev.2 で追加）
+
+disk に書く表記は現在 3 軸あり、各所で個別に判定されています: taxonomy 表記（decoded / percent-encoded）、media-ref 表記（canonical / article-relative / depth-free）、そして v0.1.25 で加わる draft revision 表記。ここも 1 本の解決関数に集約します。
+
+```typescript
+// src/utils/disk-spelling.ts（Layer 0, 新規）
+export interface DiskSpelling {
+  preferEncodedTaxonomy: boolean;
+  preferLegacyMediaRef: boolean;
+  hasDraftRevision: boolean;
+}
+
+/** disk 上の bytes と sync_state から、そのファイルが採用している表記をすべて導出する。 */
+export function resolveDiskSpelling(
+  diskContent: string,
+  syncState?: { remoteRev?: string; status?: string } | null,
+): DiskSpelling;
+
+/** canonical Markdown を disk 表記へ変換する（pull / commit / status / diff が同一関数を通る）。 */
+export function renderForDisk(
+  canonicalContent: string,
+  spelling: DiskSpelling,
+  ctx: { workspaceRoot: string; articleRelPath: string; fs: typeof import('node:fs') },
+): string;
+```
+
+既存の `carriesPercentEncodedTaxonomy()`（`frontmatter.ts:379`）と `carriesDepthFreeMediaRef()`（`media-body-refs.ts`）は内部実装として維持し、呼び出し側（`status.ts:160-168` / `diff.ts:168-182` / `orchestrator.ts:344-349` / `pull.ts:550-583`）は `resolveDiskSpelling()` 経由に置き換えます。
+
+---
+
+## 3. 各ライフサイクルにおける動作仕様
+
+表記の付与・除去は **すべて §2.4 の `hasUncommittedDraftRevision()`（保存後 `sync_state.remote_rev` の `@draft:` 有無）から導出**します。下表の「条件」列は remote 応答の実値です。
+
+| 操作 | 条件（remote 応答 / 保存後 sync_state） | フロントマター出力（key 方式） | 説明 |
+|---|---|---|---|
+| **`emit pull`**（フルプル） | `status: published` かつ `draftRevisionId` あり | `draftRevisionId: <ULID>` を出力 | 単体 GET で取得した最新ドラフト本文を出力し、キーを付与 |
+| **`emit pull`**（fast-path / heal） | 同上（`existingSync.remoteRev` に `@draft:`） | 同上 | **Rev.1 で漏れていた 4 経路**（§4.1-3）。未編集ファイルを書き戻すため表記を維持しないとファントム diff |
+| **`emit pull`** | `status: published` かつ `draftRevisionId: null` | キー無し（`draftRevisionId` 省略） | リモートでドラフトが破棄または公開された場合、クリーンな状態に自動復元 |
+| **`emit pull`** | `status: draft` | キー無し | 通常の下書き記事には不要 |
+| **`emit push`** | `status: published` で PUT 応答が `draftRevisionId` を返す | キーを維持 | EmDash 上にドラフトとしてステージングされた（live  unchanged） |
+| **`emit push`** | `--allow-publish` あり **かつ** 保存後 `remote_rev` が `@live:` | キー無し | ドラフトが Live に昇格。**`--allow-publish` を渡した事実ではなく応答で判定**（§2.4） |
+| **`emit push`**（409 / merge_stage 経由） | 保存後 `remote_rev` が `@draft:` | キーを維持 | **Rev.1 で漏れていた経路**（§4.1-5）。disk・baseline hash・`localHash` の 3 者を同一判定で揃える |
+| **`emit new`** | 新規作成（常に `status: draft`） | キー無し | 通常の下書きのため不要 |
+
+> **Rev.1 との重要な差異**: Rev.1 の表は「`--allow-publish` あり → コメントを自動除去」としていました。これは remote 状態を見ていない推測です。`commit.ts:373` の `extractComparisonRev(finalRawItem ?? …, finalRev)` はレスポンスの `draftRevisionId` を優先するため、publish 後も応答に `draftRevisionId` が残る場合 disk から表記が消えるのに `sync_state.remote_rev` は `@draft:` のままになり、次回 pull / status で必ず不整合になります。
+
+---
+
+## 4. 影響範囲と実装ステップ
+
+### 4.0 Phase 0（先行リファクタリング）: コミット処理の集約（Rev.2 で追加・必須）
+
+機能追加の前に、§1.3 で実測した複製を 1 本の関数へ集約します。これが Rev.1 の欠陥 1〜3 を構造的に消します。
+
+```typescript
+// src/sync/workspace/commit.ts（Layer 2, 新規）
+export interface ArticleCommitInput {
+  id: string;
+  relPath: string;                 // 最終 canonical 相対パス
+  diskContent: string;             // 実際に disk へ書く bytes（disk spelling）
+  canonicalContent: string;        // baseline hash の対象（canonical spelling）
+  frontmatter: Frontmatter;        // Layer A に保存する値（remote 由来のみ、合成値禁止）
+  bodyMarkdown: string;            // baseline 本文（必ず canonical）
+  revForTransport: string;         // Track 1 → base_snapshots.rev
+  revForComparison: string;        // Track 2 → sync_state.remote_rev
+  flags?: Partial<SyncState>;      // pendingFlagsFor() の出力
+  bumpBaselineHashOnly?: boolean;  // heal 経路: frontmatter/body を据え置き hash だけ更新
+}
+
+export function commitArticleSnapshot(
+  cache: CacheDatabase,
+  fs: typeof import('node:fs'),
+  input: ArticleCommitInput,
+): { localHash: string; baselineHash: string };
+```
+
+**関数内部で保証する不変条件**（現在は各複製が個別に守っているもの）:
+
+1. `localHash === calculateHash(diskContent)` — disk の実際の bytes だけを追跡
+2. `baseline.hash === calculateHash(canonicalContent)` — baseline は常に canonical spelling
+3. `frontmatter` には remote 由来の値のみ受け付け、disk 専用表記（合成値）を一切入れない
+4. `revForTransport` / `revForComparison` を引数名で分離 — 「`_rev` に複合キーが混ざると 409 ループ」事故を型で防止
+
+**置き換え対象（実測 6 箇所）**: `pull.ts:563-578` / `596-624` / `644-687` / `736-790`、`push/commit.ts:355,378`、`push/merge_stage.ts:308,296`。
+
+**layering gate との整合**: `commitArticleSnapshot` は Layer 2 の `src/sync/workspace/` 配下（AGENTS.md で「workspace 不変条件の置き場所」として定義済み）に置き、`pull.ts` / `push/commit.ts` / `push/merge_stage.ts` が import する。新規 sibling edge となるため `tests/layering.test.ts` の name-by-name スナップショット更新が必須で、**新規 edge を増やさない方向**（集約により既存 edge を削減）で整理する。
+
+### 4.1 変更対象モジュール (Strict Layering 遵守)
+
+| # | モジュール | 層 | 変更内容 | Rev.1 との差異 |
+|---|---|---|---|---|
+| 1 | `src/utils/draft-revision.ts`（**新規**） | 0 | `hasUncommittedDraftRevision()` を提供（§2.4） | 新規 |
+| 2 | `src/utils/disk-spelling.ts`（**新規**） | 0 | `resolveDiskSpelling()` / `renderForDisk()` を提供（§2.5） | 新規 |
+| 3 | `src/utils/frontmatter.ts` | 0 | key 方式: `FrontmatterSchema.draftRevisionId` と出力を追加。comment 方式: `SerializeMarkdownOptions.hasDraftRevision` と分岐を追加 | 判定条件を持たない（純直列化） |
+| 4 | `src/db/baseline.ts` | 0 | `BaselineSerializeOptions` に透過（既存型再利用で追加不要の可能性大） | 変更小 |
+| 5 | `src/sync/workspace/commit.ts`（**新規**） | 2 | `commitArticleSnapshot()`（§4.0） | 新規 |
+| 6 | `src/sync/pull.ts` | 2 | **全 5 シリアライズ箇所**（`590`, `646`, `736`, `963` ＋ media-ref respell `563-578`）を `renderForDisk()` + `commitArticleSnapshot()` 経由へ | **Rev.1 は 1 箇所のみ想定** |
+| 7 | `src/sync/push/merge_stage.ts` | 2 | `252`（disk 書き込み）・`315`（baseline hash）・`296`（`localHash: syncState?.localHash \|\| ''`）を共通コミット経由へ | **Rev.1 で欠落** |
+| 8 | `src/sync/push/commit.ts` | 2 | `216` の serialize と `355/378` の保存を共通コミット経由へ。判定は `hasUncommittedDraftRevision()` | 条件を §2.4 に統一 |
+| 9 | `src/sync/diff.ts` & `src/sync/status.ts` | 1 | `baselineMarkdown()` 呼び出しを `resolveDiskSpelling()` 経由に統一（`diff.ts:168-182` / `status.ts:160-168`） | 判定関数を共有 |
+| 10 | `src/sync/orchestrator.ts` | 2 | post-localization pass（`344-361`）を共通コミット経由に置換 → `status.ts:isBaselineSpellingMatch()` の再構築重複を削除 | 新規 |
+| 11 | `src/cli/commands/status.ts` & `src/mcp/tools/sync-status.ts` | 3 | `hasUnpublishedDraft` を `hasUncommittedDraftRevision()` から導出（disk 表記と診断が同一ソースから） | 新規 |
+
+**layering 制約**: `draft-revision.ts` / `disk-spelling.ts` は Layer 0 なので Layer 1・2 双方から import 可能（`src/utils/media-body-refs.ts` が同じ動機で Layer 0 に置かれている前例と同一）。Layer 1 → Layer 2 禁止、Layer 3 intra-layer 分離（`src/presentation/` 経由）は変更しない。
+
+### 4.2 lenient repair 経路との相互作用（Rev.2 で追加）
+
+`lenientRepairMarkdownFrontmatter()`（`frontmatter.ts:221`）はコメントを保持する設計で、末尾検証（`332-350`）は `slug` / `id` / taxonomy terms / bylines の `#` 混入のみ検査し、**`status` は検査対象外**です。comment 方式を採用する場合:
+
+- ユーザーが手で壊した `status: published # ...` がそのまま許容され、修復後は表記無しに再シリアライズされて §1.3 と同じ分裂が起こる。
+- **対策**: 検証対象に `status` を追加し、「disk 上の draft revision 表記は Emit が書いたもの（`sync_state.remote_rev` の `@draft:` と整合するもの）のみ有効」とする規則を実装・テストする。
+- repair 経路の baseline hash 更新（`pull.ts:659-662`, `744-758`）で canonical / disk ハッシュの扱いが分かれるため、**どの表記のハッシュをどこに保存するか**を `commitArticleSnapshot()` の不変条件として明文化する。
+
+### 4.3 テスト計画
+
+1. **`tests/commit_symmetry.test.ts`（新規）**: `commitArticleSnapshot()` に対して `localHash == disk hash` / `baseline.hash == canonical hash` を直接検証。既存 `push_commit_symmetry.test.ts` は経路経由の間接検証しかしていない。
+2. **`tests/draft_revision.test.ts`（新規）**: `hasUncommittedDraftRevision()` が `@draft:` / `@live:` / 旧形式（純数字・Base64）/ sync_state 無し の各ケースで正しいこと。
+3. **`tests/disk_spelling.test.ts`（新規）**: taxonomy 表記 × media-ref 表記 × draft revision 表記の直積で `resolveDiskSpelling → renderForDisk` が往復一致すること。
+4. **`tests/frontmatter_draft_revision.test.ts`（新規）**: key 方式では `draftRevisionId` が round-trip し、comment 方式では `parseMarkdown` がエラーなく `status: 'published'` を読むこと（透過性）。末尾 standalone コメント行を生成しないこと。
+5. **`tests/pull_draft_revision.test.ts` の拡張**: フルプル加えて **heal 4 経路**（media-ref respell / percent-encoded taxonomy / lenient repair / invalid frontmatter repair）で表記が維持され `emit diff` が差分ゼロになること。
+6. **`tests/push_published_draft.test.ts` の拡張**: (a) PUT 応答が `draftRevisionId` を返す → 表記維持、(b) `--allow-publish` ありで応答が `liveRevisionId` のみ → 表記除去、(c) `--allow-publish` ありだが応答に `draftRevisionId` が残る → **表記維持**（Rev.1 の推測除去を拒否する回帰テスト）。
+7. **merge_stage 系テストの拡張**: 409 コンフリクト解決後、disk・baseline・`sync_state.local_hash` の 3 者が一致し `emit status` / `emit diff` が同一判定になること。
+8. **`tests/migration_hash_invariants.test.ts` の更新**: 現状 `baselineMarkdown(retrieved!)` を **オプション無し**で呼んでいる（174 / 200 行目）。disk 表記が増えたため比較対象を `renderForDisk()` 経由に明示し、invariant の対象を書き換える。
+9. **診断整合テスト**: 同一 workspace で `emit status` / `emit diff` / `emit doctor` が draft revision 表記について同じ結論を出すこと（AGENTS.md Diagnostic alignment invariant を直接固定）。
+10. **全テストスイートの検証**: `npm run check`（`format:check`, `typecheck`, Vitest, layering invariant）がオールグリーン、かつ `tests/layering.test.ts` の sibling edge スナップショットが集約後の実態と一致すること。
+
+### 4.4 実装順序（推奨）
+
+| Step | 内容 | 単独リリース可否 |
+|---|---|---|
+| S1 | Phase 0 集約（§4.0）＋ `tests/commit_symmetry.test.ts` | ✅ 挙動不変のリファクタリングとして先行リリース可 |
+| S2 | Layer 0 判定・表記解決関数（§2.4 / §2.5）＋呼び出し側統一 | ✅ 挙動不変 |
+| S3 | `draftRevisionId` 表記の実装（pull 全経路 + commit + merge_stage） | 機能追加 |
+| S4 | 診断・presentation 層の整合（§4.1-11）とテスト 5〜9 | 機能追加 |
+| S5 | ドキュメント更新（§5） | — |
+
+S1 / S2 は挙動を変えないため、v0.1.25 と別バージョンで先行リリースしても安全です。
+
+---
+
+## 5. ドキュメント更新
+
+1. **`AGENTS.md`**:
+   - Canonical Frontmatter Schema に `draftRevisionId`（key 方式）の意味と取り扱いを明記し、**AI エージェントが手で削除・改変しない**旨をルール化する。
+   - **「disk 表記は Layer B の導出物、診断は Layer A から導出する」** を Two-Track Revision Invariant の項に追加し、`hasUncommittedDraftRevision()` が唯一の真相源であることを記載する（コメントを手で消す / 手で書くことを禁止）。
+   - §1.3 で実測した集約を踏まえ、**「記事の disk 書き込み・baseline 保存・sync_state 保存は `commitArticleSnapshot()` 経由で行う。個別実装を追加しない」** を Layer 2 の規約として明記する（今後の再分裂を gate で検知できる状態に保つ）。
+   - `tests/layering.test.ts` の sibling edge スナップショットが更新された場合は、その name-by-name 一覧を追記する。
+2. **`README.md`**:
+   - 公開記事とドラフトリビジョンの連携仕様（ファイル単体での見え方、`emit status` の `published* [has unpublished draft]` との関係）についての説明を追加。
+3. **`CHANGELOG.md`**:
+   - Phase 0 集約（§4.0）は **refactor** エントリとして独立バージョンに記録（挙動不変である旨を明記）。
+   - v0.1.25 は表記追加・診断整合・テスト拡張のエントリとして記録。
+
+---
+
+## 6. リスクと未確定事項（Rev.2 で追加）
+
+| # | 項目 | 状態 | 確認方法 |
+|---|---|---|---|
+| R1 | EmDash が publish 後の PUT / status transition 応答に `draftRevisionId` を残すか | **未確認**（テストで両ケースを扱う） | live インスタンスで `emit push --allow-publish` を実行し、応答 JSON の `draftRevisionId` / `liveRevisionId` を観測。key 方式なら disk 表記は応答に一致するため、どちらの結果でも破綻しない |
+| R2 | `draftRevisionId` キー追加が既存 frontmatter の strict parse（`parseMarkdown`）を通過するか | 確認済み（Zod は optional 追加で透過）。ただし **ハッシュ不一致による phantom diff** が初回 pull まで発生しうる | 初回 pull で heal 経路が表記を追加するため、既存 workspace に対する migration テストを追加 |
+| R3 | key 方式採用時に `lenientRepairMarkdownFrontmatter` の末尾検証（`frontmatter.ts:332-350`）が `draftRevisionId` を検査対象外のまま許容するか | 要対応（§4.2） | 検証対象に追加し、不正値を rejectするテスト |
+| R4 | Phase 0 集約による `PullResult` の各フィールド（`healed`, `meaningChanged`, `title`）の挙動同一性 | 要検証 | S1 リファクタリング時に既存 pull テストを全て green のまま維持できることを以て担保 |
+| R5 | comment 方式を選択した場合、gray-matter が末尾 standalone 行を本文へ押し出す挙動（§2.1 実測）に依存しない実装になっているか | 設計で排除済み（インラインコメント限定） | `tests/frontmatter_draft_revision.test.ts` で「standalone 行を生成しない」ことを assert |
+
+---
+
+## 7. Rev.1 レビューで指摘された欠陥と本計画での対応
+
+| 欠陥（Rev.1） | 本計画での対応 |
+|---|---|
+| pull の fast-path / heal 3 箇所が未カバー | §4.1-6 で全 5 シリアライズ箇所を列挙、§4.0 集約で構造的に解消、テスト 5 で固定 |
+| `--allow-publish` 判定が remote を見ていない（表と条件の矛盾を含む） | §2.4 / §3 で保存後 `sync_state.remote_rev` 基準へ統一、テスト 6(c) で回帰防止 |
+| `push/merge_stage.ts` が完全に欠落（disk・baseline hash・localHash の非対称） | §4.1-7 と §4.0 集約、テスト 7 |
+| standalone コメント行が本文へ押し出されるリスク | §2.1 で実測結果を明記し採用不可、key 方式を第一候補化 |
+| `lenientRepairMarkdownFrontmatter` との相互作用未検討 | §4.2 を新設、テスト R3 対応 |
+| presentation 層（`hasUnpublishedDraft`）と disk 表記の分断 | §4.1-11 と診断整合テスト 9 |
+| コミット処理が 6 箇所に複製されている構造的原因 | §1.3 で実測、§4.0 Phase 0 を必須化 |

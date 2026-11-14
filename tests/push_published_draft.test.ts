@@ -160,6 +160,9 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(result.warnings).toContain(
       'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
     );
+    // Invariant: Disk file retains draft revision comment because remote still has an uncommitted draft
+    const diskAfter = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
+    expect(diskAfter).toContain('status: published # draft revision');
   });
 
   it('calls status transition /publish endpoint when allowPublish is true', async () => {
@@ -297,6 +300,10 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(result.warnings).toContain(
       'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
     );
+    // Invariant: Disk file automatically removes draft revision comment because remote published live
+    const diskAfter = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
+    expect(diskAfter).toContain('status: published');
+    expect(diskAfter).not.toContain('# draft revision');
   });
 
   it('does NOT emit draft staging warning when pushing a clean published article without remote draft (@live:)', async () => {
@@ -400,5 +407,127 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(result.warnings).not.toContain(
       'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
     );
+  });
+
+  it('retains draft revision comment if remote publish response still returns a draftRevisionId (6(c) regression test)', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCP2';
+    const relPath = `posts/published/20261113_${articleId}-still-has-draft.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const rawServerToken = 'MTk6MjAyNi0xMS0xNFQwNzoxMDowMC4wMDBa';
+    const compositeRev = '19@draft:01M7CD9YGWNPAEP1Z7NC8600ZD';
+
+    const fm: Frontmatter = {
+      id: articleId,
+      slug: 'still-has-draft',
+      title: 'Still Has Draft Post',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      locale: 'ja',
+      taxonomies: {},
+      bylines: ['aroooy'],
+    };
+
+    const initialBody = 'Body text.\n';
+    const initialContent = serializeMarkdown(fm, initialBody, undefined, {
+      hasDraftRevision: true,
+    });
+    fs.writeFileSync(fullPath, initialContent, 'utf8');
+    const hash = calculateHash(initialContent);
+
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: hash,
+      remoteRev: compositeRev,
+      status: 'published',
+      slug: 'still-has-draft',
+      lastSyncedAt: 1000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: rawServerToken,
+        frontmatter: fm,
+        bodyMarkdown: initialBody,
+        hash,
+      }),
+    );
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+      if (url.includes('/lock')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { lockToken: 'mock-lock-token' } }),
+        });
+      }
+      if (url.endsWith(`/posts/${articleId}`) && (!init || init.method === 'GET')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 19,
+                status: 'published',
+                _rev: rawServerToken,
+              },
+            },
+          }),
+        });
+      }
+      if (url.endsWith(`/posts/${articleId}`) && init?.method === 'PUT') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: articleId,
+            version: 20,
+            status: 'published',
+            _rev: 'MjA6MjAyNi0xMS0xNFQwODowMDowMC4wMDBa',
+          }),
+        });
+      }
+      if (url.includes('/publish')) {
+        // Server response where draftRevisionId is still present!
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            version: 21,
+            draftRevisionId: '01M7STILLDRAFT00000000000',
+            liveRevisionId: '01M7LIVE00000000000000000',
+            _rev: 'MjE6MjAyNi0xMS0xNFQwOTowMDowMC4wMDBa',
+          }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    const result = await pushArticle(relPath, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      allowPublish: true,
+    });
+
+    expect(result.success).toBe(true);
+    // Invariant 6(c): Because remote returned a draftRevisionId, disk MUST keep the draft revision comment!
+    const diskAfter = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
+    expect(diskAfter).toContain('status: published # draft revision');
+
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.remoteRev).toBe('21@draft:01M7STILLDRAFT00000000000');
   });
 });

@@ -36,9 +36,10 @@ import {
   type TaxonomyCandidates,
 } from '../../utils/frontmatter.js';
 import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../../utils/media-body-refs.js';
+import { hasUncommittedDraftRevision } from '../../utils/draft-revision.js';
 import { updateConfigSyncedVersion } from '../../utils/config.js';
 import { computeTaxonomyHash } from '../terms.js';
-import { calculateHash } from '../workspace/index.js';
+import { calculateHash, commitArticleSnapshot } from '../workspace/index.js';
 import type { DraftImageReference } from '../preflight.js';
 import { finalizePromotedDraftImages } from './media_stage.js';
 import { transitionContentStatus } from './transport.js';
@@ -213,20 +214,8 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
   );
   const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
-  const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates);
-
   // [P6] Promote uploaded draft images from media/drafts/ into media/ and commit media_state.
   finalizePromotedDraftImages(draftImages, uploadedByAbsPath, options, warnings);
-
-  const serializedContent = options.localMediaRefs
-    ? localizeArticleMediaRefs(serializedCanonical, {
-        workspaceRoot: options.workspaceRoot,
-        articleRelPath: newRelPath,
-        fs,
-        preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
-      })
-    : serializedCanonical;
-  const newHash = calculateHash(serializedContent);
 
   // Transition status to published / draft if requested
   let finalRev = newRev;
@@ -288,6 +277,30 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
       finalRawItem = transitionRes.rawJson ?? finalRawItem;
     }
   }
+
+  // Track 2 (Comparison Key): Save composite comparison key in sync_state for reliable fast-path change detection
+  const comparisonRev = extractComparisonRev(
+    finalRawItem ?? { version: finalRev, status: parsed.frontmatter.status },
+    finalRev,
+  );
+  const hasDraft = hasUncommittedDraftRevision({
+    status: parsed.frontmatter.status,
+    remoteRev: comparisonRev,
+  });
+
+  const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates, {
+    hasDraftRevision: hasDraft,
+  });
+
+  const serializedContent = options.localMediaRefs
+    ? localizeArticleMediaRefs(serializedCanonical, {
+        workspaceRoot: options.workspaceRoot,
+        articleRelPath: newRelPath,
+        fs,
+        preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
+      })
+    : serializedCanonical;
+  const newHash = calculateHash(serializedContent);
 
   // File write & cleanup
   if (mode === 'create') {
@@ -351,17 +364,6 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
 
   const targetRemoteTaxHash = hasTaxFailures ? fallbackTaxHash : calculatedTaxHash;
 
-  // Track 1 (Transport Token): Save the raw server token in base_snapshots so subsequent pushes use it verbatim
-  options.cache.saveBaseSnapshot(
-    createBaseSnapshot({
-      id: actualId,
-      rev: finalRev,
-      bodyMarkdown: parsed.body,
-      frontmatter: savedFrontmatter,
-      hash: newHash,
-    }),
-  );
-
   const flags = pendingFlagsFor({
     mode,
     syncState,
@@ -369,21 +371,17 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     remoteTaxonomyHash: targetRemoteTaxHash,
   });
 
-  // Track 2 (Comparison Key): Save composite comparison key in sync_state for reliable fast-path change detection
-  const comparisonRev = extractComparisonRev(
-    finalRawItem ?? { version: finalRev, status: parsed.frontmatter.status },
-    finalRev,
-  );
-
-  options.cache.saveSyncState({
+  commitArticleSnapshot(options.cache, options.workspaceRoot, {
     id: actualId,
-    localFilePath: newRelPath,
-    localHash: newHash,
-    remoteRev: comparisonRev,
-    status: parsed.frontmatter.status,
-    slug: parsed.frontmatter.slug,
-    lastSyncedAt: Math.floor(Date.now() / 1000),
-    ...flags,
+    relPath: newRelPath,
+    diskContent: serializedContent,
+    canonicalContent: serializedCanonical,
+    frontmatter: savedFrontmatter,
+    bodyMarkdown: parsed.body,
+    revForTransport: finalRev,
+    revForComparison: comparisonRev,
+    flags,
+    skipDiskWrite: true,
   });
 
   if (mode === 'update') {

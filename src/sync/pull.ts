@@ -47,6 +47,7 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
+import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
 import {
   isLocalMediaRef,
   localizeArticleMediaRefs,
@@ -56,6 +57,7 @@ import {
 import {
   CONFLICTS_SUBDIR,
   calculateHash,
+  commitArticleSnapshot,
   findLocalFilesByUlid,
   isQuarantinedRelativePath,
   quarantineLocalCopy,
@@ -585,32 +587,35 @@ export async function pullArticle(
         if (currentDiskHash === existingSync.localHash) {
           try {
             const parsedCurrent = parseMarkdown(currentDiskContent);
-            // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms -> heal to decoded
-            if (carriesPercentEncodedTaxonomy(currentDiskContent)) {
+            // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms or out-of-sync draft revision annotation -> heal in-place
+            const hasDraft = hasUncommittedDraftRevision(existingSync);
+            const carriesDraftComment = /^\s*status:\s*published\s+#\s*draft revision\s*$/m.test(
+              currentDiskContent,
+            );
+            const needsDraftRevisionHeal =
+              parsedCurrent.frontmatter.status === 'published' && hasDraft !== carriesDraftComment;
+
+            if (carriesPercentEncodedTaxonomy(currentDiskContent) || needsDraftRevisionHeal) {
               const respelledCanon = serializeMarkdown(
                 parsedCurrent.frontmatter,
                 parsedCurrent.body,
                 getTaxonomyCandidates(),
+                { hasDraftRevision: hasDraft },
               );
               const respelled = localizeDiskMarkdown(respelledCanon, existingSync.localFilePath);
               if (respelled !== currentDiskContent) {
                 try {
                   parseMarkdown(respelled);
-                  fs.writeFileSync(fullExistingPath, respelled, 'utf8');
-                  const healedHash = calculateHash(respelled);
-                  options.cache.runTransaction(() => {
-                    const existingBase = options.cache.getBaseSnapshot(id);
-                    if (existingBase) {
-                      options.cache.saveBaseSnapshot({
-                        ...existingBase,
-                        hash: healedHash,
-                      });
-                    }
-                    options.cache.saveSyncState({
-                      ...existingSync,
-                      localHash: healedHash,
-                      lastSyncedAt: Math.floor(Date.now() / 1000),
-                    });
+                  commitArticleSnapshot(options.cache, options.workspaceRoot, {
+                    id,
+                    relPath: existingSync.localFilePath,
+                    diskContent: respelled,
+                    canonicalContent: respelledCanon,
+                    frontmatter: parsedCurrent.frontmatter,
+                    bodyMarkdown: parsedCurrent.body,
+                    revForTransport: existingSync.remoteRev,
+                    revForComparison: existingSync.remoteRev,
+                    bumpBaselineHashOnly: true,
                   });
                   return {
                     id,
@@ -643,35 +648,26 @@ export async function pullArticle(
             const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
             if (repaired !== null) {
               const parsedRepaired = parseMarkdown(repaired);
+              const hasDraft = hasUncommittedDraftRevision({
+                status: parsedRepaired.frontmatter.status,
+                remoteRev: remoteComparisonRev,
+              });
               const decodedCanon = serializeMarkdown(
                 parsedRepaired.frontmatter,
                 parsedRepaired.body,
                 getTaxonomyCandidates(),
+                { hasDraftRevision: hasDraft },
               );
               const decodedDisk = localizeDiskMarkdown(decodedCanon, existingSync.localFilePath);
-              fs.writeFileSync(fullExistingPath, decodedDisk, 'utf8');
-              const repairedHash = calculateHash(decodedDisk);
-              const healedAt = Math.floor(Date.now() / 1000);
-
-              options.cache.runTransaction(() => {
-                const existingBase = options.cache.getBaseSnapshot(id);
-                if (existingBase) {
-                  options.cache.saveBaseSnapshot({
-                    ...existingBase,
-                    hash: repairedHash,
-                  });
-                }
-
-                // Re-track the repaired file against its own repaired hash so it reads as synced.
-                options.cache.saveSyncState({
-                  ...existingSync,
-                  localFilePath: existingSync.localFilePath,
-                  localHash: repairedHash,
-                  remoteRev: remoteComparisonRev,
-                  status: parsedRepaired.frontmatter.status,
-                  slug: parsedRepaired.frontmatter.slug,
-                  lastSyncedAt: healedAt,
-                });
+              commitArticleSnapshot(options.cache, options.workspaceRoot, {
+                id,
+                relPath: existingSync.localFilePath,
+                diskContent: decodedDisk,
+                frontmatter: parsedRepaired.frontmatter,
+                bodyMarkdown: parsedRepaired.body,
+                revForTransport: remoteRev,
+                revForComparison: remoteComparisonRev,
+                bumpBaselineHashOnly: true,
               });
 
               return {
@@ -733,10 +729,15 @@ export async function pullArticle(
               }
             }
 
+            const hasDraft = hasUncommittedDraftRevision({
+              status: remoteLocal.frontmatter.status,
+              remoteRev: remoteComparisonRev,
+            });
             const remoteCanonMarkdown = serializeMarkdown(
               remoteLocal.frontmatter,
               remoteLocal.body,
               getTaxonomyCandidates(),
+              { hasDraftRevision: hasDraft },
             );
             const remoteCanonHash = calculateHash(remoteCanonMarkdown);
             // The repaired file on disk carries the workspace's local-media-ref spelling, so the tracked hash
@@ -746,37 +747,34 @@ export async function pullArticle(
             );
 
             const existingBase = options.cache.getBaseSnapshot(id);
-            if (!(categoriesTerms === null && tagsTerms === null && existingBase)) {
-              options.cache.saveBaseSnapshot(
-                createBaseSnapshot({
-                  id,
-                  rev: remoteRev,
-                  bodyMarkdown: remoteLocal.body,
-                  frontmatter: remoteLocal.frontmatter,
-                  hash: remoteCanonHash,
-                }),
-              );
-            }
-
-            options.cache.saveSyncState({
+            const bumpBaselineHashOnly = Boolean(
+              categoriesTerms === null && tagsTerms === null && existingBase,
+            );
+            commitArticleSnapshot(options.cache, options.workspaceRoot, {
               id,
-              localFilePath: existingSync.localFilePath,
+              relPath: existingSync.localFilePath,
+              diskContent: repaired,
               localHash: remoteDiskHash,
-              remoteRev: remoteComparisonRev,
-              status: parsedRepaired.frontmatter.status,
-              slug: parsedRepaired.frontmatter.slug,
-              lastSyncedAt: Math.floor(Date.now() / 1000),
-              remoteTaxonomyHash: computeTaxonomyHash(
-                remoteLocal.frontmatter.taxonomies?.categories,
-                remoteLocal.frontmatter.taxonomies?.tags,
-              ),
-              taxonomyApplyPending: 0,
-              conflictPending: existingSync.conflictPending,
-              bodyConflictPending: existingSync.bodyConflictPending,
-              taxonomyConflictPending: existingSync.taxonomyConflictPending,
-              conflictCopyPath: existingSync.conflictCopyPath,
-              conflictCopyHash: existingSync.conflictCopyHash,
-              conflictAt: existingSync.conflictAt,
+              canonicalContent: remoteCanonMarkdown,
+              frontmatter: remoteLocal.frontmatter,
+              bodyMarkdown: remoteLocal.body,
+              revForTransport: remoteRev,
+              revForComparison: remoteComparisonRev,
+              bumpBaselineHashOnly,
+              skipDiskWrite: true,
+              flags: {
+                remoteTaxonomyHash: computeTaxonomyHash(
+                  remoteLocal.frontmatter.taxonomies?.categories,
+                  remoteLocal.frontmatter.taxonomies?.tags,
+                ),
+                taxonomyApplyPending: 0,
+                conflictPending: existingSync.conflictPending,
+                bodyConflictPending: existingSync.bodyConflictPending,
+                taxonomyConflictPending: existingSync.taxonomyConflictPending,
+                conflictCopyPath: existingSync.conflictCopyPath,
+                conflictCopyHash: existingSync.conflictCopyHash,
+                conflictAt: existingSync.conflictAt,
+              },
             });
 
             return {
@@ -960,7 +958,14 @@ export async function pullArticle(
   // base snapshot records; `markdownContent` is what lands on disk, which may spell mirrored images as local
   // references when `localMediaRefs` is enabled. Keeping the two apart is what lets an editor preview render a
   // mirror while the baseline stays byte-identical to a remote pull.
-  const canonicalMarkdown = serializeMarkdown(frontmatter, body, getTaxonomyCandidates());
+  const comparisonRev = extractComparisonRev(rawItem, rev);
+  const hasDraft = hasUncommittedDraftRevision({
+    status: frontmatter.status,
+    remoteRev: comparisonRev,
+  });
+  const canonicalMarkdown = serializeMarkdown(frontmatter, body, getTaxonomyCandidates(), {
+    hasDraftRevision: hasDraft,
+  });
   const contentHash = calculateHash(canonicalMarkdown);
 
   // Determine standard relative file path: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md
@@ -1040,21 +1045,6 @@ export async function pullArticle(
     }
   }
 
-  // Ensure parent directory exists and write file
-  fs.mkdirSync(path.dirname(fullFilePath), { recursive: true });
-  fs.writeFileSync(fullFilePath, markdownContent, 'utf8');
-
-  // Update Base snapshot in cache
-  options.cache.saveBaseSnapshot(
-    createBaseSnapshot({
-      id: frontmatter.id,
-      rev,
-      bodyMarkdown: body,
-      frontmatter,
-      hash: contentHash,
-    }),
-  );
-
   // Update sync state with explicit conflict pending preservation
   let conflictInfo: Partial<SyncState> = {};
   // Take the most recently quarantined divergent copy: `quarantineDivergentLocalCopies` walks
@@ -1126,23 +1116,24 @@ export async function pullArticle(
     };
   }
 
-  // Track 2 (Comparison Key): Save composite key for fast-path check
-  const comparisonRev = extractComparisonRev(rawItem, rev);
-
-  options.cache.saveSyncState({
+  // Commit canonical Markdown and sync state via commitArticleSnapshot
+  commitArticleSnapshot(options.cache, options.workspaceRoot, {
     id: frontmatter.id,
-    localFilePath: relPath,
-    localHash: calculateHash(markdownContent),
-    remoteRev: comparisonRev,
-    status: frontmatter.status,
-    slug: frontmatter.slug,
-    lastSyncedAt: Math.floor(Date.now() / 1000),
-    remoteTaxonomyHash: computeTaxonomyHash(
-      frontmatter.taxonomies?.categories,
-      frontmatter.taxonomies?.tags,
-    ),
-    taxonomyApplyPending: 0,
-    ...conflictInfo,
+    relPath,
+    diskContent: markdownContent,
+    canonicalContent: canonicalMarkdown,
+    frontmatter,
+    bodyMarkdown: body,
+    revForTransport: rev,
+    revForComparison: comparisonRev,
+    flags: {
+      remoteTaxonomyHash: computeTaxonomyHash(
+        frontmatter.taxonomies?.categories,
+        frontmatter.taxonomies?.tags,
+      ),
+      taxonomyApplyPending: 0,
+      ...conflictInfo,
+    },
   });
 
   // Update entries cache

@@ -47,7 +47,10 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
       taxonomies: {},
       bylines: [],
     };
-    const content1 = serializeMarkdown(fm1, 'Published body with draft changes.');
+    const content1 = serializeMarkdown(fm1, 'Published body with draft changes.', undefined, {
+      hasDraftRevision: true,
+    });
+    expect(content1).toContain('status: published # draft revision');
     fs.writeFileSync(pubWithDraftPath, content1, 'utf8');
     cache.saveSyncState({
       id: pubWithDraftId,

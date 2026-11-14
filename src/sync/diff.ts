@@ -27,8 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { baselineMarkdown } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { calculateHash } from './workspace/index.js';
-import { carriesPercentEncodedTaxonomy } from '../utils/frontmatter.js';
-import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { resolveDiskSpelling, renderForDisk } from '../utils/disk-spelling.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { formatRevForDisplay } from '../client/api.js';
 
@@ -165,8 +164,10 @@ export function inspectArticleDiff(options: {
   // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML,
   // preventing phantom diffs caused by taxonomy inline comments.
   const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
+  const spelling = resolveDiskSpelling(localContent, syncState);
   const baseFullMarkdown = baselineMarkdown(baseSnapshot, candidates, {
-    preferEncodedTaxonomy: carriesPercentEncodedTaxonomy(localContent),
+    preferEncodedTaxonomy: spelling.preferEncodedTaxonomy,
+    hasDraftRevision: spelling.hasDraftRevision,
   });
   // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as local
   // references (`../../media/<storageKey>`, or the older depth-free `media/<storageKey>`). Comparing those two
@@ -174,11 +175,10 @@ export function inspectArticleDiff(options: {
   // itself: when localizing the baseline reproduces exactly what the disk carries, compare in that spelling so
   // an untouched article reads clean. Otherwise keep the baseline canonical — which is what `sync_state.local_hash`
   // records for a file that stores canonical URLs or whose asset was never mirrored locally.
-  const localizedBase = localizeArticleMediaRefs(baseFullMarkdown, {
+  const localizedBase = renderForDisk(baseFullMarkdown, spelling, {
     workspaceRoot: options.workspaceRoot,
     articleRelPath: targetFile,
     fs,
-    preferLegacyRef: carriesDepthFreeMediaRef(localContent),
   });
   const baseForCompare =
     localizedBase === baseFullMarkdown || calculateHash(localizedBase) === currentHash
