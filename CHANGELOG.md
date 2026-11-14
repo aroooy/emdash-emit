@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-11-14
+
+### Added
+
+- **Two-Track Revision Architecture & Draft Revision Advancement Detection**:
+  - Solved EmDash server architecture nuance where draft saves update `draftRevisionId` (ULID) while keeping `posts.version` and `posts.updatedAt` unchanged, which previously caused `emit pull` fast-path to falsely report `already up-to-date`.
+  - Implemented **Two-Track Revision Invariant**:
+    - **Track 1 (`revForTransport`)**: Preserves verbatim server revision tokens (Base64 string like `3:2026-11-14T...`) in `base_snapshots.rev` and `entries.rev`. Prioritized in `push/index.ts:136` for REST PUT `{ _rev }` requests, strictly preventing synthetic key contamination and HTTP 409 conflict loops.
+    - **Track 2 (`revForComparison`)**: Stores composite revision identifiers (`${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`) in `sync_state.remote_rev` across all 4 save paths (`pull.ts` full pull, `pull.ts` fast-path heal branches, `push/commit.ts`, and `push/merge_stage.ts`).
+  - Added `extractComparisonRev` (`src/client/api.ts`): Field-first composite key generator prioritizing explicit revision ULIDs (`draftRevisionId` -> `liveRevisionId`) with clean version fallback.
+  - Added `isSameRev` (`src/client/api.ts`): Strict multi-stage revision comparator supporting exact matches, composite key comparisons, legacy-to-composite cache migration, and Base64 round-trip verification.
+  - Added `formatRevForDisplay` (`src/client/api.ts`): Clean presentation formatter for CLI/MCP outputs, displaying only the clean version number (e.g. `rev: 3`) while hiding internal `@draft:...` tracking details in `status.ts` and `diff.ts`.
+  - Added `CacheDatabase.runTransaction<T>` (`src/db/cache.ts`): Safe transaction helper wrapping `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` for multi-step SQLite operations.
+  - Added Unicode NFC normalization to `tryDecodeTaxonomyTerm` (`src/utils/frontmatter.ts`), guaranteeing consistent string comparisons regardless of OS file system encoding (NFD vs NFC).
+  - Extended `transitionContentStatus` (`src/sync/push/transport.ts`) to return `StatusTransitionResult { rev, rawJson }`, ensuring post-publish/unpublish commit updates Track 2 with remote status and revision ULIDs accurately.
+  - Full production workspace verification: achieved 100% idempotency (`0 updated, 60 skipped/up-to-date`) on successive `pull` runs and verified clean create, update, and delete push lifecycles.
+
+
 ## [0.1.21] - 2026-11-14
 
 ### Added

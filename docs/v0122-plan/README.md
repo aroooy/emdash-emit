@@ -1,0 +1,264 @@
+# v0.1.22 実装計画書: ドラフトリビジョン追従とリビジョン判定の完全化 (Rev.4)
+
+**バージョン**: v0.1.22  
+**作成日**: 2026-11-14 (Rev.4 確定)  
+**ステータス**: 承認済み / 実装着手  
+**対象リポジトリ**: `emdash-emit` (`emit`)
+
+---
+
+## 1. 背景と根本原因の構造分析
+
+### 1.1 発覚した事象
+本番環境（`https://aroooy.net`）において、EmDash Web 管理画面側で下書き記事（`status: draft`）にブロック（画像ブロック等）を追加保存した状態で `emit pull` を実行しても、ローカルの Markdown ファイルが更新されず `already up-to-date` としてスキップされる事象が発生した（`--force` フラグを指定した時のみ最新のサーバー内容が反映される）。
+
+### 1.2 本番 API の実測証跡（観測された事実）
+
+該当記事（ID: `01M7BZH06K515A5NQWZ36QK7NQ`）のサーバー応答を実測調査した結果：
+
+```json
+// GET /_emdash/api/content/posts/01M7BZH06K515A5NQWZ36QK7NQ (単体 API)
+{
+  "success": true,
+  "data": {
+    "item": {
+      "id": "01M7BZH06K515A5NQWZ36QK7NQ",
+      "version": 3,
+      "updatedAt": "2026-11-14T02:52:29.779Z",
+      "draftRevisionId": "01M7C7GRKQK8N2KTAJNXXMVPG3", // ← 14:12 JST 更新の最新 ULID
+      "liveRevisionId": null,
+      "status": "draft",
+      "data": { "content": [ ...画像ブロックを含む最新本文... ] }
+    },
+    "_rev": "MzoyMDI2LTExLTE0VDAyOjUyOjI5Ljc3OVo=" // ← Base64("3:2026-11-14T02:52:29.779Z")
+    // ※ エンドポイント/実装により data._rev または data.item._rev に配置される
+  }
+}
+
+// GET /_emdash/api/content/posts?status=all (一覧 API)
+{
+  "items": [
+    {
+      "id": "01M7BZH06K515A5NQWZ36QK7NQ",
+      "version": 3,
+      "updatedAt": "2026-11-14T02:52:29.779Z",
+      "draftRevisionId": "01M7C7GRKQK8N2KTAJNXXMVPG3",
+      // ※ トップレベルの _rev は存在しない
+      // ※ item.data.content は最新ドラフト本文を反映していない場合がある
+    }
+  ]
+}
+```
+
+### 1.3 根本原因の構造
+
+1. **EmDash サーバーのライフサイクル特性**:
+   - `posts.version` は公開記事のバージョンアップ時のみインクリメントされ、**下書き編集では `version: 3` のまま不変**。
+   - `posts.updatedAt` も下書き保存時には更新されず、**`draftRevisionId` のみが新しい ULID に更新される**。
+   - out-of-band の terms POST（タグ/カテゴリ変更）も同様に `version` / `updatedAt` を動かさない（`docs/v0112-eval` 既知の事実）。
+2. **Emit 側のリビジョン正規化の欠陥**:
+   - `normalizeRev`（`src/client/api.ts:137-140`）が `s.match(/^(\d+):/)` によりコロン左側のバージョン番号（`3`）のみを抽出。
+   - ローカルの SQLite キャッシュ（`sync_state.remote_rev: "3"`）と、サーバーの `_rev`（Base64 デコードで `3:...`）の双方が `"3"` に正規化され、**`existingSync.remoteRev === remoteRev`（同一リビジョン）と誤判定**される。
+3. **`pull.ts` の高速パスによる誤スキップ**:
+   - `pull.ts:504` の `normalizeRev(existingSync.remoteRev) !== normalizeRev(remoteRev)` が一致するため、ローカルファイルが未編集（ハッシュ一致）なら本文を取得・比較することなく `already up-to-date` として早期リターンする。
+
+---
+
+## 2. 設計方針とインバリアント
+
+### 2.1 二重リビジョン分離インバリアント（Two-Track Revision Invariant）
+
+本計画における最重要不変条件。**比較用リビジョン（Comparison Rev）** と **転送用リビジョン（Transport Rev）** の責務を完全に分離する。
+
+```text
+                        ┌──────────────────────────────────────────────┐
+                        │              EmDash サーバー                 │
+                        └──────────────┬───────────────────────────────┘
+                                       │ (GET API レスポンス)
+                                       ▼
+                     生トークン (_rev / Base64 / version)
+                                       │
+        ┌──────────────────────────────┴──────────────────────────────┐
+        ▼                                                             ▼
+【Track 1: Transport Token】                                 【Track 2: Comparison Key】
+サーバー由来の生トークンを不変保持                                 draftRevisionId を含む複合キーを生成
+(例: "MzoyMDI2LTExLTE0VDAyOjUyOjI5Ljc3OVo=")                    (例: "3@draft:01M7C7GRKQK8N2KTAJNXXMVPG3")
+        │                                                             │
+        ▼                                                             ▼
+base_snapshots.rev / entries.rev に保存                       sync_state.remote_rev に格納
+        │                                                             │
+        ▼                                                             ▼
+push 送信時の PUT { _rev } で最優先使用                          pull.ts の高速パス判定 (isSameRev) で使用
+(HTTP 409 連鎖を実機検証を経て防止)                              (下書き更新を 100% 確実に検知)
+```
+
+- **Transport Token の絶対保護**: EmDash サーバーが期待する生トークン（Base64 `version:updatedAt` 等）を一切改変せず `base_snapshots.rev` および `entries.rev` に保持する。`push` の PUT ペイロード作成時（`src/sync/push/index.ts:136`）は、**`baseSnapshot?.rev` を `syncState?.remoteRev` より優先**して参照する。これにより、複合キーがサーバーへ送られて 409 が多発する致命的リスクを排除する。
+- **Comparison Key の特化**: `sync_state.remote_rev` には比較専用の複合キー（`3@draft:${draftRevisionId}`）を格納し、ローカルでの pull スキップ判定（`isSameRev`）にのみ使用する。
+
+### 2.2 複合リビジョンキー（CompositeRev）の生成優先順位 (S2 対応)
+
+ステータス語彙の曖昧さを排除し、**実在する ULID フィールドの優先順（Field-first）** で一貫したキーを生成する。
+
+```text
+1. draftRevisionId が存在する場合:  `${version}@draft:${draftRevisionId}`
+2. liveRevisionId が存在する場合:   `${version}@live:${liveRevisionId}`
+3. どちらも存在しない場合:          生トークン (extractRev の結果、例: "3" または Base64)
+```
+
+- これにより、一覧 API（`GET /posts?status=all`）のレスポンスでも、単体 API のレスポンスでも、状態語彙に左右されず同一の複合キーが決定的に生成される。
+
+### 2.3 `isSameRev` による厳格な等価性判定
+
+`normalizeRev` の現行ロジック（純粋な数値抽出）はレガシー互換・テスト互換のために維持し、リビジョン比較の責務は新設関数 **`isSameRev(trackedRev, remoteRev)`** に委譲する。
+
+1. **完全一致**: `trackedRev === remoteRev` なら `true`。
+2. **複合キー一致**: ともに `@draft:` または `@live:` を含み、ULID が一致すれば `true`、異なれば `false`。
+3. **レガシー vs 複合キーの移行判定**:
+   - 一方が純粋な数字（`"3"`）で、他方が複合キー（`"3@draft:..."`）の場合、**必ず `false`（不一致）** と判定して full pull 側へ倒し、最新の複合キーへ安全に初回昇格させる。
+4. **レガシー Base64 キャッシュとの後方互換保護**:
+   - 移行前のキャッシュ（v0.1.21 以前に保存された `b64Rev` シード記事等）や ULID 欠落フォールバック同士の比較においてのみ、Base64 厳格判定を発火させる。
+   - `Buffer.from(s, 'base64').toString('base64') === s` による厳格 round-trip 検証を行い、バイナリゴミを排除。デコード文字列がタイムスタンプを含む場合はタイムスタンプまで一致して初めて `true` とする。
+
+### 2.4 一覧取得から単体取得への安全な昇格（Selective Fetch）
+
+- `pullBatch`（`orchestrator.ts` / `pull.ts`）において、一覧 API で取得したアイテムの `draftRevisionId` がローカルの `sync_state` の比較キーと一致しない場合、一覧の古い `item.data.content` をそのまま使わず、**必ず単体 API（`GET /content/posts/:id`）をフェッチして最新ドラフト本文を取得**する。
+- 逆に、`draftRevisionId` も `version` も一致している場合は、従来どおりゼロネットワーク・高速スキップ（`already up-to-date`）を維持する。
+
+### 2.5 レビュー指摘（S1, W2）の統合実装
+
+- **S1 (NFC 正規化の一元化)**:
+  `src/utils/frontmatter.ts` の `tryDecodeTaxonomyTerm` 内で、デコード成功文字列に対して一律 `.normalize('NFC')` を適用。NFD ディスク入力に対しても byte-identical なベースライン照合が維持されることを保証。呼び出し側（`new.ts`, `taxonomies.ts`, `merge.ts`）の重複 normalize が no-op になることをテストで担保。
+- **W2 (トランザクション保護)**:
+  `src/db/cache.ts` に汎用トランザクションヘルパー `runTransaction<T>(fn: () => T): T` を新設（`db.exec('BEGIN TRANSACTION;') ... COMMIT / ROLLBACK`）。`pull.ts` の Branch 1 / Branch 2 における `saveBaseSnapshot` と `saveSyncState` をトランザクション内で実行し、中間状態の発生を防止（既存のスキーマ移行・bylines プルーニング処理も順次統合）。※トランザクションは SQLite キャッシュ層の整合性を保護するスコープであることを明記。
+
+---
+
+## 3. 影響モジュールと改修詳細
+
+### 3.1 Layer 0: Primitives & Infra
+
+#### `src/client/api.ts`
+- `extractRev(raw: unknown, fallback?: string): string`:
+  - サーバー由来の生トークン（`item._rev`, `data._rev`, `rev`, `version`）を無変換で抽出する（既存仕様維持、Transport 用）。
+- `extractComparisonRev(item: unknown, fallback?: string): string` **(新設)**:
+  - フィールド優先順（`draftRevisionId` → `liveRevisionId` → fallback）に基づき、`3@draft:${draftRevisionId}` 等の比較用キーを生成。
+- `isSameRev(revA: unknown, revB: unknown): boolean` **(新設)**:
+  - §2.3 に基づく厳格なリビジョン等価性判定。
+- `normalizeRev(rev: unknown): string`:
+  - 既存の動作を維持（`tests/api.test.ts:87-100` との完全な後方互換性を担保）。
+- `formatRevForDisplay(rev: string | null | undefined): string` **(新設)**:
+  - UI 表示用。複合キー（`3@draft:...`）の場合は `@` の前（`"3"`）を抽出し、簡潔な表示文字列を返す。
+
+#### `src/utils/frontmatter.ts`
+- `tryDecodeTaxonomyTerm(term: string): string`:
+  - デコード成功時に `.normalize('NFC')` を適用（S1 対応）。
+
+#### `src/db/cache.ts`
+- `runTransaction<T>(fn: () => T): T` **(新設)**:
+  - `BEGIN TRANSACTION;` / `COMMIT;` / `ROLLBACK;` による同期トランザクションラッパー。
+
+### 3.2 Layer 1: Sync Upstream (S3 対応)
+- **軽微な変更（表示ラベル整形のみ）**:
+  - `src/sync/diff.ts`（L187, 209）および `src/sync/status.ts`（L253, 278）の表示ラベルに `formatRevForDisplay` を適用。
+  - `PullResult.rev` / `PushResult.rev` などの public API フィールドは、CLI/MCP の一貫性のために Track 1（生トークン）をそのまま維持する。
+
+### 3.3 Layer 2: Sync Downstream
+
+#### (a) `push/index.ts` (Transport トークンの最優先参照)
+- L136 の `currentRev` 解決順序を変更:
+  ```ts
+  // サーバーへの送信 (_rev) には、baseSnapshot に保持されている生の transport トークンを最優先で使用する
+  const currentRev = baseSnapshot?.rev || syncState?.remoteRev || '';
+  ```
+
+#### (b) `push/commit.ts` (Commit 時の Track 1/2 分離)
+- `commitPostPush` の保存ロジック（L330-356）:
+  ```ts
+  // Track 1: base_snapshots にはサーバーから返された生の transport トークン (finalRev) を保存
+  options.cache.saveBaseSnapshot(createBaseSnapshot({ id: actualId, rev: finalRev, ... }));
+
+  // Track 2: sync_state.remote_rev には比較用複合キーを保存
+  const comparisonRev = extractComparisonRev(updatedJson, finalRev);
+  options.cache.saveSyncState({ id: actualId, remoteRev: comparisonRev, ... });
+  ```
+- **`transitionContentStatus` 経路**（`commit.ts:230-262` → `transport.ts:76`）:
+  - publish/unpublish 成功時にサーバーから返る新 `_rev`（生トークン）を `finalRev` として保持し、同様に分離保存。
+
+#### (c) `push/merge_stage.ts` (409 マージ後の Track 1/2 分離)
+- L294-315:
+  ```ts
+  // Track 2: 比較用複合キーを保存
+  const remoteComparisonRev = extractComparisonRev(remoteRawObj, remoteParsed.rev);
+  options.cache.saveSyncState({ ..., remoteRev: remoteComparisonRev, ... });
+
+  // Track 1: base_snapshots には生の remoteParsed.rev (生トークン) を保存
+  options.cache.saveBaseSnapshot(createBaseSnapshot({ rev: remoteParsed.rev, ... }));
+  ```
+
+#### (d) `pull.ts` (Pull 経路の網羅的 Track 1/2 分離, S1/S4 対応)
+- **Fast-path 判定 (`tryFastPathOrHeal`)**:
+  - L498-507:
+    ```ts
+    const remoteComparisonRev = extractComparisonRev(rawObj);
+    if (!existingSync || !isSameRev(existingSync.remoteRev, remoteComparisonRev)) {
+      return null; // full pull (単体 GET) へ
+    }
+    ```
+- **Fast-path heal 実行時 (`pull.ts:599-608`, `:649-666`)**:
+  - `options.cache.runTransaction(...)` で囲み、アトミック化（W2 対応）。
+  - Branch 1（`599-608`）: 既存の `existingSync.remoteRev`（複合キー）をそのまま引き継ぐ（現状維持）。
+  - Branch 2（`649-666`）: `remoteRev` の代入値を `extractComparisonRev(rawObj, remoteRev)` 由来の複合キーにする。
+- **Full pull 完了時 (`pull.ts:1016-1024`, `:1097-1124`)**:
+  - `base_snapshots.rev`: サーバー由来の生トークン `rawRev` を保存（Track 1）。
+  - `sync_state.remote_rev`: `extractComparisonRev(rawItem || rawObj)` による複合キーを保存（Track 2）。
+  - `entries.rev`: 生トークン `rawRev` を保存（Track 1 整合。※`saveEntry` の呼び出し箇所は pull.ts:1114 のみであり push 側は変更なし）。
+
+---
+
+## 4. テスト計画
+
+### 4.1 既存テストの互換性・回帰検証
+- `tests/api.test.ts:87-100`: `normalizeRev` の仕様を変更しないため、既存アサーションはすべてそのまま通過（green）。
+- `tests/sync.test.ts`:
+  - 409 マージ系テスト（`:2025`, `:2113` の `b64Rev` シード）が `saveSyncState` への複合キー保存後も壊れずに通過することを回帰確認。
+  - レガシー数値 rev シード記事が初回 pull で安全に移行することを確認。
+
+### 4.2 新設・更新テストケース
+
+1. **`tests/api_rev.test.ts`（新設）**:
+   - `extractComparisonRev` の単体テスト（draftRevisionId, liveRevisionId, fallback の各分岐）。
+   - `isSameRev` の網羅テスト:
+     - 複合キー同士の一致・不一致
+     - レガシー数値 vs 複合キーの不一致（移行トリガー）
+     - レガシー Base64 キャッシュの厳格 round-trip 判定
+   - `formatRevForDisplay` のラベル短縮テスト。
+2. **`tests/pull_draft_revision.test.ts`（新設）**:
+   - 下書き記事がサーバー側で更新され、`version` が不変で `draftRevisionId` のみが進んだケースで、`emit pull` が正しく更新（`updated: true`）を検知してローカルファイルを書き換えることの検証。
+   - 2回目 pull での完全な冪等性（`skipped: true`）の検証（※前提条件: スキップ対象は version も draftRevisionId も一致している記事のみをシード）。
+3. **`tests/push_transport_rev.test.ts`（新設）**:
+   - `sync_state.remote_rev` に複合キー（`3@draft:...`）が格納されている状態でも、`pushArticle` がサーバーへ送信する PUT ペイロードの `_rev` には `base_snapshots.rev` の生トークンが使用されることの検証（指摘 2 の防壁テスト）。
+   - publish/unpublish 状態遷移（`transitionContentStatus` / `transport.ts:48`）時にも生トークンが渡ることの検証。
+4. **`tests/migration_hash_invariants.test.ts`**:
+   - NFD 結合文字を含むディスクファイルがデコード・heal された際にも、ベースライン再構築との byte 一致が崩れないことの検証（S1）。
+   - 呼び出し側の重複 normalize が no-op であることの保証。
+
+### 4.3 実機ワークスペース（`aroooy.net`）での検証手順 (S5 対応)
+
+1. 本番ワークスペースで `emit status` を実行し、全記事が同期状態（`synced`）であることを確認。
+2. サーバー側（EmDash 管理画面）でテスト用下書き記事の内容（ブロック追加等）を編集して保存。
+3. `--force` を付けずに通常の `emit pull` を実行。
+4. **該当の下書き記事が `already up-to-date` でスキップされず、正しく `updated` としてローカルファイルに反映されること** を確認。
+5. 直後の 2 回目の `emit pull` で、正しく `0 updated, 60 skipped` の冪等性が維持されることを確認。
+6. その後、該当の下書き記事をローカルから `emit push` し、**409 Conflict が発生せず HTTP 200 で正常プッシュ完了すること** を確認。
+   - ※この時点で `sync_state.remote_rev` は複合キー、`base_snapshots.rev` は生トークンの状態であり、Track 1/2 分離が正常に機能していることの直接証明となる。
+
+---
+
+## 5. リスク評価と互換性担保
+
+1. **409 Conflict 連鎖の防止**:
+   - Transport トークン（Track 1）と Comparison キー（Track 2）を全経路（push, merge_stage, commit, pull）で厳密に分離したため、理論上リモート API へのリクエスト破壊は防護されている。§4.3-6 の実機検証をもって最終確定とする。
+2. **データベース互換性**:
+   - SQLite スキーマの変更は一切不要（`sync_state.remote_rev` は `TEXT` カラムのため、複合キーをそのまま透過的に格納可能）。
+3. **表示 UX**:
+   - `formatRevForDisplay` により、UI 表示時は `@` の前（`version`）のみを簡潔に表示し、端末幅の圧迫を防ぐ。

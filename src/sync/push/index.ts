@@ -133,7 +133,8 @@ export async function pushArticle(
   // 3 & 4. Post-preflight guards (G16: taxonomy conflict pending, G17: taxonomy apply pending)
   evaluatePostPreflightGuards(syncState, options, collection, id, targetFilePath);
 
-  const currentRev = syncState?.remoteRev || baseSnapshot?.rev || '';
+  // Track 1 (Transport Token): baseSnapshot holds the raw token from server. Prioritize it to prevent 409 conflicts.
+  const currentRev = baseSnapshot?.rev || syncState?.remoteRev || '';
   const warnings = [...preflight.warnings];
 
   // Load local bylines map for converting frontmatter byline slugs to ULIDs
@@ -291,6 +292,7 @@ export async function pushArticle(
       fetchFn,
       warnings,
       createdItemCreatedAt: (createdItem.createdAt as string) || null,
+      updatedRawItem: createdJson,
     });
   }
 
@@ -497,6 +499,7 @@ export async function pushArticle(
       warnings,
       syncState,
       baseSnapshot,
+      updatedRawItem: updatedJson,
     });
   });
 }

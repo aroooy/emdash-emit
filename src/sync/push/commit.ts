@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { extractComparisonRev } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import type { UploadMediaResult } from '../../client/media.js';
 import { createBaseSnapshot, readBaselineFrontmatter } from '../../db/baseline.js';
@@ -158,6 +159,7 @@ export interface CommitPostPushParams {
   syncState?: SyncState | null;
   baseSnapshot?: BaseSnapshot | null;
   createdItemCreatedAt?: string | null;
+  updatedRawItem?: unknown;
 }
 
 /**
@@ -228,9 +230,10 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
 
   // Transition status to published / draft if requested
   let finalRev = newRev;
+  let finalRawItem = params.updatedRawItem;
   if (mode === 'create') {
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
-      finalRev = await transitionContentStatus(
+      const transitionRes = await transitionContentStatus(
         collection,
         actualId,
         'published',
@@ -239,11 +242,13 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
         options,
         fetchFn,
       );
+      finalRev = transitionRes.rev;
+      finalRawItem = transitionRes.rawJson ?? finalRawItem;
     }
   } else {
     const previousStatus = syncState?.status || 'draft';
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
-      finalRev = await transitionContentStatus(
+      const transitionRes = await transitionContentStatus(
         collection,
         actualId,
         'published',
@@ -252,8 +257,10 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
         options,
         fetchFn,
       );
+      finalRev = transitionRes.rev;
+      finalRawItem = transitionRes.rawJson ?? finalRawItem;
     } else if (parsed.frontmatter.status === 'draft' && previousStatus === 'published') {
-      finalRev = await transitionContentStatus(
+      const transitionRes = await transitionContentStatus(
         collection,
         actualId,
         'draft',
@@ -262,6 +269,8 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
         options,
         fetchFn,
       );
+      finalRev = transitionRes.rev;
+      finalRawItem = transitionRes.rawJson ?? finalRawItem;
     }
   }
 
@@ -327,6 +336,7 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
 
   const targetRemoteTaxHash = hasTaxFailures ? fallbackTaxHash : calculatedTaxHash;
 
+  // Track 1 (Transport Token): Save the raw server token in base_snapshots so subsequent pushes use it verbatim
   options.cache.saveBaseSnapshot(
     createBaseSnapshot({
       id: actualId,
@@ -344,11 +354,17 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     remoteTaxonomyHash: targetRemoteTaxHash,
   });
 
+  // Track 2 (Comparison Key): Save composite comparison key in sync_state for reliable fast-path change detection
+  const comparisonRev = extractComparisonRev(
+    finalRawItem ?? { version: finalRev, status: parsed.frontmatter.status },
+    finalRev,
+  );
+
   options.cache.saveSyncState({
     id: actualId,
     localFilePath: newRelPath,
     localHash: newHash,
-    remoteRev: finalRev,
+    remoteRev: comparisonRev,
     status: parsed.frontmatter.status,
     slug: parsed.frontmatter.slug,
     lastSyncedAt: Math.floor(Date.now() / 1000),

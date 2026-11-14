@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { extractComparisonRev } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import { apiResponseToLocal } from '../../client/mapper.js';
 import { articleContentEndpoint } from '../../client/endpoints.js';
@@ -290,18 +291,20 @@ export async function resolveConflictAndMerge(params: {
     });
 
     // Update sync state:
-    // Do NOT overwrite localHash with marker hash, so `status` remains clean when markers are cleaned up!
+    // Track 2 (Comparison Key): Save composite comparison key in sync_state for fast-path parity
+    const remoteComparisonRev = extractComparisonRev(remoteItem, remoteParsed.rev);
     options.cache.saveSyncState({
       id,
       localFilePath: targetFilePath,
       localHash: syncState?.localHash || '',
-      remoteRev: remoteParsed.rev,
+      remoteRev: remoteComparisonRev,
       status: parsed.frontmatter.status,
       slug: parsed.frontmatter.slug,
       lastSyncedAt: Math.floor(Date.now() / 1000),
       ...flags,
     });
 
+    // Track 1 (Transport Token): Save raw remote token in base_snapshots
     options.cache.saveBaseSnapshot(
       createBaseSnapshot({
         id,

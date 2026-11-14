@@ -30,6 +30,7 @@ import { calculateHash } from './workspace/index.js';
 import { carriesPercentEncodedTaxonomy } from '../utils/frontmatter.js';
 import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { formatRevForDisplay } from '../client/api.js';
 
 export interface DiffResult {
   hasChanges: boolean;
@@ -183,15 +184,16 @@ export function inspectArticleDiff(options: {
     localizedBase === baseFullMarkdown || calculateHash(localizedBase) === currentHash
       ? localizedBase
       : baseFullMarkdown;
+  const displayRev = formatRevForDisplay(baseSnapshot.rev);
   const diffResult = computeContextDiff(baseForCompare, localContent, {
-    baseLabel: `base [rev: ${baseSnapshot.rev}]`,
+    baseLabel: `base [rev: ${displayRev}]`,
     localLabel: `local [${targetFile}]`,
   });
 
   const formattedOutput = [
     `--- Diff for ${targetFile} (${targetId}) ---`,
     `Status: ${isModified ? '🟡 Modified' : '🟢 In Sync with base snapshot'}`,
-    `Base Rev: ${baseSnapshot.rev}`,
+    `Base Rev: ${displayRev}`,
     `Base Saved At: ${new Date(baseSnapshot.savedAt * 1000).toISOString()}`,
     `Changes: +${diffResult.additions} / -${diffResult.deletions} lines`,
     '',

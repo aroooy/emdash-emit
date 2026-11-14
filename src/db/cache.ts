@@ -1017,6 +1017,26 @@ export class CacheDatabase {
     };
   }
 
+  /**
+   * Executes a synchronous callback within a SQLite transaction.
+   * Automatically commits on success and rolls back on error.
+   */
+  public runTransaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT;');
+      return result;
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK;');
+      } catch {
+        // Ignore rollback failure if transaction already terminated
+      }
+      throw err;
+    }
+  }
+
   public close(): void {
     try {
       this.db.close();

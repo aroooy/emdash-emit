@@ -33,6 +33,7 @@ import {
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
 import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../utils/media-body-refs.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { formatRevForDisplay } from '../client/api.js';
 import {
   compareArticleFilenameDesc,
   extractUlidFromFilename,
@@ -250,7 +251,7 @@ export function getWorkspaceStatus(
           status: parsed.frontmatter.status,
           syncStatus,
           filePath: relPath,
-          rev: syncState?.remoteRev,
+          rev: formatRevForDisplay(syncState?.remoteRev),
           conflictPending: conflictPending || undefined,
           deletePending: deletePending || undefined,
           taxonomyApplyPending: taxonomyApplyPending || undefined,
@@ -275,7 +276,7 @@ export function getWorkspaceStatus(
           status: sub,
           syncStatus: 'invalid',
           filePath: relPath,
-          rev: syncState?.remoteRev,
+          rev: formatRevForDisplay(syncState?.remoteRev),
           cached: Boolean(syncState),
           healable: healable || undefined,
           error: errorMsg,

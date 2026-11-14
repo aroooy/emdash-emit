@@ -365,7 +365,7 @@ export interface SerializeMarkdownOptions {
 export function tryDecodeTaxonomyTerm(term: string): string {
   if (!term.includes('%')) return term;
   try {
-    return decodeURIComponent(term);
+    return decodeURIComponent(term).normalize('NFC');
   } catch {
     return term;
   }

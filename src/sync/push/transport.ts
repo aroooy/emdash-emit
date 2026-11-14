@@ -28,6 +28,11 @@ import type { PushOptions } from './types.js';
 /**
  * Transitions article publish/draft status via dedicated EmDash endpoints.
  */
+export interface StatusTransitionResult {
+  rev: string;
+  rawJson?: Record<string, unknown>;
+}
+
 export async function transitionContentStatus(
   collection: string,
   id: string,
@@ -36,7 +41,7 @@ export async function transitionContentStatus(
   publishedAt: string | null | undefined,
   options: PushOptions,
   fetchFn: typeof fetch,
-): Promise<string> {
+): Promise<StatusTransitionResult> {
   const isPublishing = targetStatus === 'published';
   const endpoint = articleStatusTransitionEndpoint(
     options.origin,
@@ -73,7 +78,10 @@ export async function transitionContentStatus(
   }
 
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return extractRev(json, currentRev);
+  return {
+    rev: extractRev(json, currentRev),
+    rawJson: json,
+  };
 }
 
 /**

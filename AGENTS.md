@@ -59,6 +59,14 @@ The codebase strictly enforces a 4-tier architectural layering model verified vi
 - **Preflight Evaluation Precedence**: In accordance with T2-1 and Guard G6/G16 invariants, `runPreflightChecks` (including G6 `UNRESOLVED_CONFLICT_MARKERS`) is evaluated **strictly before** G16 (`TAXONOMY_CONFLICT_PENDING`).
 - **Flag Symmetry & NULL Rules (`PendingFlagsResult`)**: `conflictCopyPath`, `conflictCopyHash`, and `conflictAt` are set to `null` if and only if both `bodyConflictPending` and `taxonomyConflictPending` are 0.
 
+### Two-Track Revision Invariant (Track 1 Transport vs Track 2 Comparison)
+
+EmDash updates `draftRevisionId` (ULID) on draft saves without bumping `posts.version` or `posts.updatedAt`. To ensure reliable revision detection during pull while preventing synthetic revision string contamination during push, Emit enforces a strict separation between transport tokens and comparison keys:
+
+- **Track 1 (`revForTransport`)**: Raw server tokens (e.g. Base64 `version:updatedAt`) are stored verbatim in `base_snapshots.rev` and `entries.rev`. In `push/index.ts:136`, `baseSnapshot?.rev` is prioritized over `syncState?.remoteRev` when populating PUT `{ _rev }` payloads. Raw transport tokens must **never** be overwritten with composite keys, avoiding HTTP 409 conflict loops.
+- **Track 2 (`revForComparison`)**: Composite keys (`${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`) are stored in `sync_state.remote_rev` across all 4 save paths (`pull.ts` full pull, `pull.ts` fast-path heal, `push/commit.ts`, and `push/merge_stage.ts`). `isSameRev()` in `src/sync/pull.ts` evaluates Track 2 keys to detect remote draft edits even when the major version number remains unchanged.
+- **Presentation Layer Separation**: `formatRevForDisplay()` hides composite suffixes (`@draft:...`) in CLI/MCP outputs (`diff`, `status`), presenting only the clean version number to users.
+
 ---
 
 ## 2. Workspace Structure (Git-style)

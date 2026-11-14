@@ -28,7 +28,14 @@ import { createBaseSnapshot } from '../db/baseline.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
-import { unwrapEnvelope, unwrapItem, extractRev, normalizeRev } from '../client/api.js';
+import {
+  unwrapEnvelope,
+  unwrapItem,
+  extractRev,
+  extractComparisonRev,
+  isSameRev,
+  normalizeRev,
+} from '../client/api.js';
 import { articleContentEndpoint, openApiEndpoint } from '../client/endpoints.js';
 import {
   carriesPercentEncodedTaxonomy,
@@ -497,12 +504,9 @@ export async function pullArticle(
     const rawObj = (item.rawItem || item) as Record<string, unknown>;
     const rawRevCandidate = String(item._rev || item.rev || item.version || rawObj._rev || '');
     const remoteRev = extractRev(rawObj, rawRevCandidate);
+    const remoteComparisonRev = extractComparisonRev(rawObj, remoteRev);
 
-    if (
-      !existingSync ||
-      !remoteRev ||
-      normalizeRev(existingSync.remoteRev) !== normalizeRev(remoteRev)
-    ) {
+    if (!existingSync || !remoteRev || !isSameRev(existingSync.remoteRev, remoteComparisonRev)) {
       return null;
     }
 
@@ -594,17 +598,19 @@ export async function pullArticle(
                   parseMarkdown(respelled);
                   fs.writeFileSync(fullExistingPath, respelled, 'utf8');
                   const healedHash = calculateHash(respelled);
-                  const existingBase = options.cache.getBaseSnapshot(id);
-                  if (existingBase) {
-                    options.cache.saveBaseSnapshot({
-                      ...existingBase,
-                      hash: healedHash,
+                  options.cache.runTransaction(() => {
+                    const existingBase = options.cache.getBaseSnapshot(id);
+                    if (existingBase) {
+                      options.cache.saveBaseSnapshot({
+                        ...existingBase,
+                        hash: healedHash,
+                      });
+                    }
+                    options.cache.saveSyncState({
+                      ...existingSync,
+                      localHash: healedHash,
+                      lastSyncedAt: Math.floor(Date.now() / 1000),
                     });
-                  }
-                  options.cache.saveSyncState({
-                    ...existingSync,
-                    localHash: healedHash,
-                    lastSyncedAt: Math.floor(Date.now() / 1000),
                   });
                   return {
                     id,
@@ -645,24 +651,27 @@ export async function pullArticle(
               const decodedDisk = localizeDiskMarkdown(decodedCanon, existingSync.localFilePath);
               fs.writeFileSync(fullExistingPath, decodedDisk, 'utf8');
               const repairedHash = calculateHash(decodedDisk);
-              const existingBase = options.cache.getBaseSnapshot(id);
-              if (existingBase) {
-                options.cache.saveBaseSnapshot({
-                  ...existingBase,
-                  hash: repairedHash,
-                });
-              }
-
-              // Re-track the repaired file against its own repaired hash so it reads as synced.
               const healedAt = Math.floor(Date.now() / 1000);
-              options.cache.saveSyncState({
-                ...existingSync,
-                localFilePath: existingSync.localFilePath,
-                localHash: repairedHash,
-                remoteRev,
-                status: parsedRepaired.frontmatter.status,
-                slug: parsedRepaired.frontmatter.slug,
-                lastSyncedAt: healedAt,
+
+              options.cache.runTransaction(() => {
+                const existingBase = options.cache.getBaseSnapshot(id);
+                if (existingBase) {
+                  options.cache.saveBaseSnapshot({
+                    ...existingBase,
+                    hash: repairedHash,
+                  });
+                }
+
+                // Re-track the repaired file against its own repaired hash so it reads as synced.
+                options.cache.saveSyncState({
+                  ...existingSync,
+                  localFilePath: existingSync.localFilePath,
+                  localHash: repairedHash,
+                  remoteRev: remoteComparisonRev,
+                  status: parsedRepaired.frontmatter.status,
+                  slug: parsedRepaired.frontmatter.slug,
+                  lastSyncedAt: healedAt,
+                });
               });
 
               return {
@@ -753,7 +762,7 @@ export async function pullArticle(
               id,
               localFilePath: existingSync.localFilePath,
               localHash: remoteDiskHash,
-              remoteRev,
+              remoteRev: remoteComparisonRev,
               status: parsedRepaired.frontmatter.status,
               slug: parsedRepaired.frontmatter.slug,
               lastSyncedAt: Math.floor(Date.now() / 1000),
@@ -1094,11 +1103,14 @@ export async function pullArticle(
     };
   }
 
+  // Track 2 (Comparison Key): Save composite key for fast-path check
+  const comparisonRev = extractComparisonRev(rawItem, rev);
+
   options.cache.saveSyncState({
     id: frontmatter.id,
     localFilePath: relPath,
     localHash: calculateHash(markdownContent),
-    remoteRev: rev,
+    remoteRev: comparisonRev,
     status: frontmatter.status,
     slug: frontmatter.slug,
     lastSyncedAt: Math.floor(Date.now() / 1000),

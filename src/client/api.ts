@@ -119,6 +119,106 @@ export function extractRev(raw: unknown, fallback = '1'): string {
 }
 
 /**
+ * Extracts comparison revision key (Track 2), prioritizing draftRevisionId / liveRevisionId
+ * so draft content changes on server are never skipped during pull.
+ * Format: `<version>@draft:<ULID>` or `<version>@live:<ULID>` or fallback.
+ */
+export function extractComparisonRev(raw: unknown, fallback = '1'): string {
+  if (!raw || typeof raw !== 'object') {
+    return fallback ? String(fallback) : '1';
+  }
+
+  const root = raw as Record<string, unknown>;
+  const item = unwrapItem<Record<string, unknown>>(raw);
+  const version = String(item.version || root.version || '1');
+  const draftRevisionId = item.draftRevisionId || root.draftRevisionId;
+  const liveRevisionId = item.liveRevisionId || root.liveRevisionId;
+
+  if (draftRevisionId && typeof draftRevisionId === 'string' && draftRevisionId.trim()) {
+    return `${version}@draft:${draftRevisionId.trim()}`;
+  }
+  if (liveRevisionId && typeof liveRevisionId === 'string' && liveRevisionId.trim()) {
+    return `${version}@live:${liveRevisionId.trim()}`;
+  }
+
+  // Fallback to raw token (e.g. Base64 or plain version)
+  return extractRev(raw, fallback);
+}
+
+/**
+ * Compares two revision keys for equality.
+ * Supports:
+ * - Exact match
+ * - Composite keys (`<version>@draft:<ULID>` / `<version>@live:<ULID>`)
+ * - Safe migration: Legacy pure numbers vs Composite keys always return false (triggering upgrade pull)
+ * - Strict Base64 comparison with round-trip verification for legacy cached tokens
+ */
+export function isSameRev(trackedRev: unknown, remoteRev: unknown): boolean {
+  if (
+    trackedRev === null ||
+    trackedRev === undefined ||
+    remoteRev === null ||
+    remoteRev === undefined
+  ) {
+    return false;
+  }
+  const a = String(trackedRev).trim();
+  const b = String(remoteRev).trim();
+  if (a === b) {
+    return true;
+  }
+
+  const isCompositeA = a.includes('@draft:') || a.includes('@live:');
+  const isCompositeB = b.includes('@draft:') || b.includes('@live:');
+
+  // Both are composite keys: must match exactly (already checked a === b, so false here)
+  if (isCompositeA && isCompositeB) {
+    return false;
+  }
+
+  // One is composite and one is legacy/raw token: always treat as different to trigger migration
+  if (isCompositeA !== isCompositeB) {
+    return false;
+  }
+
+  // Both are non-composite (legacy numbers, colon-delimited, or Base64 tokens)
+  const isStrictB64 = (s: string): boolean => {
+    try {
+      return Buffer.from(s, 'base64').toString('base64') === s && /^[A-Za-z0-9+/=]+$/.test(s);
+    } catch {
+      return false;
+    }
+  };
+
+  if (isStrictB64(a) && isStrictB64(b)) {
+    try {
+      const decodedA = Buffer.from(a, 'base64').toString('utf8');
+      const decodedB = Buffer.from(b, 'base64').toString('utf8');
+      return decodedA === decodedB;
+    } catch {
+      return false;
+    }
+  }
+
+  // Pure numeric fallback comparison
+  return normalizeRev(a) === normalizeRev(b);
+}
+
+/**
+ * Formats a revision token/key for human display in CLI and diff headers.
+ * Truncates composite keys (`3@draft:01M7...`) to their version number (`3`).
+ */
+export function formatRevForDisplay(rev: string | null | undefined): string {
+  if (!rev) return '';
+  const s = String(rev).trim();
+  const atIdx = s.indexOf('@');
+  if (atIdx > 0) {
+    return s.slice(0, atIdx);
+  }
+  return normalizeRev(s);
+}
+
+/**
  * Normalizes revision representation (pure number, base64-encoded token, or colon-delimited)
  * to its canonical numeric string when possible, allowing reliable parity comparisons.
  * e.g. "1", "1:2026-10-31...", "MToyMDI2LTEwLTMxVDAwOjE2OjI4Ljk1MFo=" all normalize to "1".
