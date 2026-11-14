@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-11-15
+
+### Added
+
+- **Two-Layer Representation for Taxonomy YAML Definitions (`src/sync/taxonomies.ts`)**:
+  - Extended Two-Layer Representation from article frontmatter (`taxonomies:`) to category and tag YAML definition files (`categories/*.yaml`, `tags/*.yaml`).
+  - Disk format (Layer B) presents human-readable decoded slugs (`slug: ローカルガイド`) while preserving the raw server slug in `canonicalSlug: "%e3%83%ad..."` (omitted for standard ASCII terms where `canonicalSlug === slug`).
+  - Added safe YAML scalar serialization (`serializeTaxonomyYaml`) using `formatYamlScalar`:
+    - Guarantees single-line output, completely eliminating multi-line folded blocks (`slug: >-`) previously triggered by long percent-encoded strings in js-yaml.
+    - Reliably quotes YAML reserved words (`on`, `true`), numeric strings (`2026-review`), and symbols (`買い物(レビュー)`), preventing unintended type coercion during round-trip parsing.
+  - Added backward-compatible loading in `readTaxonomyDir()`: seamlessly loads legacy v0.1.25 files (`slug: '%e3...'` without `canonicalSlug`) and transparently decodes them in memory until refreshed on next pull.
+  - Implemented 2-Phase Collision Resolution in `loadLocalTaxonomyMaps()`:
+    - **Phase 1 (Canonical Registration)**: Registers all canonical slugs first (`idToSlug[item.id]` strictly returns canonical slug for Layer A transport, baseline snapshots, and hash calculations; ties broken deterministically by count desc, then ULID desc).
+    - **Phase 2 (Alias Registration)**: Registers decoded slugs and display names only when they do not collide with any canonical slug and uniquely map to a single term ID. Preserves loser terms' unique name aliases while avoiding alias poisoning.
+    - Dropped collision losers from Layer B presentations (`getLocalTaxonomiesSummary()`, `formatTaxonomiesHint()`) via `dedupeBySlug`, presenting clean winner candidates in AI prompts and CLI outputs.
+
 ## [0.1.25] - 2026-11-14
 
 ### Added

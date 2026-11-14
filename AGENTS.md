@@ -79,8 +79,8 @@ EmDash updates `draftRevisionId` (ULID) on draft saves without bumping `posts.ve
 ├── .emit/                          <-- [Hidden Configuration & Cache Directory]
 │   ├── cache.db                    <-- SQLite local cache (node:sqlite)
 │   └── config.json                 <-- Instance connection and collection settings
-├── categories/                     <-- Category definitions (<id>-<label>.yaml)
-├── tags/                           <-- Tag definitions (<id>-<label>.yaml)
+├── categories/                     <-- Category definitions (<id>-<label>.yaml, Two-Layer: decoded slug + canonicalSlug)
+├── tags/                           <-- Tag definitions (<id>-<label>.yaml, Two-Layer: decoded slug + canonicalSlug)
 ├── media/                          <-- Media files & companion YAML (`media/<markdownRef>.<ext>` + `media/<markdownRef>.yaml`, where <markdownRef> is the sanitized storageKey basename — never the media record id; see docs/media-id-spaces.md)
 │   └── drafts/                     <-- Staging folder for offline draft images (auto-uploaded on push)
 └── posts/                          <-- [Local Markdown Files for Humans & AI]
@@ -143,7 +143,10 @@ bylines: # Author byline slugs (defaults to first non-guest author by slug ASC)
 ```
 
 - **Never place `categories` or `tags` at the top level**: `parseMarkdown()` strips unknown top-level keys via Zod and `serializeMarkdown()` rewrites the frontmatter on every pull/push. Top-level `categories:` / `tags:` are silently discarded without triggering Guard G4. Always nest them under `taxonomies:`.
-- **Taxonomies decoded display (Two-Layer Representation)**: Taxonomy terms under `taxonomies:` are rendered in human-readable decoded display on disk (`    - 未分類`) while internally preserved as canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) in remote payloads, `computeTaxonomyHash`, and SQLite baseline snapshots (`base_snapshots.frontmatter_yaml`). When creating or editing articles, you may write either decoded Japanese (`未分類`) or canonical slug (`%e6%9c%aa%e5%88%86%e9%a1%9e`).
+- **Taxonomies decoded display (Two-Layer Representation)**:
+  - **In article frontmatter (`taxonomies:`)**: Taxonomy terms under `taxonomies:` are rendered in human-readable decoded display on disk (`    - 未分類`) while internally preserved as canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) in remote payloads, `computeTaxonomyHash`, and SQLite baseline snapshots (`base_snapshots.frontmatter_yaml`). When creating or editing articles, you may write either decoded Japanese (`未分類`) or canonical slug (`%e6%9c%aa%e5%88%86%e9%a1%9e`).
+  - **In taxonomy definitions (`categories/`, `tags/`)**: Category and tag YAML definitions store human-readable decoded slugs in `slug:` (`slug: ローカルガイド`), preserving the raw remote slug in `canonicalSlug:` (`canonicalSlug: "%e3%83%ad..."`, omitted for standard ASCII terms). `readTaxonomyDir()` seamlessly loads both legacy (v0.1.25) and new (v0.1.26) formats.
+  - **Collision resolution**: When multiple terms share the same canonical slug, a deterministic winner (count desc → ULID desc) claims the slug in `slugToId`. Querying the shared slug resolves to the winner; to target a loser term specifically, pass its unique display name (if unique) or its **ULID** directly in frontmatter. Loser terms are omitted from summary/hint outputs via `dedupeBySlug`.
 - **`seo.canonical` requires an absolute URL**: Validated with `z.string().url().nullable().optional()`; relative paths fail parsing.
 - **Draft Revision Annotation (`status: published # draft revision`)**: When a published article has an uncommitted remote draft revision, Emit serializes `status: published # draft revision`. AI agents MUST NOT remove, alter, or synthesize this comment manually; Emit manages it automatically (preserving it during draft staging and clearing it when `--allow-publish` publishes live and remote reports no remaining draft revision).
 - **No duplicate `# Title` in body**: Do not repeat the article title as a top-level `# Heading` at the start of the Markdown body (Guard G7).

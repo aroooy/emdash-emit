@@ -94,6 +94,35 @@ export interface PullTaxonomiesResult {
 }
 
 /**
+ * Serializes a category or tag definition to YAML.
+ * Emits decoded slug on disk and keeps raw percent-encoded slug as canonicalSlug when they differ.
+ * Uses formatYamlScalar to prevent type coercion of reserved words or numeric strings,
+ * and ensures 1-line scalar output to prevent js-yaml folded blocks (> -).
+ */
+function serializeTaxonomyYaml(doc: {
+  id: string;
+  name: string;
+  slug: string;
+  canonicalSlug?: string;
+  taxonomy: 'category' | 'tag';
+  parentId: string | null;
+  count: number;
+}): string {
+  const lines: string[] = [
+    `id: ${formatYamlScalar(doc.id)}`,
+    `name: ${formatYamlScalar(doc.name)}`,
+    `slug: ${formatYamlScalar(doc.slug)}`,
+  ];
+  if (doc.canonicalSlug && doc.canonicalSlug !== doc.slug) {
+    lines.push(`canonicalSlug: ${formatYamlScalar(doc.canonicalSlug)}`);
+  }
+  lines.push(`taxonomy: ${formatYamlScalar(doc.taxonomy)}`);
+  lines.push(`parentId: ${doc.parentId ? formatYamlScalar(doc.parentId) : 'null'}`);
+  lines.push(`count: ${doc.count}`);
+  return lines.join('\n') + '\n';
+}
+
+/**
  * Pulls categories and tags from EmDash API and saves them to local YAML files:
  * categories/<id>-<sanitizedLabel>.yaml
  * tags/<id>-<sanitizedLabel>.yaml
@@ -157,19 +186,19 @@ export async function pullTaxonomies(
       activeCategoryFileNames.add(fileName);
       const filePath = path.join(categoriesDir, fileName);
 
+      const rawSlug = cat.slug;
+      const decodedSlug = tryDecodeTaxonomyTerm(rawSlug);
+
       const doc = {
         id: cat.id,
         name: label,
-        slug: cat.slug,
-        taxonomy: 'category',
+        slug: decodedSlug,
+        ...(decodedSlug !== rawSlug ? { canonicalSlug: rawSlug } : {}),
+        taxonomy: 'category' as const,
         parentId: cat.parentId || null,
         count: cat.count ?? 0,
       };
-      fs.writeFileSync(
-        filePath,
-        yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
-        'utf8',
-      );
+      fs.writeFileSync(filePath, serializeTaxonomyYaml(doc), 'utf8');
     }
 
     // Prune local category YAMLs not present on remote
@@ -202,19 +231,19 @@ export async function pullTaxonomies(
       activeTagFileNames.add(fileName);
       const filePath = path.join(tagsDir, fileName);
 
+      const rawSlug = tag.slug;
+      const decodedSlug = tryDecodeTaxonomyTerm(rawSlug);
+
       const doc = {
         id: tag.id,
         name: label,
-        slug: tag.slug,
-        taxonomy: 'tag',
+        slug: decodedSlug,
+        ...(decodedSlug !== rawSlug ? { canonicalSlug: rawSlug } : {}),
+        taxonomy: 'tag' as const,
         parentId: tag.parentId || null,
         count: tag.count ?? 0,
       };
-      fs.writeFileSync(
-        filePath,
-        yaml.dump(doc, { indent: 2, quotingType: '"', forceQuotes: false }),
-        'utf8',
-      );
+      fs.writeFileSync(filePath, serializeTaxonomyYaml(doc), 'utf8');
     }
 
     // Prune local tag YAMLs not present on remote
@@ -244,7 +273,14 @@ export async function pullTaxonomies(
 
 export interface LocalTaxonomyItem {
   id: string;
+  /** Human-readable decoded slug for disk and prompts (e.g. 'ローカルガイド' or 'camera') */
   slug: string;
+  /**
+   * Raw server canonical slug for Layer A transport/hashes (e.g. '%e3%83...' or 'camera').
+   * Optional in interface to preserve compatibility with hand-authored fixtures,
+   * but guaranteed to be populated by readTaxonomyDir() (defaults to slug when omitted).
+   */
+  canonicalSlug?: string;
   name: string;
   parentId?: string | null;
   count?: number;
@@ -277,10 +313,37 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
         const content = fs.readFileSync(path.join(dir, file), 'utf8');
         const data = yaml.load(content) as Record<string, unknown>;
         if (data && typeof data.id === 'string' && typeof data.slug === 'string') {
+          const rawSlug = String(data.slug).trim();
+          if (!rawSlug) continue;
+
+          const rawCanonical =
+            typeof data.canonicalSlug === 'string' && data.canonicalSlug.trim()
+              ? data.canonicalSlug.trim()
+              : undefined;
+
+          let slug: string;
+          let canonicalSlug: string;
+
+          if (rawCanonical && rawSlug) {
+            // New format (v0.1.26): canonicalSlug is explicit
+            slug = rawSlug;
+            canonicalSlug = rawCanonical;
+          } else if (rawSlug.includes('%')) {
+            // Legacy format (v0.1.25): slug is percent-encoded
+            const decoded = tryDecodeTaxonomyTerm(rawSlug);
+            slug = decoded;
+            canonicalSlug = rawSlug;
+          } else {
+            // Standard ASCII slug
+            slug = rawSlug;
+            canonicalSlug = rawSlug;
+          }
+
           items.push({
             id: data.id,
-            slug: data.slug,
-            name: typeof data.name === 'string' ? data.name : data.slug,
+            slug,
+            canonicalSlug,
+            name: typeof data.name === 'string' ? data.name : slug,
             parentId: typeof data.parentId === 'string' ? data.parentId : null,
             count: typeof data.count === 'number' ? data.count : undefined,
           });
@@ -319,16 +382,17 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
     const idToSlug: Record<string, string> = {};
     const sorted = sortDeterministically(items);
 
-    // 1. Register canonical slugs first
+    // Phase 1: Register canonical slugs first (Track 1 / Layer A truth)
     for (const item of sorted) {
-      idToSlug[item.id] = item.slug;
-      if (!slugToId[item.slug]) {
-        slugToId[item.slug] = item.id;
+      const canonical = item.canonicalSlug || item.slug;
+      idToSlug[item.id] = canonical;
+      if (!slugToId[canonical]) {
+        slugToId[canonical] = item.id;
       }
     }
 
-    // 2. Collect candidate aliases (decoded percent-encoded slug and human-readable name)
-    // Only register an alias if it does not collide with any canonical slug and maps uniquely to 1 term ID.
+    // Phase 2: Collect candidate aliases (decoded slug and human-readable name)
+    // Only register an alias if it does not collide with ANY canonical slug and maps uniquely to 1 term ID.
     const aliasToIds = new Map<string, Set<string>>();
     const recordAliasCandidate = (alias: string | undefined, id: string) => {
       if (!alias || !alias.trim()) return;
@@ -343,13 +407,10 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
 
     for (const item of sorted) {
       recordAliasCandidate(item.name, item.id);
-      if (item.slug.includes('%')) {
-        try {
-          const decoded = decodeURIComponent(item.slug);
-          recordAliasCandidate(decoded, item.id);
-        } catch {
-          // Ignore malformed percent-encoding (URIError)
-        }
+      const canonical = item.canonicalSlug || item.slug;
+      const isCanonicalOwner = slugToId[canonical] === item.id;
+      if (isCanonicalOwner && item.slug && item.slug !== canonical) {
+        recordAliasCandidate(item.slug, item.id);
       }
     }
 
@@ -393,6 +454,9 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
         if (decoded !== c.slug) {
           catMap[decoded] = c.name;
         }
+        if (c.canonicalSlug && c.canonicalSlug !== c.slug) {
+          catMap[c.canonicalSlug] = c.name;
+        }
       }
     }
     const tagMap: Record<string, string> = {};
@@ -403,11 +467,26 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
         if (decoded !== t.slug) {
           tagMap[decoded] = t.name;
         }
+        if (t.canonicalSlug && t.canonicalSlug !== t.slug) {
+          tagMap[t.canonicalSlug] = t.name;
+        }
       }
     }
     return {
-      categories: Array.from(new Set(summary.categories.map((c) => c.slug))),
-      tags: Array.from(new Set(summary.tags.map((t) => t.slug))),
+      categories: Array.from(
+        new Set(
+          summary.categories.flatMap((c) =>
+            c.canonicalSlug && c.canonicalSlug !== c.slug ? [c.slug, c.canonicalSlug] : [c.slug],
+          ),
+        ),
+      ),
+      tags: Array.from(
+        new Set(
+          summary.tags.flatMap((t) =>
+            t.canonicalSlug && t.canonicalSlug !== t.slug ? [t.slug, t.canonicalSlug] : [t.slug],
+          ),
+        ),
+      ),
       slugToName: {
         category: catMap,
         tag: tagMap,

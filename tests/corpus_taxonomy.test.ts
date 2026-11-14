@@ -310,7 +310,8 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
         expect(g4Error).toBeDefined();
         expect(g4Error?.message).toContain("Unknown categories term: '台'");
         expect(g4Error?.suggestion).toContain('Did you mean:');
-        expect(g4Error?.suggestion).toContain('台湾 -> "%e5%8f%b0%e6%b9%be"');
+        expect(g4Error?.suggestion).toContain('台湾');
+        expect(g4Error?.suggestion).not.toContain('%e5%8f%b0%e6%b9%be');
       }
     });
   });
