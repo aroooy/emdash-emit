@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-11-14
+
+### Added
+
+- **Draft Revision Synchronization for Published Articles (`src/sync/pull.ts`)**:
+  - Supported EmDash's architecture where published articles (`status: 'published'`) can hold uncommitted/staged draft revisions (`draftRevisionId`).
+  - Generalized single GET fallthrough condition from `itemStatus !== 'published'` to `needsFullDraftFetch = isDraft || hasDraftRevision`:
+    - **Published articles with draft revisions (`draftRevisionId` present)**: Discards the stale list `rawItem` (which only contains published `liveData`) and executes a single GET (`GET /posts/{id}`) to fetch the full 10-block draft body into `posts/published/<file>.md`.
+    - **Clean published articles (`draftRevisionId === null`)**: Completely maintains the zero-overhead fast-path with **zero extra HTTP requests (0-GET)**.
+- **Unpublished Draft Status Visualization (`src/sync/status.ts`, `src/cli/commands/status.ts`, MCP `sync_status`)**:
+  - Added `hasUnpublishedDraft?: boolean` to `ArticleStatusItem`.
+  - Automatically flags published articles whose remote revision tracks an uncommitted draft (`@draft:` in `sync_state.remote_rev`).
+  - CLI `emit status` clearly highlights them with a purple icon and badge: `🟣 [synced  ] published*  posts/published/...  [has unpublished draft]`.
+  - MCP `sync_status` transparently exposes `hasUnpublishedDraft: true` in JSON payloads.
+- **Push Semantics Documentation & Safety Rails for Published Drafts**:
+  - Documented push semantics: EmDash stages PUT updates as drafts when `status` is omitted (Emit's default). To publish changes live to web, `--allow-publish` must be explicitly passed.
+  - Verified and tested that unpushed local edits during draft advancement are safely preserved in `posts/conflicts/*.conflict.md` with `body_conflict_pending = 1` and Guard G12 rescue copy protection.
+
 ## [0.1.23] - 2026-11-14
 
 ### Added

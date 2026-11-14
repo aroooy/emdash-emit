@@ -6,6 +6,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { pullArticle, calculateHash } from '../src/sync/pull.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
 import { serializeMarkdown, parseMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { assertNotQuarantinedCopy } from '../src/sync/push/guards.js';
 
 describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
   let tempDir: string;
@@ -428,5 +429,332 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     // Verify canonical disk file has the server content
     const canonicalContent = fs.readFileSync(fullPath, 'utf8');
     expect(canonicalContent).toContain('Server content advancing draft revision.');
+  });
+
+  it('fetches full draft content via single GET when a published article has unpublished draft changes (v0.1.24)', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
+    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const liveRevId = '01M7CCGC748FQWMC3FDBP4WDY7';
+    const newDraftRevId = '01M7CD9YGWNPAEP1Z7NC8600ZD';
+
+    const publishedFm: Frontmatter = {
+      id: articleId,
+      slug: 'kingfisher-diary',
+      title: 'カワセミの静寂な佇まいに出会った日',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      locale: 'ja',
+      taxonomies: { categories: ['野鳥撮影'], tags: ['カワセミ'] },
+      bylines: ['aroooy'],
+    };
+
+    const initialContent = serializeMarkdown(
+      publishedFm,
+      '7-block old live content published on web.',
+    );
+    fs.writeFileSync(fullPath, initialContent, 'utf8');
+    const initialHash = calculateHash(initialContent);
+
+    // Initial sync state in cache: synced with published live revision
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: initialHash,
+      remoteRev: `18@live:${liveRevId}`,
+      status: 'published',
+      slug: 'kingfisher-diary',
+      lastSyncedAt: 1000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: 'MTg6MjAyNi0xMS0xM1QxMDowMDowMC4wMDBa',
+        frontmatter: publishedFm,
+        bodyMarkdown: '7-block old live content published on web.',
+        hash: initialHash,
+      }),
+    );
+
+    // Stale rawItem from List API: has new draftRevisionId, but data.content is ONLY old liveData (7 blocks)!
+    const staleListRawItem = {
+      id: articleId,
+      version: 19,
+      draftRevisionId: newDraftRevId,
+      liveRevisionId: liveRevId,
+      status: 'published',
+      slug: 'kingfisher-diary',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      updatedAt: '2026-11-14T07:10:00.000Z',
+      data: {
+        title: 'カワセミの静寂な佇まいに出会った日',
+        content: [
+          {
+            _type: 'block',
+            _key: 'b1',
+            children: [{ _type: 'span', text: '7-block old live content from list API.' }],
+          },
+        ],
+      },
+    };
+
+    let singleGetCallCount = 0;
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/category/terms') || url.includes('/tag/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+
+      if (url.endsWith(`/posts/${articleId}`)) {
+        singleGetCallCount++;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 19,
+                draftRevisionId: newDraftRevId,
+                liveRevisionId: liveRevId,
+                status: 'published',
+                slug: 'kingfisher-diary',
+                publishedAt: '2026-11-13T10:00:00.000Z',
+                updatedAt: '2026-11-14T07:10:00.000Z',
+                data: {
+                  title: 'カワセミの静寂な佇まいに出会った日',
+                  content: [
+                    {
+                      _type: 'block',
+                      _key: 'b1',
+                      children: [
+                        { _type: 'span', text: '10-block latest unpublished draft content!' },
+                      ],
+                    },
+                  ],
+                },
+                liveData: {
+                  title: 'カワセミの静寂な佇まいに出会った日',
+                  content: [
+                    {
+                      _type: 'block',
+                      _key: 'b_live',
+                      children: [{ _type: 'span', text: '7-block old live content.' }],
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    // Execute pullArticle with stale list rawItem
+    const result = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      rawItem: staleListRawItem,
+    });
+
+    expect(result.updated).toBe(true);
+    // Single GET MUST have been called exactly once to discard the stale list item!
+    expect(singleGetCallCount).toBe(1);
+
+    // Verify local markdown file now contains the full 10-block draft content
+    const updatedDisk = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
+    expect(updatedDisk).toContain('10-block latest unpublished draft content!');
+    expect(updatedDisk).not.toContain('7-block old live content from list API.');
+
+    // Verify publishedAt is preserved in frontmatter
+    const updatedParsed = parseMarkdown(updatedDisk);
+    expect(updatedParsed.frontmatter.publishedAt).toBe('2026-11-13T10:00:00.000Z');
+    expect(updatedParsed.frontmatter.status).toBe('published');
+
+    // Verify sync_state now tracks the new draft composite rev
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.remoteRev).toBe(`19@draft:${newDraftRevId}`);
+    expect(syncState?.status).toBe('published');
+
+    // Idempotency check: A second batch pull with the same item MUST fast-path with 0 single GETs!
+    const secondResult = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      rawItem: staleListRawItem,
+    });
+    expect(secondResult.updated).toBe(false);
+    expect(secondResult.skipped).toBe(true);
+    expect(singleGetCallCount).toBe(1); // Call count remains 1 (no extra network call!)
+  });
+
+  it('safely quarantines unpushed local edits for published article with advancing draftRevisionId and refuses rescue copy push with G12', async () => {
+    const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
+    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const fullPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    const liveRevId = '01M7CCGC748FQWMC3FDBP4WDY7';
+    const newDraftRevId = '01M7CD9YGWNPAEP1Z7NC8600ZD';
+
+    const publishedFm: Frontmatter = {
+      id: articleId,
+      slug: 'kingfisher-diary',
+      title: 'カワセミの静寂な佇まいに出会った日',
+      collection: 'posts',
+      status: 'published',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      locale: 'ja',
+      taxonomies: { categories: ['野鳥撮影'], tags: ['カワセミ'] },
+      bylines: ['aroooy'],
+    };
+
+    // Hand-crafted local edits before pull
+    const unpushedLocalContent = serializeMarkdown(
+      publishedFm,
+      'My unpushed precious local camera notes that must not be wiped!',
+    );
+    fs.writeFileSync(fullPath, unpushedLocalContent, 'utf8');
+
+    // Initial cache: baseline had 7-block content, so unpushedLocalContent diverged
+    const baseContent = serializeMarkdown(publishedFm, 'Baseline 7-block content.');
+    const baseHash = calculateHash(baseContent);
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relPath,
+      localHash: baseHash,
+      remoteRev: `18@live:${liveRevId}`,
+      status: 'published',
+      slug: 'kingfisher-diary',
+      lastSyncedAt: 1000,
+    });
+
+    cache.saveBaseSnapshot(
+      createBaseSnapshot({
+        id: articleId,
+        rev: 'MTg6MjAyNi0xMS0xM1QxMDowMDowMC4wMDBa',
+        frontmatter: publishedFm,
+        bodyMarkdown: 'Baseline 7-block content.',
+        hash: baseHash,
+      }),
+    );
+
+    const staleListRawItem = {
+      id: articleId,
+      version: 19,
+      draftRevisionId: newDraftRevId,
+      liveRevisionId: liveRevId,
+      status: 'published',
+      slug: 'kingfisher-diary',
+      publishedAt: '2026-11-13T10:00:00.000Z',
+      updatedAt: '2026-11-14T07:10:00.000Z',
+      data: {
+        title: 'カワセミの静寂な佇まいに出会った日',
+        content: [
+          {
+            _type: 'block',
+            _key: 'b1',
+            children: [{ _type: 'span', text: '7-block old live content from list API.' }],
+          },
+        ],
+      },
+    };
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/category/terms') || url.includes('/tag/terms')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { terms: [] } }),
+        });
+      }
+
+      if (url.endsWith(`/posts/${articleId}`)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              item: {
+                id: articleId,
+                version: 19,
+                draftRevisionId: newDraftRevId,
+                liveRevisionId: liveRevId,
+                status: 'published',
+                slug: 'kingfisher-diary',
+                publishedAt: '2026-11-13T10:00:00.000Z',
+                updatedAt: '2026-11-14T07:10:00.000Z',
+                data: {
+                  title: 'カワセミの静寂な佇まいに出会った日',
+                  content: [
+                    {
+                      _type: 'block',
+                      _key: 'b1',
+                      children: [
+                        { _type: 'span', text: 'Server content with advancing draft revision.' },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    // Execute pull
+    const result = await pullArticle('posts', articleId, {
+      origin: 'https://example.com',
+      token: 'fake-token',
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn: mockFetch,
+      rawItem: staleListRawItem,
+    });
+
+    expect(result.updated).toBe(true);
+
+    // Verify unpushed local edits were quarantined to posts/conflicts/
+    const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+    expect(fs.existsSync(conflictsDir)).toBe(true);
+    const conflictFiles = fs.readdirSync(conflictsDir);
+    expect(conflictFiles.length).toBeGreaterThan(0);
+    const rescueContent = fs.readFileSync(path.join(conflictsDir, conflictFiles[0]), 'utf8');
+    expect(rescueContent).toContain(
+      'My unpushed precious local camera notes that must not be wiped!',
+    );
+
+    // Verify bodyConflictPending was set to 1 and conflictCopyPath is recorded
+    const syncState = cache.getSyncState(articleId);
+    expect(syncState?.bodyConflictPending).toBe(1);
+    expect(syncState?.conflictCopyPath).toBeTruthy();
+
+    // Verify that attempting to push the quarantined rescue copy directly is refused by Guard G12
+    try {
+      assertNotQuarantinedCopy(syncState!.conflictCopyPath!);
+      expect.fail('Expected assertNotQuarantinedCopy to throw');
+    } catch (err: unknown) {
+      expect((err as any).errors[0].code).toBe('QUARANTINED_COPY_NOT_PUSHABLE');
+    }
+
+    // Verify canonical disk file was updated with the server draft content
+    const canonicalContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
+    expect(canonicalContent).toContain('Server content with advancing draft revision.');
   });
 });

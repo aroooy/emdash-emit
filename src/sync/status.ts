@@ -56,6 +56,8 @@ export interface ArticleStatusItem {
   deletePending?: boolean;
   orphan?: boolean;
   taxonomyApplyPending?: boolean;
+  /** True when a published article has unpublished draft changes on remote (@draft: composite rev). */
+  hasUnpublishedDraft?: boolean;
 }
 
 export interface WorkspaceStatusResult {
@@ -218,6 +220,9 @@ export function getWorkspaceStatus(
         const conflictPending = syncState?.conflictPending === 1;
         const deletePending = syncState?.deletePending === 1;
         const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
+        const hasUnpublishedDraft =
+          parsed.frontmatter.status === 'published' &&
+          Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'));
 
         if (syncState) {
           // `local_hash` is supposed to record the exact bytes on disk, but a workspace whose articles were
@@ -252,6 +257,7 @@ export function getWorkspaceStatus(
           syncStatus,
           filePath: relPath,
           rev: formatRevForDisplay(syncState?.remoteRev),
+          hasUnpublishedDraft: hasUnpublishedDraft || undefined,
           conflictPending: conflictPending || undefined,
           deletePending: deletePending || undefined,
           taxonomyApplyPending: taxonomyApplyPending || undefined,

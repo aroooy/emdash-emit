@@ -805,12 +805,16 @@ export async function pullArticle(
     if (fastResult) return fastResult;
 
     // Fast-path missed: remote content changed or local repair required.
-    // EmDash list API returns stale creation-time posts.data for drafts when the draft was updated on remote.
-    // For published articles, EmDash list API returns the up-to-date committed content (no extra GET needed).
-    // Therefore, if this is an existing tracked draft article whose remote revision has advanced, we must discard
+    // EmDash list API returns stale creation-time posts.data for drafts, and liveData for published articles.
+    // When a published article has unpublished draft changes (draftRevisionId exists), list API does NOT expand
+    // the draft body (it returns only liveData).
+    // Therefore, if this is an existing tracked article whose remote draft revision has advanced, we must discard
     // the stale list rawItem so Step 2 fetches the full canonical item via single GET!
     const rawObj = rawItem as Record<string, unknown>;
-    const itemStatus = String(rawObj.status || 'draft');
+    const hasDraftRevision = Boolean(rawObj.draftRevisionId);
+    const isDraft = String(rawObj.status || 'draft') !== 'published';
+    const needsFullDraftFetch = isDraft || hasDraftRevision;
+
     const existingSync = options.cache.getSyncState(id);
     const rawRevCandidate = String(
       rawItem._rev || rawItem.rev || rawItem.version || rawObj._rev || '',
@@ -819,7 +823,7 @@ export async function pullArticle(
     const remoteComparisonRev = extractComparisonRev(rawObj, remoteRev);
     const remoteChanged = !existingSync || !isSameRev(existingSync.remoteRev, remoteComparisonRev);
 
-    if (itemStatus !== 'published' && existingSync && remoteChanged) {
+    if (needsFullDraftFetch && existingSync && remoteChanged) {
       rawItem = undefined;
     }
   }

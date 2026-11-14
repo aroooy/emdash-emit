@@ -117,15 +117,19 @@ export function registerStatusInitCommands(
         } else if (item.syncStatus === 'invalid') {
           icon = item.healable ? '🟠' : '🔴';
           label = item.healable ? 'healable' : 'invalid ';
+        } else if (item.hasUnpublishedDraft) {
+          icon = '🟣';
         }
 
         const titleDisplay = item.title ? ` (${item.title})` : '';
         const cacheTag =
           item.syncStatus === 'invalid' && item.cached === false ? ' [uncached]' : '';
+        const draftTag = item.hasUnpublishedDraft ? ' [has unpublished draft]' : '';
         const errorDisplay = item.error ? ` — ${item.error}` : '';
-        const paddedStatus = (item.status || '').padEnd(9, ' ');
+        const statusDisplay = item.hasUnpublishedDraft ? 'published*' : item.status || '';
+        const paddedStatus = statusDisplay.padEnd(9, ' ');
         console.log(
-          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${cacheTag}${errorDisplay}`,
+          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${cacheTag}${draftTag}${errorDisplay}`,
         );
       }
 
