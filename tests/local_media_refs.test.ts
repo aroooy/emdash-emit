@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
+import { formatDatePrefix } from '../src/utils/naming.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
 import { resolveLocalMediaRefsOption } from '../src/utils/media-ref-precedence.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
@@ -41,7 +42,7 @@ const STORAGE_KEY = asStorageKey('01M67P0JW605ZJ5GV4YXB7W400.jpg');
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
 /** How an article under `<collection>/draft|published/` spells its own mirror on disk. */
 const LOCAL_REF = `../../media/${STORAGE_KEY}`;
-const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+const todayPrefix = formatDatePrefix(new Date()).replace(/_$/, '');
 
 describe('Article-Relative Local Media References (pull/push round-trip)', () => {
   let tempDir: string;

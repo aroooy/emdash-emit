@@ -31,6 +31,7 @@ import { calculateHash } from '../src/sync/workspace/index.js';
 import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { formatDatePrefix } from '../src/utils/naming.js';
 
 const TINY_PNG_BUFFER = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -46,7 +47,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
   const pendingStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
   const confirmedStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
   const confirmedUrl = `/_emdash/api/media/file/${confirmedStorageKey}`;
-  const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const todayPrefix = formatDatePrefix(new Date()).replace(/_$/, '');
 
   const baseOptions = {
     origin: 'https://aroooy.net',
@@ -1189,7 +1190,7 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
   const pendingStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.png';
   const confirmedStorageKey = '01M6TF1XXBSC06QQG9M648B4K3.01M6TF1Y5YVG9YYQAY6H25270M.png';
   const confirmedUrl = `/_emdash/api/media/file/${confirmedStorageKey}`;
-  const todayPrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const todayPrefix = formatDatePrefix(new Date()).replace(/_$/, '');
 
   const baseOptions = {
     origin: 'https://aroooy.net',
