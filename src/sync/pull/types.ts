@@ -23,6 +23,7 @@
 import type { CacheDatabase } from '../../db/cache.js';
 import type { MapperOptions } from '../../client/mapper.js';
 import type { TaxonomyCandidates } from '../../utils/frontmatter.js';
+import type { PrunedTaxonomiesDetail, TaxonomyLookupMaps } from '../../utils/taxonomy-key.js';
 
 export interface PullArticleMediaSummary {
   total: number;
@@ -83,6 +84,11 @@ export interface PullOptions extends MapperOptions {
    * `featuredImage` (default `mediaSyncLimit`). Ignored when a shared `mediaSession` already owns the walk.
    */
   mediaSyncLimit?: number;
+  /**
+   * Epistemic rule: When true, allows pruning nonexistent taxonomy terms from frontmatter during fast-path.
+   * Only true when taxonomies were successfully synchronized in the current session and not skipped via postsOnly.
+   */
+  canPruneTaxonomies?: boolean;
 }
 
 export interface PullResult {
@@ -101,6 +107,8 @@ export interface PullResult {
   healed?: boolean;
   /** True if frontmatter meaning or keys/values were altered during heal (false for syntax-only repair). */
   meaningChanged?: boolean;
+  /** Nonexistent taxonomy terms that were pruned from frontmatter during fast-path heal. */
+  prunedTaxonomies?: PrunedTaxonomiesDetail;
   /** Local copies that diverged from the last synced baseline and were preserved in `<collection>/conflicts/`. */
   quarantined?: QuarantinedLocalCopy[];
   quarantineFilePath?: string;
@@ -147,6 +155,8 @@ export interface FastPathContext {
   collection: string;
   id: string;
   options: PullOptions;
+  canPruneTaxonomies?: boolean;
+  getTaxonomyMaps?: () => TaxonomyLookupMaps;
   fetchAssignedTerms: (taxonomy: 'category' | 'tag') => Promise<string[] | null>;
   getBylineIdToSlug: () => Promise<Record<string, string>>;
   getTaxonomyCandidates: () => TaxonomyCandidates | undefined;

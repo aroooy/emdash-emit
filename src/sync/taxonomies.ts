@@ -29,7 +29,15 @@ import {
   tryDecodeTaxonomyTerm,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
-import { aliasesOf, canonicalSlugOf } from '../utils/taxonomy-key.js';
+import {
+  aliasesOf,
+  canonicalSlugOf,
+  isKnownTaxonomyTerm,
+  type PrunedTaxonomiesDetail,
+  type TaxonomyLookupMaps,
+} from '../utils/taxonomy-key.js';
+
+export type { PrunedTaxonomiesDetail, TaxonomyLookupMaps };
 
 export interface TaxonomyTerm {
   id: string;
@@ -661,4 +669,115 @@ export function findClosestTaxonomySuggestions(
   }
 
   return uniqueDisplays;
+}
+
+/**
+ * Checks whether frontmatter contains taxonomy terms that no longer exist in local definitions.
+ */
+export function carriesPrunedTaxonomies(
+  taxonomies: Record<string, string[]> | undefined,
+  maps: TaxonomyLookupMaps,
+): boolean {
+  if (!taxonomies) return false;
+
+  for (const [taxName, terms] of Object.entries(taxonomies)) {
+    if (
+      taxName !== 'category' &&
+      taxName !== 'tag' &&
+      taxName !== 'categories' &&
+      taxName !== 'tags'
+    ) {
+      continue;
+    }
+    const kind = taxName === 'categories' || taxName === 'category' ? 'category' : 'tag';
+    if (!Array.isArray(terms)) continue;
+    for (const term of terms) {
+      if (!isKnownTaxonomyTerm(term, kind, maps)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Filters out pruned taxonomy terms, preserving valid terms.
+ * If all terms in a taxonomy are pruned, keeps an explicit empty array [] so remote cleanup can execute.
+ */
+export function pruneNonexistentTaxonomies(
+  taxonomies: Record<string, string[]> | undefined,
+  maps: TaxonomyLookupMaps,
+): {
+  prunedTaxonomies: Record<string, string[]>;
+  removedTerms: PrunedTaxonomiesDetail;
+} {
+  const prunedTaxonomies: Record<string, string[]> = {};
+  const removedTerms: PrunedTaxonomiesDetail = {};
+  if (!taxonomies) return { prunedTaxonomies, removedTerms };
+
+  for (const [key, terms] of Object.entries(taxonomies)) {
+    if (!Array.isArray(terms)) continue;
+    const kind =
+      key === 'categories' || key === 'category'
+        ? 'category'
+        : key === 'tags' || key === 'tag'
+          ? 'tag'
+          : null;
+    if (!kind) {
+      prunedTaxonomies[key] = [...terms];
+      continue;
+    }
+    const retained: string[] = [];
+    const removed: string[] = [];
+    for (const term of terms) {
+      if (isKnownTaxonomyTerm(term, kind, maps)) {
+        retained.push(term);
+      } else {
+        removed.push(term);
+      }
+    }
+    prunedTaxonomies[key] = retained;
+    if (removed.length > 0) {
+      if (kind === 'category') {
+        removedTerms.categories = [...(removedTerms.categories ?? []), ...removed];
+      } else {
+        removedTerms.tags = [...(removedTerms.tags ?? []), ...removed];
+      }
+    }
+  }
+  return { prunedTaxonomies, removedTerms };
+}
+
+/**
+ * Normalizes taxonomies for Layer A (base_snapshots.frontmatter_yaml).
+ * CRITICAL: Preserves ULID inputs verbatim (protecting loser terms in slug collisions),
+ * and resolves slug/name inputs to canonical slugs.
+ */
+export function canonicalizeTaxonomiesForBaseline(
+  taxonomies: Record<string, string[]>,
+  maps: TaxonomyLookupMaps,
+): Record<string, string[]> {
+  const canon: Record<string, string[]> = {};
+  for (const [key, terms] of Object.entries(taxonomies)) {
+    const kind =
+      key === 'categories' || key === 'category'
+        ? 'category'
+        : key === 'tags' || key === 'tag'
+          ? 'tag'
+          : null;
+    if (!kind) {
+      canon[key] = [...terms];
+      continue;
+    }
+    canon[key] = terms.map((term) => {
+      // If already a valid ULID, keep ULID verbatim (prevents silent replacement of loser term)
+      if (maps.idToSlug[kind]?.[term]) return term;
+      const id = maps.slugToId[kind]?.[term];
+      if (id && maps.idToSlug[kind]?.[id]) {
+        return maps.idToSlug[kind][id];
+      }
+      return term;
+    });
+  }
+  return canon;
 }

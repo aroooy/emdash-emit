@@ -64,9 +64,10 @@ export function formatPullWindowLabel(status: string | undefined, limit: number)
 import {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
+  formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 
-export { formatOrphanMediaWarning, formatMediaCoverageLine };
+export { formatOrphanMediaWarning, formatMediaCoverageLine, formatPrunedTaxonomiesNotice };
 
 /**
  * Renders the per-article media summary. A migrated corpus bakes R2 storageKeys into body URLs, so the
@@ -213,15 +214,23 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           // Batch mode: taxonomies + articles (+ media if --media)
 
           // 1. Pull taxonomies (unless --posts-only)
+          let taxonomiesFailed = false;
           if (!postsOnly) {
             console.log('Syncing categories and tags...');
-            const taxResult = await pullTaxonomies({
-              workspaceRoot: ctx.root,
-              origin: ctx.origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-            });
-            printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
+            try {
+              const taxResult = await pullTaxonomies({
+                workspaceRoot: ctx.root,
+                origin: ctx.origin,
+                token: ctx.auth.token,
+                refreshToken: ctx.auth.refreshToken,
+              });
+              if (taxResult.categoriesFailed || taxResult.tagsFailed) {
+                taxonomiesFailed = true;
+              }
+              printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
+            } catch {
+              taxonomiesFailed = true;
+            }
           }
 
           const taxSummary = getLocalTaxonomiesSummary(ctx.root);
@@ -260,13 +269,21 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
             mediaSync: !postsOnly,
             mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+            canPruneTaxonomies: !postsOnly && !taxonomiesFailed,
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
               } else if (item.healed) {
-                console.log(
-                  `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved). Push the file to apply changes to the server.`,
-                );
+                if (item.prunedTaxonomies) {
+                  const notice = formatPrunedTaxonomiesNotice(item.prunedTaxonomies);
+                  console.log(
+                    `  [${current}/${total}] ${notice ?? `🛠️  Repaired frontmatter for ${item.slug}`}`,
+                  );
+                } else {
+                  console.log(
+                    `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved). Push the file to apply changes to the server.`,
+                  );
+                }
               } else if (item.localEditsPreserved) {
                 console.log(
                   `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath}; remote changes NOT applied)`,
@@ -375,12 +392,20 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);
           } else if (res.healed) {
-            console.log(
-              `🛠️ Repaired frontmatter syntax for ${res.slug} (${res.filePath}; unpushed local body was strictly preserved).`,
-            );
-            console.log(
-              `   Push the file to apply changes to the server: "emit push ${res.filePath}"`,
-            );
+            if (res.prunedTaxonomies) {
+              const notice = formatPrunedTaxonomiesNotice(res.prunedTaxonomies);
+              console.log(notice ?? `🛠️ Repaired frontmatter for ${res.slug}`);
+              console.log(
+                `   Push the file to apply changes to the server: "emit push ${res.filePath}"`,
+              );
+            } else {
+              console.log(
+                `🛠️ Repaired frontmatter syntax for ${res.slug} (${res.filePath}; unpushed local body was strictly preserved).`,
+              );
+              console.log(
+                `   Push the file to apply changes to the server: "emit push ${res.filePath}"`,
+              );
+            }
           } else if (res.localEditsPreserved) {
             console.log(
               `🛡️ Kept 1 local edit(s); 1 remote change(s) NOT applied (${res.filePath}).`,

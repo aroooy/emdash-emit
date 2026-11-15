@@ -75,6 +75,11 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
   mediaSync?: boolean;
   /** Bounds the shared library walk used to resolve referenced assets (default `mediaSyncLimit`). */
   mediaSyncLimit?: number;
+  /**
+   * Epistemic rule: When true, allows pruning nonexistent taxonomy terms from frontmatter during fast-path.
+   * Only true when taxonomies were successfully synchronized in the current session and not skipped via postsOnly.
+   */
+  canPruneTaxonomies?: boolean;
   onProgress?: (progress: { current: number; total: number; item: PullResult }) => void;
 }
 
@@ -161,6 +166,11 @@ export async function pullSingleArticle(
     }
   }
 
+  const taxonomiesFailed = Boolean(
+    taxonomiesResult?.categoriesFailed || taxonomiesResult?.tagsFailed || taxonomiesResult?.error,
+  );
+  const canPruneTaxonomies = !options.postsOnly && !taxonomiesFailed;
+
   const article = await pullArticle(options.collection, options.targetId, {
     workspaceRoot: options.workspaceRoot,
     cache: options.cache,
@@ -172,6 +182,7 @@ export async function pullSingleArticle(
     mediaSync: options.mediaSync,
     mediaSyncLimit: options.mediaSyncLimit,
     fetchFn: options.fetchFn,
+    canPruneTaxonomies,
   });
 
   let libraryMedia: PullMediaResult | undefined = undefined;
@@ -343,6 +354,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         candidates,
         mediaSync: options.mediaSync,
         mediaSession,
+        canPruneTaxonomies: options.canPruneTaxonomies,
       });
 
       results.push(res);

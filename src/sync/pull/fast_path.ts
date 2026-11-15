@@ -37,6 +37,11 @@ import { localizeArticleMediaRefs, carriesDepthFreeMediaRef } from '../../utils/
 import { isLocalFileUnmodified } from '../baseline-reconstruction.js';
 import { computeTaxonomyHash } from '../terms.js';
 import {
+  canonicalizeTaxonomiesForBaseline,
+  carriesPrunedTaxonomies,
+  pruneNonexistentTaxonomies,
+} from '../taxonomies.js';
+import {
   calculateHash,
   commitArticleSnapshot,
   resolveCanonicalArticlePath,
@@ -199,7 +204,7 @@ export async function tryFastPathOrHeal(
             }
           }
 
-          // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms or out-of-sync draft revision annotation -> heal in-place
+          // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms, out-of-sync draft revision annotation, or deleted taxonomy terms -> heal in-place
           const hasDraft = hasUncommittedDraftRevision(existingSync);
           const carriesDraftComment = /^\s*status:\s*published\s+#\s*draft revision\s*$/m.test(
             currentDiskContent,
@@ -207,28 +212,85 @@ export async function tryFastPathOrHeal(
           const needsDraftRevisionHeal =
             parsedCurrent.frontmatter.status === 'published' && hasDraft !== carriesDraftComment;
 
-          if (carriesPercentEncodedTaxonomy(currentDiskContent) || needsDraftRevisionHeal) {
+          const maps = ctx.getTaxonomyMaps ? ctx.getTaxonomyMaps() : undefined;
+          const candidates = getTaxonomyCandidates();
+
+          // Epistemic rule: Only trigger pruning when taxonomy sync was performed and succeeded!
+          const canPrune = Boolean(ctx.canPruneTaxonomies && maps);
+          const hasPrunedTax =
+            canPrune && carriesPrunedTaxonomies(parsedCurrent.frontmatter.taxonomies, maps!);
+
+          if (
+            carriesPercentEncodedTaxonomy(currentDiskContent) ||
+            needsDraftRevisionHeal ||
+            hasPrunedTax
+          ) {
+            const { prunedTaxonomies, removedTerms } =
+              hasPrunedTax && maps
+                ? pruneNonexistentTaxonomies(parsedCurrent.frontmatter.taxonomies, maps)
+                : { prunedTaxonomies: parsedCurrent.frontmatter.taxonomies, removedTerms: {} };
+
+            const healedFrontmatter = {
+              ...parsedCurrent.frontmatter,
+              taxonomies: prunedTaxonomies,
+            };
+
             const respelledCanon = serializeMarkdown(
-              parsedCurrent.frontmatter,
+              healedFrontmatter,
               parsedCurrent.body,
-              getTaxonomyCandidates(),
+              candidates,
               { hasDraftRevision: hasDraft },
             );
             const respelled = localizeDiskMarkdown(respelledCanon, existingSync.localFilePath);
+
             if (respelled !== currentDiskContent) {
               try {
                 parseMarkdown(respelled);
+
+                // CRITICAL: Full baseline rewrite (bumpBaselineHashOnly: false) when hasPrunedTax
+                // Layer A must store canonicalized taxonomies (ULID preserved, slugs canonicalized).
+                const baselineFrontmatter =
+                  hasPrunedTax && maps
+                    ? {
+                        ...healedFrontmatter,
+                        taxonomies: canonicalizeTaxonomiesForBaseline(prunedTaxonomies || {}, maps),
+                      }
+                    : parsedCurrent.frontmatter;
+
+                // CRITICAL (Review Point C): taxonomyApplyPending preservation rule
+                // If taxonomy pruning occurred, reset to 0 (we intend to push new empty array).
+                // If only syntax heal occurred (hasPrunedTax === false), preserve existingSync.taxonomyApplyPending to keep G17 active!
+                const effectiveTaxonomyApplyPending = hasPrunedTax
+                  ? 0
+                  : existingSync.taxonomyApplyPending;
+
                 commitArticleSnapshot(options.cache, options.workspaceRoot, {
                   id,
                   relPath: existingSync.localFilePath,
                   diskContent: respelled,
                   canonicalContent: respelledCanon,
-                  frontmatter: parsedCurrent.frontmatter,
+                  frontmatter: baselineFrontmatter,
                   bodyMarkdown: parsedCurrent.body,
                   revForTransport: existingSync.remoteRev,
                   revForComparison: existingSync.remoteRev,
-                  bumpBaselineHashOnly: true,
+                  bumpBaselineHashOnly: !hasPrunedTax,
+                  flags: hasPrunedTax
+                    ? {
+                        remoteTaxonomyHash: computeTaxonomyHash(
+                          baselineFrontmatter.taxonomies?.categories,
+                          baselineFrontmatter.taxonomies?.tags,
+                        ),
+                        taxonomyApplyPending: effectiveTaxonomyApplyPending,
+                        conflictPending: existingSync.conflictPending,
+                        bodyConflictPending: existingSync.bodyConflictPending,
+                        taxonomyConflictPending: existingSync.taxonomyConflictPending,
+                        conflictCopyPath: existingSync.conflictCopyPath,
+                        conflictCopyHash: existingSync.conflictCopyHash,
+                        conflictAt: existingSync.conflictAt,
+                      }
+                    : undefined,
                 });
+
                 return {
                   id,
                   slug: existingSync.slug,
@@ -236,7 +298,8 @@ export async function tryFastPathOrHeal(
                   filePath: existingSync.localFilePath,
                   updated: true,
                   healed: true,
-                  meaningChanged: false,
+                  meaningChanged: hasPrunedTax,
+                  prunedTaxonomies: hasPrunedTax ? removedTerms : undefined,
                   title: rawTitle,
                   media: mediaSummary,
                 };

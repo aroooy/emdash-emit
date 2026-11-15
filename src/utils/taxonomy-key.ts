@@ -53,3 +53,29 @@ export function aliasesOf(item: { slug: string; canonicalSlug?: string }): strin
     ? [item.slug, item.canonicalSlug]
     : [item.slug];
 }
+
+export interface TaxonomyLookupMaps {
+  slugToId: { category: Record<string, string>; tag: Record<string, string> };
+  idToSlug: { category: Record<string, string>; tag: Record<string, string> };
+}
+
+export interface PrunedTaxonomiesDetail {
+  categories?: string[];
+  tags?: string[];
+}
+
+/**
+ * Checks whether a taxonomy term resolves to a locally defined term.
+ * Accurately supports ULID (idToSlug), canonical slug, decoded slug, and unique name aliases (slugToId).
+ */
+export function isKnownTaxonomyTerm(
+  term: string,
+  taxName: 'category' | 'tag',
+  maps: TaxonomyLookupMaps,
+): boolean {
+  // 1. Exact ULID match (Layer A)
+  if (maps.idToSlug[taxName]?.[term]) return true;
+  // 2. Slug, decoded slug, or unique name alias match (Layer B)
+  const id = maps.slugToId[taxName]?.[term];
+  return Boolean(id && maps.idToSlug[taxName]?.[id]);
+}

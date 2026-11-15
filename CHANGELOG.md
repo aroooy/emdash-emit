@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-11-15
+
+### Added
+
+- **0-GET Pruned Taxonomy Auto-Healing (`src/sync/pull/fast_path.ts`, `src/sync/taxonomies.ts`)**:
+  - Automatically reconciles frontmatter taxonomy assignments when categories or tags were deleted on remote EmDash without triggering destructive `--force` pulls or wasting network GET calls.
+  - When taxonomy sync is performed at the start of pull, untouched articles (`currentDiskHash === existingSync.localHash`) detect deleted terms and prune them in-place within the fast path (`tryFastPathOrHeal`).
+  - Preserves explicit empty arrays (e.g. `tags: []`) when all terms in a taxonomy are deleted, enabling clean remote relation cleanup on subsequent push instead of abandoning orphan `post_terms` relations.
+  - Rewrites Layer A baseline snapshot (`bumpBaselineHashOnly: false` with canonicalized slugs and verbatim ULID preservation), eliminating phantom diffs in `emit diff` (`inspectArticleDiff`).
+  - Implements the epistemic rule: when taxonomies sync was skipped (`--posts-only`) or failed, auto-pruning is strictly suppressed (`canPruneTaxonomies: false`). Unpushed local edits are 100% protected against auto-pruning.
+- **Layer 0 Predicate & Detail Types (`src/utils/taxonomy-key.ts`)**:
+  - Added `isKnownTaxonomyTerm`, `TaxonomyLookupMaps`, and `PrunedTaxonomiesDetail` to Layer 0.
+  - Accurately checks terms against exact ULID (`idToSlug`), canonical slug, decoded slug, and unique name aliases (`slugToId`), while safely preserving loser ULIDs in slug collisions.
+- **Layer 3 Dedicated Notice Formatter (`src/presentation/article_report.ts`)**:
+  - Added `formatPrunedTaxonomiesNotice(pruned)` in `src/presentation/article_report.ts`, surfacing clear notifications in CLI (`emit pull`) and MCP (`sync_pull`) identifying exactly which terms were pruned.
+
+### Changed
+
+- **Guard G19 Remote Audit Parity (`src/sync/push/taxonomy_plan.ts`, `src/sync/push/index.ts`)**:
+  - Connected `auditRemoteTaxonomies` result (`remoteTaxAudit`) to `syncArticleTaxonomies`.
+  - When remote audit confirms remote assignments are already 0 (`remoteCount === 0`, e.g. following remote term deletions), Guard G19 (`DESTRUCTIVE_TAXONOMY_WIPE`) is cleanly bypassed, dispatching `POST /terms/{taxonomy} { termIds: [] }` to clean up remote orphan relations safely without requiring manual `--allow-wipe-taxonomies`.
+
 ## [0.1.30] - 2026-11-15
 
 ### Added

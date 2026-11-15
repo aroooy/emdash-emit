@@ -109,6 +109,7 @@ export async function syncArticleTaxonomies(params: {
   options: PushOptions;
   fetchFn: typeof fetch;
   warnings: string[];
+  remoteTaxAudit?: { categories?: string[] | null; tags?: string[] | null } | null;
 }): Promise<TaxonomySyncFailure[]> {
   const {
     articleId,
@@ -120,6 +121,7 @@ export async function syncArticleTaxonomies(params: {
     options,
     fetchFn,
     warnings,
+    remoteTaxAudit,
   } = params;
   const failures: TaxonomySyncFailure[] = [];
   if (!parsed.frontmatter.taxonomies) return failures;
@@ -151,18 +153,33 @@ export async function syncArticleTaxonomies(params: {
       const prevTerms =
         taxonomyName === 'category' ? baseFm?.taxonomies?.categories : baseFm?.taxonomies?.tags;
       if (prevTerms && prevTerms.length > 0) {
-        if (!options.allowWipeTaxonomies && !options.force && !options.resolveTaxonomy) {
-          throw new ApiError({
-            endpoint: `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
-            code: 'DESTRUCTIVE_TAXONOMY_WIPE',
-            status: 400,
-            message: `Local article specified empty array for ${taxonomyName}, which would remove ${prevTerms.length} existing remote assignment(s).`,
-            suggestion: `Pass --allow-wipe-taxonomies (or --force) to confirm wiping all ${taxonomyName} assignments.`,
-          });
+        const taxKey = taxonomyName === 'category' ? 'categories' : 'tags';
+        const auditKnown =
+          remoteTaxAudit !== null &&
+          remoteTaxAudit !== undefined &&
+          Array.isArray(remoteTaxAudit[taxKey]);
+        const remoteCount = auditKnown ? remoteTaxAudit![taxKey]!.length : null;
+
+        if (remoteCount === 0) {
+          // Remote already has 0 assignments: Clean bypass!
+          // Remote terms are already deleted on CMS, so sending empty termIds [] cleans up orphan relations safely.
+          warnings.push(
+            `🏷️ Remote ${taxonomyName} terms were already unassigned; synchronizing empty assignment.`,
+          );
+        } else {
+          if (!options.allowWipeTaxonomies && !options.force && !options.resolveTaxonomy) {
+            throw new ApiError({
+              endpoint: `/_emdash/api/content/${collection}/${articleId}/terms/${taxonomyName}`,
+              code: 'DESTRUCTIVE_TAXONOMY_WIPE',
+              status: 400,
+              message: `Local article specified empty array for ${taxonomyName}, which would remove ${prevTerms.length} existing remote assignment(s).`,
+              suggestion: `Pass --allow-wipe-taxonomies (or --force) to confirm wiping all ${taxonomyName} assignments.`,
+            });
+          }
+          warnings.push(
+            `🏷️ Cleared all ${prevTerms.length} ${taxonomyName} assignment(s) from remote (local specified empty array).`,
+          );
         }
-        warnings.push(
-          `🏷️ Cleared all ${prevTerms.length} ${taxonomyName} assignment(s) from remote (local specified empty array).`,
-        );
       }
     }
 

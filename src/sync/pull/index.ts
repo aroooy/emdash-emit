@@ -48,7 +48,7 @@ import {
   quarantineLocalCopy,
   resolveCanonicalArticlePath,
 } from '../workspace/index.js';
-import { loadLocalTaxonomyCandidates } from '../taxonomies.js';
+import { loadLocalTaxonomyCandidates, loadLocalTaxonomyMaps } from '../taxonomies.js';
 import { syncRemoteBylines, extractRemoteBylineIds } from '../bylines.js';
 import { updateConfigSyncedVersion } from '../../utils/config.js';
 import { fetchAssignedTerms as fetchAssignedTermsShared, computeTaxonomyHash } from '../terms.js';
@@ -183,10 +183,20 @@ export async function pullArticle(
         })
       : canonicalContent;
 
+  let cachedTaxonomyMaps: ReturnType<typeof loadLocalTaxonomyMaps> | undefined;
+  const getTaxonomyMaps = () => {
+    if (!cachedTaxonomyMaps) {
+      cachedTaxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
+    }
+    return cachedTaxonomyMaps;
+  };
+
   const fastPathCtx: FastPathContext = {
     collection,
     id,
     options,
+    canPruneTaxonomies: options.canPruneTaxonomies,
+    getTaxonomyMaps,
     fetchAssignedTerms,
     getBylineIdToSlug,
     getTaxonomyCandidates,

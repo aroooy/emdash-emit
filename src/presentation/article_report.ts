@@ -20,6 +20,8 @@
  * SOFTWARE.
  */
 
+import type { PrunedTaxonomiesDetail } from '../utils/taxonomy-key.js';
+
 /**
  * Presentation layer: unified report formatting helpers for CLI and MCP consumers.
  *
@@ -103,4 +105,22 @@ export function formatArticleDiffReport(options: ArticleDiffReportOptions): stri
     options.unifiedDiff,
     '----------------------------------------',
   ].join('\n');
+}
+
+/**
+ * Renders a notice informing the user that deleted taxonomy terms were pruned from frontmatter.
+ */
+export function formatPrunedTaxonomiesNotice(
+  pruned: PrunedTaxonomiesDetail | undefined,
+): string | null {
+  if (!pruned) return null;
+  const parts: string[] = [];
+  if (pruned.categories && pruned.categories.length > 0) {
+    parts.push(`categories: ${JSON.stringify(pruned.categories)}`);
+  }
+  if (pruned.tags && pruned.tags.length > 0) {
+    parts.push(`tags: ${JSON.stringify(pruned.tags)}`);
+  }
+  if (parts.length === 0) return null;
+  return `🏷️ Pruned deleted taxonomy term(s) from frontmatter (${parts.join(', ')}). Push the file to apply changes on remote.`;
 }

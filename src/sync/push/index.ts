@@ -478,6 +478,7 @@ export async function pushArticle(
       options,
       fetchFn,
       warnings,
+      remoteTaxAudit,
     });
 
     return await commitPostPush({

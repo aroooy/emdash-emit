@@ -38,6 +38,7 @@ import { pullMedia } from '../../sync/media.js';
 import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,
+  formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
@@ -172,7 +173,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           }
 
           const actionText = res.healed
-            ? '🛠️ Repaired frontmatter syntax (unpushed local body was strictly preserved)'
+            ? res.prunedTaxonomies
+              ? (formatPrunedTaxonomiesNotice(res.prunedTaxonomies) ??
+                '🛠️ Repaired frontmatter (deleted taxonomy terms pruned)')
+              : '🛠️ Repaired frontmatter syntax (unpushed local body was strictly preserved)'
             : res.localEditsPreserved
               ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
               : res.skipped
@@ -203,6 +207,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
 
         // 1. Pull taxonomies (unless postsOnly or single-article mode)
         let taxonomiesMsg = '';
+        let taxonomiesFailed = false;
         if (!postsOnly) {
           const taxResult = await pullTaxonomies({
             workspaceRoot: ctx.root,
@@ -214,6 +219,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           if (taxResult.categoriesFailed) failNotes.push('categories');
           if (taxResult.tagsFailed) failNotes.push('tags');
           if (failNotes.length > 0) {
+            taxonomiesFailed = true;
             taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
           } else {
             taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
@@ -243,6 +249,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           // The shared walk is bounded by `mediaSyncLimit`, matching the CLI too.
           mediaSync: !postsOnly,
           mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+          canPruneTaxonomies: !postsOnly && !taxonomiesFailed,
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
