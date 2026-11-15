@@ -53,6 +53,9 @@ The codebase strictly enforces a 4-tier architectural layering model verified vi
 5. `media_stage.ts`: On-demand referenced media mirroring, `MediaMirrorSession` management (its shared library walk is bounded by `mediaSyncLimit`, default 300), 0-HTTP short-circuit inspection, in-flight download deduplication, and `featuredImage` resolution (symmetrical to `push/media_stage.ts`).
 6. `index.ts`: Top-level `pullArticle` orchestration and public symbol re-exports.
 
+- **Single-Article Pull Orchestration Facade (`src/sync/orchestrator.ts:pullSingleArticle`)**:
+  Single-article pull workflows across CLI (`src/cli/commands/pull.ts`) and MCP (`src/mcp/tools/sync-pull.ts`) are unified under `pullSingleArticle()` in `src/sync/orchestrator.ts` (the Layer 2 designated coordinator). It consolidates optional taxonomy synchronization, `pullArticle` execution with on-demand referenced media mirroring, and optional full media library sync (`includeMedia`), returning structured status flags (`categoriesFailed`, `tagsFailed`, `error`) to preserve Layer 2 presentation purity.
+
 ### Modular Push Architecture (`src/sync/push/`)
 
 `pushArticle` is decomposed into 9 focused modules under `src/sync/push/` (with `src/sync/push.ts` acting as a backward-compatible barrel re-export):

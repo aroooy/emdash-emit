@@ -169,7 +169,9 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       const collection = options.collection || ctx.config.defaultCollection;
       const postsOnly = options.postsOnly === true;
 
-      // Distinguish explicit --no-media vs --media
+      // Distinguish explicit --no-media vs --media.
+      // Note: options.media is intentionally unreferenced; resolveExplicitBooleanOption(command, 'media')
+      // is the single source of truth to avoid Commander's synthetic boolean defaults on --no-* options.
       const explicitMedia = resolveExplicitBooleanOption(command, 'media');
       let mediaSync = !postsOnly;
       let includeMedia = false;

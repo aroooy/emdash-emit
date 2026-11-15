@@ -43,6 +43,7 @@ import {
   formatOrphanMediaWarning,
 } from '../src/cli/commands/pull.js';
 import * as remoteIndexModule from '../src/sync/media/remote_index.js';
+import { fetchMediaListPage } from '../src/sync/media/remote_index.js';
 import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
 import { mediaMirrorNames } from '../src/sync/media/naming_mirror.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
@@ -1940,6 +1941,66 @@ locale: ja
       // Without a filename the key's final segment is the only type evidence; an inner `.ulid` segment is not.
       expect(names.markdownRef).toBe('01MJZZMIRSTKKEY3.01MJZZMIRSTKKEY4');
       expect(names.ext).toBe('.png');
+    });
+  });
+
+  describe('fetchMediaListPage (v0.1.30 T1/T2)', () => {
+    it('T1: fetches a single page with limit and cursor, parsing items and nextCursor correctly', async () => {
+      let requestedUrl = '';
+      const fetchFn = vi.fn(async (input: string | URL) => {
+        requestedUrl = String(input);
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01MJZZTESTPAGEDITEM00000001',
+                filename: 'photo.jpg',
+                mimeType: 'image/jpeg',
+                size: 1024,
+                storageKey: '01MJZZTESTPAGEDITEM00000001.photo.jpg',
+              },
+            ],
+            totalCount: 42,
+            nextCursor: 'cursor_page_2',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      });
+
+      const page = await fetchMediaListPage({
+        origin: 'https://example.com',
+        token: 'test-token',
+        limit: 10,
+        cursor: 'cursor_page_1',
+        fetchFn: fetchFn as unknown as typeof fetch,
+      });
+
+      expect(requestedUrl).toBe(
+        'https://example.com/_emdash/api/media?limit=10&cursor=cursor_page_1',
+      );
+      expect(page.rawItems).toHaveLength(1);
+      expect(page.rawItems[0].id).toBe('01MJZZTESTPAGEDITEM00000001');
+      expect(page.totalCount).toBe(42);
+      expect(page.nextCursor).toBe('cursor_page_2');
+    });
+
+    it('T2: throws MEDIA_LIST_FAILED ApiError on HTTP failure with endpoint and status', async () => {
+      const fetchFn = vi.fn(async () => {
+        return new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' });
+      });
+
+      await expect(
+        fetchMediaListPage({
+          origin: 'https://example.com',
+          token: 'bad-token',
+          limit: 20,
+          fetchFn: fetchFn as unknown as typeof fetch,
+        }),
+      ).rejects.toMatchObject({
+        code: 'MEDIA_LIST_FAILED',
+        status: 401,
+        message: expect.stringContaining('Failed to list media: Unauthorized'),
+      });
     });
   });
 });
