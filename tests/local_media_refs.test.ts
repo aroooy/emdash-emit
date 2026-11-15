@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
+import { resolveLocalMediaRefsOption } from '../src/utils/media-ref-precedence.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
 import { pullArticle } from '../src/sync/pull.js';
@@ -1135,5 +1136,27 @@ describe('localMediaRefs workspace preference persistence', () => {
     // Only the one key changes; connection settings survive.
     expect(after.defaultCollection).toBe(before.defaultCollection);
     expect(after.origin).toBe(before.origin);
+  });
+});
+
+describe('resolveLocalMediaRefsOption pure precedence resolver (Layer 0, N-2)', () => {
+  it('explicit option value overrides workspace config in both directions', () => {
+    // Explicit true overrides config false
+    expect(resolveLocalMediaRefsOption(true, { localMediaRefs: false })).toBe(true);
+    // Explicit false overrides config true
+    expect(resolveLocalMediaRefsOption(false, { localMediaRefs: true })).toBe(false);
+  });
+
+  it('omitted option value (undefined) preserves workspace config setting', () => {
+    expect(resolveLocalMediaRefsOption(undefined, { localMediaRefs: true })).toBe(true);
+    expect(resolveLocalMediaRefsOption(undefined, { localMediaRefs: false })).toBe(false);
+    expect(resolveLocalMediaRefsOption(undefined, { localMediaRefs: undefined })).toBeUndefined();
+    expect(resolveLocalMediaRefsOption(undefined, null)).toBeUndefined();
+    expect(resolveLocalMediaRefsOption(undefined, undefined)).toBeUndefined();
+  });
+
+  it('pure evaluation has zero disk side effects', () => {
+    const result = resolveLocalMediaRefsOption(true, { localMediaRefs: false });
+    expect(result).toBe(true);
   });
 });

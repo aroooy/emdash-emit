@@ -351,3 +351,56 @@ AGENTS.md §7 の `localMediaRefs` 節（`:245`）は挙動（default-ON、CLI f
 | §2.2B の AGENTS.md 記載               | ✅ **解決**（N-1: AGENTS.md §Layer 0 および §7 に明記完了）      |
 
 **クロージング完了**: N-1 を AGENTS.md に追記し、v0.1.32 の実装・テスト・文書の全整合性を完全に確立しました。
+
+---
+
+# 追加レビュー（commit `a8de8ec`）— N-1 の文档対応は妥当。ただし「Axis 3 で保護される」という根拠に 1 件の不正確な表現あり
+
+**検証方法**: `git show HEAD -- AGENTS.md` 全文読、`grep -rn persistLocalMediaRefs src/`、`tests/layering.test.ts` の各 Axis の実装内容確認、テストスイート再実行。
+
+## ✅ N-1 対応は正しく、実測で裏付けられた
+
+| 項目                              | 実測値                                                                                                                                                                                      | 判定                                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Layer 0 定義テーブル              | `AGENTS.md:30` に `media ref precedence resolver (\`src/utils/media-ref-precedence.ts\`)` を追記                                                                                            | ✅ 他の Layer 0 ユーティリティ（`taxonomy-key.ts`, `ulid.ts`）と同じ粒度で列挙され、記載位置は適切 |
+| §7 の独立項目                     | `AGENTS.md:247` に新 bullet。§7 の `localMediaRefs` 3 項目（scope / disk-spelling-only / legacy self-heal, `:244-246`）の直後に置かれ、**挙動 → 実装境界** の順序が自然                     | ✅ 「precedence は Layer 0 純関数、永続化は CLI 専用」の欠落は解消                                 |
+| 主張「純関数・disk アクセスなし」 | `src/utils/media-ref-precedence.ts` は `grep -c "node:fs"` → **0**、import は `type EmitConfig` のみ。本文も `optionValue !== undefined ? optionValue : config?.localMediaRefs` の 1 行のみ | ✅ **虚偽なし**（実コードで確認）                                                                  |
+| 主張「永続化は CLI のみ」         | `grep -rn persistLocalMediaRefs src/` → 定義 `src/utils/config.ts:113`、呼び出しは `src/cli/context.ts:286,288` **のみ**。`src/mcp/` に呼び出し 0 件                                        | ✅ 現状のコードと完全に一致                                                                        |
+| README のクロージング記録         | `docs/v0132-plan/README.md` に N-1 解決と総合判定を追記、変更は docs・AGENTS.md のみで `src/` 無変更                                                                                        | ✅ v0.1.32 の挙動は無傷                                                                            |
+
+**品質ゲート実測（本レビューで再実行）**: `npm run check` → Prettier clean / **63 files・668 tests**。layering gate は `it('Axis …')` 5 本＋allowlist 検証 1 本 = **6 PASS**、例外追加 0 件。
+
+## ⚠️ N-2【表現の不正確さ】「Never move this resolution into `src/cli/` (violates Layer 3 intra-layer isolation Axis 3)」は誤り
+
+AGENTS.md:247 のこの括弧書きは、**Axis 3 の定義と合致していません**。
+
+- AGENTS.md:39 の Axis 3 定義: 「MCP tools (`src/mcp/`) must never import from **CLI command modules** (`src/cli/commands/`)」
+- `tests/layering.test.ts:291` の実装も同じで、検査対象は `src/mcp/**` → `src/cli/commands/**` の import 辺のみ。
+- 一方 `src/cli/context.ts` は **`src/cli/commands/` 配下ではなく**、既に `src/cli/context.ts:32` が `utils/media-ref-precedence.js` を import しています（Layer 3 → Layer 0 は Axis 4 で許可済み）。
+
+したがって関数を `src/cli/context.ts` へ移す変更は **どの layering gate でも検出されません**（Axis 0/1/2/3/4 のいずれにも違反しない）。
+実際の保護根拠は層ではなく **純粋性そのもの**です: MCP は disk 書込みなしで解決できなければならない、という性質は現状テストで強制されていません。
+
+- 実測ギャップ: `grep -rln "resolveLocalMediaRefsOption|media-ref-precedence" tests/` → **0 hit**（純関数の挙動無テスト）
+  ただし CLI 側持久化自体は `tests/local_media_refs.test.ts:1127`（`persistLocalMediaRefs toggles … without touching other keys`）でカバー済み。
+- MCP 側の「config.json を変更しない」ことを assert するテストも不在（`grep config.json tests/mcp*.test.ts` → 0 hit）。
+
+**推奨修正**（文書の自己整合性のため、1 行の括弧書き差し替えのみ）:
+
+> Never move this resolution into `src/cli/` — the layering gate does **not** catch that move, so the boundary is upheld by
+> convention plus a unit test on `resolveLocalMediaRefsOption()` purity; MCP tools must never write workspace configuration.
+
+（Axis 3 を cite したままにすると、将来「gate が守っている」と誤信して MCP 側に persist を追加する改修をむしろ誘発します。）
+
+## 総合判定（v0.1.32 完全クロージング）
+
+| 観点                                             | 判定                                                                                                |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| C-1 / C-3（AGENTS.md §Two-Track 同期・方針明記） | ✅ 解決済み（`7c8ea3d`、実装と一致）                                                                |
+| C-2（`postsOnly: false` 経路検証 TD-2）          | ✅ 解決済み（`7c8ea3d`）                                                                            |
+| C-4（taxonomy import 責務注記）                  | ✅ 解決済み（`7c8ea3d`、AGENTS.md:59-60）                                                           |
+| **N-1（Layer 0 precedence 境界の明文化）**       | ✅ **解決済み**（`a8de8ec`、`:30` と `:247`。主張は実コードで検証可能）                             |
+| N-2（Axis 3 引用の正確性）                       | ✅ **解決済み**（AGENTS.md:247 修正＋`tests/local_media_refs.test.ts` に純関数単体テスト 3 本追加） |
+| 品質ゲート                                       | ✅ 63 files / 671 tests・typecheck・layering 6 PASS・Prettier clean                                 |
+
+**完全クロージング完了**: N-2 の表現是正および単体テスト追加を完了し、v0.1.32 のすべての設計・実装・テスト・ドキュメントが完全に整いました。
