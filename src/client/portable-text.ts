@@ -71,6 +71,42 @@ interface ParsedInline {
 // PT -> Markdown
 // ---------------------------------------------------------------------------
 
+/** Known property keys for plain Portable Text image blocks expressible in standard Markdown (Tier 1). */
+const KNOWN_PLAIN_IMAGE_KEYS = new Set(['_type', '_key', 'alt', 'asset']);
+
+/**
+ * Reports whether an image block carries only plain properties expressible in standard Markdown (![alt](url)).
+ * Returns false if the block carries layout, styling, or custom metadata (e.g. alignment, displayWidth,
+ * caption, title, crop, hotspot) or if the asset object contains extended metadata beyond url.
+ */
+export function isPlainImageBlock(block: Record<string, unknown>): boolean {
+  if (block._type !== 'image') return false;
+
+  // 1. Check for extended top-level properties beyond Tier 1 plain image keys
+  for (const [key, value] of Object.entries(block)) {
+    if (
+      !KNOWN_PLAIN_IMAGE_KEYS.has(key) &&
+      value !== undefined &&
+      value !== null &&
+      value !== ''
+    ) {
+      return false;
+    }
+  }
+
+  // 2. Check for extended properties within the asset object beyond { url }
+  if (block.asset && typeof block.asset === 'object') {
+    const assetObj = block.asset as Record<string, unknown>;
+    for (const [key, value] of Object.entries(assetObj)) {
+      if (key !== 'url' && value !== undefined && value !== null && value !== '') {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 /**
  * Convert Portable Text blocks to Markdown.
  * Unknown block types are serialized as opaque fences.
@@ -100,14 +136,14 @@ export function portableTextToMarkdown(blocks: PortableTextBlock[]): string {
       lines.push(code);
       lines.push('```');
       prevWasList = false;
-    } else if (block._type === 'image') {
+    } else if (block._type === 'image' && isPlainImageBlock(block)) {
       if (i > 0) lines.push('');
       const alt = (block.alt as string) || '';
       const url = (block.asset as { url?: string })?.url || '';
       lines.push(`![${alt}](${url})`);
       prevWasList = false;
     } else {
-      // Tier 3: Unknown block -> opaque fence
+      // Tier 3: Unknown or extended block -> opaque fence
       if (i > 0) lines.push('');
       lines.push(`<!--ec:block ${JSON.stringify(block)} -->`);
       prevWasList = false;

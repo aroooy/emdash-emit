@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import {
   detectUnsupportedMarkdownSyntax,
   extractOpaqueBlockLines,
+  isPlainImageBlock,
   markdownToPortableText,
   portableTextToMarkdown,
   verifyOpaqueBlocksUntampered,
@@ -85,6 +86,161 @@ describe('Portable Text <-> Markdown Conversion', () => {
     const parsedBlocks = markdownToPortableText(md);
     expect(parsedBlocks.length).toBe(1);
     expect(parsedBlocks[0]).toEqual(customBlock);
+  });
+
+  describe('Styled Image Block Fallback to Tier 3 (Fidelity Protection)', () => {
+    it('isPlainImageBlock correctly identifies plain vs extended image blocks', () => {
+      // 1. Plain image block
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k1',
+          alt: 'Plain',
+          asset: { url: 'https://example.com/a.jpg' },
+        }),
+      ).toBe(true);
+
+      // 2. Empty values (null, '', undefined) should still be considered plain (no over-fencing)
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k2',
+          alt: 'Empty props',
+          caption: null,
+          title: '',
+          alignment: undefined,
+          asset: { url: 'https://example.com/b.jpg' },
+        }),
+      ).toBe(true);
+
+      // 3. Extended top-level properties (alignment, displayWidth, etc.)
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k3',
+          alt: 'Aligned',
+          alignment: 'left',
+          asset: { url: 'https://example.com/c.jpg' },
+        }),
+      ).toBe(false);
+
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k4',
+          displayWidth: 400,
+          asset: { url: 'https://example.com/d.jpg' },
+        }),
+      ).toBe(false);
+
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k5',
+          caption: 'A caption',
+          asset: { url: 'https://example.com/e.jpg' },
+        }),
+      ).toBe(false);
+
+      // 4. Extended properties inside asset object
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k6',
+          alt: 'Asset with storageKey',
+          asset: { url: 'https://example.com/f.jpg', storageKey: '01M6ABC.jpg' },
+        }),
+      ).toBe(false);
+
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k7',
+          asset: { url: 'https://example.com/g.jpg', _type: 'asset' },
+        }),
+      ).toBe(false);
+
+      // 5. Unknown future properties (fail-safe whitelist)
+      expect(
+        isPlainImageBlock({
+          _type: 'image',
+          _key: 'k8',
+          aspectRatio: '16:9',
+          asset: { url: 'https://example.com/h.jpg' },
+        }),
+      ).toBe(false);
+
+      // 6. Non-image block
+      expect(isPlainImageBlock({ _type: 'block' })).toBe(false);
+    });
+
+    it('serializes plain image to standard markdown and styled image to opaque comment fence', () => {
+      const plainBlock: PortableTextBlock = {
+        _type: 'image',
+        _key: 'plain1',
+        alt: 'Plain Image',
+        asset: { url: '/_emdash/api/media/file/plain.jpg' },
+      };
+
+      const styledBlock: PortableTextBlock = {
+        _type: 'image',
+        _key: 'styled1',
+        alt: 'Styled Image',
+        alignment: 'right',
+        displayWidth: 350,
+        asset: { url: '/_emdash/api/media/file/styled.jpg' },
+      };
+
+      const md = portableTextToMarkdown([plainBlock, styledBlock]);
+      expect(md).toContain('![Plain Image](/_emdash/api/media/file/plain.jpg)');
+      expect(md).toContain(`<!--ec:block ${JSON.stringify(styledBlock)} -->`);
+    });
+
+    it('guarantees round-trip fidelity for styled images without property loss', () => {
+      const originalStyledBlock: PortableTextBlock = {
+        _type: 'image',
+        _key: 'k_styled_roundtrip',
+        alt: 'Hero',
+        alignment: 'center',
+        displayWidth: 600,
+        displayHeight: 400,
+        caption: 'Hero Caption',
+        asset: {
+          url: '/_emdash/api/media/file/01M7EYKSMGZE29ZYY4J4EW1JMT.jpg',
+        },
+      };
+
+      // 1. PT -> Markdown
+      const md = portableTextToMarkdown([originalStyledBlock]);
+      expect(md.trim()).toBe(`<!--ec:block ${JSON.stringify(originalStyledBlock)} -->`);
+
+      // 2. Markdown -> PT
+      const parsedBlocks = markdownToPortableText(md);
+      expect(parsedBlocks.length).toBe(1);
+      expect(parsedBlocks[0]).toEqual(originalStyledBlock);
+      expect(parsedBlocks[0].alignment).toBe('center');
+      expect(parsedBlocks[0].displayWidth).toBe(600);
+      expect(parsedBlocks[0].caption).toBe('Hero Caption');
+    });
+
+    it('safely handles edge cases like alt text containing "-->" without regex corruption', () => {
+      const edgeCaseBlock: PortableTextBlock = {
+        _type: 'image',
+        _key: 'k_edge',
+        alt: 'pointing --> this way',
+        alignment: 'left',
+        asset: { url: '/_emdash/api/media/file/edge.jpg' },
+      };
+
+      const md = portableTextToMarkdown([edgeCaseBlock]);
+      expect(md.trim()).toBe(`<!--ec:block ${JSON.stringify(edgeCaseBlock)} -->`);
+
+      const parsed = markdownToPortableText(md);
+      expect(parsed.length).toBe(1);
+      expect(parsed[0]).toEqual(edgeCaseBlock);
+      expect(parsed[0].alt).toBe('pointing --> this way');
+      expect(parsed[0].alignment).toBe('left');
+    });
   });
 
   describe('Opaque Block Safety Guard (G9)', () => {
