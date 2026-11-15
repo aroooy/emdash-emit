@@ -45,10 +45,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { storageKeyToMarkdownRef } from './naming.js';
-import { FENCE_POLICY, scanRawMediaReferences, type FencePolicyType } from './media-refs.js';
+import {
+  FENCE_POLICY,
+  MEDIA_FILE_ROUTE_PREFIX,
+  scanRawMediaReferences,
+  type FencePolicyType,
+} from './media-refs.js';
 
-/** Canonical root-relative media route prefix EmDash writes into Portable Text image blocks. */
-export const MEDIA_FILE_ROUTE_PREFIX = '/_emdash/api/media/file/';
+export { MEDIA_FILE_ROUTE_PREFIX };
 
 /** Workspace-relative directory a mirrored asset lives in. */
 export const MEDIA_DIR_PREFIX = 'media/';

@@ -803,14 +803,18 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     expect(cache.getMediaStateByMediaId(mediaRecordId)?.status).toBe('ready');
 
     // 2nd push: the canonical URL must NOT be baked into the body because the remote record is gone
-    await expect(
-      pushArticle(relPathB, {
+    try {
+      await pushArticle(relPathB, {
         ...baseOptions,
         workspaceRoot: tempDir,
         cache,
         fetchFn,
-      }),
-    ).rejects.toThrow(/no longer exists on remote/);
+      });
+      expect.fail('Expected PROMOTED_MEDIA_NOT_FOUND_REMOTE error');
+    } catch (err: any) {
+      expect(err.code).toBe('PROMOTED_MEDIA_NOT_FOUND_REMOTE');
+      expect(err.message).toMatch(/no longer exists on remote/);
+    }
 
     expect(mediaDetailCalls).toBe(1);
     expect(uploadUrlCalls).toBe(1); // Emit does not silently re-upload behind the user's back

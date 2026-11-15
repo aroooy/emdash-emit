@@ -180,4 +180,44 @@ describe('Guard Registry and Error Codes Invariants (L6)', () => {
     const pushSource = fs.readFileSync(path.resolve(srcDir, 'sync/push.ts'), 'utf-8');
     expect(pushSource.includes('[LOCAL_IMAGE_AUTO_UPLOAD]')).toBe(true);
   });
+
+  /**
+   * Rule 5: Existence check for all 20 unique guard error codes across 16 active guards.
+   *
+   * Note: This rule verifies the literal existence of each error code string in tests/ to
+   * catch forgotten or unasserted guard rails at build/test time. It is a presence rail,
+   * not a deep semantic assertion strength validator; functional tests must still assert
+   * positive/negative behavior via expect(err.code).toBe(...) or similar patterns.
+   */
+  it('Rule 5: Test coverage check - every guard code in registry must be asserted in tests/', () => {
+    const testsDir = path.resolve(__dirname, '../tests');
+    const excludedTestFiles = ['tests/guards.test.ts', 'tests/presentation_symmetry.test.ts'];
+    const testFiles = getAllTsFiles(testsDir, excludedTestFiles);
+
+    const testContents = testFiles.map((file) => fs.readFileSync(file, 'utf-8'));
+
+    const activeGuards = GUARD_REGISTRY.filter((g) => g.codes.length > 0);
+    expect(activeGuards.length).toBe(16);
+
+    const codesToCheck = Array.from(new Set(activeGuards.flatMap((g) => g.codes)));
+    expect(codesToCheck.length).toBe(20);
+
+    const unassertedCodes: string[] = [];
+    for (const code of codesToCheck) {
+      const hasLiteral = testContents.some(
+        (content) =>
+          content.includes(`'${code}'`) ||
+          content.includes(`"${code}"`) ||
+          content.includes(`\`${code}\``),
+      );
+      if (!hasLiteral) {
+        unassertedCodes.push(code);
+      }
+    }
+
+    expect(
+      unassertedCodes,
+      `Guard error codes registered in GUARD_REGISTRY but missing test assertions in tests/: ${unassertedCodes.join(', ')}`,
+    ).toEqual([]);
+  });
 });

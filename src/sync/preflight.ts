@@ -37,7 +37,8 @@ import {
   type Frontmatter,
   type ParsedMarkdown,
 } from '../utils/frontmatter.js';
-import { MEDIA_FILE_ROUTE_PREFIX, storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
+import { storageKeyFromMirrorRef } from '../utils/media-body-refs.js';
+import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
 import { toMediaRecordId, toStorageKey } from '../utils/media-id.js';
 import type { MediaRecordId, StorageKey } from '../utils/media-id.js';

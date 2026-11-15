@@ -396,4 +396,38 @@ describe('Architectural Layering Invariants', () => {
         violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
     ).toHaveLength(0);
   });
+
+  it('Axis 5: Non-CLI logging isolation - console.log/debug prohibited outside src/cli', () => {
+    const nonCliDirs = [
+      path.join(SRC_ROOT, 'sync'),
+      path.join(SRC_ROOT, 'utils'),
+      path.join(SRC_ROOT, 'db'),
+      path.join(SRC_ROOT, 'client'),
+      path.join(SRC_ROOT, 'mcp'),
+      path.join(SRC_ROOT, 'presentation'),
+    ];
+
+    const nonCliFiles = nonCliDirs.flatMap((d) => collectSourceFiles(d));
+    const forbiddenPattern = /\bconsole\.(?:log|debug)\s*\(/;
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of nonCliFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      const lines = content.split('\n');
+      const relFile = path.relative(SRC_ROOT, file);
+
+      lines.forEach((lineText, idx) => {
+        const stripped = lineText.replace(/\/\/.*$/, '');
+        if (forbiddenPattern.test(stripped)) {
+          violations.push({ file: relFile, line: idx + 1, code: lineText.trim() });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `Non-CLI console.log/debug violations found (stdout pollution):\n` +
+        violations.map((v) => `  ${v.file}:${v.line}: ${v.code}`).join('\n'),
+    ).toHaveLength(0);
+  });
 });

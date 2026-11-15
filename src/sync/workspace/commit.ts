@@ -25,7 +25,7 @@ import path from 'node:path';
 import type { CacheDatabase, SyncState } from '../../db/cache.js';
 import { createBaseSnapshot } from '../../db/baseline.js';
 import type { Frontmatter } from '../../utils/frontmatter.js';
-import { calculateHash } from './index.js';
+import { calculateHash } from './hash.js';
 
 export interface ArticleCommitInput {
   /** 26-character canonical ULID of the article */

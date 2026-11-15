@@ -20,21 +20,16 @@
  * SOFTWARE.
  */
 
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { extractUlidFromFilename } from '../../utils/naming.js';
 import { computeArticleRelativePath } from '../../utils/frontmatter.js';
+import { calculateHash } from './hash.js';
+
+export { calculateHash };
 
 /** Subdirectory (under a collection) reserved for preserved divergent local copies. */
 export const CONFLICTS_SUBDIR = 'conflicts';
-
-/**
- * Calculates SHA-256 hash of a string.
- */
-export function calculateHash(content: string): string {
-  return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-}
 
 /**
  * Detects a workspace-relative rescue-copy path (`<collection>/conflicts/<file>.md`).

@@ -2196,15 +2196,19 @@ Content
     });
 
     // Push without revive or force should be blocked
-    await expect(
-      pushArticle(relPath, {
+    try {
+      await pushArticle(relPath, {
         workspaceRoot: tempDir,
         cache,
         origin: 'https://test.emdash.local',
         token: 'test-token',
         fetchFn: (async () => ({})) as unknown as typeof fetch,
-      }),
-    ).rejects.toThrowError(/is marked as delete-pending/);
+      });
+      expect.fail('Expected DELETE_PENDING_ARTICLE error');
+    } catch (err: any) {
+      expect(err.code).toBe('DELETE_PENDING_ARTICLE');
+      expect(err.message).toMatch(/is marked as delete-pending/);
+    }
 
     // Push with revive: true should pass the guard
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
@@ -2641,15 +2645,21 @@ Partial body
     expect(baseFm.taxonomies.categories).toEqual(['news-old']);
 
     // Next bare push must be blocked by Guard G17
-    await expect(
-      pushArticle(syncState!.localFilePath, {
+    try {
+      await pushArticle(syncState!.localFilePath, {
         workspaceRoot: tempDir,
         cache,
         origin: 'https://test.emdash.local',
         token: 'test-token',
         fetchFn: mockFetch as unknown as typeof fetch,
-      }),
-    ).rejects.toThrowError(/has an unconfirmed taxonomy assignment from a previous failed update/);
+      });
+      expect.fail('Expected TAXONOMY_APPLY_PENDING error');
+    } catch (err: any) {
+      expect(err.code).toBe('TAXONOMY_APPLY_PENDING');
+      expect(err.message).toMatch(
+        /has an unconfirmed taxonomy assignment from a previous failed update/,
+      );
+    }
 
     // Push with allowUnappliedTaxonomies = true bypasses Guard G17
     // Mock fetch for successful retry

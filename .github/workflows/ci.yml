@@ -29,6 +29,9 @@ jobs:
       - name: Run TypeScript typecheck
         run: npm run typecheck
 
+      - name: Check circular dependencies
+        run: npm run check:cycles
+
       - name: Run Vitest test suite
         run: npm test
 

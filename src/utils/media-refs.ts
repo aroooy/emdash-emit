@@ -7,9 +7,8 @@
  * 3. Unified scanning of markdown and HTML image references across article bodies.
  */
 
-import { MEDIA_FILE_ROUTE_PREFIX } from './media-body-refs.js';
-
-export { MEDIA_FILE_ROUTE_PREFIX };
+/** Canonical root-relative media route prefix EmDash writes into Portable Text image blocks. */
+export const MEDIA_FILE_ROUTE_PREFIX = '/_emdash/api/media/file/';
 
 /**
  * Valid storageKey format: dot-separated 26-char ULID segments with a supported image extension.

@@ -650,5 +650,42 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         },
       });
     });
+
+    it('blocks with LOCAL_IMAGE_SIZE_EXCEEDED when draft image exceeds 50 MiB limit (boundary check)', () => {
+      const tempWs = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-preflight-size-'));
+      const draftsDir = path.join(tempWs, 'media', 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+
+      const exactLimitPath = path.join(draftsDir, 'exact-limit.jpg');
+      const fdExact = fs.openSync(exactLimitPath, 'w');
+      fs.ftruncateSync(fdExact, 52_428_800); // 50 MiB exactly
+      fs.closeSync(fdExact);
+
+      const exceededPath = path.join(draftsDir, 'exceeded.jpg');
+      const fdExceeded = fs.openSync(exceededPath, 'w');
+      fs.ftruncateSync(fdExceeded, 52_428_801); // 50 MiB + 1 byte
+      fs.closeSync(fdExceeded);
+
+      try {
+        // 1. Boundary: exactly 52,428,800 bytes passes without size error
+        const parsedExact: ParsedMarkdown = {
+          ...validParsed,
+          body: '![Exact](../../media/drafts/exact-limit.jpg)',
+        };
+        const resExact = runPreflightChecks(filePath, parsedExact, { workspaceRoot: tempWs });
+        expect(resExact.errors.some((e) => e.code === 'LOCAL_IMAGE_SIZE_EXCEEDED')).toBe(false);
+
+        // 2. Exceeded: 52,428,801 bytes blocked by LOCAL_IMAGE_SIZE_EXCEEDED
+        const parsedExceeded: ParsedMarkdown = {
+          ...validParsed,
+          body: '![Exceeded](../../media/drafts/exceeded.jpg)',
+        };
+        const resExceeded = runPreflightChecks(filePath, parsedExceeded, { workspaceRoot: tempWs });
+        expect(resExceeded.valid).toBe(false);
+        expect(resExceeded.errors.some((e) => e.code === 'LOCAL_IMAGE_SIZE_EXCEEDED')).toBe(true);
+      } finally {
+        fs.rmSync(tempWs, { recursive: true, force: true });
+      }
+    });
   });
 });
