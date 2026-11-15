@@ -89,7 +89,9 @@ export interface ArticleMediaSummaryResult {
 }
 
 /**
- * Renders the per-article media summary.
+ * Renders the per-article media summary. A migrated corpus bakes R2 storageKeys into body URLs, so the
+ * ids collected from those URLs mostly resolve to nothing; that is reported as expected resolution data,
+ * never as a failure. Only a reference no id lookup and no storageKey check could match is a failure.
  */
 export function formatArticleMediaSummary(res: ArticleMediaSummaryResult): string {
   const parts = [`${res.downloaded} downloaded`, `${res.skipped} skipped/up-to-date`];

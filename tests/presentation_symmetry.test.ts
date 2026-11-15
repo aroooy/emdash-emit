@@ -176,9 +176,15 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     expect(cliSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/pull_report(?:\.js)?['"]/);
     expect(cliSource).toContain('formatTaxonomySyncFailure');
     expect(cliSource).toContain('formatTaxonomySyncSuccess');
+    // Ensure actual call sites exist in CLI
+    expect(cliSource).toMatch(/formatTaxonomySyncFailure\s*\(/);
+    expect(cliSource).toMatch(/formatTaxonomySyncSuccess\s*\(/);
 
     expect(mcpSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/pull_report(?:\.js)?['"]/);
     expect(mcpSource).toContain('formatTaxonomySyncFailure');
     expect(mcpSource).toContain('formatTaxonomySyncSuccess');
+    // Ensure actual call sites exist in MCP
+    expect(mcpSource).toMatch(/formatTaxonomySyncFailure\s*\(/);
+    expect(mcpSource).toMatch(/formatTaxonomySyncSuccess\s*\(/);
   });
 });

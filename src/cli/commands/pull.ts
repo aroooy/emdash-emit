@@ -71,7 +71,14 @@ export {
   formatTaxonomySyncSuccess,
 } from '../../presentation/pull_report.js';
 
-/** Prints the unresolved media warning when a pull could not resolve body storageKeys locally. */
+/**
+ * Reports body image references that neither a remote media record nor confirmed local mirror metadata
+ * could resolve. Emit only knows that *its* lookups failed; it never claims the D1 record is absent,
+ * because `GET /_emdash/api/media/{id}` keys on the primary key while the body URL carries the R2
+ * storageKey, so a real record can 404 here. The advice is therefore "verify before you write": inspect
+ * the media library by storageKey (or the migration mapping) and only then register anything, since a
+ * blind INSERT risks a duplicate registration. Emit mirrors records and never repairs server data.
+ */
 function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void {
   const warning = formatOrphanMediaWarning(orphanStorageKeys);
   if (warning) console.warn(warning);
