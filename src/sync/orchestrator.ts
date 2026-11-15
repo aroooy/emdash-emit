@@ -35,7 +35,8 @@ import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
-import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { loadLocalTaxonomyCandidates, pullTaxonomies } from './taxonomies.js';
+import { pullMedia, type PullMediaResult } from './media.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
 
 export interface UnpushedConflictItem {
@@ -101,6 +102,93 @@ export interface PullBatchResult {
     orphanStorageKeys: string[];
   };
   items: PullResult[];
+}
+
+export interface PullSingleArticleOptions {
+  collection: string;
+  targetId: string;
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  force?: boolean;
+  postsOnly?: boolean;
+  localMediaRefs?: boolean;
+  mediaSync?: boolean;
+  includeMedia?: boolean;
+  metadataOnly?: boolean;
+  mediaSyncLimit?: number;
+  fetchFn?: typeof fetch;
+}
+
+export interface PullSingleArticleResult {
+  article: PullResult;
+  taxonomies?: {
+    categoriesFailed?: boolean;
+    tagsFailed?: boolean;
+    error?: string;
+  };
+  libraryMedia?: PullMediaResult;
+}
+
+/**
+ * Orchestrates single article pull including optional taxonomy sync and media library sync.
+ * Reusable across CLI and MCP servers to ensure consistent single-article workflow.
+ */
+export async function pullSingleArticle(
+  options: PullSingleArticleOptions,
+): Promise<PullSingleArticleResult> {
+  let taxonomiesResult: PullSingleArticleResult['taxonomies'] = undefined;
+
+  if (!options.postsOnly) {
+    try {
+      const taxRes = await pullTaxonomies({
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+      });
+      if (taxRes.categoriesFailed || taxRes.tagsFailed) {
+        taxonomiesResult = {
+          categoriesFailed: taxRes.categoriesFailed,
+          tagsFailed: taxRes.tagsFailed,
+        };
+      }
+    } catch (err) {
+      taxonomiesResult = { error: (err as Error).message };
+    }
+  }
+
+  const article = await pullArticle(options.collection, options.targetId, {
+    workspaceRoot: options.workspaceRoot,
+    cache: options.cache,
+    origin: options.origin,
+    token: options.token,
+    refreshToken: options.refreshToken,
+    force: options.force,
+    localMediaRefs: options.localMediaRefs,
+    mediaSync: options.mediaSync,
+    mediaSyncLimit: options.mediaSyncLimit,
+    fetchFn: options.fetchFn,
+  });
+
+  let libraryMedia: PullMediaResult | undefined = undefined;
+  if (options.includeMedia) {
+    libraryMedia = await pullMedia({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      limit: options.mediaSyncLimit,
+      downloadFiles: options.metadataOnly !== true,
+      cache: options.cache,
+      fetchFn: options.fetchFn,
+    });
+  }
+
+  return { article, taxonomies: taxonomiesResult, libraryMedia };
 }
 
 /**

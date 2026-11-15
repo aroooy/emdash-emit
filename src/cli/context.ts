@@ -20,6 +20,7 @@
  * SOFTWARE.
  */
 
+import type { Command } from 'commander';
 import { CacheDatabase } from '../db/cache.js';
 import { resolveAuth, type ResolvedAuth } from '../client/auth.js';
 import {
@@ -287,4 +288,22 @@ export function resolveAndPersistLocalMediaRefs(
     persistLocalMediaRefs(ctx.root, false);
   }
   return localMediaRefs;
+}
+
+/**
+ * Resolves a boolean CLI option explicitly passed on the command line.
+ * Returns true if --<name> was passed, false if --no-<name> was passed,
+ * or undefined if the option was not explicitly provided by the user.
+ */
+export function resolveExplicitBooleanOption(
+  cmd: Command,
+  optionName: string,
+): boolean | undefined {
+  if (
+    typeof cmd.getOptionValueSource === 'function' &&
+    cmd.getOptionValueSource(optionName) === 'cli'
+  ) {
+    return Boolean(cmd.getOptionValue(optionName));
+  }
+  return undefined;
 }

@@ -483,6 +483,34 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
 }
 
 /**
+ * Sorts taxonomy terms deterministically and deduplicates by slug, keeping the winner term.
+ * Mode 'slug-grouped' orders by slug ASC first (used for categories display).
+ * Mode 'frequency' orders by highest count first, newest ULID break (used for tags display).
+ */
+export function dedupeTermsBySlug(
+  items: LocalTaxonomyItem[],
+  mode: 'slug-grouped' | 'frequency' = 'frequency',
+): LocalTaxonomyItem[] {
+  const sorted = [...items].sort((a, b) => {
+    if (mode === 'slug-grouped') {
+      if (a.slug < b.slug) return -1;
+      if (a.slug > b.slug) return 1;
+    }
+    return compareTaxonomyTermDeterministically(a, b);
+  });
+
+  const seen = new Set<string>();
+  const result: LocalTaxonomyItem[] = [];
+  for (const item of sorted) {
+    if (!seen.has(item.slug)) {
+      seen.add(item.slug);
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+/**
  * Reads local categories/ and tags/ YAML definitions and returns structured summary.
  * Tags are sorted by count descending (most used first), then by ULID descending (newest first).
  * Categories are sorted alphabetically by slug using deterministic ordinal comparison,
@@ -492,30 +520,12 @@ export function getLocalTaxonomiesSummary(workspaceRoot: string): LocalTaxonomie
   const categoriesDir = path.join(workspaceRoot, 'categories');
   const tagsDir = path.join(workspaceRoot, 'tags');
 
-  const dedupeBySlug = (items: LocalTaxonomyItem[]): LocalTaxonomyItem[] => {
-    const seen = new Set<string>();
-    const result: LocalTaxonomyItem[] = [];
-    for (const item of items) {
-      if (!seen.has(item.slug)) {
-        seen.add(item.slug);
-        result.push(item);
-      }
-    }
-    return result;
-  };
-
   // Primary sort key `slug` asc orders distinct categories for display; within identical `slug` groups
-  // (`a.slug === b.slug`), `compareTaxonomyTermDeterministically` decides the winner kept by `dedupeBySlug`,
+  // (`a.slug === b.slug`), `compareTaxonomyTermDeterministically` decides the winner kept by `dedupeTermsBySlug`,
   // guaranteeing 100% winner parity with `loadLocalTaxonomyMaps`.
-  const categories = dedupeBySlug(
-    readTaxonomyDir(categoriesDir).sort((a, b) => {
-      if (a.slug < b.slug) return -1;
-      if (a.slug > b.slug) return 1;
-      return compareTaxonomyTermDeterministically(a, b);
-    }),
-  );
+  const categories = dedupeTermsBySlug(readTaxonomyDir(categoriesDir), 'slug-grouped');
   // Sort tags: highest count (usage frequency) first; ties broken by newest ULID (descending)
-  const tags = dedupeBySlug(readTaxonomyDir(tagsDir).sort(compareTaxonomyTermDeterministically));
+  const tags = dedupeTermsBySlug(readTaxonomyDir(tagsDir), 'frequency');
 
   return { categories, tags };
 }

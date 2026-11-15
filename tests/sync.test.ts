@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
+import { pullBatch, pullSingleArticle, pushAll } from '../src/sync/orchestrator.js';
 import { hybrid3WayMerge } from '../src/sync/merge.js';
 import { pullArticle } from '../src/sync/pull.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
@@ -3971,5 +3971,90 @@ describe('v0.1.29 Batch Pull Invariants & Media Dedup (T7-T9)', () => {
     expect(bylinesSyncCalled).toBe(0);
     const content = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
     expect(content).toContain('bylines:\n  - author-one');
+  });
+
+  it('T3: pullSingleArticle orchestrates taxonomy sync, article pull, and optional media library pull (v0.1.30)', async () => {
+    const articleId = '01M6ARTICLEFACADE000000001';
+
+    let taxCalled = 0;
+    let mediaListCalled = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+
+      // Taxonomies
+      if (url.includes('/_emdash/api/taxonomies/')) {
+        taxCalled++;
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: '01CAT000000000000000000001',
+                name: 'Tech',
+                slug: 'tech',
+                taxonomy: 'category',
+                count: 1,
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      // Media list (for includeMedia)
+      if (url.includes('/_emdash/api/media')) {
+        mediaListCalled++;
+        return new Response(
+          JSON.stringify({
+            items: [],
+            totalCount: 0,
+            nextCursor: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      // Article GET
+      if (url.includes(`/_emdash/api/content/posts/${articleId}`)) {
+        return new Response(
+          JSON.stringify({
+            id: articleId,
+            slug: 'facade-test-post',
+            collection: 'posts',
+            status: 'draft',
+            version: 1,
+            _rev: 'rev_facade_1',
+            data: {
+              title: 'Facade Test Post',
+              body: 'Hello world',
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const result = await pullSingleArticle({
+      collection: 'posts',
+      targetId: articleId,
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      postsOnly: false,
+      includeMedia: true,
+      mediaSync: false,
+    });
+
+    expect(taxCalled).toBe(2); // categories and tags
+    expect(mediaListCalled).toBe(1); // includeMedia called pullMedia
+    expect(result.article.slug).toBe('facade-test-post');
+    expect(result.taxonomies).toBeUndefined(); // clean sync without failures
+    expect(result.libraryMedia).toBeDefined();
+    expect(result.libraryMedia?.total).toBe(0);
+    expect(fs.existsSync(path.join(tempDir, result.article.filePath))).toBe(true);
   });
 });

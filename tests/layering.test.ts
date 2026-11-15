@@ -63,7 +63,14 @@ const LAYER_2_MODULE_NAMES = [
  * Enforces that internal details of Layer 2 are not leaked to consumers.
  */
 const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
-  orchestrator: new Set(['pullBatch', 'pushAll', 'SyncPruneConflictError']),
+  orchestrator: new Set([
+    'pullBatch',
+    'pullSingleArticle',
+    'PullSingleArticleOptions',
+    'PullSingleArticleResult',
+    'pushAll',
+    'SyncPruneConflictError',
+  ]),
   push: new Set(['pushArticle', 'PushValidationError', 'PushResult']),
   pull: new Set(['pullArticle', 'formatQuarantineNotice', 'PullResult']),
   new: new Set(['createArticleScaffold', 'DuplicateSlugError']),

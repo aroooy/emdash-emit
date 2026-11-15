@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.29] - 2026-11-15
+## [0.1.30] - 2026-11-15
+
+### Added
+
+- **Single-Article Pull Orchestration Facade (`src/sync/orchestrator.ts`)**:
+  - Added `pullSingleArticle`, `PullSingleArticleOptions`, and `PullSingleArticleResult` to `src/sync/orchestrator.ts` as the Layer 2 designated coordinator counterpart to `pullBatch`.
+  - Consolidates the single-article pipeline (optional taxonomy synchronization, article pull with on-demand media mirroring, and optional full media library sync) into a single reusable entry point shared by CLI (`src/cli/commands/pull.ts`) and MCP (`src/mcp/tools/sync-pull.ts`).
+  - Enforces clean architectural layering: returns structured flags (`categoriesFailed`, `tagsFailed`, `error`) without UI strings, leaving presentation formatting to Layer 3. Registered in `ALLOWED_LAYER_2_SYMBOLS['orchestrator']` in `tests/layering.test.ts` with zero intra-layer sibling coupling exceptions.
+- **Deterministic Taxonomy Term Deduplication (`src/sync/taxonomies.ts`)**:
+  - Extracted and exported `dedupeTermsBySlug` supporting `'slug-grouped'` (categories) and `'frequency'` (tags) modes. Replaced local closure in `getLocalTaxonomiesSummary` and enabled direct unit testing of winner selection and tie-breaking invariants.
+- **Robust CLI Explicit Boolean Option Resolution (`src/cli/context.ts`)**:
+  - Introduced `resolveExplicitBooleanOption` in `src/cli/context.ts` using Commander's `getOptionValueSource('media') === 'cli'` paired with `getOptionValue('media')`.
+  - Accurately differentiates `--media` (`true`), `--no-media` (`false`), and unprovided (`undefined`) without raw `process.argv` scanning, while safely handling Commander's `--no-*` source attribution behavior and argument ordering.
+
+### Changed
+
+- **Media Library Walk Pagination Unification (`src/sync/media/`)**:
+  - Exported `fetchMediaListPage` from `src/sync/media/remote_index.ts` and replaced the inline HTTP pagination walk in `src/sync/media/pull_library.ts:pullMedia()`, unifying media list endpoint queries, `MEDIA_LIST_FAILED` error wrapping, and cursor progression across `collectRemoteStorageKeys`, `searchRemoteMedia`, and `pullMedia`.
+  - Removed unused imports (`unwrapEnvelope`, `ApiError`, `mediaListEndpoint`) in `src/sync/media/pull_library.ts`, ensuring strict compliance with `noUnusedLocals: true`.
+
 
 ### Added
 

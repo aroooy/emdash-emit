@@ -30,6 +30,8 @@ import {
   loadLocalTaxonomyMaps,
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
+  dedupeTermsBySlug,
+  type LocalTaxonomyItem,
 } from '../src/sync/taxonomies.js';
 import { canonicalizeFrontmatterTaxonomies } from '../src/sync/push/taxonomy_plan.js';
 import type { ParsedMarkdown } from '../src/utils/frontmatter.js';
@@ -620,6 +622,34 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       expect(res.tagsFailed).toBe(true);
       expect(res.deletedTagsCount).toBe(0);
       expect(fs.existsSync(path.join(tagDir, '01KEEP_TAG-ExistingTag.yaml'))).toBe(true);
+    });
+  });
+
+  describe('dedupeTermsBySlug (v0.1.30 T6)', () => {
+    it('sorts categories deterministically by slug ASC and picks the winner on collisions', () => {
+      const items: LocalTaxonomyItem[] = [
+        { id: '01B_LOSER', slug: 'beta', name: 'Beta Loser', count: 1 },
+        { id: '01B_WINNER', slug: 'beta', name: 'Beta Winner', count: 5 },
+        { id: '01A_ITEM', slug: 'alpha', name: 'Alpha', count: 2 },
+        { id: '01C_ITEM', slug: 'gamma', name: 'Gamma', count: 10 },
+      ];
+
+      const result = dedupeTermsBySlug(items, 'slug-grouped');
+      expect(result.map((r) => r.slug)).toEqual(['alpha', 'beta', 'gamma']);
+      expect(result.find((r) => r.slug === 'beta')?.id).toBe('01B_WINNER');
+    });
+
+    it('sorts tags by frequency (count DESC) then newest ULID, and deduplicates identical slugs', () => {
+      const items: LocalTaxonomyItem[] = [
+        { id: '01A_OLD_TIED', slug: 'tied-tag', name: 'Tied Old', count: 5 },
+        { id: '01Z_NEW_TIED', slug: 'tied-tag', name: 'Tied New', count: 5 },
+        { id: '01LOW_TAG', slug: 'low', name: 'Low', count: 1 },
+        { id: '01HIGH_TAG', slug: 'high', name: 'High', count: 20 },
+      ];
+
+      const result = dedupeTermsBySlug(items, 'frequency');
+      expect(result.map((r) => r.slug)).toEqual(['high', 'tied-tag', 'low']);
+      expect(result.find((r) => r.slug === 'tied-tag')?.id).toBe('01Z_NEW_TIED');
     });
   });
 });

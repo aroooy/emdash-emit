@@ -38,9 +38,9 @@ export interface SearchRemoteMediaOptions {
 
 /**
  * Fetches a single page from EmDash media list endpoint.
- * Shared by collectRemoteStorageKeys and searchRemoteMedia to guarantee identical pagination behavior.
+ * Shared by collectRemoteStorageKeys, searchRemoteMedia, and pullMedia to guarantee identical pagination behavior.
  */
-async function fetchMediaListPage(options: {
+export async function fetchMediaListPage(options: {
   origin: string;
   token: string;
   limit: number;

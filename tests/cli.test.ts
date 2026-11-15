@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
 import { registerStatusInitCommands, resolveInitPlan } from '../src/cli/commands/status.js';
-import { resolveOriginPriority } from '../src/cli/context.js';
+import { resolveOriginPriority, resolveExplicitBooleanOption } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
 import { loadProfilesFile, setProfile } from '../src/utils/profile.js';
 
@@ -822,5 +822,44 @@ describe('Emit CLI (Commander)', () => {
       console.error = originalError;
       process.exit = originalExit;
     }
+  });
+
+  describe('resolveExplicitBooleanOption (v0.1.30 T7)', () => {
+    function createTestCommand() {
+      const cmd = new Command();
+      cmd
+        .option('--media', 'Mirror media')
+        .option('--no-media', 'Skip media')
+        .action(() => {});
+      return cmd;
+    }
+
+    it('returns undefined when neither option was passed', () => {
+      const cmd = createTestCommand();
+      cmd.parse([], { from: 'user' });
+      expect(resolveExplicitBooleanOption(cmd, 'media')).toBeUndefined();
+    });
+
+    it('returns true when --media was passed', () => {
+      const cmd = createTestCommand();
+      cmd.parse(['--media'], { from: 'user' });
+      expect(resolveExplicitBooleanOption(cmd, 'media')).toBe(true);
+    });
+
+    it('returns false when --no-media was passed', () => {
+      const cmd = createTestCommand();
+      cmd.parse(['--no-media'], { from: 'user' });
+      expect(resolveExplicitBooleanOption(cmd, 'media')).toBe(false);
+    });
+
+    it('resolves conflicting flags in last-wins order', () => {
+      const cmd1 = createTestCommand();
+      cmd1.parse(['--media', '--no-media'], { from: 'user' });
+      expect(resolveExplicitBooleanOption(cmd1, 'media')).toBe(false);
+
+      const cmd2 = createTestCommand();
+      cmd2.parse(['--no-media', '--media'], { from: 'user' });
+      expect(resolveExplicitBooleanOption(cmd2, 'media')).toBe(true);
+    });
   });
 });

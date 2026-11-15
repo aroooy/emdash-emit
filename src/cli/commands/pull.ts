@@ -22,8 +22,8 @@
 
 import path from 'node:path';
 import type { Command } from 'commander';
-import { pullArticle, formatQuarantineNotice } from '../../sync/pull.js';
-import { pullBatch } from '../../sync/orchestrator.js';
+import { formatQuarantineNotice } from '../../sync/pull.js';
+import { pullBatch, pullSingleArticle } from '../../sync/orchestrator.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { ApiError } from '../../client/error.js';
 import {
@@ -36,7 +36,11 @@ import { pullMedia } from '../../sync/media.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { toStorageKey, type StorageKey } from '../../utils/media-id.js';
 import { isCanonicalUlid } from '../../utils/ulid.js';
-import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
+import {
+  resolveAndPersistLocalMediaRefs,
+  resolveExplicitBooleanOption,
+  type CliContextResolver,
+} from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
 
 /** Prints the unresolved media warning when a pull could not resolve body storageKeys locally. */
@@ -160,20 +164,19 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Disable a remembered local-media-ref preference and store canonical EmDash URLs on disk again.',
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (target, options) => {
+    .action(async (target, options, command) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
       const postsOnly = options.postsOnly === true;
 
       // Distinguish explicit --no-media vs --media
-      const hasNoMedia = process.argv.includes('--no-media');
-      const hasMedia = process.argv.includes('--media');
+      const explicitMedia = resolveExplicitBooleanOption(command, 'media');
       let mediaSync = !postsOnly;
       let includeMedia = false;
-      if (hasNoMedia) {
+      if (explicitMedia === false) {
         mediaSync = false;
         includeMedia = false;
-      } else if (hasMedia) {
+      } else if (explicitMedia === true) {
         mediaSync = !postsOnly;
         includeMedia = true;
       }
@@ -335,36 +338,38 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
         } else {
           // Single article mode: pull article and synchronize taxonomies (unless --posts-only)
-          if (!postsOnly) {
-            try {
-              const taxRes = await pullTaxonomies({
-                workspaceRoot: ctx.root,
-                origin: ctx.origin,
-                token: ctx.auth.token,
-                refreshToken: ctx.auth.refreshToken,
-              });
-              if (taxRes.categoriesFailed || taxRes.tagsFailed) {
-                console.warn(
-                  '⚠️ Warning: Failed to sync some remote taxonomies (preserved existing local definitions).',
-                );
-              }
-            } catch (err) {
-              console.warn(`⚠️ Warning: Failed to sync taxonomies: ${(err as Error).message}`);
-            }
+          if (includeMedia) {
+            console.log('Pulling media library assets...');
           }
 
-          const res = await pullArticle(collection, targetId, {
+          const singlePull = await pullSingleArticle({
+            collection,
+            targetId,
             workspaceRoot: ctx.root,
             cache: ctx.cache,
             origin: ctx.origin,
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
             force: options.force,
+            postsOnly,
             localMediaRefs,
             mediaSync,
+            includeMedia,
+            metadataOnly: options.metadataOnly === true,
             mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
           });
 
+          if (singlePull.taxonomies) {
+            if (singlePull.taxonomies.error) {
+              console.warn(`⚠️ Warning: Failed to sync taxonomies: ${singlePull.taxonomies.error}`);
+            } else if (singlePull.taxonomies.categoriesFailed || singlePull.taxonomies.tagsFailed) {
+              console.warn(
+                '⚠️ Warning: Failed to sync some remote taxonomies (preserved existing local definitions).',
+              );
+            }
+          }
+
+          const res = singlePull.article;
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);
           } else if (res.healed) {
@@ -397,20 +402,9 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             }
           }
 
-          // In single article mode, if --media is explicitly requested, also pull library assets
-          if (includeMedia) {
-            console.log('Pulling media library assets...');
-            const mediaResult = await pullMedia({
-              workspaceRoot: ctx.root,
-              origin: ctx.origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-              limit: ctx.config.mediaSyncLimit,
-              downloadFiles: options.metadataOnly !== true,
-              cache: ctx.cache,
-            });
+          if (singlePull.libraryMedia) {
             console.log(
-              `  ✅ Media library: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
+              `  ✅ Media library: ${singlePull.libraryMedia.total} items (${singlePull.libraryMedia.downloaded} downloaded, ${singlePull.libraryMedia.skipped} up-to-date)`,
             );
           }
 

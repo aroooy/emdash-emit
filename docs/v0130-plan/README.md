@@ -1,0 +1,359 @@
+# Emit v0.1.30 リファクタリング計画書（Rev.2）
+
+**テーマ**: メディア走査・単一記事 Pull オーケストレーション・タクソノミー導出・CLI フラグ解決の構造的共通化と対称性完成（Structural Deduplication & Parity Refactoring）
+
+- **対象リビジョン**: `v0.1.29`（commit `51d3a43`）完了時点の `main` ブランチ（`src/` 95 ファイル、`tests/` 59 ファイル・634 tests）
+- **ステータス**: Rev.2 — **レイヤリングゲート・Commander仕様・型境界の厳密化を反映した確定設計**
+
+---
+
+## 0. エグゼクティブサマリー
+
+`v0.1.29` において、`MediaMirrorSession` の新設により「バッチ Pull と単一記事 Pull のメディア処理乖離」という最大のリファクタリング課題は解決された。また、品質ゲート（`npm run check`）において 59 ファイル・634 テストがすべて Green であることを実証した。
+
+本リビジョン（`v0.1.30`）では、「ソースコードのコピペ」にとどまらず、**「同一の関心事・機能を担うコードが複数箇所に分散し、将来の API 変更や仕様改定で一方だけが取り残されるリスク」** を持つ残存構造を解消する。
+
+### 本計画で解消する 4 つの残存課題
+
+1. **【課題 1（高）】メディアライブラリのページネーション走査が 2 系統存在する**
+   - `src/sync/media/remote_index.ts` の `fetchMediaListPage()`（`collectRemoteStorageKeys` と `searchRemoteMedia` が共有）が存在するにもかかわらず、`src/sync/media/pull_library.ts:134-207` の `pullMedia()` が同一のエンドポイント走査ロジック（URL 構築・認証ヘッダ・`MEDIA_LIST_FAILED` ApiError・`items`/`data` エンベロープ展開・`totalCount` 取得・`nextCursor` 判定）を独自ループでインライン再実装している。
+   - `fetchMediaListPage()` を export して `pull_library.ts` をそれに載せ替え、約 40 行のネットワーク重複を排除する（不要となる `unwrapEnvelope`, `ApiError`, `mediaListEndpoint` の import を削除し `noUnusedLocals` を維持）。
+2. **【課題 2（高）】CLI / MCP の「単一記事 pull」オーケストレーションが平行実装されている**
+   - `v0.1.29` で CLI（`pull.ts`）と MCP（`sync-pull.ts`）の入出力挙動・オプションは完全に対称化されたが、その処理フロー（target 解決 → タクソノミー同期＋失敗ハンドリング → `pullArticle` → メディアサマリー整形・孤立警告 → `--media` / `includeMedia` 時の `pullMedia` 実行）のシーケンスが両ファイルに独立して書かれている。
+   - Layer 2 の公認オーケストレータである `src/sync/orchestrator.ts` に、既存の `pullBatch` と対称となる単一記事 Pull ファサード `pullSingleArticle` を新設し、シーケンスを一元化する。Layer 2 内部の兄弟結合（sibling coupling）の例外を新設せず、戻り値も UI 整形文字列ではなく構造化フラグ（`categoriesFailed`, `tagsFailed` 等）にとどめてプレゼンテーション層（Layer 3）との境界を厳守する。
+3. **【課題 3（中）】`taxonomies.ts` 内の決定論的ソート・重複排除（`dedupeBySlug`）ロジックの局所重複**
+   - 勝者決定規則（`compareTaxonomyTermDeterministically`）は共通関数化されているが、`getLocalTaxonomiesSummary` 内にローカル関数 `dedupeBySlug` が閉じ込められており、カテゴリ（`slug` 昇順 ＋ count/ULID 降順）およびタグ（count/ULID 降順）の「ソート ＋ 勝者 dedupe」パイプラインが局所記述されている。
+   - 共通ヘルパー `dedupeTermsBySlug()` を抽出・export し、テスト依存ではなくコード構造として「Layer A / Layer B の 100% 勝者一致」を恒久化する。
+4. **【課題 4（低〜中）】CLI 引数の対立フラグ解決イディオムの散在**
+   - Commander の `--no-*` フラグの挙動（`getOptionValueSource` が `'cli'` になる）を安全に取り扱うため、`src/cli/context.ts` に Commander 公式 API（`getOptionValueSource` ＋ `getOptionValue`）を用いた `resolveExplicitBooleanOption` を導入し、`pull.ts:168-170` 等の生 `process.argv` 走査を排除する。
+
+### 統合対象外（意図された非対称）の明記
+
+- **記事一覧走査（`pull/list.ts`） vs メディア一覧走査（`remote_index.ts`）**:
+  一見似ているが、`/posts` 側は draft / published のステータス別並行クエリや、API の最大取得件数超過時の 400 エラーに対する adaptive batchLimit フォールバックなどの記事固有制御を持つ。モデルとライフサイクルが異なるため統合しない。
+- **`pullArticleMedia` の単一 GET**:
+  本文画像がなく `featuredImage` のみを持つ場合の「1-GET 最適化（Case B）」であり、API コスト削減のために意図された仕様として維持する。
+
+---
+
+## 1. 対応スコープ一覧と優先度マトリクス
+
+| ID     | 優先度      | 対象領域                                                                                   | 概要                                                                                         | アーキテクチャ分類         |
+| ------ | ----------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------- |
+| **P1** | **High**    | `src/sync/media/remote_index.ts`, `src/sync/media/pull_library.ts`                         | `fetchMediaListPage` の export と `pull_library.ts` のインライン walk 置き換え・unused import 削除 | Layer 2 内部重複排除       |
+| **P2** | **High**    | `src/sync/orchestrator.ts`, `src/cli/commands/pull.ts`, `src/mcp/tools/sync-pull.ts`       | 単一記事 Pull オーケストレータ（`pullSingleArticle`）を Layer 2 統括モジュールに集約          | Layer 2 / Layer 3 境界整理 |
+| **P3** | **Medium**  | `src/sync/taxonomies.ts`                                                                   | タクソノミー項目の決定論的ソート・重複排除ヘルパー（`dedupeTermsBySlug`）集約                | Layer 1 健全化             |
+| **P4** | **Low-Med** | `src/cli/context.ts`, `src/cli/commands/pull.ts`                                           | Commander 公式 API（`getOptionValueSource` + `getOptionValue`）による明示フラグ解決ヘルパー導入 | Layer 3 堅牢化             |
+
+---
+
+## 2. 各項目の詳細設計
+
+### P1（High）— メディアライブラリ走査の共通化（`fetchMediaListPage`）
+
+#### 1. 現状の重複
+
+- `src/sync/media/remote_index.ts:43-85` にプライベート関数 `fetchMediaListPage()` が存在し、`collectRemoteStorageKeys` と `searchRemoteMedia` の 2 箇所から呼ばれている。
+- `src/sync/media/pull_library.ts:134-207` の `pullMedia()` は、以下の処理を全く同一にインライン記述している：
+  ```ts
+  const url = new URL(mediaListEndpoint(options.origin));
+  url.searchParams.set('limit', String(currentBatch));
+  if (cursor) url.searchParams.set('cursor', cursor);
+  const res = await fetchFn(url.toString(), {
+    headers: { Authorization: `Bearer ${options.token}`, Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError({
+      message: `Failed to list media: ${res.statusText}`,
+      code: 'MEDIA_LIST_FAILED',
+      status: res.status,
+      endpoint: url.toString(),
+      suggestion: 'Verify network connection and token permissions.',
+    });
+  }
+  const json = await res.json();
+  const data = unwrapEnvelope<Record<string, unknown>>(json);
+  if (typeof data.totalCount === 'number') remoteIndex.totalCount = data.totalCount;
+  const rawItems = (
+    Array.isArray(data.items) ? data.items : Array.isArray(data.data) ? data.data : []
+  ) as EmDashMediaItem[];
+  ```
+
+#### 2. 改修仕様
+
+1. **`src/sync/media/remote_index.ts`**:
+   - `fetchMediaListPage` を `export async function fetchMediaListPage(...)` として公開する。
+2. **`src/sync/media/pull_library.ts`**:
+   - `fetchMediaListPage` を import する。
+   - ループ内の上記インライン fetch / parse ブロックを `const page = await fetchMediaListPage({ ... })` に置換する。
+   - 取得した `page.rawItems` に対して既存の `activeMediaBaseNames`, `activeMediaIds`, `syncSingleMediaItem` 処理を実行する。
+   - `page.totalCount` が取得できた場合は `remoteIndex.totalCount` を更新し、`page.rawItems.length === 0` または `!page.nextCursor` でループを抜けて `remoteIndex.complete = true` を設定する。
+   - **`noUnusedLocals: true` 遵守**: `pull_library.ts:3-6` から不要となった `unwrapEnvelope`, `ApiError`, `mediaListEndpoint` の import を削除する（`createAuthedFetch` はファイル内別箇所で使用されるため残す）。
+3. **効果**:
+   - メディア一覧 API（`GET /_emdash/api/media`）の呼び出しロジック、エラーコード（`MEDIA_LIST_FAILED`）、レスポンス展開ルールが一元化される。
+
+---
+
+### P2（High）— 単一記事 Pull オーケストレーションの共通化（`pullSingleArticle`）
+
+#### 1. 現状の重複と配置の選定
+
+- `src/cli/commands/pull.ts:337-416` と `src/mcp/tools/sync-pull.ts:114-173` で、単一記事 Pull の一連の流れが重複記述されている：
+  - タクソノミー同期（`pullTaxonomies`）を `postsOnly` でない場合に呼び出し、失敗フラグをハンドリングする処理。
+  - `pullArticle(...)` を呼び出す処理。
+  - `includeMedia`（CLI `--media`）指定時に `pullMedia` を呼び出す処理。
+- **アーキテクチャ・レイヤリング上の配置決定**:
+  - `src/sync/pull/` の配下に新設すると、`ALLOWED_LAYER_2_SIBLING_IMPORTS`（`tests/layering.test.ts`）において `pull` から `media`（`pullMedia`）への依存が許可されていないため、兄弟結合ルール違反または例外追加が必要になる。
+  - 一方、`src/sync/orchestrator.ts` は既に Layer 2 の公認統括モジュール（coordinator）として `./pull.js`, `./push.js`, `./media.js`, `./taxonomies.js` すべてのインポートが許可されており、バッチ Pull を統括する `pullBatch` が配置されている。
+  - したがって、単一記事 Pull ファサード `pullSingleArticle` は **`src/sync/orchestrator.ts` に配置する**のが最も自然であり、新たな兄弟結合エッジの追加がゼロとなる。
+
+#### 2. 改修仕様
+
+`src/sync/orchestrator.ts` に以下を定義・export する：
+
+```ts
+export interface PullSingleArticleOptions {
+  collection: string;
+  targetId: string;
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  force?: boolean;
+  postsOnly?: boolean;
+  localMediaRefs?: boolean;
+  mediaSync?: boolean;
+  includeMedia?: boolean;
+  metadataOnly?: boolean;
+  mediaSyncLimit?: number;
+  fetchFn?: typeof fetch;
+}
+
+export interface PullSingleArticleResult {
+  article: PullResult;
+  taxonomies?: {
+    categoriesFailed?: boolean;
+    tagsFailed?: boolean;
+    error?: string;
+  };
+  libraryMedia?: PullMediaResult;
+}
+
+export async function pullSingleArticle(options: PullSingleArticleOptions): Promise<PullSingleArticleResult> {
+  let taxonomiesResult: PullSingleArticleResult['taxonomies'] = undefined;
+
+  if (!options.postsOnly) {
+    try {
+      const taxRes = await pullTaxonomies({
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+      });
+      if (taxRes.categoriesFailed || taxRes.tagsFailed) {
+        taxonomiesResult = {
+          categoriesFailed: taxRes.categoriesFailed,
+          tagsFailed: taxRes.tagsFailed,
+        };
+      }
+    } catch (err) {
+      taxonomiesResult = { error: (err as Error).message };
+    }
+  }
+
+  const article = await pullArticle(options.collection, options.targetId, {
+    workspaceRoot: options.workspaceRoot,
+    cache: options.cache,
+    origin: options.origin,
+    token: options.token,
+    refreshToken: options.refreshToken,
+    force: options.force,
+    localMediaRefs: options.localMediaRefs,
+    mediaSync: options.mediaSync,
+    mediaSyncLimit: options.mediaSyncLimit,
+    fetchFn: options.fetchFn,
+  });
+
+  let libraryMedia: PullMediaResult | undefined = undefined;
+  if (options.includeMedia) {
+    libraryMedia = await pullMedia({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      limit: options.mediaSyncLimit,
+      downloadFiles: options.metadataOnly !== true,
+      cache: options.cache,
+      fetchFn: options.fetchFn,
+    });
+  }
+
+  return { article, taxonomies: taxonomiesResult, libraryMedia };
+}
+```
+
+1. **Layer 2 純粋性の保護**:
+   - `pullSingleArticle` は UI 整形文字列（`⚠️ Warning:...` や Markdown）を生成せず、構造化された結果オブジェクトのみを返す。
+   - **明確な責務境界（Facade Boundary）**: `pullSingleArticle` はバックエンド実行フロー（タクソノミー同期、記事取得、メディア取得、参照メディアミラー）を集約して結果を返す。一方で、ユーザー向けプレゼンテーションである「タクソノミー候補ヒント（`getLocalTaxonomiesSummary` + `formatTaxonomiesHint`）」の表示や「隔離通知（`formatQuarantineNotice`）」の出力は、Layer 3（CLI / MCP）の責務として維持される。
+2. **Layer 3（CLI / MCP）での利用**:
+   - CLI `pull.ts` および MCP `sync-pull.ts` は、`pullSingleArticle` を呼び出し、得られた結果オブジェクトをもとにそれぞれの出力チャネル（コンソール出力 / MCP 構造化テキスト）へフォーマットする。
+3. **Layering Gate 適合性**:
+   - `tests/layering.test.ts` の `ALLOWED_LAYER_2_SYMBOLS['orchestrator']` に `'pullSingleArticle'` を追加する。
+
+---
+
+### P3（Medium）— `taxonomies.ts` の決定論的ソート・重複排除集約（`dedupeTermsBySlug`）
+
+#### 1. 現状の構造
+
+- `src/sync/taxonomies.ts:351` に `compareTaxonomyTermDeterministically` が定義されている（既に共通化済み）。
+- `src/sync/taxonomies.ts:495` に関数内ローカルの `dedupeBySlug` が定義されている。
+- `getLocalTaxonomiesSummary` では：
+  - カテゴリ: `readTaxonomyDir(categoriesDir).sort(...)` を `dedupeBySlug` に通す。
+  - タグ: `readTaxonomyDir(tagsDir).sort(...)` を `dedupeBySlug` に通す。
+
+#### 2. 改修仕様
+
+1. **共通ヘルパーの抽出と export**:
+   ```ts
+   /**
+    * Sorts taxonomy terms deterministically and deduplicates by slug, keeping the winner term.
+    * Mode 'slug-grouped' orders by slug ASC first (used for categories display).
+    * Mode 'frequency' orders by highest count first, newest ULID break (used for tags display).
+    */
+   export function dedupeTermsBySlug(
+     items: LocalTaxonomyItem[],
+     mode: 'slug-grouped' | 'frequency' = 'frequency',
+   ): LocalTaxonomyItem[] {
+     const sorted = [...items].sort((a, b) => {
+       if (mode === 'slug-grouped') {
+         if (a.slug < b.slug) return -1;
+         if (a.slug > b.slug) return 1;
+       }
+       return compareTaxonomyTermDeterministically(a, b);
+     });
+
+     const seen = new Set<string>();
+     const result: LocalTaxonomyItem[] = [];
+     for (const item of sorted) {
+       if (!seen.has(item.slug)) {
+         seen.add(item.slug);
+         result.push(item);
+       }
+     }
+     return result;
+   }
+   ```
+2. **`getLocalTaxonomiesSummary` の載せ替え**:
+   - ローカル `dedupeBySlug` 関数を削除。
+   - `const categories = dedupeTermsBySlug(readTaxonomyDir(categoriesDir), 'slug-grouped');`
+   - `const tags = dedupeTermsBySlug(readTaxonomyDir(tagsDir), 'frequency');`
+3. **効果**:
+   - ローカル関数の排除とロジックの一元化。単体テストから直接勝者選択ロジックをアサート可能にする。
+
+---
+
+### P4（Low-Med）— CLI 対立フラグ解決ヘルパーの導入
+
+#### 1. 現状の構造と Commander の仕様落とし穴
+
+- `src/cli/commands/pull.ts:168-178` で、生 `process.argv` を走査して `--no-media` と `--media` を判別している。
+- Commander 13.1.0 において、`cmd.getOptionValueSource('media') === 'cli'` は `--media` だけでなく `--no-media` を渡した際にも `'cli'` を返す。
+- 単に `cmd.getOptionValueSource('media') === 'cli'` だけを評価すると、`--no-media` を渡した際に「media オプションが渡されたから ON」と誤判定する。
+- 一方、`cmd.getOptionValue('media')` は `--media` で `true`、`--no-media` で `false`、未指定時に `undefined` となる。
+
+#### 2. 改修仕様
+
+本関数は CLI コマンドの引数解決専用ユーティリティ（MCP は Commander を使用しない）であるため、Layer 3 の CLI 共通モジュールである `src/cli/context.ts` に追加する：
+
+```ts
+import type { Command } from 'commander';
+
+/**
+ * Resolves a boolean CLI option explicitly passed on the command line.
+ * Returns true if --<name> was passed, false if --no-<name> was passed,
+ * or undefined if the option was not explicitly provided by the user.
+ */
+export function resolveExplicitBooleanOption(
+  cmd: Command,
+  optionName: string,
+): boolean | undefined {
+  if (
+    typeof cmd.getOptionValueSource === 'function' &&
+    cmd.getOptionValueSource(optionName) === 'cli'
+  ) {
+    return Boolean(cmd.getOptionValue(optionName));
+  }
+  return undefined;
+}
+```
+
+`pull.ts` 側では以下のように簡潔かつ安全に判定する：
+
+```ts
+const explicitMedia = resolveExplicitBooleanOption(cmd, 'media');
+let mediaSync = !postsOnly;
+let includeMedia = false;
+if (explicitMedia === false) {
+  mediaSync = false;
+  includeMedia = false;
+} else if (explicitMedia === true) {
+  mediaSync = !postsOnly;
+  includeMedia = true;
+}
+```
+
+---
+
+## 3. レイヤリングおよびアーキテクチャ不変条件の保証
+
+本リファクタリングにおいても、以下の 4 層モデルと制約を 100% 遵守する：
+
+1. **Layer 0 / 1 / 2 / 3 の境界厳守**:
+   - P1: `fetchMediaListPage` の export は Layer 2 内部（`sync/media/`）の閉じた共通化。
+   - P2: `pullSingleArticle` は Layer 2 統括モジュール（`src/sync/orchestrator.ts`）から export。兄弟結合の例外新設はゼロ。Layer 3（CLI/MCP）からのインポートは `ALLOWED_LAYER_2_SYMBOLS['orchestrator']` に追加して保護。
+   - P3: `dedupeTermsBySlug` は Layer 1（`sync/taxonomies.ts`）内の純粋計算ロジック。
+   - P4: `resolveExplicitBooleanOption` は Layer 3 内部（`src/cli/`）のユーティリティ。
+2. **Non-Degradation Invariant**:
+   - 既存のバッチ Pull 性能、0-GET 特性、メディア重複排除、Layering Gate（6/6 PASS）、`noUnusedLocals: true` を完全に維持する。
+
+---
+
+## 4. テストマトリクス（T1〜T7）
+
+| テスト ID | 対象モジュール                       | 検証内容                                                                                                                                   |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **T1**    | `tests/media.test.ts`                | `fetchMediaListPage` 共通化後も `pullMedia` のページネーション走査、`totalCount`、`scannedCount`、`complete` 判定が完全に一致すること      |
+| **T2**    | `tests/media.test.ts`                | `fetchMediaListPage` のネットワークエラー時に `pullMedia` が従来通り `MEDIA_LIST_FAILED` ApiError を投げること                             |
+| **T3**    | `tests/sync.test.ts`                 | `orchestrator.ts` の `pullSingleArticle` が単一記事 Pull、タクソノミー同期、参照メディア取得、`includeMedia` 取得を一貫してオーケストレーションすること |
+| **T4**    | `tests/cli.test.ts`                  | CLI `emit pull <target>` が `pullSingleArticle` 経由で従来と全く同一の出力（サマリー、孤立警告、タクソノミー警告）を行うこと            |
+| **T5**    | `tests/mcp.test.ts`                  | MCP `sync_pull` が `pullSingleArticle` 経由で従来と全く同一の構造化レスポンスを返すこと                                                 |
+| **T6**    | `tests/taxonomies_two_layer.test.ts` | `dedupeTermsBySlug` によるカテゴリ・タグのソートと重複排除結果が、既存の Layer A（`loadLocalTaxonomyMaps`）と 100% 勝者一致すること        |
+| **T7**    | `tests/cli.test.ts`                  | `resolveExplicitBooleanOption` が `--media`（true）、`--no-media`（false）、未指定（undefined）、および両方指定（後勝ち判定）を正確に識別すること（テスト時は `cmd.parse(argv, { from: 'user' })` を指定） |
+
+---
+
+## 5. 実装ステップと作業手順
+
+1. **Step 1: メディア走査共通化（P1）**
+   - `src/sync/media/remote_index.ts` で `fetchMediaListPage` を export。
+   - `src/sync/media/pull_library.ts` のインライン walk を `fetchMediaListPage` に置換し、不要となった `unwrapEnvelope`, `ApiError`, `mediaListEndpoint` を import から削除。
+   - `npx vitest run tests/media.test.ts tests/media_search.test.ts` で検証。
+2. **Step 2: タクソノミー重複排除集約（P3）**
+   - `src/sync/taxonomies.ts` に `dedupeTermsBySlug` を実装・export。
+   - `getLocalTaxonomiesSummary` 内のローカル処理を載せ替え。
+   - `npx vitest run tests/taxonomies_two_layer.test.ts` で検証。
+3. **Step 3: 単一記事 Pull オーケストレータ抽出（P2）**
+   - `src/sync/orchestrator.ts` に `pullSingleArticle` を実装・export。
+   - `tests/layering.test.ts` の `ALLOWED_LAYER_2_SYMBOLS['orchestrator']` に `'pullSingleArticle'` を追加。
+   - `src/cli/commands/pull.ts` および `src/mcp/tools/sync-pull.ts` を `pullSingleArticle` 呼び出しに移行。
+   - `npx vitest run tests/cli.test.ts tests/mcp.test.ts tests/sync.test.ts` で検証。
+4. **Step 4: CLI フラグ解決整理（P4）**
+   - `src/cli/context.ts` に `resolveExplicitBooleanOption` ヘルパーを追加し、`pull.ts` のフラグ判定を整理。
+   - `tests/cli.test.ts` に T7 を追加して検証。
+5. **Step 5: Quality Gate & リリース準備**
+   - `npm run check`（Prettier、TypeScript、Vitest 全 59 ファイル）完全パスを確認。
+   - `tests/layering.test.ts`（6/6 PASS）を確認。
+   - `CHANGELOG.md`、`package.json`（v0.1.30）の更新。

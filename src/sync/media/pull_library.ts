@@ -1,16 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { unwrapEnvelope } from '../../client/api.js';
-import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
-import { mediaListEndpoint } from '../../client/endpoints.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
 import { mediaMirrorNames, mediaRecordIdForStem } from './naming_mirror.js';
 import { mirrorReferencedAssetsFromIndex, pullArticleMedia } from './pull_article.js';
-import { collectRemoteStorageKeys, findUnmirroredStorageKeys } from './remote_index.js';
+import {
+  collectRemoteStorageKeys,
+  fetchMediaListPage,
+  findUnmirroredStorageKeys,
+} from './remote_index.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
   type EmDashMediaItem,
@@ -131,36 +132,18 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     const remaining = targetTotal - totalProcessed;
     const currentBatch = Math.min(remaining, batchSize);
 
-    const url = new URL(mediaListEndpoint(options.origin));
-    url.searchParams.set('limit', String(currentBatch));
-    if (cursor) {
-      url.searchParams.set('cursor', cursor);
-    }
-
-    const res = await fetchFn(url.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        Accept: 'application/json',
-      },
+    const page = await fetchMediaListPage({
+      origin: options.origin,
+      token: options.token,
+      limit: currentBatch,
+      cursor,
+      fetchFn,
     });
 
-    if (!res.ok) {
-      throw new ApiError({
-        message: `Failed to list media: ${res.statusText}`,
-        code: 'MEDIA_LIST_FAILED',
-        status: res.status,
-        endpoint: url.toString(),
-        suggestion: 'Verify network connection and token permissions.',
-      });
+    if (page.totalCount !== null) {
+      remoteIndex.totalCount = page.totalCount;
     }
-
-    const json = await res.json();
-    const data = unwrapEnvelope<Record<string, unknown>>(json);
-    if (typeof data.totalCount === 'number') remoteIndex.totalCount = data.totalCount;
-    const rawItems = (
-      Array.isArray(data.items) ? data.items : Array.isArray(data) ? data : []
-    ) as EmDashMediaItem[];
+    const rawItems = page.rawItems;
 
     if (rawItems.length === 0) {
       // An empty page ends the listing regardless of any cursor the server echoes back.
@@ -200,11 +183,11 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       }
     }
 
-    if (!data.nextCursor || typeof data.nextCursor !== 'string') {
+    if (!page.nextCursor) {
       remoteIndex.complete = true;
       break;
     }
-    cursor = data.nextCursor;
+    cursor = page.nextCursor;
   }
 
   // Pruning logic for media: if --prune or --all is enabled, delete local media not present on remote

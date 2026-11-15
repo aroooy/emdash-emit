@@ -23,8 +23,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { pullArticle, formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
-import { pullBatch } from '../../sync/orchestrator.js';
+import { formatQuarantineNotice } from '../../sync/pull.js';
+import {
+  pullBatch,
+  pullSingleArticle,
+  type PullSingleArticleResult,
+} from '../../sync/orchestrator.js';
 import {
   pullTaxonomies,
   getLocalTaxonomiesSummary,
@@ -112,39 +116,42 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         });
 
         if (targetId) {
-          let res: PullResult;
+          let singlePull: PullSingleArticleResult;
           let taxonomiesMsg = '';
           const mediaSync = args.noMedia ? false : !args.postsOnly;
           try {
-            if (!args.postsOnly) {
-              const taxResult = await pullTaxonomies({
-                workspaceRoot: ctx.root,
-                origin,
-                token: ctx.auth.token,
-                refreshToken: ctx.auth.refreshToken,
-              });
-              const failNotes: string[] = [];
-              if (taxResult.categoriesFailed) failNotes.push('categories');
-              if (taxResult.tagsFailed) failNotes.push('tags');
-              if (failNotes.length > 0) {
-                taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
-              }
-            }
-            res = await pullArticle(collection, targetId, {
+            singlePull = await pullSingleArticle({
+              collection,
+              targetId,
               workspaceRoot: ctx.root,
               cache: ctx.cache,
               origin,
               token: ctx.auth.token,
               refreshToken: ctx.auth.refreshToken,
               force: args.force,
+              postsOnly: args.postsOnly,
               localMediaRefs,
               mediaSync,
+              includeMedia: args.includeMedia,
+              metadataOnly: args.metadataOnly === true,
               mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
             });
           } catch (error) {
             return formatToolError(error);
           }
 
+          if (singlePull.taxonomies) {
+            const failNotes: string[] = [];
+            if (singlePull.taxonomies.categoriesFailed) failNotes.push('categories');
+            if (singlePull.taxonomies.tagsFailed) failNotes.push('tags');
+            if (failNotes.length > 0) {
+              taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
+            } else if (singlePull.taxonomies.error) {
+              taxonomiesMsg = `\n⚠️ Taxonomies: Failed to sync taxonomies (${singlePull.taxonomies.error}).`;
+            }
+          }
+
+          const res = singlePull.article;
           let mediaMsg = '';
           if (res.media && res.media.total > 0) {
             mediaMsg = `\nMedia: ${res.media.total} item(s) (${res.media.downloaded} downloaded, ${res.media.skipped} up-to-date)`;
@@ -154,18 +161,11 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             }
           }
 
-          if (args.includeMedia) {
-            const mediaResult = await pullMedia({
-              workspaceRoot: ctx.root,
-              origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-              limit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
-              downloadFiles: args.metadataOnly !== true,
-              cache: ctx.cache,
-            });
-            mediaMsg += `\nMedia library: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
-            const orphanWarning = formatOrphanMediaWarning(mediaResult.orphanStorageKeys);
+          if (singlePull.libraryMedia) {
+            mediaMsg += `\nMedia library: ${singlePull.libraryMedia.total} items (${singlePull.libraryMedia.downloaded} downloaded, ${singlePull.libraryMedia.skipped} up-to-date).`;
+            const orphanWarning = formatOrphanMediaWarning(
+              singlePull.libraryMedia.orphanStorageKeys,
+            );
             if (orphanWarning) {
               mediaMsg += `\n\n${orphanWarning}`;
             }
