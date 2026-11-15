@@ -27,7 +27,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
 import { hybrid3WayMerge } from '../src/sync/merge.js';
-import { calculateHash, pullArticle } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { computeTaxonomyHash } from '../src/sync/terms.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
@@ -2728,7 +2729,6 @@ Local body
       savedAt: 1700000000,
     });
 
-    let putPayloadCaptured: any = null;
     let putCount = 0;
 
     const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
@@ -2744,7 +2744,6 @@ Local body
             json: async () => ({ error: 'Revision conflict' }),
           };
         }
-        putPayloadCaptured = JSON.parse(String(init?.body || '{}'));
         return {
           ok: true,
           status: 200,

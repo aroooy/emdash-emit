@@ -30,8 +30,6 @@ import {
   loadLocalTaxonomyMaps,
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
-  loadLocalTaxonomyCandidates,
-  type LocalTaxonomyItem,
 } from '../src/sync/taxonomies.js';
 import { canonicalizeFrontmatterTaxonomies } from '../src/sync/push/taxonomy_plan.js';
 import type { ParsedMarkdown } from '../src/utils/frontmatter.js';

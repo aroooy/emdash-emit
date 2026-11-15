@@ -26,7 +26,7 @@ import { extractComparisonRev } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import { apiResponseToLocal } from '../../client/mapper.js';
 import { articleContentEndpoint } from '../../client/endpoints.js';
-import { readBaseline, readBaselineFrontmatter, createBaseSnapshot } from '../../db/baseline.js';
+import { readBaseline, readBaselineFrontmatter } from '../../db/baseline.js';
 import type { BaseSnapshot, SyncState } from '../../db/cache.js';
 import {
   serializeMarkdown,
@@ -120,7 +120,7 @@ export async function resolveConflictAndMerge(params: {
 
   if (!getRes.ok) {
     if (getRes.status === 404 || getRes.status === 410) {
-      throwRemoteArticleDeleted(collection, id, targetFilePath, getUrl);
+      throwRemoteArticleDeleted(id, targetFilePath, getUrl);
     }
     throw new ApiError({
       message: `Failed to fetch latest remote version during conflict resolution: ${getRes.statusText}`,

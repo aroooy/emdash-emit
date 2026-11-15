@@ -234,7 +234,7 @@ export function computeContextDiff(
   const localLines = localText.split('\n');
   const patches = diffPatch(baseLines, localLines);
 
-  const contextLines = options?.contextLines ?? 3;
+  const contextLines = Math.max(0, options?.contextLines ?? 0);
   const baseLabel = options?.baseLabel ?? 'base';
   const localLabel = options?.localLabel ?? 'local';
 
@@ -249,8 +249,25 @@ export function computeContextDiff(
     deletions += b1.length;
     additions += b2.length;
 
+    const preStart = Math.max(0, b1.offset - contextLines);
+    const preLines = baseLines.slice(preStart, b1.offset);
+    const postEnd = Math.min(baseLines.length, b1.offset + b1.length + contextLines);
+    const postLines = baseLines.slice(b1.offset + b1.length, postEnd);
+
+    const preCount = preLines.length;
+    const postCount = postLines.length;
+    const start1 = b1.offset - preCount + 1;
+    const len1 = preCount + b1.length + postCount;
+    const start2 = Math.max(0, b2.offset - preCount) + 1;
+    const len2 = preCount + b2.length + postCount;
+
     // Output hunk header
-    output.push(`@@ -${b1.offset + 1},${b1.length} +${b2.offset + 1},${b2.length} @@`);
+    output.push(`@@ -${start1},${len1} +${start2},${len2} @@`);
+
+    // Leading context lines
+    for (const line of preLines) {
+      output.push(` ${line}`);
+    }
 
     // Removed lines
     for (const line of b1.chunk) {
@@ -260,6 +277,11 @@ export function computeContextDiff(
     // Added lines
     for (const line of b2.chunk) {
       output.push(`+${line}`);
+    }
+
+    // Trailing context lines
+    for (const line of postLines) {
+      output.push(` ${line}`);
     }
   }
 

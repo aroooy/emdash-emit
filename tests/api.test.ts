@@ -35,7 +35,6 @@ import {
   mediaListEndpoint,
   mediaUploadUrlEndpoint,
   openApiEndpoint,
-  taxonomiesTermsEndpoint,
 } from '../src/client/endpoints.js';
 
 describe('api unwrap utils', () => {

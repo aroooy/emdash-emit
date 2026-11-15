@@ -22,17 +22,18 @@
 
 import type { Command } from 'commander';
 import { pullArticle, formatQuarantineNotice } from '../../sync/pull.js';
-import { pullBatch, SyncPruneConflictError } from '../../sync/orchestrator.js';
+import { pullBatch } from '../../sync/orchestrator.js';
 import {
   pullTaxonomies,
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
+  type PullTaxonomiesResult,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { persistLocalMediaRefs, DEFAULT_CONFIG } from '../../utils/config.js';
+import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { toStorageKey, type StorageKey } from '../../utils/media-id.js';
-import { ApiError } from '../../client/error.js';
-import type { CliContextResolver } from '../context.js';
+import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 
 /** Prints the unresolved media warning when a pull could not resolve body storageKeys locally. */
 function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void {
@@ -96,6 +97,31 @@ export function formatPullStatusBreakdown(
   return ` [${publishedCount} published, ${draftCount} draft]`;
 }
 
+function printTaxonomySyncSummary(
+  res: PullTaxonomiesResult,
+  indent = '',
+  successLabel = 'Taxonomies:',
+  suffix = '',
+): void {
+  const prunedCat = res.deletedCategoriesCount
+    ? `, ${res.deletedCategoriesCount} categories pruned`
+    : '';
+  const prunedTag = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
+  if (res.categoriesFailed) {
+    console.warn(
+      `${indent}⚠️  Failed to fetch remote categories: preserved existing local definitions.`,
+    );
+  }
+  if (res.tagsFailed) {
+    console.warn(`${indent}⚠️  Failed to fetch remote tags: preserved existing local definitions.`);
+  }
+  if (!res.categoriesFailed || !res.tagsFailed) {
+    console.log(
+      `${indent}✅ ${successLabel} ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCat}${prunedTag}${suffix}`,
+    );
+  }
+}
+
 export function registerPullCommands(program: Command, resolveContext: CliContextResolver): void {
   // emit pull [id]
   program
@@ -135,21 +161,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       const postsOnly = options.postsOnly === true;
       const includeMedia = options.media === true;
 
-      // `--local-media-refs` is a workspace preference, not a per-run switch: remember it so every later
-      // pull and push keeps the same spelling without having to repeat the flag. `--no-local-media-refs` clears
-      // that preference again, because commander defaults the paired option to true and only an explicit negation
-      // means the user asked to go back to canonical URLs.
-      const localMediaRefs =
-        options.localMediaRefs === false
-          ? false
-          : options.localMediaRefs === true
-            ? true
-            : ctx.config.localMediaRefs;
-      if (options.localMediaRefs === true && ctx.config.localMediaRefs !== true) {
-        persistLocalMediaRefs(ctx.root, true);
-      } else if (options.localMediaRefs === false && ctx.config.localMediaRefs === true) {
-        persistLocalMediaRefs(ctx.root, false);
-      }
+      const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
 
       try {
         if (!id) {
@@ -164,27 +176,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
               token: ctx.auth.token,
               refreshToken: ctx.auth.refreshToken,
             });
-            const taxPrunedCat = taxResult.deletedCategoriesCount
-              ? `, ${taxResult.deletedCategoriesCount} categories pruned`
-              : '';
-            const taxPrunedTag = taxResult.deletedTagsCount
-              ? `, ${taxResult.deletedTagsCount} tags pruned`
-              : '';
-            if (taxResult.categoriesFailed) {
-              console.warn(
-                '  ⚠️  Failed to fetch remote categories: preserved existing local definitions.',
-              );
-            }
-            if (taxResult.tagsFailed) {
-              console.warn(
-                '  ⚠️  Failed to fetch remote tags: preserved existing local definitions.',
-              );
-            }
-            if (!taxResult.categoriesFailed || !taxResult.tagsFailed) {
-              console.log(
-                `  ✅ Taxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags${taxPrunedCat}${taxPrunedTag}`,
-              );
-            }
+            printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
           }
 
           const taxSummary = getLocalTaxonomiesSummary(ctx.root);
@@ -344,15 +336,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           if (quarantineNotice) console.log(`\n${quarantineNotice}`);
         }
       } catch (error) {
-        if (error instanceof SyncPruneConflictError) {
-          console.error(`\n❌ ${error.message}`);
-          process.exit(1);
-        }
-        if (error instanceof ApiError) {
-          console.error(`\n${error.toActionableString()}`);
-          process.exit(1);
-        }
-        throw error;
+        reportActionFailure(error);
       }
     });
 
@@ -373,23 +357,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
         });
-        const prunedCatMsg = res.deletedCategoriesCount
-          ? `, ${res.deletedCategoriesCount} categories pruned`
-          : '';
-        const prunedTagMsg = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
-        if (res.categoriesFailed) {
-          console.warn(
-            '⚠️  Failed to fetch remote categories: preserved existing local definitions.',
-          );
-        }
-        if (res.tagsFailed) {
-          console.warn('⚠️  Failed to fetch remote tags: preserved existing local definitions.');
-        }
-        if (!res.categoriesFailed || !res.tagsFailed) {
-          console.log(
-            `✅ Successfully synced taxonomies: ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCatMsg}${prunedTagMsg}.`,
-          );
-        }
+        printTaxonomySyncSummary(res, '', 'Successfully synced taxonomies:', '.');
         const taxSummary = getLocalTaxonomiesSummary(ctx.root);
         const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
         if (taxHint) {
@@ -399,11 +367,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           process.exit(1);
         }
       } catch (error) {
-        if (error instanceof ApiError) {
-          console.error(`\n${error.toActionableString()}`);
-          process.exit(1);
-        }
-        throw error;
+        reportActionFailure(error);
       }
     });
 
@@ -525,11 +489,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}`,
         );
       } catch (error) {
-        if (error instanceof ApiError) {
-          console.error(`\n${error.toActionableString()}`);
-          process.exit(1);
-        }
-        throw error;
+        reportActionFailure(error);
       }
     });
 }

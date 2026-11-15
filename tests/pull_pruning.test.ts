@@ -26,7 +26,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
 import { pullBatch, SyncPruneConflictError } from '../src/sync/orchestrator.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { computeArticleRelativePath } from '../src/utils/naming.js';
 
 describe('Pull Window Pruning & Unpushed Edits Guard', () => {
@@ -174,8 +174,8 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
 
   it('aborts pull with SyncPruneConflictError if pushed-out article has unpushed edits', async () => {
     // art1 and art2 are clean, art3 has local edits
-    const art1 = setupLocalArticle('01M6ART01', 'article-1', 'published', '# Article 1');
-    const art2 = setupLocalArticle('01M6ART02', 'article-2', 'published', '# Article 2');
+    setupLocalArticle('01M6ART01', 'article-1', 'published', '# Article 1');
+    setupLocalArticle('01M6ART02', 'article-2', 'published', '# Article 2');
     const art3 = setupLocalArticle('01M6ART03', 'article-3', 'published', '# Article 3', true);
 
     const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
@@ -268,8 +268,8 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
   });
 
   it('respects prune: false to keep articles outside the sync window', async () => {
-    const art1 = setupLocalArticle('01M6ART01', 'article-1', 'published', '# Article 1');
-    const art2 = setupLocalArticle('01M6ART02', 'article-2', 'published', '# Article 2');
+    setupLocalArticle('01M6ART01', 'article-1', 'published', '# Article 1');
+    setupLocalArticle('01M6ART02', 'article-2', 'published', '# Article 2');
     const art3 = setupLocalArticle('01M6ART03', 'article-3', 'published', '# Article 3');
 
     const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
@@ -355,7 +355,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
       });
     });
 
-    const result = await pullBatch({
+    await pullBatch({
       collection: 'posts',
       workspaceRoot: tempDir,
       cache,

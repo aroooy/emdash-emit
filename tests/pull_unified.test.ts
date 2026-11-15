@@ -26,9 +26,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { pullTaxonomies } from '../src/sync/taxonomies.js';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullArticle, calculateHash } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
-import { serializeMarkdown, parseMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
+import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
 describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
   let tempDir: string;

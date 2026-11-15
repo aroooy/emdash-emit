@@ -26,7 +26,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { computeContextDiff, resolveArticleTarget, inspectArticleDiff } from '../src/sync/diff.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { loadLocalTaxonomyCandidates } from '../src/sync/taxonomies.js';
 import { CacheDatabase } from '../src/db/cache.js';
@@ -61,6 +61,32 @@ describe('computeContextDiff', () => {
     expect(res.deletions).toBe(0);
     expect(res.unifiedDiff).toContain('+line 3');
     expect(res.unifiedDiff).toContain('+line 4');
+  });
+
+  it('defaults contextLines to 0 and preserves exact zero-context hunk header (L2-①)', () => {
+    const base = 'line 1\nline 2\nline 3';
+    const local = 'line 1\nline 2 (modified)\nline 3';
+    const res = computeContextDiff(base, local);
+    expect(res.unifiedDiff).toBe(
+      ['--- base', '+++ local', '@@ -2,1 +2,1 @@', '-line 2', '+line 2 (modified)'].join('\n'),
+    );
+  });
+
+  it('includes surrounding context lines and adjusts hunk header when contextLines > 0 (L2-②)', () => {
+    const base = 'line 1\nline 2\nline 3';
+    const local = 'line 1\nline 2 (modified)\nline 3';
+    const res = computeContextDiff(base, local, { contextLines: 1 });
+    expect(res.unifiedDiff).toBe(
+      [
+        '--- base',
+        '+++ local',
+        '@@ -1,3 +1,3 @@',
+        ' line 1',
+        '-line 2',
+        '+line 2 (modified)',
+        ' line 3',
+      ].join('\n'),
+    );
   });
 });
 

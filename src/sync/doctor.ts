@@ -32,15 +32,11 @@ import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
-import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
+import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
 import { mediaFileEndpoint } from '../client/endpoints.js';
 import { calculateHash } from './workspace/index.js';
-import {
-  collectRemoteStorageKeys,
-  findUnmirroredStorageKeys,
-  storageKeyFromMediaMeta,
-} from './media.js';
-import { checkMcpProcess } from '../mcp/heartbeat.js';
+import { collectRemoteStorageKeys } from './media.js';
+import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
 import { VALID_MEDIA_FILE_KEY, FENCE_POLICY, isCodeFenceDelimiter } from '../utils/media-refs.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';

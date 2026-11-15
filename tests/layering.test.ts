@@ -64,7 +64,7 @@ const LAYER_2_MODULE_NAMES = [
  */
 const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
   orchestrator: new Set(['pullBatch', 'pushAll', 'SyncPruneConflictError']),
-  push: new Set(['pushArticle', 'PushValidationError']),
+  push: new Set(['pushArticle', 'PushValidationError', 'PushResult']),
   pull: new Set(['pullArticle', 'formatQuarantineNotice', 'PullResult']),
   new: new Set(['createArticleScaffold', 'DuplicateSlugError']),
   delete: new Set([
@@ -92,7 +92,6 @@ interface ImportStatement {
 
 function parseImports(fileContent: string): ImportStatement[] {
   const imports: ImportStatement[] = [];
-  const lines = fileContent.split('\n');
   const importRegex = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
 
   let match: RegExpExecArray | null;
@@ -228,6 +227,7 @@ describe('Architectural Layering Invariants', () => {
   it('Layer 2 modules never import from a sibling Layer 2 module (no intra-layer coupling)', () => {
     const layer2Dirs = [
       path.join(SRC_ROOT, 'sync'),
+      path.join(SRC_ROOT, 'sync', 'pull'),
       path.join(SRC_ROOT, 'sync', 'push'),
       path.join(SRC_ROOT, 'sync', 'media'),
       path.join(SRC_ROOT, 'sync', 'workspace'),
@@ -303,6 +303,88 @@ describe('Architectural Layering Invariants', () => {
     expect(
       violations,
       `MCP tools importing from CLI commands (Layer 3 intra-layer violation):\n` +
+        violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
+    ).toHaveLength(0);
+  });
+
+  it('Axis 0: Layer 0 (utils / db / client) NEVER imports Layer 1, Layer 2, or Layer 3', () => {
+    const layer0Dirs = [
+      path.join(SRC_ROOT, 'utils'),
+      path.join(SRC_ROOT, 'db'),
+      path.join(SRC_ROOT, 'client'),
+    ];
+    const upperDirs = [
+      path.join(SRC_ROOT, 'sync'),
+      path.join(SRC_ROOT, 'cli'),
+      path.join(SRC_ROOT, 'mcp'),
+      path.join(SRC_ROOT, 'presentation'),
+    ];
+
+    const layer0Files = layer0Dirs.flatMap((d) => collectSourceFiles(d));
+    const violations: { file: string; line: number; source: string }[] = [];
+
+    for (const file of layer0Files) {
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+      const relFile = path.relative(SRC_ROOT, file);
+
+      for (const imp of imports) {
+        if (!imp.source.startsWith('.')) continue;
+        const resolved = path.normalize(
+          path.join(path.dirname(file), imp.source).replace(/\.(js|ts)$/, ''),
+        );
+        for (const upper of upperDirs) {
+          if (resolved === upper || resolved.startsWith(upper + path.sep)) {
+            violations.push({ file: relFile, line: imp.line, source: imp.source });
+          }
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `Layer 0 upward import violations found:\n` +
+        violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
+    ).toHaveLength(0);
+  });
+
+  it('Axis 4: Layers 0, 1, and 2 (utils / db / client / sync) NEVER import Layer 3 (cli / mcp / presentation)', () => {
+    const lowerDirs = [
+      path.join(SRC_ROOT, 'utils'),
+      path.join(SRC_ROOT, 'db'),
+      path.join(SRC_ROOT, 'client'),
+      path.join(SRC_ROOT, 'sync'),
+    ];
+    const layer3Dirs = [
+      path.join(SRC_ROOT, 'cli'),
+      path.join(SRC_ROOT, 'mcp'),
+      path.join(SRC_ROOT, 'presentation'),
+    ];
+
+    const lowerFiles = lowerDirs.flatMap((d) => collectSourceFiles(d));
+    const violations: { file: string; line: number; source: string }[] = [];
+
+    for (const file of lowerFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+      const relFile = path.relative(SRC_ROOT, file);
+
+      for (const imp of imports) {
+        if (!imp.source.startsWith('.')) continue;
+        const resolved = path.normalize(
+          path.join(path.dirname(file), imp.source).replace(/\.(js|ts)$/, ''),
+        );
+        for (const l3 of layer3Dirs) {
+          if (resolved === l3 || resolved.startsWith(l3 + path.sep)) {
+            violations.push({ file: relFile, line: imp.line, source: imp.source });
+          }
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `Layer 0/1/2 -> Layer 3 import violations found:\n` +
         violations.map((v) => `  ${v.file}:${v.line} -> ${v.source}`).join('\n'),
     ).toHaveLength(0);
   });

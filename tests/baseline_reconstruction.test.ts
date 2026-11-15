@@ -31,6 +31,10 @@ import { getWorkspaceStatus } from '../src/sync/status.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { runWorkspaceDoctor } from '../src/sync/doctor.js';
 import { deleteArticle } from '../src/sync/delete.js';
+import { pullBatch } from '../src/sync/orchestrator.js';
+import { resolveConflict } from '../src/sync/conflicts.js';
+import { pullArticle } from '../src/sync/pull.js';
+import { quarantineDivergentLocalCopies } from '../src/sync/pull/quarantine.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { DEFAULT_CONFIG } from '../src/utils/config.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
@@ -270,5 +274,214 @@ describe('Baseline Reconstruction & Sync-State-Only Hash Retracking (v0.1.27 P1/
     });
     expect(diffRes.ok).toBe(true);
     expect(diffRes.status).toBe('modified');
+  });
+
+  it('H1-① pullBatch prune guard does not throw SyncPruneConflictError when a window-out article only differs by media ref spelling', async () => {
+    const { fullPath, staleHash } = setupLocalizedArticleWithStaleCanonicalHash();
+    expect(cache.getSyncState(ARTICLE_ID)!.localHash).toBe(staleHash);
+
+    const fetchFn: typeof fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/bylines')) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      // Return empty remote list so ARTICLE_ID is outside the sync window and becomes a prune candidate
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    };
+
+    const batchRes = await pullBatch({
+      workspaceRoot: tempDir,
+      cache,
+      collection: 'posts',
+      origin: 'https://example.com',
+      token: 'token',
+      prune: true,
+      mediaSync: false,
+      fetchFn,
+    });
+
+    expect(batchRes.deleted).toBe(1);
+    expect(fs.existsSync(fullPath)).toBe(false);
+    expect(cache.getSyncState(ARTICLE_ID)).toBeNull();
+  });
+
+  it('H1-② resolveConflict(accept-local) does not throw CanonicalHasUnpushedEditsError when canonical file only differs by media ref spelling', () => {
+    const { localizedBytes, staleHash } = setupLocalizedArticleWithStaleCanonicalHash();
+
+    // Create a quarantined conflict copy under posts/conflicts/
+    const conflictRelPath = `posts/conflicts/20261115_${ARTICLE_ID}-Localized-Article.20261115100000.conflict.md`;
+    const conflictFullPath = path.join(tempDir, conflictRelPath);
+    fs.mkdirSync(path.dirname(conflictFullPath), { recursive: true });
+    fs.writeFileSync(conflictFullPath, localizedBytes, 'utf8');
+
+    cache.saveSyncState({
+      ...cache.getSyncState(ARTICLE_ID)!,
+      localHash: staleHash,
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      taxonomyConflictPending: 0,
+      conflictCopyPath: conflictRelPath,
+    });
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: conflictRelPath,
+      strategy: 'accept-local',
+    });
+    expect(res.success).toBe(true);
+    expect(res.strategy).toBe('accept-local');
+    expect(cache.getSyncState(ARTICLE_ID)?.bodyConflictPending).toBe(0);
+  });
+
+  it('H1-③ quarantineDivergentLocalCopies skips quarantining a local copy when only media ref spelling differs from baseline', () => {
+    const { relPath, staleHash } = setupLocalizedArticleWithStaleCanonicalHash();
+    const existingSync = cache.getSyncState(ARTICLE_ID)!;
+    expect(existingSync.localHash).toBe(staleHash);
+
+    // Create a duplicate ULID file with the same localized bytes (whose raw hash !== staleHash, but matches reconstructed baseline)
+    const dupRelPath = `posts/draft/20261115_${ARTICLE_ID}-Old-Title.md`;
+    const dupFullPath = path.join(tempDir, dupRelPath);
+    const localizedContent = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
+    fs.writeFileSync(dupFullPath, localizedContent, 'utf8');
+
+    const quarantined = quarantineDivergentLocalCopies(
+      {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'token',
+      },
+      'posts',
+      new Set([dupRelPath]),
+      staleHash,
+      'incoming-new-remote-content',
+      null,
+      existingSync,
+    );
+
+    expect(quarantined).toEqual([]);
+  });
+
+  it('H1-④ pullArticle 404 remote deletion cleans up local file (deleted: true) instead of setting deletePending when only media ref spelling differs', async () => {
+    const { fullPath, staleHash } = setupLocalizedArticleWithStaleCanonicalHash();
+    expect(cache.getSyncState(ARTICLE_ID)!.localHash).toBe(staleHash);
+
+    const fetchFn: typeof fetch = async () =>
+      new Response(JSON.stringify({ error: 'Not Found' }), { status: 404 });
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'token',
+      fetchFn,
+    });
+
+    expect(res.deleted).toBe(true);
+    expect(res.localEditsPreserved).toBeUndefined();
+    expect(fs.existsSync(fullPath)).toBe(false);
+    expect(cache.getSyncState(ARTICLE_ID)).toBeNull();
+  });
+
+  it('H1-⑤ pullArticle tryFastPathOrHeal heals local_hash on skip when remote is unchanged and applies remote update (not localEditsPreserved) when remote advances', async () => {
+    const { relPath, fullPath, staleHash, localizedHash } =
+      setupLocalizedArticleWithStaleCanonicalHash();
+    expect(cache.getSyncState(ARTICLE_ID)!.localHash).toBe(staleHash);
+
+    // (a) Same remote rev ('1@draft:01REV'): skips and heals local_hash to localizedHash via retrackLocalHashOnly
+    const sameRawItem = {
+      id: ARTICLE_ID,
+      slug: 'localized-article',
+      title: 'Localized Article',
+      status: 'draft',
+      version: 1,
+      draftRevisionId: '01REV',
+      _rev: 'rev_transport_1',
+      data: {
+        title: 'Localized Article',
+        content: [
+          {
+            _type: 'block',
+            style: 'normal',
+            children: [{ _type: 'span', text: 'Intro paragraph.' }],
+          },
+          {
+            _type: 'image',
+            alt: 'Sample Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    const skipRes = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'token',
+      rawItem: sameRawItem,
+      localMediaRefs: true,
+    });
+
+    expect(skipRes.skipped).toBe(true);
+    expect(skipRes.updated).toBe(false);
+    expect(skipRes.localEditsPreserved).toBeUndefined();
+    expect(cache.getSyncState(ARTICLE_ID)!.localHash).toBe(localizedHash);
+
+    // (b) Reset localHash back to staleHash and advance remote rev ('2@draft:01REV2'):
+    // must NOT misclassify as localEditsPreserved; must fall through to full pull and update disk
+    cache.saveSyncState({
+      ...cache.getSyncState(ARTICLE_ID)!,
+      localHash: staleHash,
+    });
+
+    const updatedRawItem = {
+      ...sameRawItem,
+      version: 2,
+      draftRevisionId: '01REV2',
+      _rev: 'rev_transport_2',
+      data: {
+        title: 'Localized Article',
+        content: [
+          {
+            _type: 'block',
+            style: 'normal',
+            children: [{ _type: 'span', text: 'Updated remote paragraph.' }],
+          },
+          {
+            _type: 'image',
+            alt: 'Sample Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    const fetchFn: typeof fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes(`/posts/${ARTICLE_ID}/terms`)) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify(updatedRawItem), { status: 200 });
+    };
+
+    const updateRes = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'token',
+      rawItem: updatedRawItem,
+      localMediaRefs: true,
+      fetchFn,
+    });
+
+    expect(updateRes.updated).toBe(true);
+    expect(updateRes.skipped).toBeUndefined();
+    expect(updateRes.localEditsPreserved).toBeUndefined();
+    expect(updateRes.filePath).toBe(relPath);
+    const updatedDisk = fs.readFileSync(fullPath, 'utf8');
+    expect(updatedDisk).toContain('Updated remote paragraph.');
+    expect(updatedDisk).toContain(`![Sample Image](${LOCAL_REF})`);
   });
 });

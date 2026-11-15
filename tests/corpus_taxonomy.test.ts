@@ -31,13 +31,11 @@ import {
   formatFrontmatterYaml,
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
-  serializeMarkdown,
   type Frontmatter,
 } from '../src/utils/frontmatter.js';
 import {
   findClosestTaxonomySuggestions,
   levenshteinDistance,
-  loadLocalTaxonomyMaps,
   type LocalTaxonomyItem,
 } from '../src/sync/taxonomies.js';
 

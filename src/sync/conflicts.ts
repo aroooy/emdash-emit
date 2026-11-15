@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
+import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { computeContextDiff } from './diff.js';
 import { calculateHash } from './workspace/index.js';
 
@@ -464,7 +465,6 @@ export function resolveConflict(options: {
     // Major 1 Guard: Check if canonical file has unpushed modifications
     if (!options.force && fs.existsSync(canonicalFull)) {
       const canonicalContent = fs.readFileSync(canonicalFull, 'utf8');
-      const canonicalHash = calculateHash(canonicalContent);
       let canonicalId = id;
       try {
         const parsedCan = parseMarkdown(canonicalContent);
@@ -473,7 +473,18 @@ export function resolveConflict(options: {
         // fallback
       }
       const syncState = options.cache.getSyncState(canonicalId);
-      if (syncState && syncState.localHash !== canonicalHash) {
+      if (
+        syncState &&
+        !isLocalFileUnmodified({
+          workspaceRoot: options.workspaceRoot,
+          cache: options.cache,
+          id: canonicalId,
+          relPath: canonicalRel,
+          localContent: canonicalContent,
+          syncState,
+          healOnSpellingMatch: false,
+        })
+      ) {
         throw new CanonicalHasUnpushedEditsError({
           canonicalFilePath: canonicalRel,
           conflictFilePath: relPath,
@@ -615,7 +626,6 @@ export function pruneConflicts(options: PruneConflictsOptions): PruneConflictsRe
       const canonicalFull = path.join(options.workspaceRoot, canonicalRel);
       if (fs.existsSync(canonicalFull)) {
         const canonicalContent = fs.readFileSync(canonicalFull, 'utf8');
-        const canonicalHash = calculateHash(canonicalContent);
         let resolvedId = item.id;
         if (!resolvedId) {
           try {
@@ -628,7 +638,18 @@ export function pruneConflicts(options: PruneConflictsOptions): PruneConflictsRe
         const syncState = resolvedId
           ? options.cache.getSyncState(resolvedId)
           : options.cache.getSyncStateByPath(canonicalRel);
-        if (syncState && syncState.localHash !== canonicalHash) {
+        if (
+          syncState &&
+          !isLocalFileUnmodified({
+            workspaceRoot: options.workspaceRoot,
+            cache: options.cache,
+            id: syncState.id,
+            relPath: canonicalRel,
+            localContent: canonicalContent,
+            syncState,
+            healOnSpellingMatch: true,
+          })
+        ) {
           skipped.push({
             filePath: item.filePath,
             reason: `Canonical article ${canonicalRel} has unpushed modifications; rescue copy preserved`,

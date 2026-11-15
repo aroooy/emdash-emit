@@ -22,13 +22,31 @@
 
 import { ApiError } from '../client/error.js';
 import { CanonicalHasUnpushedEditsError, QuarantinedPathRequiredError } from '../sync/conflicts.js';
+import { SyncPruneConflictError } from '../sync/orchestrator.js';
+import { PushValidationError } from '../sync/push.js';
+import { FrontmatterParseError } from '../utils/frontmatter.js';
 
 /**
  * Single CLI failure presentation: ensures a leading `❌` line, optional `💡 Suggestion`, and exit code 1,
  * without duplicating `❌` on errors whose message already starts with `❌`.
  */
 export function reportActionFailure(error: unknown): never {
-  if (error instanceof ApiError) {
+  if (error instanceof PushValidationError) {
+    console.error(`\n❌ Push blocked by Preflight Guards (${error.errors.length} error(s)):`);
+    for (const e of error.errors) {
+      console.error(`   - [${e.code}] ${e.message}`);
+      if (e.suggestion) {
+        console.error(`     👉 Suggestion: ${e.suggestion}`);
+      }
+    }
+  } else if (error instanceof SyncPruneConflictError) {
+    console.error(`\n❌ ${error.message}`);
+  } else if (error instanceof FrontmatterParseError) {
+    console.error(`\n❌ Error: [${error.code}] ${error.message}`);
+    if (error.suggestion) {
+      console.error(`   💡 Suggestion: ${error.suggestion}`);
+    }
+  } else if (error instanceof ApiError) {
     console.error(error.toActionableString());
   } else if (error instanceof CanonicalHasUnpushedEditsError) {
     console.error(`❌ ${error.message}`);

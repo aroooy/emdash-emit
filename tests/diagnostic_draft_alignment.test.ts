@@ -30,7 +30,7 @@ import { inspectArticleDiff } from '../src/sync/diff.js';
 import { runWorkspaceDoctor } from '../src/sync/doctor.js';
 import { loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
-import { calculateHash, commitArticleSnapshot } from '../src/sync/workspace/index.js';
+import { commitArticleSnapshot } from '../src/sync/workspace/index.js';
 
 describe('Diagnostic Alignment for Draft Revision (status vs diff vs doctor)', () => {
   let tempDir: string;

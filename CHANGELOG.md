@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-11-15
+
+### Fixed
+
+- **Order-Independent Unmodified Detection Across All Layer 2 Paths (`src/sync/orchestrator.ts`, `src/sync/conflicts.ts`, `src/sync/pull/{quarantine,fast_path}.ts`)**:
+  - Replaced all 5 remaining raw `calculateHash(content) !== syncState.localHash` comparisons in Layer 2 with `isLocalFileUnmodified()` so articles whose disk bytes differ from `sync_state.local_hash` only by media reference spelling (`../../media/<storageKey>` vs `/_emdash/api/media/file/<storageKey>`) or taxonomy comment decoration are never misclassified as having unpushed local edits:
+    1. `pullBatch` prune guard (`src/sync/orchestrator.ts`) — prevents false `SyncPruneConflictError` on window-out articles.
+    2. `resolveConflict(..., 'accept-local')` & `pruneConflicts` (`src/sync/conflicts.ts`) — prevents false `CanonicalHasUnpushedEditsError`.
+    3. `quarantineDivergentLocalCopies` (`src/sync/pull/quarantine.ts`) — prevents false quarantine of unmodified duplicate ULID files.
+    4. `handleRemoteDeletedArticle` (`src/sync/pull/quarantine.ts`) — prevents false `deletePending: true` on 404/410 remote deletion.
+    5. `tryFastPathOrHeal` (`src/sync/pull/fast_path.ts`) — prevents false `localEditsPreserved: true` when remote revision advances and heals `sync_state.local_hash` once via `retrackLocalHashOnly` on skip, while preserving the raw hash check at the `carriesDepthFreeMediaRef` legacy self-heal branch (`AGENTS.md` §7).
+- **`computeContextDiff` `contextLines` Support (`src/sync/diff.ts`)**:
+  - Wired `options?.contextLines` (defaulting to `0` to preserve zero-context token efficiency and existing diff output) into `computeContextDiff()`, emitting surrounding context lines (` ${line}`) and adjusted hunk headers (`@@ -start1,len1 +start2,len2 @@`) when `contextLines > 0` is explicitly requested.
+
+### Changed
+
+- **Complete 4-Tier Layering Gate & `mcp-heartbeat` Relocation (`src/utils/mcp-heartbeat.ts`, `tests/layering.test.ts`)**:
+  - Moved MCP heartbeat process inspection (`checkMcpProcess`, `touchMcpHeartbeat`, `removeMcpHeartbeat`) to Layer 0 (`src/utils/mcp-heartbeat.ts`, reusing `getPackageVersion` from `src/utils/version.ts`), keeping `src/mcp/heartbeat.ts` as a backward-compatible barrel re-export and eliminating the Layer 2 → Layer 3 import in `src/sync/doctor.ts`.
+  - Normalized `src/sync/orchestrator.ts` and 14 test files to import `calculateHash` / workspace contracts from `src/sync/workspace/index.ts`, and `src/sync/doctor.ts` to import `storageKeyFromMediaMeta` from `src/utils/media-companion.ts`.
+  - Extended `tests/layering.test.ts` with **Axis 0** (Layer 0 never imports Layer 1/2/3) and **Axis 4** (Layers 0/1/2 never import Layer 3 `cli/`, `mcp/`, `presentation/`).
+- **Modular Pull Architecture & Cache Migration Separation (`src/sync/pull/`, `src/db/migrations.ts`)**:
+  - Split `src/sync/pull.ts` (1,163 lines) into 5 focused modules under `src/sync/pull/` (`types.ts`, `list.ts`, `quarantine.ts`, `fast_path.ts`, `index.ts`) using `FastPathContext` to eliminate closure capture, while keeping `src/sync/pull.ts` as a barrel re-export.
+  - Extracted SQLite schema initialization and versioned migrations (`runCacheMigrations`, `CURRENT_CACHE_SCHEMA_VERSION`) from `src/db/cache.ts` into `src/db/migrations.ts`.
+- **CLI `pull` / `push` Failure Presentation & Deduplication (`src/cli/report-failure.ts`, `src/cli/context.ts`, `src/cli/commands/{pull,push}.ts`)**:
+  - Extended `reportActionFailure` to format `PushValidationError`, `SyncPruneConflictError`, and `FrontmatterParseError`, and unified all catch blocks in `pull.ts` and `push.ts`.
+  - Extracted `resolveAndPersistLocalMediaRefs()` in `src/cli/context.ts`, `printTaxonomySyncSummary()` in `src/cli/commands/pull.ts`, and `printPushArticleDetails()` in `src/cli/commands/push.ts`.
+- **Zero Unused Locals Gate (`tsconfig.json`)**:
+  - Removed all unused imports, variables, and internal function parameters across `src/` and `tests/`, and enabled `"noUnusedLocals": true` in `tsconfig.json`.
+
 ## [0.1.27] - 2026-11-15
 
 ### Fixed

@@ -28,7 +28,13 @@ import {
   requireWorkspaceRoot,
   type WorkspacePaths,
 } from '../utils/workspace.js';
-import { DEFAULT_ORIGIN, getEnvOrigin, loadConfig, type EmitConfig } from '../utils/config.js';
+import {
+  DEFAULT_ORIGIN,
+  getEnvOrigin,
+  loadConfig,
+  persistLocalMediaRefs,
+  type EmitConfig,
+} from '../utils/config.js';
 import {
   findProfileByDirectory,
   loadProfilesFile,
@@ -263,4 +269,22 @@ export function createCliContextResolver(): CliContextResolver {
       origin: resolution.origin,
     };
   };
+}
+
+/**
+ * Resolves the effective `localMediaRefs` setting for a CLI command (`--local-media-refs` / `--no-local-media-refs`)
+ * and persists explicit changes into `.emit/config.json`.
+ */
+export function resolveAndPersistLocalMediaRefs(
+  ctx: Pick<CliContext, 'root' | 'config'>,
+  optionValue: boolean | undefined,
+): boolean | undefined {
+  const localMediaRefs =
+    optionValue === false ? false : optionValue === true ? true : ctx.config.localMediaRefs;
+  if (optionValue === true && ctx.config.localMediaRefs !== true) {
+    persistLocalMediaRefs(ctx.root, true);
+  } else if (optionValue === false && ctx.config.localMediaRefs === true) {
+    persistLocalMediaRefs(ctx.root, false);
+  }
+  return localMediaRefs;
 }

@@ -20,7 +20,6 @@
  * SOFTWARE.
  */
 
-import path from 'node:path';
 import matter from 'gray-matter';
 import { z } from 'zod';
 import { CANONICAL_ULID_REGEX } from './ulid.js';

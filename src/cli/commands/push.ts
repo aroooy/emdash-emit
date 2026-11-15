@@ -21,12 +21,40 @@
  */
 
 import type { Command } from 'commander';
-import { pushArticle, PushValidationError } from '../../sync/push.js';
+import { pushArticle, type PushResult } from '../../sync/push.js';
 import { pushAll } from '../../sync/orchestrator.js';
-import { ApiError } from '../../client/error.js';
-import { FrontmatterParseError } from '../../utils/frontmatter.js';
-import { persistLocalMediaRefs } from '../../utils/config.js';
-import type { CliContextResolver } from '../context.js';
+import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
+
+function printPushArticleDetails(
+  res: PushResult,
+  warningHeaderPrefix = '   ⚠️',
+  warningItemPrefix = '     👉',
+): void {
+  if (res.previousId) {
+    console.log(`   🆔 Server assigned ULID: ${res.previousId} -> ${res.id}`);
+  }
+  if (res.previousFilePath) {
+    console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
+  }
+  if (res.resolvedTaxonomies) {
+    for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item.input !== item.resolved) {
+            console.log(`   🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'`);
+          }
+        }
+      }
+    }
+  }
+  if (res.warnings && res.warnings.length > 0) {
+    console.warn(`${warningHeaderPrefix} Warnings (${res.warnings.length}):`);
+    for (const w of res.warnings) {
+      console.warn(`${warningItemPrefix} ${w}`);
+    }
+  }
+}
 
 export function registerPushCommand(program: Command, resolveContext: CliContextResolver): void {
   program
@@ -59,20 +87,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (file, options) => {
       const ctx = resolveContext(options.profile);
-
-      // Same workspace-preference rule as pull: honour the remembered setting, persist an explicit flag, and
-      // let `--no-local-media-refs` clear a previously remembered preference.
-      const localMediaRefs =
-        options.localMediaRefs === false
-          ? false
-          : options.localMediaRefs === true
-            ? true
-            : ctx.config.localMediaRefs;
-      if (options.localMediaRefs === true && ctx.config.localMediaRefs !== true) {
-        persistLocalMediaRefs(ctx.root, true);
-      } else if (options.localMediaRefs === false && ctx.config.localMediaRefs === true) {
-        persistLocalMediaRefs(ctx.root, false);
-      }
+      const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
 
       try {
         if (options.all) {
@@ -108,31 +123,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
 
           for (const res of pushResult.results) {
             console.log(`✅ Pushed ${res.id} (${res.filePath})`);
-            if (res.previousId) {
-              console.log(`   🆔 Server assigned ULID: ${res.previousId} -> ${res.id}`);
-            }
-            if (res.previousFilePath) {
-              console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
-            }
-            if (res.resolvedTaxonomies) {
-              for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
-                if (Array.isArray(items)) {
-                  for (const item of items) {
-                    if (item.input !== item.resolved) {
-                      console.log(
-                        `   🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'`,
-                      );
-                    }
-                  }
-                }
-              }
-            }
-            if (res.warnings && res.warnings.length > 0) {
-              console.warn(`   ⚠️ Warnings (${res.warnings.length}):`);
-              for (const w of res.warnings) {
-                console.warn(`     👉 ${w}`);
-              }
-            }
+            printPushArticleDetails(res);
           }
           return;
         }
@@ -193,60 +184,10 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           }
         } else {
           console.log(`✅ Successfully pushed ${res.id} -> ${res.filePath} (rev: ${res.rev})`);
-          if (res.previousId) {
-            console.log(`   🆔 Server assigned ULID: ${res.previousId} -> ${res.id}`);
-          }
-          if (res.previousFilePath) {
-            console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
-          }
-          if (res.resolvedTaxonomies) {
-            for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
-              if (Array.isArray(items)) {
-                for (const item of items) {
-                  if (item.input !== item.resolved) {
-                    console.log(
-                      `   🏷️ Canonicalized ${tax}: '${item.input}' -> '${item.resolved}'`,
-                    );
-                  }
-                }
-              }
-            }
-          }
-          if (res.warnings && res.warnings.length > 0) {
-            console.warn(`\n⚠️ Warnings (${res.warnings.length}):`);
-            for (const w of res.warnings) {
-              console.warn(`   👉 ${w}`);
-            }
-          }
+          printPushArticleDetails(res, '\n⚠️', '   👉');
         }
       } catch (err: unknown) {
-        if (err instanceof PushValidationError) {
-          console.error(`\n❌ Push blocked by Preflight Guards (${err.errors.length} error(s)):`);
-          for (const e of err.errors) {
-            console.error(`   - [${e.code}] ${e.message}`);
-            if (e.suggestion) {
-              console.error(`     👉 Suggestion: ${e.suggestion}`);
-            }
-          }
-          process.exit(1);
-        }
-        if (err instanceof FrontmatterParseError) {
-          console.error(`\n❌ Error: [${err.code}] ${err.message}`);
-          if (err.suggestion) {
-            console.error(`   💡 Suggestion: ${err.suggestion}`);
-          }
-          process.exit(1);
-        }
-        if (err instanceof ApiError) {
-          console.error(`\n${err.toActionableString()}`);
-          process.exit(1);
-        }
-        if (err instanceof Error) {
-          console.error(`\n❌ Error: ${err.message}`);
-          process.exit(1);
-        }
-        console.error(`\n❌ Error: ${String(err)}`);
-        process.exit(1);
+        reportActionFailure(err);
       }
     });
 }

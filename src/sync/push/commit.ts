@@ -25,7 +25,7 @@ import path from 'node:path';
 import { extractComparisonRev } from '../../client/api.js';
 import { ApiError } from '../../client/error.js';
 import type { UploadMediaResult } from '../../client/media.js';
-import { createBaseSnapshot, readBaselineFrontmatter } from '../../db/baseline.js';
+import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { BaseSnapshot, SyncState } from '../../db/cache.js';
 import {
   computeArticleRelativePath,
@@ -39,7 +39,7 @@ import { carriesDepthFreeMediaRef, localizeArticleMediaRefs } from '../../utils/
 import { hasUncommittedDraftRevision } from '../../utils/draft-revision.js';
 import { updateConfigSyncedVersion } from '../../utils/config.js';
 import { computeTaxonomyHash } from '../terms.js';
-import { calculateHash, commitArticleSnapshot } from '../workspace/index.js';
+import { commitArticleSnapshot } from '../workspace/index.js';
 import type { DraftImageReference } from '../preflight.js';
 import { finalizePromotedDraftImages } from './media_stage.js';
 import { transitionContentStatus } from './transport.js';
@@ -300,7 +300,6 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
         preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
       })
     : serializedCanonical;
-  const newHash = calculateHash(serializedContent);
 
   // File write & cleanup
   if (mode === 'create') {

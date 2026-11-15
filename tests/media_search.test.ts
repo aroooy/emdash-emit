@@ -964,9 +964,6 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
 
   // T7-3: doctor / search / collectRemoteStorageKeys の walk 整合性
   it('T7-3: guarantees walk pagination consistency between searchRemoteMedia and collectRemoteStorageKeys', async () => {
-    let searchPageCount = 0;
-    let collectPageCount = 0;
-
     const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
       const url = new URL(urlStr);
       const cursor = url.searchParams.get('cursor');

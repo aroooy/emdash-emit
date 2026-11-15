@@ -28,7 +28,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { initWorkspace, loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { runWorkspaceDoctor, scanArticleMediaDetailed } from '../src/sync/doctor.js';
 import { collectArticleStorageKeys } from '../src/sync/media.js';
 
@@ -1006,7 +1006,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   // --- v0.1.14 Specific Test Cases (R5) ---
 
   it('T5-1: detects taxonomy_apply_pending = 1 with remote check suggestion', async () => {
-    const art = setupHealthyArticle();
+    setupHealthyArticle();
     cache.setTaxonomyApplyPending(articleId, true);
 
     const config = loadConfig(tempDir);
@@ -1025,7 +1025,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('T5-2: detects delete_pending = 1 with cleanup and revive suggestions', async () => {
-    const art = setupHealthyArticle();
+    setupHealthyArticle();
     cache.setDeletePending(articleId, true);
 
     const config = loadConfig(tempDir);
@@ -1044,7 +1044,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('T5-3: auto-clears taxonomy pending by kind when rescue copy is removed manually and no divergence exists', async () => {
-    const art = setupHealthyArticle();
+    setupHealthyArticle();
     // Initially pending taxonomy conflict
     cache.setConflictPending(articleId, 'taxonomy', true);
 

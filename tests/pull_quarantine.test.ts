@@ -26,14 +26,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { CacheDatabase } from '../src/db/cache.js';
 import {
-  calculateHash,
-  CONFLICTS_SUBDIR,
   formatQuarantineNotice,
-  isQuarantinedRelativePath,
   pullArticle,
   extractCanonicalRemoteTitle,
-  resolveCanonicalArticlePath,
 } from '../src/sync/pull.js';
+import {
+  calculateHash,
+  CONFLICTS_SUBDIR,
+  isQuarantinedRelativePath,
+  resolveCanonicalArticlePath,
+} from '../src/sync/workspace/index.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
 import { pushArticle, PushValidationError } from '../src/sync/push.js';
 import { countQuarantinedCopies, getWorkspaceStatus } from '../src/sync/status.js';

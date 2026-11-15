@@ -272,13 +272,6 @@ describe('Hybrid 3-Way Merge Engine', () => {
     });
 
     it('cleanly merges non-interfering deletion on one side and addition on the other (Pattern 3 relaxation)', () => {
-      const base = { tags: ['old-tag', 'shared-tag'] };
-      const local = { tags: ['shared-tag', 'new-local-tag'] }; // local removed 'old-tag', added 'new-local-tag'
-      const remote = { tags: ['old-tag', 'shared-tag', 'new-remote-tag'] }; // remote kept 'old-tag', added 'new-remote-tag'
-
-      // Wait: in this case, local removed 'old-tag' but remote kept 'old-tag'.
-      // If remote actively kept old-tag and added new-remote-tag, let's test non-disputed:
-      // If remote replaced old-tag with new-remote-tag, or if base had A and B:
       // base: ['A', 'B']
       // local: ['B', 'C'] (removed A, added C)
       // remote: ['B', 'D'] (removed A, added D)

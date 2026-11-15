@@ -25,7 +25,7 @@ import {
   portableTextToMarkdown,
   type PortableTextBlock,
 } from './portable-text.js';
-import { unwrapEnvelope, unwrapItem, extractRev } from './api.js';
+import { unwrapItem, extractRev } from './api.js';
 import type { Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
 import { isCanonicalUlid, toCanonicalUlid } from '../utils/ulid.js';
 

@@ -358,7 +358,7 @@ export async function pushArticle(
       });
 
       if (res.status === 404 || res.status === 410) {
-        throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+        throwRemoteArticleDeleted(id, targetFilePath, putUrl);
       }
     }
 
@@ -416,7 +416,7 @@ export async function pushArticle(
 
         if (!res.ok) {
           if (res.status === 404 || res.status === 410) {
-            throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+            throwRemoteArticleDeleted(id, targetFilePath, putUrl);
           }
 
           const errText = await res.text().catch(() => '');
@@ -453,7 +453,7 @@ export async function pushArticle(
 
     if (!res || !res.ok) {
       if (res && (res.status === 404 || res.status === 410)) {
-        throwRemoteArticleDeleted(collection, id, targetFilePath, putUrl);
+        throwRemoteArticleDeleted(id, targetFilePath, putUrl);
       }
       const errText = res ? await res.text().catch(() => '') : '';
       throw new ApiError({

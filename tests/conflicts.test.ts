@@ -28,7 +28,7 @@ import { CacheDatabase } from '../src/db/cache.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { toStorageKey, toMediaRecordId } from '../src/utils/media-id.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { pushArticle } from '../src/sync/push.js';
 import {
   listConflicts,
@@ -451,7 +451,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
   });
 
   it('T4-2: resolveConflict accept-canonical clears cache conflict pending flag and metadata', () => {
-    const { relCanonical } = setupArticleFixture();
+    setupArticleFixture();
     const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
     fs.mkdirSync(conflictsDir, { recursive: true });
 
@@ -490,7 +490,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
   });
 
   it('T4-2b: resolveConflict accept-canonical extracts ULID from filename fallback when frontmatter is missing in quarantined file and clears cache', () => {
-    const { relCanonical } = setupArticleFixture();
+    setupArticleFixture();
     const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
     fs.mkdirSync(conflictsDir, { recursive: true });
 
@@ -526,7 +526,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
   });
 
   it('T4-3: resolveConflict accept-local explicitly clears all conflict flags and copy columns', () => {
-    const { fullCanonical, relCanonical } = setupArticleFixture();
+    setupArticleFixture();
     const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
     fs.mkdirSync(conflictsDir, { recursive: true });
 
@@ -558,7 +558,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
   });
 
   it('T3-6: observing accept-canonical effect on local conflict state and confirming escape behavior', () => {
-    const { relCanonical } = setupArticleFixture();
+    setupArticleFixture();
     const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
     fs.mkdirSync(conflictsDir, { recursive: true });
 
@@ -733,7 +733,6 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
 
     const baseBody = `![photo](${localMediaRef})\n\nBase paragraph.\n`;
     const localBody = `![photo](${localMediaRef})\n\nLocal divergent paragraph.\n`;
-    const remoteBody = `![photo](${remoteMediaRef})\n\nRemote divergent paragraph.\n`;
 
     const localMarkdown = serializeMarkdown(fm, localBody);
     fs.writeFileSync(fullCanonical, localMarkdown, 'utf8');

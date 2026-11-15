@@ -88,7 +88,6 @@ export async function transitionContentStatus(
  * Standardized error thrower when a remote article 404s or 410s on update.
  */
 export function throwRemoteArticleDeleted(
-  collection: string,
   id: string,
   targetFilePath: string,
   endpoint: string,

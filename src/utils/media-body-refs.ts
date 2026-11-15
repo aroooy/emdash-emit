@@ -224,11 +224,7 @@ export function mediaRefPrefixForArticle(articleRelPath: string): string {
 }
 
 /** True when every standalone image line already carries `prefix` plus a mirrored storageKey. */
-function isLocalizedIn(
-  body: string,
-  prefix: string,
-  fs: { existsSync(p: string): boolean },
-): boolean {
+function isLocalizedIn(body: string, prefix: string): boolean {
   let sawLocalRef = false;
   const standaloneRegex = /^!?\[([^\]]*)\]\(([^)]+)\)$/;
   for (const rawLine of body.split('\n')) {
@@ -276,7 +272,7 @@ export function localizeArticleMediaRefs(
 
   // Already written in the requested spelling: leave it byte-identical so its hash stays stable.
   const targetPrefix = options.preferLegacyRef ? MEDIA_DIR_PREFIX : depthPrefix;
-  if (isLocalizedIn(body, targetPrefix, options.fs)) return body;
+  if (isLocalizedIn(body, targetPrefix)) return body;
 
   // Otherwise localize from canonical form into the requested spelling. A disk file that already carries the
   // other local spelling is normalized here too — a draft→published move changes the article's depth, and

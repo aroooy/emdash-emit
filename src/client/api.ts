@@ -24,12 +24,7 @@
  * Safe unwrap utilities for EmDash API response envelopes and revision extraction.
  */
 
-import {
-  ContentEnvelopeSchema,
-  ContentItemSchema,
-  type ContentEnvelope,
-  type ContentItem,
-} from './schemas.js';
+import { ContentEnvelopeSchema, ContentItemSchema } from './schemas.js';
 
 export interface UnwrappedEnvelope<T = Record<string, unknown>> {
   data: T;

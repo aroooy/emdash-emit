@@ -26,7 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { createMcpServer } from '../src/mcp/server.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { setProfile } from '../src/utils/profile.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';

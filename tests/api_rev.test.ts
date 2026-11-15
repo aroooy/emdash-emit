@@ -2,13 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {
-  extractComparisonRev,
-  isSameRev,
-  formatRevForDisplay,
-  extractRev,
-  normalizeRev,
-} from '../src/client/api.js';
+import { extractComparisonRev, isSameRev, formatRevForDisplay } from '../src/client/api.js';
 import { tryDecodeTaxonomyTerm } from '../src/utils/frontmatter.js';
 import { CacheDatabase } from '../src/db/cache.js';
 

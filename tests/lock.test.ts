@@ -25,7 +25,6 @@ import {
   acquireLock,
   EntryLockError,
   getLockStatus,
-  releaseLock,
   withEntryLock,
   type LockResponse,
 } from '../src/client/lock.js';

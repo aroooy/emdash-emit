@@ -31,7 +31,7 @@ import {
   PublishedArticleDeletionForbiddenError,
 } from '../src/sync/delete.js';
 import { scanArticleMediaReferences } from '../src/utils/media-body-refs.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { ApiError } from '../src/client/error.js';
 import { createMcpServer } from '../src/mcp/server.js';
@@ -497,8 +497,7 @@ describe('deleteArticle & sync_delete (§4)', () => {
       const art = setupArticle({ status: 'draft', isModified: true });
 
       // Remote returns 404
-      const mockFetch404 = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-        const method = (init?.method || 'GET').toUpperCase();
+      const mockFetch404 = vi.fn().mockImplementation(async (url: string) => {
         if (url.includes('/lock')) return { ok: true, status: 200, json: async () => ({}) };
         return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'Not Found' };
       });

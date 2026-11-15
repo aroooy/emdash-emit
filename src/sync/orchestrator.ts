@@ -27,24 +27,22 @@ import { retrackLocalHashOnly } from '../db/baseline.js';
 import {
   listRemoteArticles,
   pullArticle,
-  calculateHash,
-  carriesDepthFreeMediaRef,
-  findLocalFilesByUlid,
   type PullResult,
   type ListRemoteArticlesOptions,
 } from './pull.js';
+import { findLocalFilesByUlid } from './workspace/index.js';
 import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
+import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
 import {
   collectRemoteStorageKeys,
   mirrorReferencedAssetsFromIndex,
   collectArticleStorageKeys,
-  type RemoteStorageKeyIndex,
   type MirroredAssetResult,
 } from './media.js';
-import { localizeArticleMediaRefs } from '../utils/media-body-refs.js';
+import { localizeArticleMediaRefs, carriesDepthFreeMediaRef } from '../utils/media-body-refs.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -172,8 +170,17 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         if (fs.existsSync(fullPath)) {
           try {
             const content = fs.readFileSync(fullPath, 'utf8');
-            const currentHash = calculateHash(content);
-            if (currentHash !== candidate.localHash) {
+            if (
+              !isLocalFileUnmodified({
+                workspaceRoot: options.workspaceRoot,
+                cache: options.cache,
+                id: candidate.id,
+                relPath,
+                localContent: content,
+                syncState: candidate,
+                healOnSpellingMatch: false,
+              })
+            ) {
               unpushedConflicts.push({
                 id: candidate.id,
                 slug: candidate.slug,

@@ -5,12 +5,7 @@ import { toRootRelativeMediaUrl } from '../../client/media.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../../utils/media-refs.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
-import type {
-  EmDashMediaItem,
-  LocalMediaMirrorCandidate,
-  LocalMirrorEntry,
-  LocalMirrorIndex,
-} from './types.js';
+import type { EmDashMediaItem, LocalMediaMirrorCandidate, LocalMirrorIndex } from './types.js';
 
 export function buildMediaMetaDoc(
   item: EmDashMediaItem,

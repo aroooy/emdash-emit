@@ -31,7 +31,6 @@ import type { CacheDatabase } from '../db/cache.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../utils/media-refs.js';
 import {
   asMediaRecordId,
-  asStorageKey,
   toMediaRecordId,
   toStorageKey,
   type MediaRecordId,

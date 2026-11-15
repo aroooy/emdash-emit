@@ -26,7 +26,6 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   loadProfilesFile,
-  saveProfilesFile,
   getProfile,
   setProfile,
   setActiveProfile,
@@ -35,7 +34,6 @@ import {
   resolveTargetProfile,
   AmbiguousProfileError,
 } from '../src/utils/profile.js';
-import { resolveAuth } from '../src/client/auth.js';
 
 describe('Profile Management (profiles.yaml)', () => {
   let tmpDir: string;

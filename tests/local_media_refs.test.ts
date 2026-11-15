@@ -29,7 +29,8 @@ import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/config.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
-import { pullArticle, calculateHash } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 

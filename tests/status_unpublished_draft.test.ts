@@ -5,7 +5,7 @@ import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { createMcpServer } from '../src/mcp/server.js';
 
 describe('Unpublished Draft Status Visualization (v0.1.24)', () => {

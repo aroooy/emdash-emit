@@ -31,7 +31,7 @@ import {
   readBaselineFrontmatter,
   baselineMarkdown,
 } from '../src/db/baseline.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 

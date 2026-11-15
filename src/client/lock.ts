@@ -33,7 +33,7 @@ export interface LockResponse {
   heldByCaller: boolean;
 }
 
-import { authenticatedFetch, createAuthedFetch } from './http.js';
+import { createAuthedFetch } from './http.js';
 import { articleLockEndpoint } from './endpoints.js';
 
 export interface LockClientOptions {

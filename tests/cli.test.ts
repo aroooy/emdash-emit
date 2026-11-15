@@ -710,6 +710,34 @@ describe('Emit CLI (Commander)', () => {
       expect(exitCode).toBe(1);
       expect(errLines[0]).toContain('❌ Error: [QUARANTINED_PATH_REQUIRED]');
       expect(errLines[1]).toContain('💡 Suggestion:');
+
+      // 4. PushValidationError formats preflight guard errors and suggestions (v0.1.28 H3)
+      const { PushValidationError } = await import('../src/sync/push.js');
+      invokeFailure(
+        new PushValidationError('Push blocked by Preflight Guards (1 error(s)).', [
+          {
+            code: 'INVALID_TAXONOMY_ERROR',
+            message: 'Unknown category "ghost"',
+            suggestion: 'Run emit pull first.',
+          },
+        ]),
+      );
+      expect(exitCode).toBe(1);
+      expect(errLines.join('\n')).toContain('❌ Push blocked by Preflight Guards (1 error(s)):');
+      expect(errLines.join('\n')).toContain('[INVALID_TAXONOMY_ERROR] Unknown category "ghost"');
+      expect(errLines.join('\n')).toContain('👉 Suggestion: Run emit pull first.');
+
+      // 5. SyncPruneConflictError formats window prune conflict message (v0.1.28 H3)
+      const { SyncPruneConflictError } = await import('../src/sync/orchestrator.js');
+      invokeFailure(
+        new SyncPruneConflictError('Pull aborted: 1 file(s) have unpushed local edits!', [
+          { id: '01M6ABCDEF1234567890123456', slug: 'old-post', filePath: 'posts/draft/old.md' },
+        ]),
+      );
+      expect(exitCode).toBe(1);
+      expect(errLines.join('\n')).toContain(
+        '❌ Pull aborted: 1 file(s) have unpushed local edits!',
+      );
     } finally {
       console.error = originalError;
       process.exit = originalExit;

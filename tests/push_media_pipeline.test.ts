@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { computeMediaHashes } from '../src/client/media.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
-import { calculateHash } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { pushArticle } from '../src/sync/push.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';

@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullArticle, calculateHash } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
 import { serializeMarkdown, parseMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { assertNotQuarantinedCopy } from '../src/sync/push/guards.js';
@@ -69,8 +70,6 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
       slug: 'draft-rev-test',
       lastSyncedAt: 1000,
     });
-
-    const newBody = 'New body edited on server with image.\n\n![img](../../media/test.jpg)\n';
 
     // Mock fetch for single article GET and taxonomies
     const mockFetch = vi.fn().mockImplementation((url: string) => {
