@@ -1061,8 +1061,9 @@ describe('Pull & Push Synchronization Engine', () => {
       status: 'all',
       concurrency: 2,
       // This test asserts healing costs only the article-list request; skip the default-ON local-first media
-      // walk so its "Unexpected fetch" guard still isolates the heal path.
+      // walk and taxonomy sync so its "Unexpected fetch" guard still isolates the heal path.
       mediaSync: false,
+      postsOnly: true,
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 

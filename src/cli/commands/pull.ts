@@ -212,34 +212,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
         if (!targetId) {
           // Batch mode: taxonomies + articles (+ media if --media)
-
-          // 1. Pull taxonomies (unless --posts-only)
-          let taxonomiesFailed = false;
           if (!postsOnly) {
             console.log('Syncing categories and tags...');
-            try {
-              const taxResult = await pullTaxonomies({
-                workspaceRoot: ctx.root,
-                origin: ctx.origin,
-                token: ctx.auth.token,
-                refreshToken: ctx.auth.refreshToken,
-              });
-              if (taxResult.categoriesFailed || taxResult.tagsFailed) {
-                taxonomiesFailed = true;
-              }
-              printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
-            } catch {
-              taxonomiesFailed = true;
-            }
           }
 
-          const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-          const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
-          if (taxHint) {
-            console.log(`\n${taxHint}\n`);
-          }
-
-          // 2. Pull articles (batch)
+          // Pull articles and taxonomies via orchestrator facade
           const limit =
             ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
 
@@ -264,12 +241,20 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             localMediaRefs,
             concurrency,
             prune: options.prune,
+            postsOnly,
+            onTaxonomySync: (taxResult) => {
+              printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
+              const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+              const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+              if (taxHint) {
+                console.log(`\n${taxHint}\n`);
+              }
+            },
             // Local-first media mirroring is default-ON for a batch pull. `--posts-only` skips it entirely;
             // the full-library walk stays on the dedicated `emit pull-media --all` command below. The shared
             // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
             mediaSync: !postsOnly,
             mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
-            canPruneTaxonomies: !postsOnly && !taxonomiesFailed,
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);

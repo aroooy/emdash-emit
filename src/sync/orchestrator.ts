@@ -35,7 +35,11 @@ import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
-import { loadLocalTaxonomyCandidates, pullTaxonomies } from './taxonomies.js';
+import {
+  loadLocalTaxonomyCandidates,
+  pullTaxonomies,
+  type PullTaxonomiesResult,
+} from './taxonomies.js';
 import { pullMedia, type PullMediaResult } from './media.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
 
@@ -57,6 +61,8 @@ export class SyncPruneConflictError extends Error {
   }
 }
 
+export type OrchestratorTaxonomiesResult = PullTaxonomiesResult & { error?: string };
+
 export interface PullBatchOptions extends ListRemoteArticlesOptions {
   workspaceRoot: string;
   cache: CacheDatabase;
@@ -75,11 +81,9 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
   mediaSync?: boolean;
   /** Bounds the shared library walk used to resolve referenced assets (default `mediaSyncLimit`). */
   mediaSyncLimit?: number;
-  /**
-   * Epistemic rule: When true, allows pruning nonexistent taxonomy terms from frontmatter during fast-path.
-   * Only true when taxonomies were successfully synchronized in the current session and not skipped via postsOnly.
-   */
-  canPruneTaxonomies?: boolean;
+  /** When true, skips taxonomy synchronization before article batch pull. */
+  postsOnly?: boolean;
+  onTaxonomySync?: (result: OrchestratorTaxonomiesResult) => void;
   onProgress?: (progress: { current: number; total: number; item: PullResult }) => void;
 }
 
@@ -107,6 +111,7 @@ export interface PullBatchResult {
     orphanStorageKeys: string[];
   };
   items: PullResult[];
+  taxonomies?: OrchestratorTaxonomiesResult;
 }
 
 export interface PullSingleArticleOptions {
@@ -129,11 +134,7 @@ export interface PullSingleArticleOptions {
 
 export interface PullSingleArticleResult {
   article: PullResult;
-  taxonomies?: {
-    categoriesFailed?: boolean;
-    tagsFailed?: boolean;
-    error?: string;
-  };
+  taxonomies?: OrchestratorTaxonomiesResult;
   libraryMedia?: PullMediaResult;
 }
 
@@ -144,7 +145,7 @@ export interface PullSingleArticleResult {
 export async function pullSingleArticle(
   options: PullSingleArticleOptions,
 ): Promise<PullSingleArticleResult> {
-  let taxonomiesResult: PullSingleArticleResult['taxonomies'] = undefined;
+  let taxonomiesResult: OrchestratorTaxonomiesResult | undefined = undefined;
 
   if (!options.postsOnly) {
     try {
@@ -156,13 +157,16 @@ export async function pullSingleArticle(
         fetchFn: options.fetchFn,
       });
       if (taxRes.categoriesFailed || taxRes.tagsFailed) {
-        taxonomiesResult = {
-          categoriesFailed: taxRes.categoriesFailed,
-          tagsFailed: taxRes.tagsFailed,
-        };
+        taxonomiesResult = taxRes;
       }
     } catch (err) {
-      taxonomiesResult = { error: (err as Error).message };
+      taxonomiesResult = {
+        categoriesCount: 0,
+        tagsCount: 0,
+        deletedCategoriesCount: 0,
+        deletedTagsCount: 0,
+        error: (err as Error).message,
+      };
     }
   }
 
@@ -207,6 +211,38 @@ export async function pullSingleArticle(
  * Reusable across CLI and MCP servers to ensure consistent behavior.
  */
 export async function pullBatch(options: PullBatchOptions): Promise<PullBatchResult> {
+  // Synchronize remote taxonomies safely unless postsOnly
+  let taxonomiesResult: OrchestratorTaxonomiesResult | undefined = undefined;
+
+  if (!options.postsOnly) {
+    try {
+      const taxRes = await pullTaxonomies({
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+      });
+      taxonomiesResult = taxRes;
+    } catch (err) {
+      taxonomiesResult = {
+        categoriesCount: 0,
+        tagsCount: 0,
+        deletedCategoriesCount: 0,
+        deletedTagsCount: 0,
+        error: (err as Error).message,
+      };
+    }
+    if (options.onTaxonomySync && taxonomiesResult) {
+      options.onTaxonomySync(taxonomiesResult);
+    }
+  }
+
+  const taxonomiesFailed = Boolean(
+    taxonomiesResult?.categoriesFailed || taxonomiesResult?.tagsFailed || taxonomiesResult?.error,
+  );
+  const canPruneTaxonomies = !options.postsOnly && !taxonomiesFailed;
+
   // Synchronize remote bylines into local SQLite cache before pulling articles
   const bylineMaps = await syncRemoteBylines({
     origin: options.origin,
@@ -354,7 +390,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         candidates,
         mediaSync: options.mediaSync,
         mediaSession,
-        canPruneTaxonomies: options.canPruneTaxonomies,
+        canPruneTaxonomies,
       });
 
       results.push(res);
@@ -435,6 +471,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     quarantined,
     media: mediaResult,
     items: results,
+    taxonomies: taxonomiesResult,
   };
 }
 

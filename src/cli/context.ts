@@ -29,6 +29,7 @@ import {
   requireWorkspaceRoot,
   type WorkspacePaths,
 } from '../utils/workspace.js';
+import { resolveLocalMediaRefsOption } from '../utils/media-ref-precedence.js';
 import {
   DEFAULT_ORIGIN,
   getEnvOrigin,
@@ -280,8 +281,7 @@ export function resolveAndPersistLocalMediaRefs(
   ctx: Pick<CliContext, 'root' | 'config'>,
   optionValue: boolean | undefined,
 ): boolean | undefined {
-  const localMediaRefs =
-    optionValue === false ? false : optionValue === true ? true : ctx.config.localMediaRefs;
+  const localMediaRefs = resolveLocalMediaRefsOption(optionValue, ctx.config);
   if (optionValue === true && ctx.config.localMediaRefs !== true) {
     persistLocalMediaRefs(ctx.root, true);
   } else if (optionValue === false && ctx.config.localMediaRefs === true) {

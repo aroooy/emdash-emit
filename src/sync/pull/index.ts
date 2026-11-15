@@ -220,9 +220,9 @@ export async function pullArticle(
     const rawObj = rawItem as Record<string, unknown>;
     const hasDraftRevision = Boolean(rawObj.draftRevisionId);
     const isDraft = String(rawObj.status || 'draft') !== 'published';
-    const needsFullDraftFetch = isDraft || hasDraftRevision;
-
     const existingSync = options.cache.getSyncState(id);
+    const needsFullDraftFetch = hasDraftRevision || (isDraft && Boolean(existingSync));
+
     const rawRevCandidate = String(
       rawItem._rev || rawItem.rev || rawItem.version || rawObj._rev || '',
     );
@@ -230,7 +230,7 @@ export async function pullArticle(
     const remoteComparisonRev = extractComparisonRev(rawObj, remoteRev);
     const remoteChanged = !existingSync || !isSameRev(existingSync.remoteRev, remoteComparisonRev);
 
-    if (needsFullDraftFetch && existingSync && remoteChanged) {
+    if (needsFullDraftFetch && remoteChanged) {
       rawItem = undefined;
     }
   }

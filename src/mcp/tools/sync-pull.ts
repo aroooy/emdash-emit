@@ -45,6 +45,7 @@ import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError, formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 import { toStorageKey } from '../../utils/media-id.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
+import { resolveLocalMediaRefsOption } from '../../utils/media-ref-precedence.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
   // sync_pull: Pull remote article(s) and taxonomies
@@ -107,8 +108,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const collection = args.collection || ctx.config.defaultCollection;
         const origin = ctx.origin;
         // An explicit MCP argument wins over the remembered workspace setting, matching the CLI flag precedence.
-        const localMediaRefs =
-          args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs;
+        const localMediaRefs = resolveLocalMediaRefsOption(args.localMediaRefs, ctx.config);
 
         const { id: targetId } = resolveArticleTarget({
           workspaceRoot: ctx.root,
@@ -205,34 +205,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         const postsOnly = args.postsOnly === true;
         const includeMedia = args.includeMedia === true;
 
-        // 1. Pull taxonomies (unless postsOnly or single-article mode)
-        let taxonomiesMsg = '';
-        let taxonomiesFailed = false;
-        if (!postsOnly) {
-          const taxResult = await pullTaxonomies({
-            workspaceRoot: ctx.root,
-            origin,
-            token: ctx.auth.token,
-            refreshToken: ctx.auth.refreshToken,
-          });
-          const failNotes: string[] = [];
-          if (taxResult.categoriesFailed) failNotes.push('categories');
-          if (taxResult.tagsFailed) failNotes.push('tags');
-          if (failNotes.length > 0) {
-            taxonomiesFailed = true;
-            taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
-          } else {
-            taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced.`;
-          }
-        }
-
-        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
-        if (taxHint) {
-          taxonomiesMsg += `\n\n${taxHint}`;
-        }
-
-        // 2. Pull articles
+        // Pull articles and taxonomies via orchestrator facade
         const batchResult = await pullBatch({
           collection,
           workspaceRoot: ctx.root,
@@ -245,12 +218,39 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           force: args.force,
           prune: shouldPrune,
           localMediaRefs,
+          postsOnly,
           // Local-first media mirroring is default-ON for a batch pull; postsOnly skips it, matching the CLI.
           // The shared walk is bounded by `mediaSyncLimit`, matching the CLI too.
           mediaSync: !postsOnly,
           mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
-          canPruneTaxonomies: !postsOnly && !taxonomiesFailed,
         });
+
+        let taxonomiesMsg = '';
+        if (batchResult.taxonomies) {
+          const taxResult = batchResult.taxonomies;
+          if (taxResult.error) {
+            taxonomiesMsg = `\n⚠️ Taxonomies: Failed to sync remote taxonomies (${taxResult.error}, preserved existing local definitions).`;
+          } else if (taxResult.categoriesFailed || taxResult.tagsFailed) {
+            const failNotes: string[] = [];
+            if (taxResult.categoriesFailed) failNotes.push('categories');
+            if (taxResult.tagsFailed) failNotes.push('tags');
+            taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
+          } else {
+            const prunedCat = taxResult.deletedCategoriesCount
+              ? `, ${taxResult.deletedCategoriesCount} categories pruned`
+              : '';
+            const prunedTag = taxResult.deletedTagsCount
+              ? `, ${taxResult.deletedTagsCount} tags pruned`
+              : '';
+            taxonomiesMsg = `\nTaxonomies: ${taxResult.categoriesCount} categories, ${taxResult.tagsCount} tags synced${prunedCat}${prunedTag}.`;
+          }
+        }
+
+        const taxSummary = getLocalTaxonomiesSummary(ctx.root);
+        const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
+        if (taxHint) {
+          taxonomiesMsg += `\n\n${taxHint}`;
+        }
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
         // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first

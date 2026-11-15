@@ -366,6 +366,23 @@ describe('Pull 0-GET Taxonomy Pruning & Remote Audit Parity (v0.1.31 T2-T7)', ()
 
     const mockFetch = vi.fn(async (input: string | URL | Request) => {
       const url = input.toString();
+      // Taxonomy endpoints (synchronized inside pullBatch)
+      if (url.includes('/taxonomies/category/terms')) {
+        return new Response(
+          JSON.stringify({
+            terms: [{ id: CAT_NEWS_ID, slug: 'news', name: 'News' }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/taxonomies/tag/terms')) {
+        return new Response(
+          JSON.stringify({
+            terms: [{ id: TAG_TS_ID, slug: 'typescript', name: 'TypeScript' }],
+          }),
+          { status: 200 },
+        );
+      }
       // List remote articles
       if (url.includes('/_emdash/api/content/posts')) {
         return new Response(
@@ -401,7 +418,6 @@ describe('Pull 0-GET Taxonomy Pruning & Remote Audit Parity (v0.1.31 T2-T7)', ()
       origin: 'https://example.com',
       token: 'test-token',
       status: 'draft',
-      canPruneTaxonomies: true,
       mediaSync: false,
       fetchFn: mockFetch as unknown as typeof fetch,
     });
