@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-11-15
+
+### Added
+
+- **Consolidated Pull Presentation Formatters (`src/presentation/pull_report.ts`)**:
+  - Created `src/presentation/pull_report.ts` consolidating pull-related reporting into Layer 3: `formatTaxonomySyncFailure`, `formatTaxonomySyncSuccess`, `formatArticleMediaSummary`, `formatPullStatusBreakdown`, and `formatPullWindowLabel`.
+  - Added unit and symmetry tests in `tests/presentation_symmetry.test.ts` verifying identical formatting output between direct presentation calls and CLI re-exports, as well as static import alignment across CLI and MCP.
+
+### Changed
+
+- **Unified Taxonomy Sync Failure Notifications**:
+  - Replaced divergent taxonomy sync failure warnings across CLI (`src/cli/commands/pull.ts`) and MCP (`src/mcp/tools/sync-pull.ts`) with standardized `formatTaxonomySyncFailure`, eliminating 7 divergent warning patterns and providing consistent diagnostic messages for human users and AI agents.
+  - Aligned partial failure semantics in `printTaxonomySyncSummary`: suppressed misleading partial success counts when either categories or tags fail, matching MCP behavior.
+  - Maintained 2-block backward-compatible re-exports in `src/cli/commands/pull.ts` (Block 1 from `presentation/article_report.js`, Block 2 from `presentation/pull_report.js`), ensuring zero breakage for existing tests and consumers.
+- **Style and Licensing Parity**:
+  - Added MIT license headers (SPORT-SERVICE RS★R) across 12 newly introduced modules (`src/sync/media/`, `src/sync/guards.ts`, `src/utils/media-refs.ts`), achieving 100% license coverage across all 105 TypeScript modules.
+  - Standardized barrel file comments in `src/sync/media.ts` to align with `pull.ts` and `push.ts`.
+  - Reordered presentation imports to the top of `src/cli/commands/pull.ts`.
+
+## [0.1.33] - 2026-11-15
+
+### Added
+
+- **Static Architecture & Quality Gates (Axis 5, Rule 5)**:
+  - Enforced Axis 5 non-CLI logging isolation in `tests/layering.test.ts`: strictly prohibits `console.log` and `console.debug` outside `src/cli/` to protect MCP stdio streams.
+  - Enforced Rule 5 guard coverage in `tests/guards.test.ts`: verified test assertion coverage across all 20 unique guard error codes across 16 active guards, adding explicit tests for G11, G12, and G17.
+  - Integrated `npm run check:cycles` using `madge --circular` into the test and verification pipeline.
+- **Governance & Specification Archive**:
+  - Created `docs/README.md` as the index and central directory for specifications and refactoring plans.
+  - Updated `AGENTS.md` with Axis 5, Rules 1-5, Ask First Policy, and Commit Readiness Checklist.
+
+### Fixed
+
+- **Circular Import Eradication**:
+  - Extracted `calculateHash` into `src/sync/workspace/hash.ts`, breaking the `commit.ts` <-> `index.ts` circular dependency.
+  - Relocated canonical `MEDIA_FILE_ROUTE_PREFIX` to `src/utils/media-refs.ts`, breaking the `media-body-refs.ts` <-> `media-refs.ts` circular dependency.
+
+## [0.1.32] - 2026-11-15
+
+### Added
+
+- **Batch Pull Taxonomy Orchestration Facade (`src/sync/orchestrator.ts`)**:
+  - Encapsulated remote taxonomy synchronization into `orchestrator.ts:pullBatch` (symmetric with `pullSingleArticle`), eliminating consumer-level duplicate calls and try/catch omissions.
+  - Provided `onTaxonomySync` callback for CLI progress output while returning full `OrchestratorTaxonomiesResult` with 4 counts.
+- **Media Reference Precedence Isolation (`src/utils/media-ref-precedence.ts`)**:
+  - Extracted `resolveLocalMediaRefsOption` to Layer 0 pure function (`src/utils/media-ref-precedence.ts`) while keeping persistence CLI-only.
+
+### Fixed
+
+- **Draft Initial Pull Staleness Fix (`src/sync/pull/fast_path.ts`, `src/sync/pull/index.ts`)**:
+  - Discarded stale list `rawItem` for untracked drafts when `Boolean(draftRevisionId)` is true, triggering selective single-GET to fetch the canonical draft body.
+
 ## [0.1.31] - 2026-11-15
 
 ### Added
@@ -51,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exported `fetchMediaListPage` from `src/sync/media/remote_index.ts` and replaced the inline HTTP pagination walk in `src/sync/media/pull_library.ts:pullMedia()`, unifying media list endpoint queries, `MEDIA_LIST_FAILED` error wrapping, and cursor progression across `collectRemoteStorageKeys`, `searchRemoteMedia`, and `pullMedia`.
   - Removed unused imports (`unwrapEnvelope`, `ApiError`, `mediaListEndpoint`) in `src/sync/media/pull_library.ts`, ensuring strict compliance with `noUnusedLocals: true`.
 
+## [0.1.29] - 2026-11-15
 
 ### Added
 

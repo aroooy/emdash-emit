@@ -21,15 +21,23 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   formatOrphanMediaWarning as formatOrphanCli,
   formatMediaCoverageLine as formatCoverageCli,
+  formatTaxonomySyncFailure as formatTaxonomySyncFailureCli,
+  formatTaxonomySyncSuccess as formatTaxonomySyncSuccessCli,
 } from '../src/cli/commands/pull.js';
 import {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
   formatArticleDiffReport,
 } from '../src/presentation/article_report.js';
+import {
+  formatTaxonomySyncFailure,
+  formatTaxonomySyncSuccess,
+} from '../src/presentation/pull_report.js';
 import { remediationFor, GUARD_REGISTRY } from '../src/sync/guards.js';
 
 describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
@@ -110,5 +118,67 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     // Returns null for unrecognized code
     expect(remediationFor('NONEXISTENT_CODE')).toBeNull();
     expect(remediationFor('')).toBeNull();
+  });
+
+  it('formatTaxonomySyncFailure and formatTaxonomySyncSuccess produce byte-identical output between CLI re-export and presentation module', () => {
+    const failureTestCases = [
+      { error: 'ECONNRESET' },
+      { categoriesFailed: true, tagsFailed: true },
+      { categoriesFailed: true },
+      { tagsFailed: true },
+      {},
+    ];
+
+    for (const tc of failureTestCases) {
+      const fromPresentation = formatTaxonomySyncFailure(tc);
+      const fromCli = formatTaxonomySyncFailureCli(tc);
+      expect(fromPresentation).toBe(fromCli);
+      expect(fromPresentation).toContain('⚠️ Taxonomies:');
+      expect(fromPresentation).toContain('preserved existing local definitions');
+    }
+
+    const successTestCases = [
+      { counts: { categoriesCount: 10, tagsCount: 20 }, options: undefined },
+      {
+        counts: {
+          categoriesCount: 5,
+          tagsCount: 15,
+          deletedCategoriesCount: 2,
+          deletedTagsCount: 3,
+        },
+        options: { label: 'Taxonomies' },
+      },
+      {
+        counts: { categoriesCount: 0, tagsCount: 0, deletedCategoriesCount: 1 },
+        options: { label: 'CustomTax' },
+      },
+    ];
+
+    for (const tc of successTestCases) {
+      const fromPresentation = formatTaxonomySyncSuccess(tc.counts, tc.options);
+      const fromCli = formatTaxonomySyncSuccessCli(tc.counts, tc.options);
+      expect(fromPresentation).toBe(fromCli);
+      expect(fromPresentation).toContain('✅ ');
+    }
+  });
+
+  it('CLI and MCP pull modules import taxonomy formatters from presentation/pull_report.js (Static Parity)', () => {
+    const cliSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/cli/commands/pull.ts'),
+      'utf-8',
+    );
+    const mcpSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-pull.ts'),
+      'utf-8',
+    );
+
+    // Both CLI and MCP must import formatTaxonomySyncFailure and formatTaxonomySyncSuccess from presentation/pull_report.js
+    expect(cliSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/pull_report(?:\.js)?['"]/);
+    expect(cliSource).toContain('formatTaxonomySyncFailure');
+    expect(cliSource).toContain('formatTaxonomySyncSuccess');
+
+    expect(mcpSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/pull_report(?:\.js)?['"]/);
+    expect(mcpSource).toContain('formatTaxonomySyncFailure');
+    expect(mcpSource).toContain('formatTaxonomySyncSuccess');
   });
 });
