@@ -515,10 +515,9 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
     expect(syncState.localHash).not.toBe(staleHash);
     expect(syncState.localHash).toBe(calculateHash(fs.readFileSync(articlePath, 'utf8')));
 
-    // `emit status` now certifies the file as untouched. `emit diff`'s *content* comparison already agreed
-    // (its baseline is rendered in the disk's own spelling), but its `status` verdict still reads the raw
-    // hash, so assert agreement through the diff payload and keep the real-edit case honest.
+    // Both `emit status` and `emit diff` certify the file as untouched (`status: 'synced'`, `hasChanges: false`).
     const diffResult = inspectArticleDiff({ workspaceRoot: tempDir, cache, id: ARTICLE_ID });
+    expect(diffResult.status).toBe('synced');
     expect(diffResult.diff?.hasChanges).toBe(false);
 
     fs.writeFileSync(articlePath, `${localized}\n\nA real new paragraph.\n`, 'utf8');

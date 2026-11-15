@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-11-15
+
+### Fixed
+
+- **Order-Independent Baseline Reconstruction & Diagnostic Alignment (`src/sync/baseline-reconstruction.ts`, `src/sync/diff.ts`, `src/sync/doctor.ts`, `src/sync/delete.ts`)**:
+  - Fixed a self-contradiction bug in `inspectArticleDiff` (`src/sync/diff.ts`) where calling `emit diff` / `sync_diff` _before_ `emit status` on an untouched article with localized media references returned `status: 'modified'` (`Status: 🟡 Modified`) despite `diff.hasChanges === false` (`No changes detected.`).
+  - Unified `isLocalFileUnmodified()` across `status.ts`, `diff.ts`, `doctor.ts`, and `delete.ts` so spelling-only differences between `sync_state.local_hash` and disk bytes are recognized and healed regardless of which command runs first.
+- **Unified CLI Failure Presentation Without Double Prefixing (`src/cli/report-failure.ts`)**:
+  - Consolidated 5 duplicate `reportActionFailure` implementations (`delete`, `new`, `conflicts`, `doctor`, `media`) into `src/cli/report-failure.ts`.
+  - Fixed missing `❌ Error:` prefix on generic errors in `emit delete` and `emit new` while preventing double `❌ Error: ❌ ...` prefixes on pre-formatted errors (`DuplicateSlugError`, `UnpushedModificationsError`, `PublishedArticleDeletionForbiddenError`).
+
+### Changed
+
+- **Sync-State-Only Hash Retracking (`retrackLocalHashOnly` in `src/db/baseline.ts`)**:
+  - Centralized hash-only re-tracking (updating `sync_state.local_hash` when disk spelling changes without touching `base_snapshots`) into Layer 0 (`src/db/baseline.ts`), replacing 3 independent `saveSyncState` call sites in `status.ts`, `orchestrator.ts`, and `pull.ts`.
+- **Taxonomy Consolidation (`src/sync/taxonomies.ts`, `src/utils/taxonomy-key.ts`)**:
+  - Consolidated category and tag save/prune loops in `pullTaxonomies()` into `writeAndPruneTaxonomyDir()`.
+  - Unified deterministic collision winner ordering (`count desc → ULID desc`) into `compareTaxonomyTermDeterministically()`, guaranteeing 100% winner parity between Layer A (`loadLocalTaxonomyMaps`) and Layer B (`getLocalTaxonomiesSummary`).
+  - Extracted taxonomy key normalization helpers (`normalizeTaxonomyKey`, `isPercentEncodedTerm`, `canonicalSlugOf`, `aliasesOf`) into Layer 0 (`src/utils/taxonomy-key.ts`).
+- **MCP Tool Context & Preflight Local Image Probe (`src/mcp/tool-errors.ts`, `src/sync/preflight/image_probe.ts`)**:
+  - Added `withResolvedContext()` and `formatToolTextWithMeta()` in `src/mcp/tool-errors.ts` to standardize context error handling and `_meta` suffix formatting across MCP tools.
+  - Extracted local draft image probing (`probeLocalImageFile`) into `src/sync/preflight/image_probe.ts` while preserving guard-specific remediation messages for G5, G10, and G11.
+
 ## [0.1.26] - 2026-11-15
 
 ### Added
@@ -83,7 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - **Fail-safe fallback**: Any article with missing or undefined status defaults safely to `'draft'`, ensuring single GET retrieval rather than writing incomplete content.
   - Hardened unpushed edit protection: Divergent local copies continue to be safely quarantined under `posts/conflicts/*.conflict.md` with `body_conflict_pending = 1` and Guard G12 push protection across both draft and published states.
 
-
 ## [0.1.22] - 2026-11-14
 
 ### Added
@@ -100,7 +122,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added Unicode NFC normalization to `tryDecodeTaxonomyTerm` (`src/utils/frontmatter.ts`), guaranteeing consistent string comparisons regardless of OS file system encoding (NFD vs NFC).
   - Extended `transitionContentStatus` (`src/sync/push/transport.ts`) to return `StatusTransitionResult { rev, rawJson }`, ensuring post-publish/unpublish commit updates Track 2 with remote status and revision ULIDs accurately.
   - Full production workspace verification: achieved 100% idempotency (`0 updated, 60 skipped/up-to-date`) on successive `pull` runs and verified clean create, update, and delete push lifecycles.
-
 
 ## [0.1.21] - 2026-11-14
 
@@ -119,7 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Achieves complete idempotency: subsequent pull runs are zero-overhead no-ops (`0 updated, N skipped/up-to-date`).
   - Added NFC Unicode normalization for taxonomy alias resolution in `loadLocalTaxonomyMaps` and `createArticleScaffold`, accepting raw Japanese terms (`-C 未分類 -T カメラレビュー`) seamlessly without spurious warnings.
   - Dual-indexed candidates in `loadLocalTaxonomyCandidates` and refined human-readable name comments in frontmatter YAML (`# 日本語名`), automatically omitting redundant comments when term equals display name.
-
 
 ## [0.1.20] - 2026-11-14
 
@@ -182,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Draft image localization on push (`localMediaRefs: true`)**:
-  - A draft image auto-uploaded from `media/drafts/` during `emit push` / `sync_push` now lands on disk as an article-relative mirror reference (`../../media/<storageKey>`) instead of a canonical remote URL. Promotion of the uploaded file into `media/` (P6) was running *after* the body localization pass, and `localizeArticleMediaRefs` only rewrites a reference whose storageKey already has a real mirror under `media/`, so a freshly uploaded image stayed spelled as `/_emdash/api/media/file/<storageKey>` on disk until the next pull.
+  - A draft image auto-uploaded from `media/drafts/` during `emit push` / `sync_push` now lands on disk as an article-relative mirror reference (`../../media/<storageKey>`) instead of a canonical remote URL. Promotion of the uploaded file into `media/` (P6) was running _after_ the body localization pass, and `localizeArticleMediaRefs` only rewrites a reference whose storageKey already has a real mirror under `media/`, so a freshly uploaded image stayed spelled as `/_emdash/api/media/file/<storageKey>` on disk until the next pull.
   - The fix relocates promotion to just after the remote POST/PUT (and its conflict handling) and before localization, on both the create and update paths. Promotion still never runs when the remote article write fails or a 3-way merge aborts the push, so the compensation window stays intact: the draft image remains staged under `media/drafts/`, the article file keeps its original draft-path reference, and `media_state` keeps `status: 'uploaded'` for the next run.
 
 ### Removed

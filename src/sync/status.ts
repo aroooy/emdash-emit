@@ -23,17 +23,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
-import { baselineMarkdown } from '../db/baseline.js';
 import {
-  carriesPercentEncodedTaxonomy,
   formatFrontmatterParseError,
   lenientRepairMarkdownFrontmatter,
   parseMarkdown,
 } from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
-import { resolveDiskSpelling, renderForDisk } from '../utils/disk-spelling.js';
 import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
-import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { formatRevForDisplay } from '../client/api.js';
 import {
   compareArticleFilenameDesc,
@@ -136,48 +133,6 @@ export function countQuarantinedCopies(
 }
 
 /**
- * Reports whether a file whose hash disagrees with `sync_state.local_hash` is still byte-identical to its
- * baseline once the baseline is spelled the way the disk spells it.
- *
- * `base_snapshots` always stores the canonical `/_emdash/api/media/file/<storageKey>` form, so re-spelling it
- * through `localizeArticleMediaRefs` reproduces either local spelling a workspace carries — the article-relative
- * `../../media/<key>` or the older depth-free `media/<key>`. A match proves the divergence is purely reference
- * spelling and not an edit, which is exactly the case `emit diff` already treats as clean; status must agree or
- * the two diagnostics disagree. Anything that still differs after this pass is a real local edit.
- */
-function isBaselineSpellingMatch(
-  workspaceRoot: string,
-  cache: CacheDatabase,
-  relPath: string,
-  localContent: string,
-  currentHash: string,
-): boolean {
-  const id = extractUlidFromFilename(path.basename(relPath));
-  if (!id) return false;
-  const snapshot = cache.getBaseSnapshot(id);
-  if (!snapshot) return false;
-
-  try {
-    const syncState = cache.getSyncState(id);
-    const candidates = loadLocalTaxonomyCandidates(workspaceRoot);
-    const spelling = resolveDiskSpelling(localContent, syncState);
-    const baseMarkdown = baselineMarkdown(snapshot, candidates, {
-      preferEncodedTaxonomy: spelling.preferEncodedTaxonomy,
-      hasDraftRevision: spelling.hasDraftRevision,
-    });
-    const localizedBase = renderForDisk(baseMarkdown, spelling, {
-      workspaceRoot,
-      articleRelPath: relPath,
-      fs,
-    });
-    return calculateHash(localizedBase) === currentHash;
-  } catch {
-    // An unreadable or malformed baseline cannot certify the file as untouched.
-    return false;
-  }
-}
-
-/**
  * Scans the workspace directory and compares files against cache.db to compute sync status.
  */
 export function getWorkspaceStatus(
@@ -227,24 +182,16 @@ export function getWorkspaceStatus(
         const hasUnpublishedDraft = hasUncommittedDraftRevision(syncState);
 
         if (syncState) {
-          // `local_hash` is supposed to record the exact bytes on disk, but a workspace whose articles were
-          // written before media-ref localization existed keeps a hash of the *canonical* spelling while the
-          // file itself carries `../../media/<storageKey>` — pull's post-pass re-spelled the disk without
-          // re-tracking it. A legacy cache can therefore disagree with the disk purely on reference spelling.
-          // Ask the baseline, which stores the canonical form: when localizing it reproduces exactly what the
-          // disk carries, the article is untouched and must read as synced, the same rule `emit diff` applies.
-          // Only a file that actually diverges from its baseline falls through to 'modified'.
-          const hashMatches = syncState.localHash === currentHash;
-          const spellingMatch =
-            !hashMatches &&
-            isBaselineSpellingMatch(workspaceRoot, cache, relPath, content, currentHash);
-          if (spellingMatch) {
-            // Re-track the file against its own bytes so later passes skip it outright instead of re-reading
-            // and re-localizing the baseline on every status call. Values are untouched — only the recorded
-            // hash catches up with the spelling already on disk.
-            cache.saveSyncState({ ...syncState, localHash: currentHash });
-          }
-          if ((hashMatches || spellingMatch) && !conflictPending && !taxonomyApplyPending) {
+          const unmodified = isLocalFileUnmodified({
+            workspaceRoot,
+            cache,
+            id: parsed.frontmatter.id,
+            relPath,
+            localContent: content,
+            currentHash,
+            syncState,
+          });
+          if (unmodified && !conflictPending && !taxonomyApplyPending) {
             syncStatus = 'synced';
           } else {
             syncStatus = 'modified';

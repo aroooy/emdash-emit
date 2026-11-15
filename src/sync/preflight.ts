@@ -25,11 +25,8 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { extractUlidFromFilename, storageKeyToMarkdownRef } from '../utils/naming.js';
 import { extractMediaUlid } from '../client/mapper.js';
-import {
-  MAX_MEDIA_UPLOAD_BYTES,
-  resolveImageMimeType,
-  toRootRelativeMediaUrl,
-} from '../client/media.js';
+import { toRootRelativeMediaUrl } from '../client/media.js';
+import { probeLocalImageFile } from './preflight/image_probe.js';
 import {
   stripCodeBlocks,
   verifyOpaqueBlocksUntampered,
@@ -557,32 +554,28 @@ export function runPreflightChecks(
           continue;
         }
 
-        const stat = fs.statSync(resolved.candidateAbs);
-        if (!stat.isFile()) {
-          errors.push({
-            code: 'MISSING_LOCAL_IMAGE_FILE',
-            message: `Draft image path is not a regular file: '${rawPath}'.`,
-            suggestion: `Ensure "${resolved.filename}" is a valid image file inside "media/drafts/".`,
-          });
-          continue;
-        }
-
-        if (!resolveImageMimeType(resolved.filename)) {
-          errors.push({
-            code: 'INVALID_LOCAL_IMAGE_TYPE',
-            message: `Unsupported image file extension for draft image: '${resolved.filename}'.`,
-            suggestion:
-              'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
-          });
-          continue;
-        }
-
-        if (stat.size > MAX_MEDIA_UPLOAD_BYTES) {
-          errors.push({
-            code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
-            message: `Draft image '${resolved.filename}' (${stat.size} bytes) exceeds the maximum allowed upload size of ${MAX_MEDIA_UPLOAD_BYTES} bytes (50 MiB).`,
-            suggestion: 'Compress or resize the image below 50 MiB before pushing.',
-          });
+        const probe = probeLocalImageFile(resolved.candidateAbs, resolved.filename);
+        if (!probe.ok) {
+          if (probe.failure.code === 'MISSING_LOCAL_IMAGE_FILE') {
+            errors.push({
+              code: 'MISSING_LOCAL_IMAGE_FILE',
+              message: `Draft image path is not a regular file: '${rawPath}'.`,
+              suggestion: `Ensure "${resolved.filename}" is a valid image file inside "media/drafts/".`,
+            });
+          } else if (probe.failure.code === 'INVALID_LOCAL_IMAGE_TYPE') {
+            errors.push({
+              code: 'INVALID_LOCAL_IMAGE_TYPE',
+              message: `Unsupported image file extension for draft image: '${resolved.filename}'.`,
+              suggestion:
+                'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
+            });
+          } else {
+            errors.push({
+              code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
+              message: `Draft image '${resolved.filename}' (${probe.failure.sizeBytes} bytes) exceeds the maximum allowed upload size of ${probe.failure.maxBytes} bytes (50 MiB).`,
+              suggestion: 'Compress or resize the image below 50 MiB before pushing.',
+            });
+          }
           continue;
         }
       }
@@ -671,26 +664,31 @@ export function runPreflightChecks(
                     });
                   }
                 } else {
-                  const stat = fs.statSync(resolvedPath.candidateAbs);
-                  if (!stat.isFile()) {
-                    errors.push({
-                      code: 'MISSING_LOCAL_IMAGE_FILE',
-                      message: `Draft image path specified in featuredImage is not a regular file: '${rawFeaturedImage}'.`,
-                      suggestion: `Ensure "${resolvedPath.filename}" is a valid image file inside "media/drafts/".`,
-                    });
-                  } else if (!resolveImageMimeType(resolvedPath.filename)) {
-                    errors.push({
-                      code: 'INVALID_LOCAL_IMAGE_TYPE',
-                      message: `Unsupported image file extension for featuredImage: '${resolvedPath.filename}'.`,
-                      suggestion:
-                        'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
-                    });
-                  } else if (stat.size > MAX_MEDIA_UPLOAD_BYTES) {
-                    errors.push({
-                      code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
-                      message: `Draft image specified in featuredImage exceeds the 50 MiB limit: '${resolvedPath.filename}' (${stat.size} bytes).`,
-                      suggestion: 'Compress or resize the image before pushing.',
-                    });
+                  const probe = probeLocalImageFile(
+                    resolvedPath.candidateAbs,
+                    resolvedPath.filename,
+                  );
+                  if (!probe.ok) {
+                    if (probe.failure.code === 'MISSING_LOCAL_IMAGE_FILE') {
+                      errors.push({
+                        code: 'MISSING_LOCAL_IMAGE_FILE',
+                        message: `Draft image path specified in featuredImage is not a regular file: '${rawFeaturedImage}'.`,
+                        suggestion: `Ensure "${resolvedPath.filename}" is a valid image file inside "media/drafts/".`,
+                      });
+                    } else if (probe.failure.code === 'INVALID_LOCAL_IMAGE_TYPE') {
+                      errors.push({
+                        code: 'INVALID_LOCAL_IMAGE_TYPE',
+                        message: `Unsupported image file extension for featuredImage: '${resolvedPath.filename}'.`,
+                        suggestion:
+                          'Use a supported image format (.jpg, .jpeg, .png, .webp, .gif, .avif, .svg).',
+                      });
+                    } else {
+                      errors.push({
+                        code: 'LOCAL_IMAGE_SIZE_EXCEEDED',
+                        message: `Draft image specified in featuredImage exceeds the 50 MiB limit: '${resolvedPath.filename}' (${probe.failure.sizeBytes} bytes).`,
+                        suggestion: 'Compress or resize the image before pushing.',
+                      });
+                    }
                   } else {
                     draftImages.push({
                       line: `featuredImage: ${rawFeaturedImage}`,

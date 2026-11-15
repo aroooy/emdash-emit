@@ -250,9 +250,14 @@ describe('MCP Tool Error Formatting', () => {
       const cases: Array<[string, Record<string, unknown>]> = [
         ['sync_status', {}],
         ['sync_pull', {}],
+        ['sync_pull_taxonomies', {}],
+        ['sync_pull_media', {}],
         ['sync_push', { filePath: 'posts/draft/20261108_01M6ABCDEF1234567890123456-post.md' }],
         ['sync_diff', { id: '01M6ABCDEF1234567890123456' }],
         ['sync_new', { slug: 'ambiguity-probe' }],
+        ['sync_delete', { id: '01M6ABCDEF1234567890123456' }],
+        ['sync_conflicts', { action: 'list' }],
+        ['sync_doctor', {}],
         ['sync_media_search', { query: 'ambiguity-probe' }],
       ];
 

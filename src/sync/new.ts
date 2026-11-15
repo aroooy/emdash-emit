@@ -27,10 +27,10 @@ import {
   computeArticleRelativePath,
   parseMarkdown,
   serializeMarkdown,
-  tryDecodeTaxonomyTerm,
   type Frontmatter,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
+import { normalizeTaxonomyKey } from '../utils/taxonomy-key.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { CANONICAL_ULID_REGEX } from '../utils/ulid.js';
 import type { CacheDatabase } from '../db/cache.js';
@@ -257,15 +257,13 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     slugToNameMap?: Record<string, string>,
   ): boolean => {
     if (canonicalList.includes(term)) return true;
-    const tNorm = tryDecodeTaxonomyTerm(term).normalize('NFC').toLowerCase();
-    if (
-      canonicalList.some((c) => tryDecodeTaxonomyTerm(c).normalize('NFC').toLowerCase() === tNorm)
-    ) {
+    const tNorm = normalizeTaxonomyKey(term).toLowerCase();
+    if (canonicalList.some((c) => normalizeTaxonomyKey(c).toLowerCase() === tNorm)) {
       return true;
     }
     if (slugToNameMap) {
       for (const [k, v] of Object.entries(slugToNameMap)) {
-        if (tryDecodeTaxonomyTerm(k).normalize('NFC').toLowerCase() === tNorm) return true;
+        if (normalizeTaxonomyKey(k).toLowerCase() === tNorm) return true;
         if (v && v.normalize('NFC').toLowerCase() === tNorm) return true;
       }
     }

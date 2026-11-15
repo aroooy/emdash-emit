@@ -22,9 +22,9 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
-import { inspectArticleDiff, type ArticleDiffInspection } from '../../sync/diff.js';
-import { formatToolError } from '../tool-errors.js';
+import type { ContextResolver } from '../context.js';
+import { inspectArticleDiff } from '../../sync/diff.js';
+import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncDiffTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -40,35 +40,15 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
       id: z.string().optional().describe('Article ID (ULID) to inspect'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
-      let inspection: ArticleDiffInspection;
-      try {
-        inspection = inspectArticleDiff({
+    async (args) =>
+      withResolvedContext(resolveContext, args, (ctx) => {
+        const inspection = inspectArticleDiff({
           workspaceRoot: ctx.root,
           cache: ctx.cache,
           filePath: args.filePath,
           id: args.id,
         });
-      } catch (error) {
-        return formatToolError(error, ctx.meta);
-      }
-
-      const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `${inspection.formattedOutput}${metaSuffix}`,
-          },
-        ],
-      };
-    },
+        return formatToolTextWithMeta(inspection.formattedOutput, ctx.meta);
+      }),
   );
 }

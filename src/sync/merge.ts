@@ -21,11 +21,8 @@
  */
 
 import { merge as diff3Merge } from 'node-diff3';
-import {
-  tryDecodeTaxonomyTerm,
-  type Frontmatter,
-  type ParsedMarkdown,
-} from '../utils/frontmatter.js';
+import { type Frontmatter, type ParsedMarkdown } from '../utils/frontmatter.js';
+import { isPercentEncodedTerm, normalizeTaxonomyKey } from '../utils/taxonomy-key.js';
 
 export interface MergeResult {
   hasConflict: boolean;
@@ -51,7 +48,7 @@ function normalizeTermList(val: unknown, preferredMap?: Map<string, string>): st
       val.map((v) => {
         const s = String(v);
         if (!preferredMap) return s;
-        const key = tryDecodeTaxonomyTerm(s).normalize('NFC');
+        const key = normalizeTaxonomyKey(s);
         return preferredMap.get(key) || s;
       }),
     ),
@@ -162,12 +159,12 @@ export function mergeTaxonomies(
     ];
     for (const t of allTerms) {
       const s = String(t);
-      const key = tryDecodeTaxonomyTerm(s).normalize('NFC');
-      const isPercentEncoded = tryDecodeTaxonomyTerm(s) !== s;
+      const key = normalizeTaxonomyKey(s);
+      const isPercentEncoded = isPercentEncodedTerm(s);
       const existing = preferredTermMap.get(key);
       if (!existing) {
         preferredTermMap.set(key, s);
-      } else if (isPercentEncoded && tryDecodeTaxonomyTerm(existing) === existing) {
+      } else if (isPercentEncoded && !isPercentEncodedTerm(existing)) {
         // Upgrade to canonical slug if currently mapped to plain/decoded string
         preferredTermMap.set(key, s);
       }

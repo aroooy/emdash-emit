@@ -463,10 +463,13 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
         { input: '01LOSER', resolved: sharedRawSlug, id: '01LOSER' },
       ]);
 
-      // 6. Layer B Presentation: dedupeBySlug drops the loser from candidates / summary
+      // 6. Layer B Presentation: dedupeBySlug drops the loser from candidates / summary,
+      // and Layer B winner strictly matches Layer A winner (v0.1.27 T2 invariant)
       const summary = getLocalTaxonomiesSummary(tempDir);
       expect(summary.categories.length).toBe(1);
       expect(summary.categories[0].id).toBe('01WINNER');
+      expect(summary.categories[0].id).toBe(maps.slugToId.category[sharedRawSlug]);
+      expect(summary.categories[0].id).toBe(maps.slugToId.category['共有スラッグ']);
 
       const hint = formatTaxonomiesHint(summary);
       expect(hint).toContain('共有スラッグ (勝者カテゴリ)');
@@ -563,6 +566,62 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       const maps = loadLocalTaxonomyMaps(tempDir);
       expect(maps.idToSlug.tag['01DEC_PCT']).toBe('%350%25off');
       expect(maps.idToSlug.tag['01RAW_PCT']).toBe('50%off');
+    });
+
+    it('preserves existing local taxonomy YAML files when remote fetch fails on one side (v0.1.27 T1)', async () => {
+      const catDir = path.join(tempDir, 'categories');
+      const tagDir = path.join(tempDir, 'tags');
+      fs.mkdirSync(catDir, { recursive: true });
+      fs.mkdirSync(tagDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(catDir, '01STALE_CAT-OldCat.yaml'),
+        'id: 01STALE_CAT\nname: OldCat\nslug: old-cat\ntaxonomy: category\ncount: 1\n',
+      );
+      fs.writeFileSync(
+        path.join(tagDir, '01KEEP_TAG-ExistingTag.yaml'),
+        'id: 01KEEP_TAG\nname: ExistingTag\nslug: existing-tag\ntaxonomy: tag\ncount: 5\n',
+      );
+
+      // Categories succeeds with 1 new category; tags fails with HTTP 500
+      const partialFailFetch = async (url: string) => {
+        if (url.includes('/taxonomies/category/terms')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => ({
+              data: {
+                terms: [{ id: '01NEW_CAT', slug: 'new-cat', label: 'NewCat', count: 2 }],
+              },
+            }),
+          } as Response;
+        }
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          json: async () => ({}),
+        } as Response;
+      };
+
+      const res = await pullTaxonomies({
+        workspaceRoot: tempDir,
+        origin: 'https://test.example.com',
+        token: 'test-token',
+        fetchFn: partialFailFetch as unknown as typeof fetch,
+      });
+
+      expect(res.categoriesFailed).toBe(false);
+      expect(res.categoriesCount).toBe(1);
+      expect(res.deletedCategoriesCount).toBe(1);
+      expect(fs.existsSync(path.join(catDir, '01STALE_CAT-OldCat.yaml'))).toBe(false);
+      expect(fs.existsSync(path.join(catDir, '01NEW_CAT-NewCat.yaml'))).toBe(true);
+
+      // Tags failed -> existing tag YAML must NOT be pruned
+      expect(res.tagsFailed).toBe(true);
+      expect(res.deletedTagsCount).toBe(0);
+      expect(fs.existsSync(path.join(tagDir, '01KEEP_TAG-ExistingTag.yaml'))).toBe(true);
     });
   });
 });

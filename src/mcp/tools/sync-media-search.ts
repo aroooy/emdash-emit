@@ -24,8 +24,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
-import type { ContextResolver, ServerContext } from '../context.js';
-import { formatToolError, formatToolSuccess } from '../tool-errors.js';
+import type { ContextResolver } from '../context.js';
+import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncMediaSearchTool(
   server: McpServer,
@@ -54,15 +54,8 @@ export function registerSyncMediaSearchTool(
         .describe('Append top local tag slugs as extra search hints'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
-
-      try {
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
         const mirrorIndex = collectLocalMirrorIndex(ctx.root, ctx.cache);
         const result = await searchRemoteMedia({
           workspaceRoot: ctx.root,
@@ -105,9 +98,6 @@ export function registerSyncMediaSearchTool(
         if (tagHints) payload.tagHints = tagHints;
 
         return formatToolSuccess(payload, ctx.meta);
-      } catch (err) {
-        return formatToolError(err, ctx.meta);
-      }
-    },
+      }),
   );
 }

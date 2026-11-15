@@ -20,13 +20,14 @@
  * SOFTWARE.
  */
 
+import crypto from 'node:crypto';
 import {
   type Frontmatter,
   type TaxonomyCandidates,
   type SerializeMarkdownOptions,
   serializeMarkdown,
 } from '../utils/frontmatter.js';
-import type { BaseSnapshot } from './cache.js';
+import type { BaseSnapshot, CacheDatabase } from './cache.js';
 
 export interface DecodedBaseline {
   frontmatter: Frontmatter;
@@ -97,4 +98,38 @@ export function baselineMarkdown(
 ): string {
   const { frontmatter, body } = readBaseline(snapshot);
   return serializeMarkdown(frontmatter, body, candidates, options);
+}
+
+/**
+ * Sync-state-only re-tracking: the disk bytes changed (spelling), values did not.
+ * Invariants:
+ *  - local_hash strictly matches SHA-256 of the bytes now on disk
+ *  - base_snapshots is NOT touched (baseline stays canonical / Layer A)
+ *  - remote_rev, status, slug, conflict flags are preserved verbatim
+ */
+export function retrackLocalHashOnly(
+  cache: CacheDatabase,
+  input: {
+    id: string;
+    diskContent?: string;
+    localHash?: string;
+    touchSyncedAt?: boolean;
+  },
+): { localHash: string } | null {
+  const existing = cache.getSyncState(input.id);
+  if (!existing) {
+    return null;
+  }
+  const localHash =
+    input.localHash ??
+    crypto
+      .createHash('sha256')
+      .update(input.diskContent ?? '', 'utf8')
+      .digest('hex');
+  cache.saveSyncState({
+    ...existing,
+    localHash,
+    lastSyncedAt: input.touchSyncedAt ? Math.floor(Date.now() / 1000) : existing.lastSyncedAt,
+  });
+  return { localHash };
 }

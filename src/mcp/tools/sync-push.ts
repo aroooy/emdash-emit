@@ -22,9 +22,9 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
+import type { ContextResolver } from '../context.js';
 import { pushArticle } from '../../sync/push.js';
-import { formatToolError } from '../tool-errors.js';
+import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -76,16 +76,10 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (err: unknown) {
-        return formatToolError(err);
-      }
-      const origin = ctx.origin;
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
+        const origin = ctx.origin;
 
-      try {
         const res = await pushArticle(args.filePath, {
           workspaceRoot: ctx.root,
           cache: ctx.cache,
@@ -167,25 +161,15 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         const warningLines =
           allWarnings.length > 0 ? ['', '⚠️ Warnings:', ...allWarnings.map((w) => `  - ${w}`)] : [];
 
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text:
-                [
-                  `✅ Successfully pushed '${res.id}' to remote (${res.filePath}, rev: ${res.rev}).`,
-                  ...transitionLines,
-                  ...taxonomyLines,
-                  ...warningLines,
-                ].join('\n') + metaSuffix,
-            },
-          ],
-        };
-      } catch (err: unknown) {
-        return formatToolError(err, ctx.meta);
-      }
-    },
+        return formatToolTextWithMeta(
+          [
+            `✅ Successfully pushed '${res.id}' to remote (${res.filePath}, rev: ${res.rev}).`,
+            ...transitionLines,
+            ...taxonomyLines,
+            ...warningLines,
+          ].join('\n'),
+          ctx.meta,
+        );
+      }),
   );
 }

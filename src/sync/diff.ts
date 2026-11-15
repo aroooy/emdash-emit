@@ -24,11 +24,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
-import { baselineMarkdown } from '../db/baseline.js';
+import { retrackLocalHashOnly } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
 import { calculateHash } from './workspace/index.js';
-import { resolveDiskSpelling, renderForDisk } from '../utils/disk-spelling.js';
-import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { reconstructBaseline } from './baseline-reconstruction.js';
 import { formatRevForDisplay } from '../client/api.js';
 
 export interface DiffResult {
@@ -159,31 +158,29 @@ export function inspectArticleDiff(options: {
 
   const syncState = options.cache.getSyncState(targetId);
   const currentHash = calculateHash(localContent);
-  const isModified = syncState ? syncState.localHash !== currentHash : true;
-  // Rebuild the base document with the exact same serializer and taxonomy candidates used to write the local file so the
-  // diff compares canonical Markdown against canonical Markdown instead of JSON against YAML,
-  // preventing phantom diffs caused by taxonomy inline comments.
-  const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
-  const spelling = resolveDiskSpelling(localContent, syncState);
-  const baseFullMarkdown = baselineMarkdown(baseSnapshot, candidates, {
-    preferEncodedTaxonomy: spelling.preferEncodedTaxonomy,
-    hasDraftRevision: spelling.hasDraftRevision,
-  });
-  // The baseline is stored in the canonical remote spelling, but a workspace may spell mirrored images as local
-  // references (`../../media/<storageKey>`, or the older depth-free `media/<storageKey>`). Comparing those two
-  // spellings directly reports a change on every untouched article. Decide the spelling from the disk file
-  // itself: when localizing the baseline reproduces exactly what the disk carries, compare in that spelling so
-  // an untouched article reads clean. Otherwise keep the baseline canonical — which is what `sync_state.local_hash`
-  // records for a file that stores canonical URLs or whose asset was never mirrored locally.
-  const localizedBase = renderForDisk(baseFullMarkdown, spelling, {
+  const reconstructed = reconstructBaseline({
     workspaceRoot: options.workspaceRoot,
-    articleRelPath: targetFile,
+    snapshot: baseSnapshot,
+    localContent,
+    currentHash,
+    syncState,
+    relPath: targetFile,
     fs,
   });
+  if (syncState && syncState.localHash !== currentHash && reconstructed.matchesDisk) {
+    retrackLocalHashOnly(options.cache, {
+      id: targetId,
+      localHash: currentHash,
+    });
+  }
+  const isModified = syncState
+    ? syncState.localHash !== currentHash && !reconstructed.matchesDisk
+    : true;
   const baseForCompare =
-    localizedBase === baseFullMarkdown || calculateHash(localizedBase) === currentHash
-      ? localizedBase
-      : baseFullMarkdown;
+    reconstructed.diskSpellingMarkdown === reconstructed.canonicalMarkdown ||
+    reconstructed.matchesDisk
+      ? reconstructed.diskSpellingMarkdown
+      : reconstructed.canonicalMarkdown;
   const displayRev = formatRevForDisplay(baseSnapshot.rev);
   const diffResult = computeContextDiff(baseForCompare, localContent, {
     baseLabel: `base [rev: ${displayRev}]`,

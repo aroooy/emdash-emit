@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { CacheDatabase, SyncState } from '../db/cache.js';
-import { createBaseSnapshot } from '../db/baseline.js';
+import { createBaseSnapshot, retrackLocalHashOnly } from '../db/baseline.js';
 import { apiResponseToLocal, type MapperOptions } from '../client/mapper.js';
 import { ApiError } from '../client/error.js';
 import { authenticatedFetch, createAuthedFetch } from '../client/http.js';
@@ -563,10 +563,10 @@ export async function pullArticle(
             try {
               parseMarkdown(respelled);
               fs.writeFileSync(fullExistingPath, respelled, 'utf8');
-              options.cache.saveSyncState({
-                ...existingSync,
-                localHash: calculateHash(respelled),
-                lastSyncedAt: Math.floor(Date.now() / 1000),
+              retrackLocalHashOnly(options.cache, {
+                id,
+                diskContent: respelled,
+                touchSyncedAt: true,
               });
               return {
                 id,

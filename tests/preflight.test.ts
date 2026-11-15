@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runPreflightChecks } from '../src/sync/preflight.js';
+import { probeLocalImageFile } from '../src/sync/preflight/image_probe.js';
 import type { ParsedMarkdown } from '../src/utils/frontmatter.js';
 
 describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
@@ -636,6 +637,18 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       const resBadId = runPreflightChecks(filePath, parsedBadId);
       expect(resBadId.valid).toBe(false);
       expect(resBadId.errors.some((e) => e.code === 'INVALID_FEATURED_IMAGE')).toBe(true);
+    });
+
+    it('probeLocalImageFile catches ENOENT and returns MISSING_LOCAL_IMAGE_FILE with reason: "not_found"', () => {
+      const nonExistent = path.join(os.tmpdir(), 'emit-nonexistent-image-probe-999999.jpg');
+      const res = probeLocalImageFile(nonExistent, 'emit-nonexistent-image-probe-999999.jpg');
+      expect(res).toEqual({
+        ok: false,
+        failure: {
+          code: 'MISSING_LOCAL_IMAGE_FILE',
+          reason: 'not_found',
+        },
+      });
     });
   });
 });

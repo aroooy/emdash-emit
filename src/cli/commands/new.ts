@@ -21,23 +21,12 @@
  */
 
 import type { Command } from 'commander';
-import { createArticleScaffold, DuplicateSlugError } from '../../sync/new.js';
-import { ApiError } from '../../client/error.js';
+import { createArticleScaffold } from '../../sync/new.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 
 export function registerNewCommand(program: Command, resolveContext: CliContextResolver): void {
-  const reportActionFailure = (error: unknown): never => {
-    if (error instanceof ApiError) {
-      console.error(error.toActionableString());
-    } else if (error instanceof Error) {
-      console.error(error.message);
-    } else {
-      console.error(String(error));
-    }
-    process.exit(1);
-  };
-
   program
     .command('new <slug>')
     .description(

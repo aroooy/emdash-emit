@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase, SyncState } from '../db/cache.js';
+import { retrackLocalHashOnly } from '../db/baseline.js';
 import {
   listRemoteArticles,
   pullArticle,
@@ -354,10 +355,10 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         // canonical form it held moments ago reports itself as an edit nobody made — every status pass would
         // call it modified while diff shows nothing. Only a tracked article needs re-tracking: an untracked
         // one has no baseline to stay honest with. Values are untouched; only the recorded hash advances.
-        const tracked = options.cache.getSyncState(res.id);
-        if (tracked) {
-          options.cache.saveSyncState({ ...tracked, localHash: calculateHash(localized) });
-        }
+        retrackLocalHashOnly(options.cache, {
+          id: res.id,
+          diskContent: localized,
+        });
       }
     }
 

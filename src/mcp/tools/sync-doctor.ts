@@ -22,9 +22,9 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
+import type { ContextResolver } from '../context.js';
 import { runWorkspaceDoctor } from '../../sync/doctor.js';
-import { formatToolError, formatToolSuccess } from '../tool-errors.js';
+import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncDoctorTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -55,15 +55,8 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
           'Walk the whole remote media library via metadata only (GET /_emdash/api/media; no binary downloads) and report its record count against the number of assets this workspace mirrors, so a missing-file count reads as coverage instead of data loss',
         ),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
-
-      try {
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
         const collection = args.collection || ctx.config.defaultCollection || 'posts';
         const report = await runWorkspaceDoctor({
           workspaceRoot: ctx.root,
@@ -80,9 +73,6 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         });
 
         return formatToolSuccess(report as unknown as Record<string, unknown>, ctx.meta);
-      } catch (err) {
-        return formatToolError(err, ctx.meta);
-      }
-    },
+      }),
   );
 }

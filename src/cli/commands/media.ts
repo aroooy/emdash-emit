@@ -21,10 +21,10 @@
  */
 
 import type { Command } from 'commander';
-import { ApiError } from '../../client/error.js';
 import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 
 function formatSize(bytes: number | null): string {
   if (bytes === null || bytes === undefined) return '';
@@ -38,17 +38,6 @@ export function registerMediaSearchCommand(
   program: Command,
   resolveContext: CliContextResolver,
 ): void {
-  const reportActionFailure = (error: unknown): never => {
-    if (error instanceof ApiError) {
-      console.error(error.toActionableString());
-    } else if (error instanceof Error) {
-      console.error(`❌ Error: ${error.message}`);
-    } else {
-      console.error(`❌ Error: ${String(error)}`);
-    }
-    process.exit(1);
-  };
-
   program
     .command('media-search <query>')
     .description(

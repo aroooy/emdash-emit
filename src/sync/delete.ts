@@ -25,6 +25,7 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown } from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
+import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { resolveArticleTarget } from './diff.js';
 import { ApiError } from '../client/error.js';
 
@@ -141,7 +142,19 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
   // Safety Guard 1: Unpushed Modifications Protection
   const syncState = options.cache.getSyncState(articleId);
   const currentHash = calculateHash(rawContent);
-  if (syncState && syncState.localHash !== currentHash && !options.discardLocalEdits) {
+  if (
+    syncState &&
+    !options.discardLocalEdits &&
+    !isLocalFileUnmodified({
+      workspaceRoot: options.workspaceRoot,
+      cache: options.cache,
+      id: articleId,
+      relPath: targetFile,
+      localContent: rawContent,
+      currentHash,
+      syncState,
+    })
+  ) {
     throw new UnpushedModificationsError({ filePath: targetFile, id: articleId });
   }
 

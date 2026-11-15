@@ -22,14 +22,14 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
+import type { ContextResolver } from '../context.js';
 import {
   listConflicts,
   diffConflict,
   resolveConflict,
   pruneConflicts,
 } from '../../sync/conflicts.js';
-import { formatToolError, formatToolSuccess } from '../tool-errors.js';
+import { formatToolError, formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncConflictsTool(
   server: McpServer,
@@ -80,17 +80,10 @@ export function registerSyncConflictsTool(
         .describe('Collection containing conflicts (defaults to "posts")'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
+    async (args) =>
+      withResolvedContext(resolveContext, args, (ctx) => {
+        const collection = args.collection || ctx.config.defaultCollection || 'posts';
 
-      const collection = args.collection || ctx.config.defaultCollection || 'posts';
-
-      try {
         if (args.action === 'list') {
           const items = listConflicts(ctx.root, collection);
           return formatToolSuccess(
@@ -163,9 +156,6 @@ export function registerSyncConflictsTool(
           ),
           ctx.meta,
         );
-      } catch (err) {
-        return formatToolError(err, ctx.meta);
-      }
-    },
+      }),
   );
 }

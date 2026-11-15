@@ -650,4 +650,69 @@ describe('Emit CLI (Commander)', () => {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it('reportActionFailure guarantees leading ❌ without double-prefixing ❌ Error: ❌ (v0.1.27 P3)', async () => {
+    const { reportActionFailure } = await import('../src/cli/report-failure.js');
+    const { DuplicateSlugError } = await import('../src/sync/new.js');
+    const { QuarantinedPathRequiredError } = await import('../src/sync/conflicts.js');
+
+    const errLines: string[] = [];
+    const originalError = console.error;
+    const originalExit = process.exit;
+    const EXIT_SENTINEL = Symbol('emit-test-exit');
+    let exitCode: number | undefined;
+
+    console.error = (...args: unknown[]) => {
+      errLines.push(args.map(String).join(' '));
+    };
+    process.exit = ((code?: number) => {
+      exitCode = code ?? 0;
+      throw EXIT_SENTINEL;
+    }) as typeof process.exit;
+
+    const invokeFailure = (err: unknown) => {
+      errLines.length = 0;
+      exitCode = undefined;
+      try {
+        reportActionFailure(err);
+      } catch (caught) {
+        if (caught !== EXIT_SENTINEL) throw caught;
+      }
+    };
+
+    try {
+      // 1. Pre-prefixed error (DuplicateSlugError) keeps single ❌ and does NOT double-prefix
+      invokeFailure(
+        new DuplicateSlugError({
+          slug: 'dup-slug',
+          existingId: '01M6ABCDEF1234567890123456',
+          existingFilePath: 'posts/draft/dup-slug.md',
+          existingStatus: 'draft',
+          source: 'workspace',
+        }),
+      );
+      expect(exitCode).toBe(1);
+      expect(errLines[0].startsWith('❌ Conflict:')).toBe(true);
+      expect(errLines.join('\n')).not.toContain('❌ Error: ❌');
+
+      // 2. Plain Error gets ❌ Error: prefix
+      invokeFailure(new Error('unexpected filesystem failure'));
+      expect(exitCode).toBe(1);
+      expect(errLines[0]).toBe('❌ Error: unexpected filesystem failure');
+
+      // 3. QuarantinedPathRequiredError uses dynamic error.code and suggestion
+      invokeFailure(
+        new QuarantinedPathRequiredError({
+          filePath: 'posts/draft/some.md',
+          collection: 'posts',
+        }),
+      );
+      expect(exitCode).toBe(1);
+      expect(errLines[0]).toContain('❌ Error: [QUARANTINED_PATH_REQUIRED]');
+      expect(errLines[1]).toContain('💡 Suggestion:');
+    } finally {
+      console.error = originalError;
+      process.exit = originalExit;
+    }
+  });
 });

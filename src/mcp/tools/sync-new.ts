@@ -22,10 +22,10 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
-import { createArticleScaffold, DuplicateSlugError } from '../../sync/new.js';
+import type { ContextResolver } from '../context.js';
+import { createArticleScaffold } from '../../sync/new.js';
 import { getLocalTaxonomiesSummary, formatTaxonomiesHint } from '../../sync/taxonomies.js';
-import { formatToolError } from '../tool-errors.js';
+import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncNewTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -71,15 +71,8 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
-
-      try {
+    async (args) =>
+      withResolvedContext(resolveContext, args, (ctx) => {
         const collection = args.collection || ctx.config.defaultCollection;
 
         const res = createArticleScaffold({
@@ -121,20 +114,10 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 60 });
         const hintBlock = taxHint ? `\n\n${taxHint}` : '';
 
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${assignedBlock}${warningBlock}${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.${metaSuffix}`,
-            },
-          ],
-        };
-      } catch (error) {
-        // Slug validation, byline resolution, and taxonomy hint reads all fail here.
-        return formatToolError(error, ctx?.meta);
-      }
-    },
+        return formatToolTextWithMeta(
+          `✅ Created new draft article '${args.slug}' (ID: ${res.id}) at ${res.filePath}.${assignedBlock}${warningBlock}${hintBlock}\n\nYou can now edit the file directly and sync it with sync_push.`,
+          ctx.meta,
+        );
+      }),
   );
 }

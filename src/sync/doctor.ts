@@ -31,6 +31,7 @@ import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontm
 import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
+import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { scanArticleMediaReferences } from '../utils/media-body-refs.js';
 import { mediaFileEndpoint } from '../client/endpoints.js';
 import { calculateHash } from './workspace/index.js';
@@ -386,7 +387,15 @@ export async function runWorkspaceDoctor(
     if (fs.existsSync(fullPath)) {
       diskContent = fs.readFileSync(fullPath, 'utf8');
       const diskHash = calculateHash(diskContent);
-      hasDivergence = diskHash !== state.localHash;
+      hasDivergence = !isLocalFileUnmodified({
+        workspaceRoot: options.workspaceRoot,
+        cache: options.cache,
+        id: state.id,
+        relPath: state.localFilePath,
+        localContent: diskContent,
+        currentHash: diskHash,
+        syncState: state,
+      });
       hasBodyMarkers = conflictMarkerRegex.test(diskContent);
     }
 

@@ -22,7 +22,7 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
+import type { ContextResolver } from '../context.js';
 import { pullArticle, formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
 import { pullBatch } from '../../sync/orchestrator.js';
 import {
@@ -37,7 +37,7 @@ import {
 } from '../../presentation/article_report.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
-import { formatToolError } from '../tool-errors.js';
+import { formatToolError, formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 import { toStorageKey } from '../../utils/media-id.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 
@@ -93,84 +93,74 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .describe('With includeMedia: download only metadata YAML, skip binary file downloads.'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
-      const collection = args.collection || ctx.config.defaultCollection;
-      const origin = ctx.origin;
-      // An explicit MCP argument wins over the remembered workspace setting, matching the CLI flag precedence.
-      const localMediaRefs =
-        args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs;
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
+        const collection = args.collection || ctx.config.defaultCollection;
+        const origin = ctx.origin;
+        // An explicit MCP argument wins over the remembered workspace setting, matching the CLI flag precedence.
+        const localMediaRefs =
+          args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs;
 
-      const { id: targetId } = resolveArticleTarget({
-        workspaceRoot: ctx.root,
-        filePath: args.filePath,
-        id: args.id,
-      });
+        const { id: targetId } = resolveArticleTarget({
+          workspaceRoot: ctx.root,
+          filePath: args.filePath,
+          id: args.id,
+        });
 
-      if (targetId) {
-        let res: PullResult;
-        try {
-          if (!args.postsOnly) {
-            await pullTaxonomies({
+        if (targetId) {
+          let res: PullResult;
+          try {
+            if (!args.postsOnly) {
+              await pullTaxonomies({
+                workspaceRoot: ctx.root,
+                origin,
+                token: ctx.auth.token,
+                refreshToken: ctx.auth.refreshToken,
+              }).catch(() => null);
+            }
+            res = await pullArticle(collection, targetId, {
               workspaceRoot: ctx.root,
+              cache: ctx.cache,
               origin,
               token: ctx.auth.token,
               refreshToken: ctx.auth.refreshToken,
-            }).catch(() => null);
+              force: args.force,
+              localMediaRefs,
+            });
+          } catch (error) {
+            return formatToolError(error);
           }
-          res = await pullArticle(collection, targetId, {
-            workspaceRoot: ctx.root,
-            cache: ctx.cache,
-            origin,
-            token: ctx.auth.token,
-            refreshToken: ctx.auth.refreshToken,
-            force: args.force,
-            localMediaRefs,
-          });
-        } catch (error) {
-          return formatToolError(error);
+
+          const actionText = res.healed
+            ? '🛠️ Repaired frontmatter syntax (unpushed local body was strictly preserved)'
+            : res.localEditsPreserved
+              ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
+              : res.skipped
+                ? 'ℹ️ Article is already up-to-date'
+                : '✅ Successfully pulled article';
+          const titleText = res.title ? ` "${res.title}"` : '';
+          const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
+          const quarantineNotice = formatQuarantineNotice(res.quarantined);
+          const quarantineLine = quarantineNotice ? `\n\n${quarantineNotice}` : '';
+          const nextStep = res.localEditsPreserved
+            ? '\n\nYour local version is intact. Push it with sync_push to publish your edits, ' +
+              'or re-run sync_pull with force: true to accept the remote version instead.'
+            : '\n\nYou can now read or edit this local Markdown file directly.';
+
+          return formatToolTextWithMeta(
+            `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}`,
+            ctx.meta,
+          );
         }
 
-        const actionText = res.healed
-          ? '🛠️ Repaired frontmatter syntax (unpushed local body was strictly preserved)'
-          : res.localEditsPreserved
-            ? 'ℹ️ Local edits preserved (remote changes were NOT applied)'
-            : res.skipped
-              ? 'ℹ️ Article is already up-to-date'
-              : '✅ Successfully pulled article';
-        const titleText = res.title ? ` "${res.title}"` : '';
-        const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
-        const quarantineNotice = formatQuarantineNotice(res.quarantined);
-        const quarantineLine = quarantineNotice ? `\n\n${quarantineNotice}` : '';
-        const nextStep = res.localEditsPreserved
-          ? '\n\nYour local version is intact. Push it with sync_push to publish your edits, ' +
-            'or re-run sync_pull with force: true to accept the remote version instead.'
-          : '\n\nYou can now read or edit this local Markdown file directly.';
+        // Batch sync mode: taxonomies + articles (+ media if includeMedia)
+        const limit =
+          ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
+        const shouldPrune =
+          args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
+        const postsOnly = args.postsOnly === true;
+        const includeMedia = args.includeMedia === true;
 
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}${metaSuffix}`,
-            },
-          ],
-        };
-      }
-
-      // Batch sync mode: taxonomies + articles (+ media if includeMedia)
-      const limit =
-        ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
-      const shouldPrune = args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
-      const postsOnly = args.postsOnly === true;
-      const includeMedia = args.includeMedia === true;
-
-      try {
         // 1. Pull taxonomies (unless postsOnly or single-article mode)
         let taxonomiesMsg = '';
         if (!postsOnly) {
@@ -266,19 +256,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         }
 
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}${metaSuffix}\n\nYou can now read or edit these local Markdown files directly.`,
-            },
-          ],
-        };
-      } catch (error) {
-        return formatToolError(error, ctx?.meta);
-      }
-    },
+        return formatToolTextWithMeta(
+          `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}`,
+          ctx.meta,
+          'You can now read or edit these local Markdown files directly.',
+        );
+      }),
   );
 
   // sync_pull_taxonomies
@@ -288,9 +271,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
     {
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      try {
-        const ctx = resolveContext(args.profile);
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
         const res = await pullTaxonomies({
           workspaceRoot: ctx.root,
           origin: ctx.origin,
@@ -310,19 +292,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             ? `⚠️ Warning: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions in categories/ and tags/).`
             : `✅ Successfully pulled taxonomies (${res.categoriesCount} categories, ${res.tagsCount} tags) into categories/ and tags/.`;
 
-        const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `${statusLine}${hintBlock}${metaSuffix}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return formatToolError(error);
-      }
-    },
+        return formatToolTextWithMeta(`${statusLine}${hintBlock}`, ctx.meta);
+      }),
   );
 
   // sync_pull_media
@@ -361,9 +332,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       downloadFiles: z.boolean().optional().describe('Download binary files (defaults to true)'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      try {
-        const ctx = resolveContext(args.profile);
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
         const metaSuffix = `\n\n_meta: ${JSON.stringify(ctx.meta)}`;
 
         if (args.storageKey) {
@@ -402,14 +372,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             };
           }
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `✅ Successfully pulled targeted media asset '${args.storageKey}': ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
-              },
-            ],
-          };
+          return formatToolTextWithMeta(
+            `✅ Successfully pulled targeted media asset '${args.storageKey}': ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date).${orphanWarning ? `\n\n${orphanWarning}` : ''}`,
+            ctx.meta,
+          );
         }
 
         const res = await pullMedia({
@@ -442,28 +408,17 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             res.orphanStorageKeys && res.orphanStorageKeys.length > 0
               ? `\nUnresolved Storage Keys (no matching record or local mirror): ${res.orphanStorageKeys.join(', ')}`
               : '';
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${verifiedMsg}${failedMsg}).${idNote}${idsList}${keysList}${orphanWarning ? `\n\n${orphanWarning}` : ''}${metaSuffix}`,
-              },
-            ],
-          };
+          return formatToolTextWithMeta(
+            `✅ Successfully pulled media for article '${res.articleId || args.article}': ${res.total} referenced item(s) (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${verifiedMsg}${failedMsg}).${idNote}${idsList}${keysList}${orphanWarning ? `\n\n${orphanWarning}` : ''}`,
+            ctx.meta,
+          );
         }
 
         const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}${metaSuffix}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return formatToolError(error);
-      }
-    },
+        return formatToolTextWithMeta(
+          `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}`,
+          ctx.meta,
+        );
+      }),
   );
 }

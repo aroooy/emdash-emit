@@ -21,38 +21,19 @@
  */
 
 import type { Command } from 'commander';
-import { ApiError } from '../../client/error.js';
 import {
   listConflicts,
   diffConflict,
   resolveConflict,
   pruneConflicts,
-  CanonicalHasUnpushedEditsError,
-  QuarantinedPathRequiredError,
 } from '../../sync/conflicts.js';
 import type { CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 
 export function registerConflictsCommand(
   program: Command,
   resolveContext: CliContextResolver,
 ): void {
-  const reportActionFailure = (error: unknown): never => {
-    if (error instanceof CanonicalHasUnpushedEditsError) {
-      console.error(`❌ ${error.message}`);
-      console.error(`💡 Suggestion: ${error.suggestion}`);
-    } else if (error instanceof QuarantinedPathRequiredError) {
-      console.error(`❌ Error: [QUARANTINED_PATH_REQUIRED] ${error.message}`);
-      console.error(`💡 Suggestion: ${error.suggestion}`);
-    } else if (error instanceof ApiError) {
-      console.error(error.toActionableString());
-    } else if (error instanceof Error) {
-      console.error(`❌ Error: ${error.message}`);
-    } else {
-      console.error(`❌ Error: ${String(error)}`);
-    }
-    process.exit(1);
-  };
-
   const conflicts = program
     .command('conflicts')
     .description(

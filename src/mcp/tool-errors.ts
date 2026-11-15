@@ -21,7 +21,7 @@
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { McpMeta } from './context.js';
+import type { ContextResolver, McpMeta, ServerContext } from './context.js';
 import { ApiError } from '../client/error.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
 import { PushValidationError } from '../sync/push.js';
@@ -59,6 +59,44 @@ export function formatToolSuccess(data: Record<string, unknown>, meta?: McpMeta)
       },
     ],
   };
+}
+
+/**
+ * Formats a successful plain-text MCP response with optional _meta context suffix.
+ */
+export function formatToolTextWithMeta(
+  text: string,
+  meta?: McpMeta,
+  trailingText?: string,
+): CallToolResult {
+  const metaSuffix = meta ? `\n\n_meta: ${JSON.stringify(meta)}` : '';
+  const tail = trailingText ? `\n\n${trailingText}` : '';
+  return {
+    content: [
+      {
+        type: 'text',
+        text: `${text}${metaSuffix}${tail}`,
+      },
+    ],
+  };
+}
+
+/**
+ * Resolves the MCP ServerContext inside a guarded try/catch block so any profile/workspace
+ * resolution error or subsequent handler exception is returned as a structured MCP tool error.
+ */
+export async function withResolvedContext<TArgs extends { profile?: string }>(
+  resolveContext: ContextResolver,
+  args: TArgs,
+  handler: (ctx: ServerContext) => Promise<CallToolResult> | CallToolResult,
+): Promise<CallToolResult> {
+  let ctx: ServerContext | undefined;
+  try {
+    ctx = resolveContext(args.profile);
+    return await handler(ctx);
+  } catch (error) {
+    return formatToolError(error, ctx?.meta);
+  }
 }
 
 /**

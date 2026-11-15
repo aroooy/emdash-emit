@@ -22,9 +22,9 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ContextResolver, ServerContext } from '../context.js';
+import type { ContextResolver } from '../context.js';
 import { deleteArticle } from '../../sync/delete.js';
-import { formatToolError, formatToolSuccess } from '../tool-errors.js';
+import { formatToolError, formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncDeleteTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -56,21 +56,14 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
         .describe('Collection name containing the article (defaults to "posts")'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
-    async (args) => {
-      let ctx: ServerContext;
-      try {
-        ctx = resolveContext(args.profile);
-      } catch (error) {
-        return formatToolError(error);
-      }
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
+        if (!args.filePath && !args.id) {
+          return formatToolError(
+            new Error('Please specify either "filePath" or "id" of the article to delete.'),
+          );
+        }
 
-      if (!args.filePath && !args.id) {
-        return formatToolError(
-          new Error('Please specify either "filePath" or "id" of the article to delete.'),
-        );
-      }
-
-      try {
         const collection = args.collection || ctx.config.defaultCollection;
         const result = await deleteArticle({
           workspaceRoot: ctx.root,
@@ -87,9 +80,6 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
         });
 
         return formatToolSuccess(result as unknown as Record<string, unknown>, ctx.meta);
-      } catch (error) {
-        return formatToolError(error, ctx.meta);
-      }
-    },
+      }),
   );
 }

@@ -31,10 +31,12 @@ const SRC_ROOT = path.resolve(__dirname, '../src');
  * MUST NOT import Layer 2 (downstream execution/orchestration) or Layer 3.
  */
 const LAYER_1_FILES = [
+  'sync/baseline-reconstruction.ts',
   'sync/status.ts',
   'sync/diff.ts',
   'sync/merge.ts',
   'sync/preflight.ts',
+  'sync/preflight/image_probe.ts',
   'sync/guards.ts',
   'sync/taxonomies.ts',
   'sync/terms.ts',

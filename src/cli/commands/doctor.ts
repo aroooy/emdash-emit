@@ -21,22 +21,11 @@
  */
 
 import type { Command } from 'commander';
-import { ApiError } from '../../client/error.js';
 import { runWorkspaceDoctor } from '../../sync/doctor.js';
 import type { CliContextResolver } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 
 export function registerDoctorCommand(program: Command, resolveContext: CliContextResolver): void {
-  const reportActionFailure = (error: unknown): never => {
-    if (error instanceof ApiError) {
-      console.error(error.toActionableString());
-    } else if (error instanceof Error) {
-      console.error(`❌ Error: ${error.message}`);
-    } else {
-      console.error(`❌ Error: ${String(error)}`);
-    }
-    process.exit(1);
-  };
-
   program
     .command('doctor')
     .description(
