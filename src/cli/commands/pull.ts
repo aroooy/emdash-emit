@@ -47,8 +47,29 @@ import {
   formatMediaCoverageLine,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
+import {
+  formatArticleMediaSummary,
+  formatPullStatusBreakdown,
+  formatPullWindowLabel,
+  formatTaxonomySyncFailure,
+  formatTaxonomySyncSuccess,
+} from '../../presentation/pull_report.js';
 
-export { formatOrphanMediaWarning, formatMediaCoverageLine, formatPrunedTaxonomiesNotice };
+// 1. Re-exports from presentation/article_report.js (existing, required by tests/presentation_symmetry.test.ts)
+export {
+  formatOrphanMediaWarning,
+  formatMediaCoverageLine,
+  formatPrunedTaxonomiesNotice,
+} from '../../presentation/article_report.js';
+
+// 2. Re-exports from presentation/pull_report.js (new, required by tests/media.test.ts and tests/cli.test.ts)
+export {
+  formatArticleMediaSummary,
+  formatPullStatusBreakdown,
+  formatPullWindowLabel,
+  formatTaxonomySyncFailure,
+  formatTaxonomySyncSuccess,
+} from '../../presentation/pull_report.js';
 
 /** Prints the unresolved media warning when a pull could not resolve body storageKeys locally. */
 function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void {
@@ -56,70 +77,26 @@ function reportOrphanStorageKeys(orphanStorageKeys: string[] | undefined): void 
   if (warning) console.warn(warning);
 }
 
-export function formatPullWindowLabel(status: string | undefined, limit: number): string {
-  return status === 'all' ? `${limit}/status` : `${limit}`;
-}
-
-/**
- * Renders the per-article media summary. A migrated corpus bakes R2 storageKeys into body URLs, so the
- * ids collected from those URLs mostly resolve to nothing; that is reported as expected resolution data,
- * never as a failure. Only a reference no id lookup and no storageKey check could match is a failure.
- */
-export function formatArticleMediaSummary(res: {
-  articleId?: string;
-  total: number;
-  downloaded: number;
-  skipped: number;
-  failed?: number;
-  unresolvedIds?: number;
-  verifiedStorageKeys?: string[];
-}): string {
-  const parts = [`${res.downloaded} downloaded`, `${res.skipped} skipped/up-to-date`];
-  if (res.failed) parts.push(`${res.failed} unresolved`);
-  const mirrored =
-    res.verifiedStorageKeys?.length ?? res.total - (res.failed ?? 0) - res.downloaded - res.skipped;
-  if (mirrored > 0) parts.push(`${mirrored} verified/mirrored`);
-  const body = parts.join(', ');
-  const note =
-    res.unresolvedIds && !res.failed
-      ? ` (${res.unresolvedIds} body ULID(s) are R2 storageKeys, not media record ids, so no id lookup was expected to match)`
-      : '';
-  return `✅ Media sync for article '${res.articleId || ''}' complete: ${res.total} referenced item(s) (${body}).${note}`;
-}
-
-export function formatPullStatusBreakdown(
-  status: string | undefined,
-  items: Array<{ deleted?: boolean; status?: string }>,
-): string {
-  if (status !== 'all') return '';
-  const publishedCount = items.filter((i) => !i.deleted && i.status === 'published').length;
-  const draftCount = items.filter((i) => !i.deleted && i.status === 'draft').length;
-  return ` [${publishedCount} published, ${draftCount} draft]`;
-}
-
 function printTaxonomySyncSummary(
-  res: PullTaxonomiesResult,
+  res: PullTaxonomiesResult & { error?: string },
   indent = '',
   successLabel = 'Taxonomies:',
   suffix = '',
 ): void {
-  const prunedCat = res.deletedCategoriesCount
-    ? `, ${res.deletedCategoriesCount} categories pruned`
-    : '';
-  const prunedTag = res.deletedTagsCount ? `, ${res.deletedTagsCount} tags pruned` : '';
-  if (res.categoriesFailed) {
-    console.warn(
-      `${indent}⚠️  Failed to fetch remote categories: preserved existing local definitions.`,
-    );
+  if (res.error || res.categoriesFailed || res.tagsFailed) {
+    const failureMsg = formatTaxonomySyncFailure({
+      categoriesFailed: res.categoriesFailed,
+      tagsFailed: res.tagsFailed,
+      error: res.error,
+    });
+    console.warn(`${indent}${failureMsg}`);
+    return;
   }
-  if (res.tagsFailed) {
-    console.warn(`${indent}⚠️  Failed to fetch remote tags: preserved existing local definitions.`);
-  }
-  if (!res.categoriesFailed || !res.tagsFailed) {
-    console.log(
-      `${indent}✅ ${successLabel} ${res.categoriesCount} categories, ${res.tagsCount} tags${prunedCat}${prunedTag}${suffix}`,
-    );
-  }
+
+  const successLine = formatTaxonomySyncSuccess(res, {
+    label: successLabel.replace(/:$/, ''),
+  });
+  console.log(`${indent}${successLine}${suffix}`);
 }
 
 export function registerPullCommands(program: Command, resolveContext: CliContextResolver): void {
@@ -355,12 +332,12 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           });
 
           if (singlePull.taxonomies) {
-            if (singlePull.taxonomies.error) {
-              console.warn(`⚠️ Warning: Failed to sync taxonomies: ${singlePull.taxonomies.error}`);
-            } else if (singlePull.taxonomies.categoriesFailed || singlePull.taxonomies.tagsFailed) {
-              console.warn(
-                '⚠️ Warning: Failed to sync some remote taxonomies (preserved existing local definitions).',
-              );
+            if (
+              singlePull.taxonomies.error ||
+              singlePull.taxonomies.categoriesFailed ||
+              singlePull.taxonomies.tagsFailed
+            ) {
+              console.warn(formatTaxonomySyncFailure(singlePull.taxonomies));
             }
           }
 
