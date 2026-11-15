@@ -27,7 +27,7 @@ import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
 
-describe('Initial Draft Pull Single GET Guarantee (v0.1.32 TD-1)', () => {
+describe('Initial Draft Pull Single GET Guarantee (v0.1.32 TD-1 & TD-2)', () => {
   let tempDir: string;
   let cache: CacheDatabase;
 
@@ -35,6 +35,8 @@ describe('Initial Draft Pull Single GET Guarantee (v0.1.32 TD-1)', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-draft-initial-test-'));
     fs.mkdirSync(path.join(tempDir, '.emit'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+    fs.mkdirSync(path.join(tempDir, 'categories'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
   });
 
@@ -190,5 +192,136 @@ describe('Initial Draft Pull Single GET Guarantee (v0.1.32 TD-1)', () => {
       u.split('?')[0].endsWith(`/_emdash/api/content/posts/${draftId}`),
     );
     expect(secondArticleCalls.length).toBe(0);
+  });
+
+  it('TD-2: Initial pull of untracked draft article with postsOnly: false (default batch) executes taxonomy sync and single GET seamlessly', async () => {
+    const draftId = '01M7TESTINITIALDRAFT000002';
+    const draftSlug = 'initial-draft-with-tax';
+    const draftRev = '2@draft:01M7REVISIONULID0000000002';
+
+    const listRawItem = {
+      id: draftId,
+      slug: draftSlug,
+      status: 'draft',
+      version: 2,
+      draftRevisionId: '01M7REVISIONULID0000000002',
+      _rev: '2:2026-11-15T00:00:00.000Z',
+      createdAt: '2026-11-15T00:00:00.000Z',
+      updatedAt: '2026-11-15T01:00:00.000Z',
+      data: {
+        title: 'Initial Draft With Tax',
+        content: [
+          {
+            _type: 'block',
+            _key: 'b1',
+            style: 'normal',
+            children: [{ _type: 'span', _key: 's1', text: 'Old creation body' }],
+          },
+        ],
+      },
+    };
+
+    const singleGetItem = {
+      id: draftId,
+      slug: draftSlug,
+      status: 'draft',
+      version: 2,
+      draftRevisionId: '01M7REVISIONULID0000000002',
+      _rev: '2:2026-11-15T00:00:00.000Z',
+      createdAt: '2026-11-15T00:00:00.000Z',
+      updatedAt: '2026-11-15T01:00:00.000Z',
+      data: {
+        title: 'Initial Draft With Tax',
+        content: [
+          {
+            _type: 'block',
+            _key: 'b1',
+            style: 'normal',
+            children: [
+              { _type: 'span', _key: 's1', text: 'Full canonical draft body with taxonomies!' },
+            ],
+          },
+        ],
+      },
+    };
+
+    const requestedUrls: string[] = [];
+
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      requestedUrls.push(url);
+
+      if (url.includes('/taxonomies/category/terms')) {
+        return new Response(
+          JSON.stringify({
+            terms: [
+              { id: '01M67MY23GDT9X8QMY0G5SEQ6M', slug: 'camera', label: 'Camera', count: 1 },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/taxonomies/tag/terms')) {
+        return new Response(
+          JSON.stringify({
+            terms: [{ id: '01M65FEDZNS9GN01GD3JJRZFT2', slug: 'lens', label: 'Lens', count: 1 }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes(`/_emdash/api/content/posts/${draftId}`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: { item: singleGetItem },
+            _rev: '2:2026-11-15T00:00:00.000Z',
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [listRawItem],
+            total: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'test-token',
+      status: 'draft',
+      postsOnly: false,
+      mediaSync: false,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.total).toBe(1);
+    expect(res.updated).toBe(1);
+    expect(res.taxonomies).toBeDefined();
+    expect(res.taxonomies?.categoriesCount).toBe(1);
+    expect(res.taxonomies?.tagsCount).toBe(1);
+
+    // Assert: Single GET was issued during initial batch pull even with taxonomy sync active
+    const singleGetCalls = requestedUrls.filter((u) =>
+      u.split('?')[0].endsWith(`/_emdash/api/content/posts/${draftId}`),
+    );
+    expect(singleGetCalls.length).toBe(1);
+
+    // Assert: Disk content came from single GET
+    const pulledItem = res.items[0];
+    const diskContent = fs.readFileSync(path.join(tempDir, pulledItem.filePath), 'utf8');
+    expect(diskContent).toContain('Full canonical draft body with taxonomies!');
+    expect(diskContent).not.toContain('Old creation body');
+
+    const syncState = cache.getSyncState(draftId);
+    expect(syncState?.remoteRev).toBe(draftRev);
   });
 });

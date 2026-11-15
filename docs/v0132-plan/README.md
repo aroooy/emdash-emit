@@ -173,4 +173,128 @@ export interface PullSingleArticleResult {
 1. [ ] `tests/layering.test.ts` が 6/6 PASS すること（新たな sibling coupling やレイヤー違反がないこと）。
 2. [ ] `pullTaxonomies` が throw しても、CLI および MCP の batch pull が中断せず安全に記事 pull を継続すること。
 3. [ ] 初回ドラフト PULL で一覧 API のデータが破棄され、Single GET を経由して完全な下書き本文が取得されること。
-4. [ ] `npm run check` で 63 test files / 全テストが PASS すること。
+
+---
+
+# 実装レビュー（commit `a4092c1` / v0.1.32）— 設計意図は完全に達成。残課題は 4 件（うち AGENTS.md 不整合 1 件）
+
+**検証方法**: `git show HEAD` の差分全読、`npm run check` 再実行、AGENTS.md との突合、テスト mock の実挙動追跡。
+**結論**: **Rev.3 の設計およびレビュー指摘（R-1〜R-5 / A-1 / A-2）はすべて実装されており、品質ゲートは Green。**
+ただし **AGENTS.md §Two-Track の記載が実装と食い違ったまま**残っています。
+
+---
+
+## ✅ 設計意図の達成確認（コード実体で確認済み）
+
+| 計画項目 | 実装 | 確認結果 |
+|---|---|---|
+| **§2.2A** taxonomy sync の orchestrator 内包 | `orchestrator.ts:214-246` で try/catch 付き `pullTaxonomies()`（`:219`）→ 失敗時 `error` 設定（`:233-241`） | ✅ MCP 側の生呼び出し（旧 `sync-pull.ts:212`）を削除 → **try/catch 欠落バグは物理的に消滅** |
+| 単一記事側との対称性（A-1） | `OrchestratorTaxonomiesResult = PullTaxonomiesResult & { error?: string }`（`:64`）を**両側**へ適用（`PullBatchResult:114` / `PullSingleArticleResult:137`） | ✅ **A-1 (a) を採用**。単一記事側も counts を保持（成功時 `taxonomiesResult = taxRes`、`:160`） |
+| 4 カウント保持＋即時表示 | `onTaxonomySync?: (result: OrchestratorTaxonomiesResult) => void`（`:86`）＋ CLI `pull.ts:245-252` の `printTaxonomySyncSummary` | ✅ pruned 数を含む既存 CLI 出力を維持。MCP も `deletedCategoriesCount` / `deletedTagsCount` を表示（`sync-pull.ts:239-246`） |
+| `canPruneTaxonomies` 内部導出 | 公開 option を `PullBatchOptions` から**削除**し `postsOnly?: boolean`（`:85`）を導入、内部で `!options.postsOnly && !taxonomiesFailed`（`:244-246`） | ✅ R-3 の「黙って無視」を回避する**最も安全な形**（型エラーで呼び出し元を強制修正） |
+| **§2.2B** Layer 0 純関数 | `src/utils/media-ref-precedence.ts:29-34`（import は `type EmitConfig` のみ、disk アクセスなし） | ✅ 軸 0 遵守（Axis 0 検査は `src/utils` を走査、`layering.test.ts:318-320`）。CLI 側のみ persist 維持（`context.ts:284-289`） |
+| MCP が設定を変更しない | `sync-pull.ts:111` は `resolveLocalMediaRefsOption()` のみ | ✅ 不変条件維持 |
+| **§2.2C** 初回ドラフト Single GET | `pull/index.ts:223` → `hasDraftRevision \|\| (isDraft && Boolean(existingSync))` | ✅ 目的は達成（注記は C-3） |
+| T5 mock 是正 | `pull_taxonomy_pruning.test.ts:369-384` に taxonomy 端点分岐を追加、`canPruneTaxonomies: true` を削除 | ✅ 破壊的 unlink を防止 |
+| allowlist 例外 0 件 | `ALLOWED_LAYER_2_SYMBOLS` は無変更 | ✅ `OrchestratorTaxonomiesResult` は `orchestrator`（既存登録、`:66-72`）経由、`PullTaxonomiesResult` は Layer 1 で gate 対象外 |
+
+**想定より良く処理できた点**:
+- `sync.test.ts:1064` に `postsOnly: true` を追加し「Unexpected fetch」ガードを taxonomy sync から隔離 — **R-3 の監査が T5 以外にも及んで正しい**。
+- TD-1 は A-2 を採用し (c) を `/_emdash/api/content/posts/${draftId}` への GET **0 本**（`pull_draft_initial.test.ts:186-191`）で assert。Track 2 rev 整合（`:167`）も確認済み。
+
+---
+
+## ⛔ C-1【AGENTS.md 不整合】Two-Track invariant の記載が実装と食い違い
+
+AGENTS.md:83 は現在も `needsFullDraftFetch = isDraft || hasDraftRevision` /
+`needsFullDraftFetch && existingSync && remoteChanged` のまま。実装後は両方変化しています（`pull/index.ts:223,233`）:
+
+```ts
+const needsFullDraftFetch = hasDraftRevision || (isDraft && Boolean(existingSync));
+if (needsFullDraftFetch && remoteChanged) { rawItem = undefined; }
+```
+
+**次の改修者が旧条件へ戻す（= v0.1.32 の修正を元に戻す）リスク**があります。推奨文言:
+
+> `needsFullDraftFetch = hasDraftRevision || (isDraft && existingSync)`, evaluated as `needsFullDraftFetch && remoteChanged`.
+> A **published** article's draft body is never carried by the list payload, so a tracked published article with any
+> `draftRevisionId` always re-fetches. An **untracked** draft without a revision token has no evidence of staleness and
+> reuses the list item (initial-pull cost unchanged; clean published 0-GET invariant preserved).
+
+---
+
+## ⚠️ C-2【テストカバレッジギャップ】TD-1 は `postsOnly: true` で走り、新導出経路を通っていない
+
+TD-1 Step 1（`pull_draft_initial.test.ts:138-148`）は `postsOnly: true` です。よって
+**「`pullBatch` が実際に taxonomy sync を走る経路で初回ドラフト Single GET が成立すること」**が未検証です。
+TD-1 の mock に taxonomy 端点分岐が無い（`grep taxonom` → 0 hit）ため、現状の mock では `postsOnly: false` 版を検証できません。
+
+→ TD-1 に `postsOnly: false` 版を 1 ケース追加（taxonomy 端点分岐を持つ mock を共有）、または TS-1 の mock に未追跡ドラフト記事を加え
+**両効果を同一経路で検証**するのが確実です。
+
+---
+
+## ⚠️ C-3【方針の未明文化】`isDraft && existingSync` は「初回 pull で作成時本文が採用される」ケースを明示的に残す
+
+§1.2 の目的は「初回 PULL から最新リビジョン本文を確実に取得」ですが、実装条件は
+**未追跡＋`draftRevisionId` 無し**のケースを Single GET 対象から除外します（`remoteChanged === true` でも除外）。
+
+- 技術的正当性: `extractComparisonRev()` は draft で `draftRevisionId` が無いと `version` のみを返し（`tests/api_rev.test.ts:11`）、
+  一覧 `posts.data` が作成時固定か最新版かの判別手段がない → **GET を強制する根拠が存在しない**。判断自体は妥当。
+- ただし「初回 PULL で作成時の不完全な本文が保存される」事象はこのケースで**未解決のまま**です
+  （`draftRevisionId` は draft 編集で生成されるため、作成直後無編集の記事が該当し得ます）。
+
+→ plan / AGENTS.md に「判別根拠が無いため意図的に list item を採用する」と 1 行明記し、既知の残存限界として記録してください。
+
+---
+
+## ⚠️ C-4【軽微】taxonomy import の責務注記が無い
+
+`pull.ts:30,33` と `sync-pull.ts:33` は `pullTaxonomies` / `PullTaxonomiesResult` をまだ import していますが、
+バッチ経路では不使用です（`pull.ts:442`、`sync-pull.ts:325` の `emit pull-taxonomies` / `sync_pull_taxonomies` で依然必要）。
+import は正当ですが、将来またバッチ経路で再利用されるリスクがあるため、AGENTS.md の facade 節に
+「taxonomy hint 表示は `getLocalTaxonomiesSummary` / `formatTaxonomiesHint`（Layer 1）のみを使い、taxonomy sync 自体は orchestrator の責務」と 1 行追加を推奨。
+
+---
+
+## ✅ 品質ゲート再確認（本レビューで実測）
+
+```
+npm run check
+All matched files use Prettier code style!
+ Test Files  63 passed (63)
+      Tests  667 passed (667)
+```
+
+`npm run typecheck`（`tsc --noEmit && tsc -p tsconfig.test.json`）: PASS ／ layering gate: 例外 0 件で PASS ／ `package.json`: `0.1.32`。
+
+---
+
+## 総合判定
+
+| 観点 | 判定 |
+|---|---|
+| MCP batch クラッシュバグ根絶 | ✅ **達成**（構造的に存在不能） |
+| CLI/MCP 対称性・4 カウント保持 | ✅ **達成**（A-1 (a) を採用し両側統一） |
+| allowlist 例外 0 件・軸 0〜4 | ✅ **達成** |
+| 初回ドラフト Single GET（`draftRevisionId` あり） | ✅ 達成（TD-1 の 3 段 assert＋0-GET） |
+| AGENTS.md §Two-Track の同期 | ⛔ **未実施**（C-1）— 旧条件へ戻される危険 |
+| `postsOnly: false` 経路での初回ドラフト検証 | ⚠️ ギャップ（C-2） |
+| 「判別根拠なし」ケースの方針明文化 | ⚠️ 未記載（C-3） |
+
+**次の推奨作業**: C-1（AGENTS.md 更新・最優先で低コスト）→ C-2（TD-1 の `postsOnly: false` ケース追加）→ C-3（方針明記）。
+いずれも v0.1.32 の安定性を損なわない文書・テストの追補です。
+
+---
+
+## ✅ レビュー残課題（C-1〜C-4）の反映結果
+
+1. **C-1 & C-3 反映**: `AGENTS.md` §Draft Selective Single GET Invariant を更新。
+   - `needsFullDraftFetch = hasDraftRevision || (isDraft && Boolean(existingSync))`（evaluated as `needsFullDraftFetch && remoteChanged`）に同期。
+   - 未追跡で `draftRevisionId` が存在しないドラフトは判別根拠が無いため、N+1 回避のため意図的にリスト項目を採用する旨を明文化。
+2. **C-2 反映**: `tests/pull_draft_initial.test.ts` に `TD-2` を追加。
+   - `postsOnly: false`（デフォルトのバッチ pull）経路において、taxonomy sync と未追跡ドラフトの Single GET が干渉なく成立することを検証完了。
+3. **C-4 反映**: `AGENTS.md` §Batch Pull Orchestration Facade に注記を追加。
+   - バッチ pull における taxonomy 同期は `orchestrator.ts:pullBatch` に集約され、CLI/MCP 側の `pullTaxonomies` import はスタンドアロン専用（`emit pull-taxonomies` / `sync_pull_taxonomies`）であることを明記。
+4. **品質ゲート**: `npm run check` → 63 files / 668 tests passed, Prettier clean, TypeScript typecheck clean, Layering gate 6/6 passed。
+
