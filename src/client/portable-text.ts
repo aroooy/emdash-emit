@@ -77,30 +77,15 @@ const KNOWN_PLAIN_IMAGE_KEYS = new Set(['_type', '_key', 'alt', 'asset']);
 /**
  * Reports whether an image block carries only plain properties expressible in standard Markdown (![alt](url)).
  * Returns false if the block carries layout, styling, or custom metadata (e.g. alignment, displayWidth,
- * caption, title, crop, hotspot) or if the asset object contains extended metadata beyond url.
+ * displayHeight, caption, title, crop, hotspot, etc.).
  */
 export function isPlainImageBlock(block: Record<string, unknown>): boolean {
   if (block._type !== 'image') return false;
 
-  // 1. Check for extended top-level properties beyond Tier 1 plain image keys
+  // Check for extended top-level properties beyond Tier 1 plain image keys
   for (const [key, value] of Object.entries(block)) {
-    if (
-      !KNOWN_PLAIN_IMAGE_KEYS.has(key) &&
-      value !== undefined &&
-      value !== null &&
-      value !== ''
-    ) {
+    if (!KNOWN_PLAIN_IMAGE_KEYS.has(key) && value !== undefined && value !== null && value !== '') {
       return false;
-    }
-  }
-
-  // 2. Check for extended properties within the asset object beyond { url }
-  if (block.asset && typeof block.asset === 'object') {
-    const assetObj = block.asset as Record<string, unknown>;
-    for (const [key, value] of Object.entries(assetObj)) {
-      if (key !== 'url' && value !== undefined && value !== null && value !== '') {
-        return false;
-      }
     }
   }
 

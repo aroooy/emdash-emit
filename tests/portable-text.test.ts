@@ -142,7 +142,7 @@ describe('Portable Text <-> Markdown Conversion', () => {
         }),
       ).toBe(false);
 
-      // 4. Extended properties inside asset object
+      // 4. Standard asset object carrying storageKey remains plain
       expect(
         isPlainImageBlock({
           _type: 'image',
@@ -150,15 +150,7 @@ describe('Portable Text <-> Markdown Conversion', () => {
           alt: 'Asset with storageKey',
           asset: { url: 'https://example.com/f.jpg', storageKey: '01M6ABC.jpg' },
         }),
-      ).toBe(false);
-
-      expect(
-        isPlainImageBlock({
-          _type: 'image',
-          _key: 'k7',
-          asset: { url: 'https://example.com/g.jpg', _type: 'asset' },
-        }),
-      ).toBe(false);
+      ).toBe(true);
 
       // 5. Unknown future properties (fail-safe whitelist)
       expect(

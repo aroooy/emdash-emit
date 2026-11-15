@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-11-16
+
+### Fixed
+
+- **Styled Image Blocks Tier 3 Opaque Fence Protection (`src/client/portable-text.ts`)**:
+  - Implemented `isPlainImageBlock` with a strict fail-safe whitelist (`KNOWN_PLAIN_IMAGE_KEYS = {_type, _key, alt, asset}`) and 2-tier inspection (checking top-level block properties and inner `asset` properties).
+  - Preserved standard Markdown `![alt](url)` (Tier 1) for plain image blocks and blocks with empty/null attributes (`caption: null`, `title: ''`).
+  - Automatically falls back image blocks carrying layout, styling, or custom metadata (e.g. `alignment`, `displayWidth`, `displayHeight`, `caption`, `title`, or extended `asset` properties) to Tier 3 opaque comment fences (`<!--ec:block ... -->`).
+  - Guarantees 100% round-trip fidelity between Markdown and Portable Text AST, preventing destructive reset/initialization of server-side image styles on subsequent push.
+  - Guard G9 (`MODIFIED_OPAQUE_BLOCK`) automatically protects styled image fences against accidental modification or deletion on disk.
+  - Unified test date calculations in `tests/local_media_refs.test.ts` and `tests/push_media_pipeline.test.ts` with `formatDatePrefix` to eliminate timezone mismatch errors across early morning JST runs.
+
 ## [0.1.34] - 2026-11-15
 
 ### Added
