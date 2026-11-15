@@ -271,7 +271,8 @@ These rules are enforced at the code level via Safety Guards (G1–G19) declared
   - **Single-Side Adoption (ours/theirs) Semantics**: Passing explicit `--resolve-taxonomy local|remote` strictly adopts the chosen side. If the adopted side specifies an empty taxonomy (wipe), Guard G19 (`DESTRUCTIVE_TAXONOMY_WIPE`) is bypassed because the explicit user strategy intent is unambiguous.
 - **Destructive Taxonomy Wipe Guard (Guard G19 / `DESTRUCTIVE_TAXONOMY_WIPE`)**:
   - Pushing an empty taxonomy array (`categories: []` or `tags: []`) that would wipe existing remote terms requires explicit confirmation via `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`), unless an explicit `--resolve-taxonomy` strategy was passed.
-  - **Remote Audit Parity**: When pre-PUT remote audit (`auditRemoteTaxonomies`) confirms that remote assignments are already 0 (`remoteCount === 0`, e.g. following remote term deletions), G19 is cleanly bypassed and `POST { termIds: [] }` is dispatched to clean up remote orphan relations safely without requiring manual `--allow-wipe-taxonomies`.
+  - **Remote Audit Parity**: When pre-PUT remote audit (`auditRemoteTaxonomies`) confirms that remote assignments are already 0 (`remoteCount === 0`, e.g. following remote term deletions), G19 in `push/taxonomy_plan.ts` is cleanly bypassed and `POST { termIds: [] }` is dispatched to clean up remote orphan relations safely without requiring manual `--allow-wipe-taxonomies`.
+  - **Merge Path Scope**: Note that the 409 / divergence merge path (`push/merge_stage.ts:181-195`) evaluates G19 independently based on observed live remote terms (`wipeWarnings`), which is intentionally stricter and requires an explicit `--resolve-taxonomy` or `--allow-wipe-taxonomies`.
 
 ### 11. Quarantined Copy Pruning & Remote-Deleted Article Escape (R3)
 

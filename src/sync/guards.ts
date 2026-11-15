@@ -258,7 +258,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['DESTRUCTIVE_TAXONOMY_WIPE'],
     stage: 'push',
     severity: 'error',
-    source: 'src/sync/push.ts:803,1232',
+    source: 'src/sync/push/taxonomy_plan.ts:155-186, src/sync/push/merge_stage.ts:181-195',
     description: 'タクソノミー全削除等の破壊的操作抑止',
   },
 ] as const;

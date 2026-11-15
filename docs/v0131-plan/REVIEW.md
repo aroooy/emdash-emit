@@ -866,3 +866,138 @@ Rev.3 の配置は `isKnownTaxonomyTerm` + `TaxonomyLookupMaps` を **Layer 0**�
 
 
 
+---
+
+# 実装レビュー（v0.1.31 / commit cfc6176）— Rev.3 準拠の検証と残存 2 点
+
+**対象**: `cfc6176`（HEAD、作業ツリー clean）
+**検証方法**: 各層の実装を diff 照合 + 単体/結合テスト実行 + 全品質ゲート再実行
+**結論**: **Rev.3 の承認設計どおりに実装されている。4 ラウンドの指摘はすべて反映済み。**
+軽微な残存 2 点（テスト網羅性 1・文档 1）があり、いずれも挙動の欠陥ではありません。
+
+---
+
+## 5-1. Rev.3 承認項目の適合性（全項目 ✅）
+
+| Rev.3 指定 | 実装 | 照合箇所 |
+|---|---|---|
+| ブロッカー A: `TaxonomyLookupMaps` を `loadLocalTaxonomyMaps()` と一致 | ✅ index signature 無し、語句一致 | `taxonomy-key.ts:56-59` / `taxonomies.ts:363-366` |
+| R4-4 推奨: `PrunedTaxonomiesDetail` を Layer 0 配置 + Layer 1 が re-export | ✅ 承認済み推奨どおり | `taxonomy-key.ts:61-64`、`taxonomies.ts` の `export type { PrunedTaxonomiesDetail, TaxonomyLookupMaps }` |
+| ブロッカー B: 3 条件厳密化（audit known / 0 件 / unknown は発火） | ✅ `remoteCount === 0` のときのみ bypass、`null`/undefined は `else` で G19 発火。per-key 判定も正しい | `taxonomy_plan.ts:155-186` |
+| ブロッカー B: wiring（update 経路で audit 結果を渡す） | ✅ update 分岐のみ `remoteTaxAudit` を注入 | `push/index.ts:478`（create 分岐 `:265-275` は変更なし = Rev.3 の意図どおり） |
+| ブロッカー C: `canPruneTaxonomies` の貫通 | ✅ CLI batch / MCP batch / orchestrator single の 3 経路で計算・注入 | `cli/commands/pull.ts:272`、`mcp/tools/sync-pull.ts:252`、`orchestrator.ts:169-183,354` |
+| ブロッカー C: `taxonomyApplyPending` 保持分岐 | ✅ `hasPrunedTax ? 0 : existingSync.taxonomyApplyPending` | `fast_path.ts:262-264` |
+| Layer A 完全再構成（`bumpBaselineHashOnly: false`） | ✅ 間引き発火時のみ full rewrite、syntax-only heal は従来どおり hash-only bump を維持するよう最適化 | `fast_path.ts:276` |
+| 0-GET 維持 | ✅ T2 が `GET /posts/{id}` 0 回を assert、テスト Green | `pull_taxonomy_pruning.test.ts:141` |
+| 未編集保護（hash match のみ発火） | ✅ Branch 1 は hash-match パス内のみで評価、T4 で保護を確認 | `fast_path.ts:206-310`、test `:307` |
+| phantom diff 根絶 | ✅ T6 が `inspectArticleDiff` の additions/deletions 0 を assert | test `:428-469` |
+| Layer 3 表示（軸 3 準拠） | ✅ `src/presentation/article_report.ts` に新設、CLI/MCP 双方が import（`src/cli/commands/` 経由の共有なし） | `article_report.ts:107-124` |
+| AGENTS.md / CHANGELOG / version 更新 | ✅ §3 frontmatter invariant・§10 G19 Remote Audit Parity・0.1.31 エントリすべて記載 | commit diff |
+
+**追加で確認した安全性（実装者が明示していないが正しく動作する点）**
+
+- **`delete_pending` は失われない**: 新 flags は `deletePending` を含みませんが、
+  `cache.saveSyncState()` の SQL が `delete_pending = excluded.delete_pending` で
+  `state.deletePending ?? 0` を渡すため、pull fast-path を通ると G15 のフラグは意図どおりクリアされます
+  （remote が生存確認された記事なので正しい挙動）。`cache.ts:321,348`。
+- **`remote_taxonomy_hash` は間引き後値で更新**: `baselineFrontmatter`（canonical slug / ULID verbatim）から
+  `computeTaxonomyHash()` を再計算しており、T5 の整合 assert と一致。SQL 側も
+  `CASE WHEN excluded... IS NOT NULL` で上書きされる（`cache.ts:331`）。
+- **`bumpBaselineHashOnly: !hasPrunedTax` は Rev.3 より安全**: syntax-only heal では Layer A を
+  再構成しない既存挙動（`fast_path.ts:355` の `true`）を保ち、間引き時のみ full rewrite。
+  既存の percent-encoded / draft-annotation heal テストを壊さずに phantom diff を防いでいます。
+
+---
+
+
+## 5-2. 【残存 1・要追記】G19 bypass の unknown / 非 0 側（negative test）が未網羅
+
+`taxonomy_plan.ts:155-186` の分岐は **2 とケースを扱う**のに、T3 は
+「audit が 0 件を返す」成功側しか検証していません。
+
+| ケース | 期待挙動 | テスト |
+|---|---|---|
+| `remoteCount === 0` | bypass + `POST { termIds: [] }` | ✅ T3（`:257-262` で `{ termIds: [] }` を返す mock） |
+| `remoteCount > 0` | G19 発火（`--allow-wipe-taxonomies` 無しでは throw） | ❌ 未網羅 |
+| `remoteTaxAudit === null`（unknown / `--no-taxonomy-audit`） | G19 発火 | ❌ 未網羅 |
+
+これは第 3 ラウンド R3-3 で「最重要」として是正した安全不変条件そのものです。
+**ロジックは正しいが、将来の退行を検知するテストが存在しません。**
+
+**推奨テスト（T8 / T9）**
+
+```ts
+it('T8: G19 still fires when remote audit reports non-zero assignments', async () => {
+  // GET /terms/tag -> { termIds: [TAG_X] }、local tags: [] で push
+  await expect(pushArticle(relPath, opts)).rejects.toMatchObject({ code: 'DESTRUCTIVE_TAXONOMY_WIPE' });
+});
+
+it('T9: G19 still fires when remote audit is unavailable (--no-taxonomy-audit)', async () => {
+  // noTaxonomyAudit: true（remoteTaxAudit は null のまま）+ local tags: []
+  await expect(pushArticle(relPath, { ...opts, noTaxonomyAudit: true })).rejects.toMatchObject({
+    code: 'DESTRUCTIVE_TAXONOMY_WIPE',
+  });
+});
+```
+
+---
+
+## 5-3. 【残存 2・文档】merge 経路（409 / divergence）の G19 は audit parity の対象外
+
+`merge_stage.ts:181-195` にも **別の G19 発火箇所**（`mergeTaxonomies()` の `wipeWarnings` 由来、
+`merge.ts:71-75`）があり、ここは `remoteTaxAudit` を参照しません。
+
+```ts
+// merge_stage.ts:181 — remote 実状態を見ずに wipeWarnings だけで throw
+if (!options.resolveTaxonomy && mergeResult.wipeWarnings?.length > 0) {
+  if (!options.allowWipeTaxonomies && !options.force) throw ...DESTRUCTIVE_TAXONOMY_WIPE...;
+}
+```
+
+第 3 ラウンド R4-2(c) で指摘したとおり、remote タームがまだ割り当て済みで hash が baseline と食い違うと
+`taxonomyDivergenceDetected === true`（`tax_audit.ts:96-98`）→ **PUT 前に merge 経路**へ入り、
+こちらの G19 で止まります。T3 の fixture は audit が clean に通る設定のためこの経路を通っておらず、
+**実運用の「ターム削除直後」で `--allow-wipe-taxonomies` が必要になるケースが残る**可能性があります。
+
+- **これは欠陥ではなく意図的な安全側**と評価します（merge 経路は union 判定を持ち、remote の非 0 割当を
+  実際に観測しているため audit parity より厳密）。
+- ただし AGENTS.md の Remote Audit Parity 記述は `taxonomy_plan.ts` の G19 しか説明しておらず、
+  **merge 経路の G19 が audit parity の適用外であることが読み取れません**。
+  → §10 に「merge 経路（3-way merge）側の `DESTRUCTIVE_TAXONOMY_WIPE` は remote 実割当を観測して
+  発火するため audit parity のバイパス対象外」と 1 行追記することを推奨。
+
+---
+
+## 5-4. 品質ゲート再検証（本レビューで再実行）
+
+```
+npx vitest run tests/pull_taxonomy_pruning.test.ts tests/taxonomy_key.test.ts tests/layering.test.ts
+  → 3 files / 24 tests passed（T1: 12、T2-T7: 6、layering: 6）
+
+npm run check
+  Test Files  61 passed (61)
+       Tests  661 passed (661)
+```
+
+報告どおり Green を確認。新規 sibling 結合例外は増加なし（`tests/layering.test.ts` の
+`LAYER_1_FILES` に `sync/taxonomies.ts` が登録済みで、Layer 1 → Layer 0 import は軸 1 で許可）。
+`src/utils|db|client|sync` から `src/presentation/` への import は 0 件（軸 4 クリーン）。
+
+---
+
+## 5-5. 最終判定
+
+**v0.1.31 の実装は妥当で、レビュー 4 ラウンドの全指摘が正しく反映されています。**
+特に (1) `bumpBaselineHashOnly: !hasPrunedTax` による既存 heal 挙動の非退行維持、
+(2) per-key な audit 判定、(3) flags 全面引き継ぎ（`delete_pending` のクリアを含む）は、
+plan を超える正確さで実装されています。
+
+**次アクション（任意・軽微）**
+
+1. **T8 / T9 を追加**（5-2）— G19 unknown / 非 0 側の negative test。安全不変条件の退行検知に必須。
+2. **AGENTS.md §10 に merge 経路 G19 の適用外を 1 行追記**（5-3）。
+3. `guards.ts` の G19 `source:` が `'src/sync/push.ts:803,1232'` を指したままです（実体は
+   `push/taxonomy_plan.ts:155-186` と `push/merge_stage.ts:181-195`）。guard registry の行番号は
+   既存から stale ですが、新規変更でさらにずれたため次バージョンで更新するとよいです（挙動影響なし）。
+
+

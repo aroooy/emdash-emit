@@ -26,6 +26,7 @@ import path from 'node:path';
 import os from 'node:os';
 import yaml from 'js-yaml';
 import { CacheDatabase } from '../src/db/cache.js';
+import { ApiError } from '../src/client/error.js';
 import { pullArticle } from '../src/sync/pull/index.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
 import { pushArticle } from '../src/sync/push/index.js';
@@ -504,5 +505,122 @@ describe('Pull 0-GET Taxonomy Pruning & Remote Audit Parity (v0.1.31 T2-T7)', ()
     const diskAfter = fs.readFileSync(fullPath, 'utf8');
     const parsed = parseMarkdown(diskAfter);
     expect(parsed.frontmatter.taxonomies?.tags).toContain('deleted-tag');
+  });
+
+  it('T8: Negative test: remoteCount > 0 with local empty array enforces Guard G19 (DESTRUCTIVE_TAXONOMY_WIPE)', async () => {
+    const articleId = '01M6TESTT8G19WIPE000000001';
+    const { relPath, fullPath } = setupArticleFixture({
+      id: articleId,
+      slug: 't8-article',
+      status: 'published',
+      categories: ['news'],
+      tags: ['typescript'],
+    });
+
+    // User locally edited frontmatter to wipe all tags: tags: []
+    const parsed = parseMarkdown(fs.readFileSync(fullPath, 'utf8'));
+    parsed.frontmatter.taxonomies = { categories: ['news'], tags: [] };
+    fs.writeFileSync(fullPath, serializeMarkdown(parsed.frontmatter, parsed.body), 'utf8');
+
+    const mockPushFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method || 'GET';
+
+      if (url.includes(`/posts/${articleId}/terms`)) {
+        if (method === 'GET') {
+          // Remote CMS still has 1 tag assigned (remoteCount === 1)
+          if (url.endsWith('/terms/category') || url.includes('/terms/category')) {
+            return new Response(JSON.stringify({ termIds: [CAT_NEWS_ID] }), { status: 200 });
+          }
+          if (url.endsWith('/terms/tag') || url.includes('/terms/tag')) {
+            return new Response(JSON.stringify({ termIds: [TAG_TS_ID] }), { status: 200 });
+          }
+          return new Response(
+            JSON.stringify({
+              categories: [CAT_NEWS_ID],
+              tags: [TAG_TS_ID],
+            }),
+            { status: 200 },
+          );
+        }
+      }
+
+      if (method === 'PUT') {
+        return new Response(
+          JSON.stringify({
+            post: { id: articleId, version: 2, updatedAt: Date.now() },
+          }),
+          { status: 200 },
+        );
+      }
+
+      return new Response('{}', { status: 200 });
+    });
+
+    let caughtError: unknown = null;
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'test-token',
+        fetchFn: mockPushFetch as unknown as typeof fetch,
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError);
+    const apiErr = caughtError as ApiError;
+    expect(apiErr.code).toBe('DESTRUCTIVE_TAXONOMY_WIPE');
+  });
+
+  it('T9: Negative test: remoteTaxAudit === null (--no-taxonomy-audit) with local empty array enforces Guard G19', async () => {
+    const articleId = '01M6TESTT9NOAUDIT000000001';
+    const { relPath, fullPath } = setupArticleFixture({
+      id: articleId,
+      slug: 't9-article',
+      status: 'published',
+      categories: ['news'],
+      tags: ['typescript'],
+    });
+
+    // User locally edited frontmatter to wipe all tags: tags: []
+    const parsed = parseMarkdown(fs.readFileSync(fullPath, 'utf8'));
+    parsed.frontmatter.taxonomies = { categories: ['news'], tags: [] };
+    fs.writeFileSync(fullPath, serializeMarkdown(parsed.frontmatter, parsed.body), 'utf8');
+
+    const mockPushFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method || 'GET';
+
+      if (method === 'PUT') {
+        return new Response(
+          JSON.stringify({
+            post: { id: articleId, version: 2, updatedAt: Date.now() },
+          }),
+          { status: 200 },
+        );
+      }
+
+      return new Response('{}', { status: 200 });
+    });
+
+    let caughtError: unknown = null;
+    try {
+      await pushArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'test-token',
+        noTaxonomyAudit: true, // Disables pre-PUT audit so remoteTaxAudit is null
+        fetchFn: mockPushFetch as unknown as typeof fetch,
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError);
+    const apiErr = caughtError as ApiError;
+    expect(apiErr.code).toBe('DESTRUCTIVE_TAXONOMY_WIPE');
   });
 });
