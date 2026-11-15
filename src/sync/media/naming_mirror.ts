@@ -125,8 +125,18 @@ export function resolveMarkdownRefCollision(
  * file. Pass `mediaDir` to resolve a stem collision against the mirrors already on disk.
  */
 export function mediaMirrorNames(item: EmDashMediaItem, mediaDir?: string): MediaMirrorNames {
-  const ext = path.extname(item.filename) || '';
-  const sanitizedBase = sanitizeTitleForFilename(path.basename(item.filename, ext));
+  const filename =
+    typeof item.filename === 'string' && item.filename
+      ? item.filename
+      : typeof item.storageKey === 'string' && item.storageKey
+        ? path.basename(item.storageKey)
+        : 'image.jpg';
+  // The extension describes the file this record names, so it comes from `filename` first and only then from
+  // the storageKey: a migrated record can carry a `.jpeg` key for an asset whose filename says `.jpg`, and the
+  // mirror must keep the name the server itself advertises. A filename-less record falls back to the key's own
+  // extension, which is the only type evidence available there.
+  const ext = path.extname(filename) || (item.storageKey ? path.extname(item.storageKey) : '');
+  const sanitizedBase = sanitizeTitleForFilename(path.basename(filename, path.extname(filename)));
   const legacyBaseNames = [
     `${item.id}-${sanitizedBase}`,
     `${formatDatePrefix(item.createdAt)}${item.id}-${sanitizedBase}`,

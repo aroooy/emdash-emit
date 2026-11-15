@@ -42,6 +42,7 @@ import {
   resolveCanonicalArticlePath,
 } from '../workspace/index.js';
 import { extractCanonicalRemoteTitle } from './list.js';
+import { mirrorArticleReferencedMedia } from './media_stage.js';
 import type { FastPathContext, PullOptions, PullResult } from './types.js';
 
 /**
@@ -163,6 +164,41 @@ export async function tryFastPathOrHeal(
       if (isUnmodified) {
         try {
           const parsedCurrent = parseMarkdown(currentDiskContent);
+
+          let mediaSummary = undefined;
+          if (options.mediaSync !== false) {
+            mediaSummary = await mirrorArticleReferencedMedia(
+              options,
+              currentDiskContent,
+              parsedCurrent.frontmatter.featuredImage,
+            );
+          }
+
+          // Check if local relative pathing can be healed now that media is mirrored
+          if (options.localMediaRefs) {
+            const localized = localizeDiskMarkdown(currentDiskContent, existingSync.localFilePath);
+            if (localized !== currentDiskContent) {
+              const fullDiskPath = path.resolve(options.workspaceRoot, existingSync.localFilePath);
+              fs.writeFileSync(fullDiskPath, localized, 'utf8');
+              retrackLocalHashOnly(options.cache, {
+                id,
+                diskContent: localized,
+                touchSyncedAt: true,
+              });
+              return {
+                id,
+                slug: existingSync.slug,
+                status: existingSync.status,
+                filePath: existingSync.localFilePath,
+                updated: true,
+                healed: true,
+                meaningChanged: false,
+                title: rawTitle,
+                media: mediaSummary,
+              };
+            }
+          }
+
           // Branch 1: Valid YAML on hash-matched untouched file, but carries percent-encoded taxonomy terms or out-of-sync draft revision annotation -> heal in-place
           const hasDraft = hasUncommittedDraftRevision(existingSync);
           const carriesDraftComment = /^\s*status:\s*published\s+#\s*draft revision\s*$/m.test(
@@ -202,6 +238,7 @@ export async function tryFastPathOrHeal(
                   healed: true,
                   meaningChanged: false,
                   title: rawTitle,
+                  media: mediaSummary,
                 };
               } catch {
                 // Re-spelling broke the parse (should not happen): fall through to skip
@@ -225,6 +262,7 @@ export async function tryFastPathOrHeal(
             updated: false,
             skipped: true,
             title: rawTitle,
+            media: mediaSummary,
           };
         } catch {
           // Branch 2: Broken YAML on hash-matched untouched file.

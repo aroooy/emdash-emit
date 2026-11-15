@@ -20,9 +20,12 @@
  * SOFTWARE.
  */
 
+import path from 'node:path';
 import type { Command } from 'commander';
 import { pullArticle, formatQuarantineNotice } from '../../sync/pull.js';
 import { pullBatch } from '../../sync/orchestrator.js';
+import { resolveArticleTarget } from '../../sync/diff.js';
+import { ApiError } from '../../client/error.js';
 import {
   pullTaxonomies,
   getLocalTaxonomiesSummary,
@@ -32,6 +35,7 @@ import {
 import { pullMedia } from '../../sync/media.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { toStorageKey, type StorageKey } from '../../utils/media-id.js';
+import { isCanonicalUlid } from '../../utils/ulid.js';
 import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
 
@@ -123,11 +127,11 @@ function printTaxonomySyncSummary(
 }
 
 export function registerPullCommands(program: Command, resolveContext: CliContextResolver): void {
-  // emit pull [id]
+  // emit pull [target]
   program
-    .command('pull [id]')
+    .command('pull [target]')
     .description(
-      'Pull articles and taxonomies from remote EmDash into workspace (or specific article by ID)',
+      'Pull articles and taxonomies from remote EmDash into workspace (or specific article by ID or file path)',
     )
     .option('-c, --collection <collection>', 'Collection name (defaults to "posts")')
     .option('-s, --status <status>', 'Filter by status: "all", "draft", or "published"', 'all')
@@ -138,6 +142,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
     )
     .option('--force', 'Force overwrite local files and bypass differential skip')
     .option('--posts-only', 'Skip automatic taxonomy (categories/tags) sync. Pull articles only.')
+    .option('--no-media', 'Skip automatic on-demand media mirroring')
     .option(
       '--media',
       'Additionally pull the FULL remote media library into media/ (not just assets referenced by pulled articles). Local-first mirroring of referenced assets is already default-ON.',
@@ -155,16 +160,51 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Disable a remembered local-media-ref preference and store canonical EmDash URLs on disk again.',
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (id, options) => {
+    .action(async (target, options) => {
       const ctx = resolveContext(options.profile);
       const collection = options.collection || ctx.config.defaultCollection;
       const postsOnly = options.postsOnly === true;
-      const includeMedia = options.media === true;
+
+      // Distinguish explicit --no-media vs --media
+      const hasNoMedia = process.argv.includes('--no-media');
+      const hasMedia = process.argv.includes('--media');
+      let mediaSync = !postsOnly;
+      let includeMedia = false;
+      if (hasNoMedia) {
+        mediaSync = false;
+        includeMedia = false;
+      } else if (hasMedia) {
+        mediaSync = !postsOnly;
+        includeMedia = true;
+      }
 
       const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
 
       try {
-        if (!id) {
+        let targetId: string | undefined = undefined;
+        if (target) {
+          const isUlid = isCanonicalUlid(target.trim());
+          const isPathLike =
+            !isUlid &&
+            (target.includes('/') || target.includes(path.sep) || target.endsWith('.md'));
+          const resolved = resolveArticleTarget({
+            workspaceRoot: ctx.root,
+            filePath: isPathLike ? target : undefined,
+            id: !isPathLike ? target.trim() : undefined,
+            cache: ctx.cache,
+          });
+          if (!resolved.id) {
+            throw new ApiError({
+              message: `Could not resolve article target: "${target}"`,
+              code: 'ARTICLE_TARGET_UNRESOLVED',
+              status: 400,
+              suggestion: `Verify that target "${target}" is a valid 26-character ULID or a path to an existing article file.`,
+            });
+          }
+          targetId = resolved.id;
+        }
+
+        if (!targetId) {
           // Batch mode: taxonomies + articles (+ media if --media)
 
           // 1. Pull taxonomies (unless --posts-only)
@@ -211,8 +251,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             concurrency,
             prune: options.prune,
             // Local-first media mirroring is default-ON for a batch pull. `--posts-only` skips it entirely;
-            // the full-library walk stays on the dedicated `emit pull-media --all` command below.
+            // the full-library walk stays on the dedicated `emit pull-media --all` command below. The shared
+            // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
             mediaSync: !postsOnly,
+            mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
@@ -293,15 +335,25 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
         } else {
           // Single article mode: pull article and synchronize taxonomies (unless --posts-only)
-          if (!options.postsOnly) {
-            await pullTaxonomies({
-              workspaceRoot: ctx.root,
-              origin: ctx.origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-            }).catch(() => null);
+          if (!postsOnly) {
+            try {
+              const taxRes = await pullTaxonomies({
+                workspaceRoot: ctx.root,
+                origin: ctx.origin,
+                token: ctx.auth.token,
+                refreshToken: ctx.auth.refreshToken,
+              });
+              if (taxRes.categoriesFailed || taxRes.tagsFailed) {
+                console.warn(
+                  '⚠️ Warning: Failed to sync some remote taxonomies (preserved existing local definitions).',
+                );
+              }
+            } catch (err) {
+              console.warn(`⚠️ Warning: Failed to sync taxonomies: ${(err as Error).message}`);
+            }
           }
-          const res = await pullArticle(collection, id, {
+
+          const res = await pullArticle(collection, targetId, {
             workspaceRoot: ctx.root,
             cache: ctx.cache,
             origin: ctx.origin,
@@ -309,7 +361,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             refreshToken: ctx.auth.refreshToken,
             force: options.force,
             localMediaRefs,
+            mediaSync,
+            mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
           });
+
           if (res.deleted) {
             console.log(`🗑️ Remote article was deleted. Pruned local file: ${res.filePath}`);
           } else if (res.healed) {
@@ -330,6 +385,33 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);
           } else {
             console.log(`✅ Pulled ${res.slug} -> ${res.filePath}`);
+          }
+
+          if (res.media && res.media.total > 0) {
+            console.log(
+              `  ✅ Media: ${res.media.total} item(s) (${res.media.downloaded} downloaded, ${res.media.skipped} up-to-date)`,
+            );
+            const orphanWarning = formatOrphanMediaWarning(res.media.orphanStorageKeys);
+            if (orphanWarning) {
+              console.log(`\n${orphanWarning}`);
+            }
+          }
+
+          // In single article mode, if --media is explicitly requested, also pull library assets
+          if (includeMedia) {
+            console.log('Pulling media library assets...');
+            const mediaResult = await pullMedia({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+              limit: ctx.config.mediaSyncLimit,
+              downloadFiles: options.metadataOnly !== true,
+              cache: ctx.cache,
+            });
+            console.log(
+              `  ✅ Media library: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
+            );
           }
 
           const quarantineNotice = formatQuarantineNotice(res.quarantined);
@@ -442,6 +524,19 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             );
             reportOrphanStorageKeys(res.orphanStorageKeys);
             process.exit(1);
+          }
+
+          // Nothing was (re)downloaded and nothing failed either: the walk left the key outside its window, or
+          // local mirror metadata already confirms it. Report that instead of claiming a successful sync.
+          if (res.total === 0) {
+            const reason =
+              res.verifiedStorageKeys && res.verifiedStorageKeys.length > 0
+                ? 'confirmed by local mirror metadata already in media/'
+                : 'not found within the bounded library walk';
+            console.log(
+              `ℹ️ Targeted storageKey(s) not downloaded: ${keys.join(', ')} (${reason}). Run "emit pull-media --all" (or a larger --limit) for a complete library pass.`,
+            );
+            return;
           }
 
           console.log(

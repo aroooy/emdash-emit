@@ -6,10 +6,12 @@ import { createAuthedFetch } from '../../client/http.js';
 import { extractMediaUlid } from '../../client/mapper.js';
 import { articleContentEndpoint, mediaDetailEndpoint } from '../../client/endpoints.js';
 import type { CacheDatabase } from '../../db/cache.js';
+import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { parseMarkdown } from '../../utils/frontmatter.js';
 import { collectArticleReferencedMediaIds, collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
+import { collectRemoteStorageKeys } from './remote_index.js';
 import type {
   EmDashMediaItem,
   MirroredAssetResult,
@@ -28,6 +30,8 @@ export async function pullArticleMedia(options: {
   refreshToken?: string;
   article: string;
   collection?: string;
+  /** Bounds the library walk used to resolve body storageKeys (default `mediaSyncLimit`). */
+  limit?: number;
   downloadFiles?: boolean;
   fetchFn?: typeof fetch;
   cache?: CacheDatabase;
@@ -146,25 +150,78 @@ export async function pullArticleMedia(options: {
   // the record exists, it simply carries a storageKey that differs from the one baked into the body.
   const resolvedRecordIds = new Set<string>();
 
-  // 1. Canonical path: resolve each referenced media record id and mirror it normally.
-  for (const mId of mediaIds) {
+  // If storageKeys are present in the body, fetch the remote index to resolve them loss-free. The walk is
+  // bounded by `limit` (default `mediaSyncLimit`, or unlimited for `--all`) exactly like the library pass, so a
+  // fleet-scale library never turns one article's media pull into an unbounded scan. A key that falls outside
+  // the window is never asserted absent: it stays in `verifiedStorageKeys`/`orphanStorageKeys` evaluation, and
+  // `complete === false` keeps every per-record lookup available downstream.
+  let remoteIndex: RemoteStorageKeyIndex | null = null;
+  if (allKeys.length > 0) {
     try {
-      const mediaUrl = new URL(mediaDetailEndpoint(options.origin, mId));
-      const res = await fetchFn(mediaUrl.toString(), {
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: 'application/json',
-        },
+      remoteIndex = await collectRemoteStorageKeys({
+        workspaceRoot: options.workspaceRoot,
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        maxItems: options.limit ?? DEFAULT_CONFIG.mediaSyncLimit,
+        fetchFn,
       });
+    } catch {}
+  }
 
-      if (!res.ok) {
-        unresolvedIdCount++;
-        continue;
+  // 1. Resolve body storageKeys using mirrorReferencedAssetsFromIndex if remoteIndex is available
+  let mirrorResult: MirroredAssetResult | null = null;
+  if (remoteIndex && allKeys.length > 0) {
+    mirrorResult = await mirrorReferencedAssetsFromIndex(allKeys, remoteIndex, {
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      downloadFiles,
+      fetchFn,
+      cache: options.cache,
+    });
+    downloadedCount += mirrorResult.downloaded;
+    skippedCount += mirrorResult.skipped;
+    for (const key of mirrorResult.mirroredStorageKeys) {
+      recoveredStorageKeys.add(key);
+    }
+  }
+
+  // 2. Canonical path: resolve each referenced media record id and mirror it normally.
+  for (const mId of mediaIds) {
+    let covered = false;
+    for (const recKey of recoveredStorageKeys) {
+      if (recKey.toUpperCase().includes(mId.toUpperCase())) {
+        covered = true;
+        break;
       }
+    }
+    if (covered) {
+      resolvedRecordIds.add(mId.toUpperCase());
+      continue;
+    }
 
-      const json = await res.json();
-      const envelope = unwrapEnvelope<Record<string, unknown>>(json);
-      const item = (envelope.item || envelope) as EmDashMediaItem;
+    try {
+      let item: EmDashMediaItem | undefined = remoteIndex?.recordsById.get(mId.toUpperCase());
+      if (!item) {
+        const mediaUrl = new URL(mediaDetailEndpoint(options.origin, mId));
+        const res = await fetchFn(mediaUrl.toString(), {
+          headers: {
+            Authorization: `Bearer ${options.token}`,
+            Accept: 'application/json',
+          },
+        });
+
+        if (!res.ok) {
+          unresolvedIdCount++;
+          continue;
+        }
+
+        const json = await res.json();
+        const envelope = unwrapEnvelope<Record<string, unknown>>(json);
+        item = (envelope.item || envelope) as EmDashMediaItem;
+      }
 
       const result = await syncSingleMediaItem({
         item,
@@ -185,23 +242,18 @@ export async function pullArticleMedia(options: {
     }
   }
 
-  // 2. Unresolved storageKeys: a body key that no canonical id lookup mirrored is NOT proof of a
-  //    missing record. The record can exist under a different primary key, so Emit re-checks the key
-  //    against confirmed evidence only — a record it just resolved under the same ULID, or the local
-  //    mirror metadata (companion YAML `id` + `storageKey`) — and reports what still fails as
-  //    unresolved. Emit never fetches such an asset and never registers a record for it.
+  // 3. Unresolved storageKeys: evaluate verified vs orphan
   const mirrorCandidates = collectLocalMediaMirrorCandidates(mediaDir);
-  const verifiedStorageKeys: string[] = [];
-  const orphanStorageKeys: string[] = [];
+  const verifiedStorageKeys: string[] = mirrorResult ? [...mirrorResult.verifiedStorageKeys] : [];
+  const orphanStorageKeys: string[] = mirrorResult ? [...mirrorResult.orphanStorageKeys] : [];
+
   for (const key of allKeys) {
     if (recoveredStorageKeys.has(key)) continue;
+    if (verifiedStorageKeys.includes(key) || orphanStorageKeys.includes(key)) continue;
     const ulids = (key.match(/[0-9A-HJ-NP-Z]{26}/gi) ?? []).map((u) => u.toUpperCase());
-    // Only two things count as evidence: a record Emit successfully fetched under this exact ULID, or
-    // confirmed local mirror metadata naming it. A body reference alone is never self-confirming — that
-    // is precisely the case where the asset must be reported instead of assumed healthy.
-    const confirmed = ulids.some(
-      (ulid) => resolvedRecordIds.has(ulid) || mirrorCandidates.has(ulid),
-    );
+    const confirmed =
+      (remoteIndex && remoteIndex.storageKeys.has(key)) ||
+      ulids.some((ulid) => resolvedRecordIds.has(ulid) || mirrorCandidates.has(ulid));
     if (confirmed) {
       verifiedStorageKeys.push(key);
       continue;

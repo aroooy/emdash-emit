@@ -249,6 +249,7 @@ describe('Architectural Layering Invariants', () => {
       'sync/orchestrator.ts': new Set(['./pull.js', './push.js', './media.js']),
       'sync/doctor.ts': new Set(['./conflicts.js', './media.js']),
       'sync/push/media_stage.ts': new Set(['../media.js']),
+      'sync/pull/media_stage.ts': new Set(['../media.js']),
     };
 
     const violations: { file: string; line: number; source: string }[] = [];

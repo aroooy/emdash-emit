@@ -743,4 +743,84 @@ describe('Emit CLI (Commander)', () => {
       process.exit = originalExit;
     }
   });
+
+  it('T10: resolves pull article target by filePath or ID, and rejects invalid targets (v0.1.29 P4)', async () => {
+    const { resolveArticleTarget } = await import('../src/sync/diff.js');
+
+    const sampleUlid = '01M6ABCDEF1234567890123456';
+    const canonicalRelPath = `posts/draft/20261115_${sampleUlid}-sample-title.md`;
+
+    // 1. Resolve by lexical path containing ULID
+    const resFromLexical = resolveArticleTarget({
+      workspaceRoot: tempDir,
+      filePath: canonicalRelPath,
+    });
+    expect(resFromLexical.id).toBe(sampleUlid);
+
+    // 2. Resolve by ID directly
+    const resFromId = resolveArticleTarget({
+      workspaceRoot: tempDir,
+      id: sampleUlid,
+    });
+    expect(resFromId.id).toBe(sampleUlid);
+
+    // 3. Resolve by disk frontmatter when filename does not have ULID
+    const nonUlidRelPath = 'posts/draft/custom-named-post.md';
+    const nonUlidFullPath = path.join(tempDir, nonUlidRelPath);
+    fs.mkdirSync(path.dirname(nonUlidFullPath), { recursive: true });
+    fs.writeFileSync(
+      nonUlidFullPath,
+      `---\nid: ${sampleUlid}\nslug: custom-post\ntitle: "Custom"\nstatus: draft\n---\nBody`,
+      'utf8',
+    );
+
+    const resFromDisk = resolveArticleTarget({
+      workspaceRoot: tempDir,
+      filePath: nonUlidRelPath,
+    });
+    expect(resFromDisk.id).toBe(sampleUlid);
+
+    // 4. Unresolved path returns undefined id
+    const resUnresolved = resolveArticleTarget({
+      workspaceRoot: tempDir,
+      filePath: 'posts/draft/does-not-exist.md',
+    });
+    expect(resUnresolved.id).toBeUndefined();
+
+    // 5. CLI pull command invocation with invalid target rejects with ARTICLE_TARGET_UNRESOLVED
+    const errLines: string[] = [];
+    const originalError = console.error;
+    const originalExit = process.exit;
+    const EXIT_SENTINEL = Symbol('emit-test-exit');
+    let exitCode: number | undefined;
+
+    console.error = (...args: unknown[]) => {
+      errLines.push(args.map(String).join(' '));
+    };
+    process.exit = ((code?: number) => {
+      exitCode = code ?? 0;
+      throw EXIT_SENTINEL;
+    }) as typeof process.exit;
+
+    try {
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        await program.parseAsync(['node', 'emit', 'pull', 'posts/draft/does-not-exist.md']);
+      } catch (err) {
+        if (err !== EXIT_SENTINEL) throw err;
+      } finally {
+        process.chdir(prevCwd);
+      }
+
+      expect(exitCode).toBe(1);
+      const out = errLines.join('\n');
+      expect(out).toContain('[ARTICLE_TARGET_UNRESOLVED]');
+      expect(out).toContain('Could not resolve article target: "posts/draft/does-not-exist.md"');
+      expect(out).not.toContain('    at ');
+    } finally {
+      console.error = originalError;
+      process.exit = originalExit;
+    }
+  });
 });

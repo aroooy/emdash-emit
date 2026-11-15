@@ -146,3 +146,35 @@ export async function syncRemoteBylines(options: SyncBylinesOptions): Promise<By
 export function loadLocalBylineMaps(cache: CacheDatabase): BylineMaps {
   return cache.getBylineMaps();
 }
+
+/**
+ * Extracts raw byline identifiers (IDs or slugs) referenced by a remote article JSON item.
+ * Used to detect unknown byline IDs on single-article pull and trigger on-demand sync.
+ */
+export function extractRemoteBylineIds(rawItem: Record<string, unknown>): string[] {
+  const ids = new Set<string>();
+
+  const rawBylines = (rawItem.bylines || []) as Array<{
+    bylineId?: string;
+    byline?: { id?: string; slug?: string };
+  }>;
+  if (Array.isArray(rawBylines)) {
+    for (const b of rawBylines) {
+      if (b.bylineId) ids.add(b.bylineId);
+      if (b.byline?.id) ids.add(b.byline.id);
+      if (b.byline?.slug) ids.add(b.byline.slug);
+    }
+  }
+
+  if (rawItem.byline && typeof rawItem.byline === 'object') {
+    const single = rawItem.byline as { slug?: string; id?: string };
+    if (single.id) ids.add(single.id);
+    if (single.slug) ids.add(single.slug);
+  }
+
+  if (typeof rawItem.primaryBylineId === 'string' && rawItem.primaryBylineId) {
+    ids.add(rawItem.primaryBylineId);
+  }
+
+  return Array.from(ids);
+}

@@ -307,6 +307,36 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
     );
   });
 
+  it('reports a confirmed-but-not-downloaded targeted storageKey without claiming a sync (R1)', async () => {
+    setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+
+    // The library reports nothing, but the workspace already mirrors this key with companion metadata, so
+    // Emit must say "confirmed locally, not downloaded" instead of either a fake success or an error.
+    const confirmedKey = '01MJZZKCAKNAY9999999999999.jpg';
+    fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, 'media', '01MJZZKCAKNAY9999999999999.yaml'),
+      `id: 01MJZZMIRRNAME9999999999993\nfilename: hero.jpg\nstorageKey: ${confirmedKey}\nsize: 7\n`,
+      'utf8',
+    );
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { items: [], nextCursor: null, totalCount: 0 } }),
+    } as Response);
+
+    const prog = createProgram();
+    await prog.parseAsync(['node', 'emit', 'pull-media', '--storage-key', confirmedKey]);
+
+    expect(exitCode).toBeNull();
+    const stdout = stdoutLogs.join('\n');
+    expect(stdout).toContain('ℹ️ Targeted storageKey(s) not downloaded');
+    expect(stdout).toContain('confirmed by local mirror metadata already in media/');
+    expect(stdout).not.toContain('✅ Media sync complete');
+    expect(stderrLogs.join('\n')).not.toContain('❌');
+  });
+
   // Minor-A: CLI と MCP の同一クエリにおける完全な hits / storageKey パリティ
   it('Minor-A: verifies exact parity of hits and storageKeys between CLI and MCP', async () => {
     setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });

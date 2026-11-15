@@ -23,10 +23,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase, SyncState } from '../db/cache.js';
-import { retrackLocalHashOnly } from '../db/baseline.js';
 import {
   listRemoteArticles,
   pullArticle,
+  createMediaMirrorSession,
   type PullResult,
   type ListRemoteArticlesOptions,
 } from './pull.js';
@@ -35,14 +35,8 @@ import { pushArticle, type PushResult, type PushOptions } from './push.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
+import { loadLocalTaxonomyCandidates } from './taxonomies.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
-import {
-  collectRemoteStorageKeys,
-  mirrorReferencedAssetsFromIndex,
-  collectArticleStorageKeys,
-  type MirroredAssetResult,
-} from './media.js';
-import { localizeArticleMediaRefs, carriesDepthFreeMediaRef } from '../utils/media-body-refs.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -78,6 +72,8 @@ export interface PullBatchOptions extends ListRemoteArticlesOptions {
    * uses. The full-library `emit pull-media --all` path stays a separate command, unaffected by this flag.
    */
   mediaSync?: boolean;
+  /** Bounds the shared library walk used to resolve referenced assets (default `mediaSyncLimit`). */
+  mediaSyncLimit?: number;
   onProgress?: (progress: { current: number; total: number; item: PullResult }) => void;
 }
 
@@ -120,6 +116,23 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     cache: options.cache,
     fetchFn: options.fetchFn,
   }).catch(() => options.cache.getBylineMaps());
+
+  const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
+
+  const mediaSession =
+    options.mediaSync !== false
+      ? createMediaMirrorSession({
+          workspaceRoot: options.workspaceRoot,
+          origin: options.origin,
+          token: options.token,
+          refreshToken: options.refreshToken,
+          cache: options.cache,
+          fetchFn: options.fetchFn,
+          downloadFiles: true,
+          isSharedSession: true,
+          limit: options.mediaSyncLimit,
+        })
+      : undefined;
 
   const remoteList = await listRemoteArticles(options.collection, {
     origin: options.origin,
@@ -178,6 +191,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
                 relPath,
                 localContent: content,
                 syncState: candidate,
+                candidates,
                 healOnSpellingMatch: false,
               })
             ) {
@@ -238,6 +252,9 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         fetchFn: options.fetchFn,
         bylineIdToSlug: bylineMaps.idToSlug,
         bylineSlugToId: bylineMaps.slugToId,
+        candidates,
+        mediaSync: options.mediaSync,
+        mediaSession,
       });
 
       results.push(res);
@@ -300,85 +317,11 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     }
   }
 
-  // Local-first media mirror stage (default ON). Articles are already on disk in canonical form, so their
-  // bodies carry the exact storageKeys EmDash baked into them. Emit walks the remote library once — JSON
-  // only, no binaries — then downloads binaries for exactly those referenced keys, reusing each walked
-  // record instead of paying a per-asset `GET /_emdash/api/media/{id}`. Only assets an article actually
-  // references are downloaded; the rest of the library is left to `emit pull-media --all`.
+  // Local-first media mirror stage: mediaSession mirrors referenced assets during each pullArticle
+  // and aggregates deduplicated results. If mediaSync is enabled, finalize batch media summary.
   let mediaResult: PullBatchResult['media'];
-  if (options.mediaSync !== false && results.some((r) => !r.deleted)) {
-    const index = await collectRemoteStorageKeys({
-      workspaceRoot: options.workspaceRoot,
-      origin: options.origin,
-      token: options.token,
-      refreshToken: options.refreshToken,
-      fetchFn: options.fetchFn,
-    });
-
-    const referencedKeys = new Set<string>();
-    for (const res of results) {
-      if (res.deleted || !res.filePath) continue;
-      const fullPath = path.join(options.workspaceRoot, res.filePath);
-      if (!fs.existsSync(fullPath)) continue;
-      for (const descriptor of collectArticleStorageKeys(fs.readFileSync(fullPath, 'utf8'))) {
-        referencedKeys.add(descriptor.storageKey);
-      }
-    }
-
-    const mirrored: MirroredAssetResult = await mirrorReferencedAssetsFromIndex(
-      referencedKeys,
-      index,
-      {
-        workspaceRoot: options.workspaceRoot,
-        origin: options.origin,
-        token: options.token,
-        refreshToken: options.refreshToken,
-        fetchFn: options.fetchFn,
-        cache: options.cache,
-      },
-    );
-
-    // Binaries now exist under `media/`, so re-apply the local-ref spelling to every article that mirrors
-    // images. pullArticle wrote them canonical because no mirror existed yet; this pass resolves them to
-    // article-relative references only when the mirror is actually present, keeping disk and preview in step
-    // without ever touching the baseline hash (which stays canonical). Each file is localized at the depth of
-    // its own path, so an article written by a legacy workspace keeps the spelling its bytes already carry.
-    if (options.localMediaRefs) {
-      for (const res of results) {
-        if (res.deleted || !res.filePath) continue;
-        const fullPath = path.join(options.workspaceRoot, res.filePath);
-        if (!fs.existsSync(fullPath)) continue;
-        const current = fs.readFileSync(fullPath, 'utf8');
-        const localized = localizeArticleMediaRefs(current, {
-          workspaceRoot: options.workspaceRoot,
-          articleRelPath: res.filePath,
-          fs,
-          preferLegacyRef: carriesDepthFreeMediaRef(current),
-        });
-        if (localized === current) continue;
-        fs.writeFileSync(fullPath, localized, 'utf8');
-        // The pass rewrote the bytes on disk, so the tracked hash must follow them. `sync_state.local_hash`
-        // records exactly what the file carries, and a re-spelled article whose hash still describes the
-        // canonical form it held moments ago reports itself as an edit nobody made — every status pass would
-        // call it modified while diff shows nothing. Only a tracked article needs re-tracking: an untracked
-        // one has no baseline to stay honest with. Values are untouched; only the recorded hash advances.
-        retrackLocalHashOnly(options.cache, {
-          id: res.id,
-          diskContent: localized,
-        });
-      }
-    }
-
-    mediaResult = {
-      walkedCount: index.scannedCount,
-      remoteTotalCount: index.totalCount,
-      complete: index.complete,
-      downloaded: mirrored.downloaded,
-      skipped: mirrored.skipped,
-      mirroredStorageKeys: [...mirrored.mirroredStorageKeys],
-      verifiedStorageKeys: mirrored.verifiedStorageKeys,
-      orphanStorageKeys: mirrored.orphanStorageKeys,
-    };
+  if (mediaSession && results.some((r) => !r.deleted)) {
+    mediaResult = await mediaSession.finalizeBatchMediaResult();
   }
 
   updateConfigSyncedVersion(options.workspaceRoot);

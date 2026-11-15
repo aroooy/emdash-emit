@@ -83,6 +83,8 @@ Resolution order, confirmed sources only:
 2. Confirmed local mirror metadata (`media/*.yaml`, indexed by its record id and by its storageKey — read from `storageKey:` when present, otherwise recovered from the companion's canonical `url:`, because most migrated companions carry only the URL) → also `verifiedStorageKeys`.
 3. Nothing matched → the key stays in **`orphanStorageKeys`** and is surfaced as `[UNRESOLVED_MEDIA_ASSET]`. Emit downloads nothing and invents nothing.
 
+Every walk that feeds this resolution — the on-demand pull walk, `emit pull-media --article`, and `emit pull-media --storage-key` — stops at `mediaSyncLimit` records (default 300), so a key reported as unresolved may simply sit outside the window rather than be absent. Only an explicit full-library pass (`--all`, or `--check-media-library`) is unbounded. A targeted pull that downloads nothing while also finding no orphan says so explicitly (`ℹ️ Targeted storageKey(s) not downloaded`, naming whether local mirror metadata confirmed the key or the bounded walk never reached it) instead of printing a success line.
+
 Related invariants:
 
 - **Mirror stems are derived from the storageKey, never inferred from a URL.** A mirror is named `media/<markdownRef>.<ext>` where `markdownRef` is the sanitized basename of the storageKey, so the file on disk and the body URL share one key; the record id appears in a filename only as a `<stem>--<mediaId>` collision suffix. Matching therefore goes through the companion YAML (`id:` / `storageKey:` / `url:`) or the `media_state` index — never through filename guessing.
@@ -94,7 +96,7 @@ Related invariants:
 
 ## 6. Practical rules of thumb
 
-1. Reading or writing `featuredImage`, cache columns, or local filenames → **record id**.
+1. Reading or writing `featuredImage`, cache columns, or local filenames → **record id**. A pull mirrors the featured asset under `media/` but never rewrites the `featuredImage:` value into a local path — only body references get localized.
 2. Writing or resolving any URL under `/_emdash/api/media/file/` → **storageKey**.
 3. Looking up an asset you cannot resolve → index the library with `emit doctor --check-media-library` first (a metadata-only walk that inspects remote storageKeys without downloading binaries; reserve `emit pull-media --all` for deliberate full offline backups), because the list endpoint is the only one that reports storageKeys. Only after indexing should anything be verified server-side (admin UI / wrangler) by **storageKey**, never by guessing a record id.
 4. Never register, insert, or "fix" media records from Emit; mirroring is its whole job.

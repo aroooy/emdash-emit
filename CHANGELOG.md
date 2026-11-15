@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-11-15
+
+### Added
+
+- **Single-Article On-Demand Media Mirroring (`src/sync/pull/media_stage.ts`, `src/sync/pull/index.ts`)**:
+  - Automatically discovers and mirrors article-referenced media assets (Markdown body images and frontmatter `featuredImage`) into `media/` during single-article pulls (`emit pull <id>`, `sync_pull`).
+  - Immediately resolves **Markdown body image references** to local relative paths (`../../media/<storageKey>.<ext>`) in 1 step without requiring manual `emit pull-media --article <id>` or a subsequent `--force` pull. Scope limit: the disk rewriting applies only to body `![...](/_emdash/api/media/file/<storageKey>)` references. A frontmatter `featuredImage` is mirrored into `media/` as a companion-backed asset, but its frontmatter value always stays the canonical 26-character D1 record ULID — Emit never rewrites it to a local path (see `docs/media-id-spaces.md`).
+  - Implements `MediaMirrorSession` with 0-HTTP short-circuit when all referenced assets exist locally (verifying file size and upserting `localContentHash` via `computeFileSha256` and `mediaRecordIdForStem` without guessing stem prefixes).
+  - Unifies `featuredImage` resolution: uses D1 `MediaRecordId` single-GET lookup via `/api/media/{id}` in single-article pull **only when the article carries no body images** (Case B — one body image is enough to route the article through the shared library walk, Case A), and the shared `recordsById` map from `RemoteStorageKeyIndex` in batch pull or articles with body images (0 extra GETs). When the walk already completed (`complete === true`) and the id is absent from it, the redundant individual GET is skipped instead of paying for a request that must 404.
+  - In-flight deduplication across parallel article pulls prevents duplicate downloads and accurately aggregates session counts. Batch media statistics are session-wide: `downloaded`/`skipped` count each shared storageKey once, not once per referencing article.
+- **CLI `emit pull [target]` Target Resolution & Symmetry (`src/cli/commands/pull.ts`, `src/sync/diff.ts`)**:
+  - Allows `emit pull [target]` where `target` can be an article ULID or a workspace relative/absolute file path (e.g. `emit pull posts/draft/20261115_<ulid>-title.md`).
+  - Added frontmatter `id` disk fallback to `resolveArticleTarget` in `src/sync/diff.ts`.
+  - Added clean error reporting for invalid/unresolvable target paths (`ARTICLE_TARGET_UNRESOLVED`) registered in `OPERATIONAL_ERROR_CODES`.
+  - Added single-article media sync summary, orphan image warnings, and taxonomy sync warnings.
+  - Supported `--media` on single-article pull to trigger library pull, and explicit `--no-media` to skip media mirroring.
+- **MCP `sync_pull` Target Symmetry & `noMedia` Support (`src/mcp/tools/sync-pull.ts`)**:
+  - Added `noMedia: true` option to `sync_pull` schema to mirror CLI `--no-media`.
+  - Added single-article media sync summary reporting and taxonomy failure notes.
+- **Fast-Path Relative Media Reference Self-Healing (`src/sync/pull/fast_path.ts`)**:
+  - Extended `tryFastPathOrHeal` to detect and heal unmirrored referenced assets even when the article revision is unchanged.
+  - Guaranteed `updateConfigSyncedVersion` execution on all fast-path exits.
+- **On-Demand Byline Catalog Refresh on Unknown Author ID (`src/sync/pull/index.ts`, `src/sync/bylines.ts`)**:
+  - Single-article pull inspects `rawItem` for unknown byline IDs not yet recorded in SQLite cache. If detected, triggers `syncRemoteBylines` to refresh local authors before generating frontmatter.
+
+### Changed
+
+- **1-Pass Batch Media Processing (`src/sync/orchestrator.ts`)**:
+  - Replaced the 2-pass disk rewrite loop in `pullBatch` with shared `MediaMirrorSession`, eliminating redundant file reads/writes and saving media state directly during the primary article pull.
+  - Injected `loadLocalTaxonomyCandidates` once at batch start, avoiding redundant filesystem traversals across parallel article pulls.
+- **Unified `pullArticleMedia` / `pullMedia` on `mirrorReferencedAssetsFromIndex` (`src/sync/media/`)**:
+  - Replaced bespoke loops in `pull_article.ts` and `pull_library.ts` with shared `mirrorReferencedAssetsFromIndex`.
+- **Safe `filename` Fallbacks (`src/sync/media/naming_mirror.ts`)**:
+  - Added safe fallback to `item.storageKey` or `image.jpg` when remote `item.filename` is missing or undefined. The mirror extension now comes from `filename` first and falls back to the storageKey's own extension, so a filename-less record never derives an extension from an inner `.ulid` segment of a multi-ULID key.
+
+### Fixed
+
+- **Byline Staleness Check Accepted Slugs As Well As Ids (`src/sync/pull/index.ts`)**:
+  - `getBylineIdToSlug()` fed the byline references found in `rawItem` into `cachedMaps.idToSlug` only. Because a remote item can carry a byline **slug** (or both), a slug always missed the id-keyed map and every pull re-ran `syncRemoteBylines` even when the author was already cached. The check now treats a reference as known when it appears in either `idToSlug` or `slugToId`, so a cached workspace performs zero byline requests per article. Regression test: `tests/sync.test.ts` ("does not trigger on-demand bylines sync when rawItem contains already-cached byline slug or ID").
+- **Bounded Library Walks For Referenced-Media Resolution (`src/sync/pull/media_stage.ts`, `src/sync/media/pull_article.ts`, `src/sync/media/pull_library.ts`)**:
+  - The shared `MediaMirrorSession` walk, the article-targeted media pull, and the targeted `--storage-key` pull each walked the **entire** remote media library. On a fleet-scale instance that made one article's pull pay for thousands of list requests. All three are now bounded by `mediaSyncLimit` (default 300; unlimited only for an explicit full-library pass), matching how `emit pull-media --all` and `--check-media-library` already behave. A key outside the window is reported as unresolved, never asserted absent, and `complete === false` keeps per-record lookups available.
+- **Targeted `pull-media --storage-key` Never Reports Silence As Success (`src/cli/commands/pull.ts`, `src/mcp/tools/sync-pull.ts`)**:
+  - When nothing was downloaded but the key was confirmed by local mirror metadata, the command printed a success line for a pull that mirrored nothing (or exited silently). It now reports `ℹ️ Targeted storageKey(s) not downloaded` naming the reason — "confirmed by local mirror metadata already in media/" versus "not found within the bounded library walk" — and keeps the existing exit-1 path only for genuine orphans. MCP mirrors the same wording instead of claiming `✅ Successfully pulled`.
+
 ## [0.1.28] - 2026-11-15
 
 ### Fixed

@@ -9,7 +9,7 @@ import { collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
 import { mediaMirrorNames, mediaRecordIdForStem } from './naming_mirror.js';
-import { pullArticleMedia } from './pull_article.js';
+import { mirrorReferencedAssetsFromIndex, pullArticleMedia } from './pull_article.js';
 import { collectRemoteStorageKeys, findUnmirroredStorageKeys } from './remote_index.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
@@ -35,47 +35,38 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     fs.mkdirSync(mediaDir, { recursive: true });
     const downloadFiles = options.downloadFiles !== false;
 
-    // Walk metadata via collectRemoteStorageKeys (walks library to index records by storageKey)
+    // Walk metadata via collectRemoteStorageKeys (walks library to index records by storageKey). Targeted
+    // keys are addressed directly, so the walk is bounded: a key outside the window is never asserted absent
+    // (`complete === false` keeps per-record lookups honest) and stays in the verified/orphan evaluation.
     const remoteIndex = await collectRemoteStorageKeys({
       workspaceRoot: options.workspaceRoot,
       origin: options.origin,
       token: options.token,
       refreshToken: options.refreshToken,
+      maxItems: options.limit ?? DEFAULT_CONFIG.mediaSyncLimit,
       fetchFn,
     });
 
-    let totalProcessed = 0;
-    let downloadedCount = 0;
-    let skippedCount = 0;
-    const orphanStorageKeys: string[] = [];
-
-    for (const key of options.storageKeys) {
-      const item = remoteIndex.recordsByStorageKey.get(key);
-      if (!item) {
-        orphanStorageKeys.push(key);
-        continue;
-      }
-
-      totalProcessed++;
-      const result = await syncSingleMediaItem({
-        item,
-        mediaDir,
-        origin: options.origin,
-        token: options.token,
-        downloadFiles,
-        fetchFn,
-        cache: options.cache,
-      });
-
-      if (result.downloaded) downloadedCount++;
-      else if (result.skipped) skippedCount++;
-    }
+    const mirrorResult = await mirrorReferencedAssetsFromIndex(options.storageKeys, remoteIndex, {
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      downloadFiles,
+      fetchFn,
+      cache: options.cache,
+    });
 
     return {
-      total: totalProcessed,
-      downloaded: downloadedCount,
-      skipped: skippedCount,
-      orphanStorageKeys: orphanStorageKeys.length > 0 ? orphanStorageKeys : undefined,
+      total: mirrorResult.downloaded + mirrorResult.skipped,
+      downloaded: mirrorResult.downloaded,
+      skipped: mirrorResult.skipped,
+      // A targeted pull that mirrored nothing still has to say what it found: keys confirmed by local mirror
+      // metadata are healthy but were not (re)downloaded, and keys nothing could resolve are orphans.
+      verifiedStorageKeys:
+        mirrorResult.verifiedStorageKeys.length > 0 ? mirrorResult.verifiedStorageKeys : undefined,
+      orphanStorageKeys:
+        mirrorResult.orphanStorageKeys.length > 0 ? mirrorResult.orphanStorageKeys : undefined,
       remoteTotalCount: remoteIndex.complete
         ? (remoteIndex.totalCount ?? remoteIndex.scannedCount)
         : remoteIndex.totalCount,
@@ -90,6 +81,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       refreshToken: options.refreshToken,
       article: options.article,
       collection: options.collection,
+      limit: options.limit,
       downloadFiles: options.downloadFiles,
       fetchFn: options.fetchFn,
       cache: options.cache,

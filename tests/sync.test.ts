@@ -3447,3 +3447,529 @@ Body
     expect(diffEdited.diff?.unifiedDiff).not.toContain('未分類'); // No phantom taxonomy diff!
   });
 });
+
+describe('v0.1.29 Batch Pull Invariants & Media Dedup (T7-T9)', () => {
+  let tempDir: string;
+  let cache: CacheDatabase;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-batch-pull-media-'));
+    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
+    cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+  });
+
+  afterEach(() => {
+    cache.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('T7: batch pull mirrors featuredImage from shared RemoteStorageKeyIndex without extra GET', async () => {
+    const featuredId = '01M67P0MBMJQQXH2K95HHCYRYB';
+    const featuredKey = '01M67P0MBMJQQXH2K95HHCYRYB.jpg';
+    const detailGetMock = vi.fn();
+    const listScanMock = vi.fn();
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        listScanMock();
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: featuredId,
+                filename: 'featured.jpg',
+                storageKey: featuredKey,
+                mimeType: 'image/jpeg',
+                size: 4,
+                url: `/_emdash/api/media/file/${featuredKey}`,
+              },
+            ],
+            nextCursor: null,
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes(`/_emdash/api/media/${featuredId}`)) {
+        detailGetMock();
+        return new Response('Not found', { status: 404 });
+      }
+      if (url.includes(`/_emdash/api/media/file/${featuredKey}`)) {
+        return new Response(Buffer.from('feat'), { status: 200 });
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6ARTICLE111111111111111',
+                slug: 'batch-post-1',
+                status: 'draft',
+                title: 'Batch Post 1',
+                version: 1,
+                _rev: 'rev_1',
+                featured_image: featuredId,
+                data: {
+                  title: 'Batch Post 1',
+                  featuredImage: featuredId,
+                  content: 'No body image, just text.',
+                },
+              },
+            ],
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn,
+      mediaSync: true,
+    });
+
+    expect(listScanMock).toHaveBeenCalledTimes(1);
+    expect(detailGetMock).toHaveBeenCalledTimes(0);
+    expect(res.media).toBeDefined();
+    expect(res.media?.downloaded).toBe(1);
+    expect(fs.existsSync(path.join(tempDir, 'media', featuredKey))).toBe(true);
+  });
+
+  it('bounds the shared batch library walk at mediaSyncLimit instead of scanning the whole library', async () => {
+    // A fleet-scale library must not make a handful of articles pay for thousands of list requests. Each page
+    // returns a full batch, so a bounded walk stops after its window and reports itself as incomplete.
+    const sharedKey = '01M6B0UNDEDKEY000000000000.jpg';
+    let listScanCalls = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        listScanCalls++;
+        return new Response(
+          JSON.stringify({
+            items: Array.from({ length: 100 }, (_unused, i) => ({
+              id: `01M6WALKPAGE0000000000${String(i).padStart(2, '0')}`,
+              filename: `filler-${i}.jpg`,
+              mimeType: 'image/jpeg',
+              size: 3,
+              storageKey: `01M6FILLERKEY000000000${String(i).padStart(3, '0')}.jpg`,
+            })),
+            nextCursor: 'next-page',
+            totalCount: 5000,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6ARTICLEBOUND0000000001',
+                slug: 'bounded-walk',
+                status: 'draft',
+                title: 'Bounded Walk',
+                version: 1,
+                _rev: 'rev_1',
+                data: {
+                  title: 'Bounded Walk',
+                  body: `![Img](/_emdash/api/media/file/${sharedKey})`,
+                },
+              },
+            ],
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      concurrency: 2,
+      fetchFn,
+      mediaSync: true,
+      mediaSyncLimit: 100,
+    });
+
+    // Exactly one page of `mediaSyncLimit` records was fetched — the walk never paginates to the end.
+    expect(listScanCalls).toBe(1);
+    expect(res.media?.walkedCount).toBe(100);
+    // The referenced key sits outside the window: it is reported, never asserted absent.
+    expect(res.media?.orphanStorageKeys).toEqual([sharedKey]);
+  });
+
+  it('skips the individual featuredImage GET when a complete library walk already covered the library (R2)', async () => {
+    const articleId = '01M6FEATWALKARTICLE000000001';
+    const featuredId = '01M6FEATMISSINGID00000000001';
+    let detailGetCalls = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        // A complete walk (nextCursor: null) that does not contain the featured record.
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6WALKEDOTHER0000000000001',
+                filename: 'walked.jpg',
+                mimeType: 'image/jpeg',
+                size: 3,
+                storageKey: '01M6WALKEDSTKKEY0000000001.jpg',
+              },
+            ],
+            nextCursor: null,
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes(`/_emdash/api/media/${featuredId}`)) {
+        detailGetCalls++;
+        return new Response('Not found', { status: 404 });
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: articleId,
+                slug: 'feat-walk',
+                status: 'draft',
+                title: 'Feat Walk',
+                version: 1,
+                _rev: 'rev_1',
+                data: {
+                  title: 'Feat Walk',
+                  featuredImage: featuredId,
+                  body: `![hero](/_emdash/api/media/file/01M6WALKEDSTKKEY0000000001.jpg)`,
+                },
+              },
+            ],
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/_emdash/api/media/file/01M6WALKEDSTKKEY0000000001.jpg')) {
+        return new Response(Buffer.from('jpg'), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      concurrency: 2,
+      fetchFn,
+      mediaSync: true,
+    });
+
+    expect(res.items[0].updated).toBe(true);
+    // The walk proved the id is not in the library, so no doomed individual GET was paid for.
+    expect(detailGetCalls).toBe(0);
+  });
+
+  it('T8: deduplicates in-flight media downloads and counts correctly across parallel articles', async () => {
+    const sharedKey = '01M6SHARED0000000000000000.jpg';
+    let binaryDownloadCalls = 0;
+    let listScanCalls = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        listScanCalls++;
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6RECORD0000000000000000',
+                filename: 'shared.jpg',
+                storageKey: sharedKey,
+                mimeType: 'image/jpeg',
+                size: 6,
+                url: `/_emdash/api/media/file/${sharedKey}`,
+              },
+            ],
+            nextCursor: null,
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes(`/_emdash/api/media/file/${sharedKey}`)) {
+        binaryDownloadCalls++;
+        return new Response(Buffer.from('shared'), { status: 200 });
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6ARTICLEA11111111111111',
+                slug: 'article-a',
+                status: 'draft',
+                title: 'Article A',
+                version: 1,
+                _rev: 'rev_1',
+                data: {
+                  title: 'Article A',
+                  content: `![Img](/_emdash/api/media/file/${sharedKey})`,
+                },
+              },
+              {
+                id: '01M6ARTICLEB22222222222222',
+                slug: 'article-b',
+                status: 'draft',
+                title: 'Article B',
+                version: 1,
+                _rev: 'rev_1',
+                data: {
+                  title: 'Article B',
+                  content: `![Img](/_emdash/api/media/file/${sharedKey})`,
+                },
+              },
+            ],
+            totalCount: 2,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      concurrency: 4,
+      fetchFn,
+      localMediaRefs: true,
+      mediaSync: true,
+    });
+
+    expect(listScanCalls).toBe(1);
+    expect(binaryDownloadCalls).toBe(1);
+    expect(res.media).toBeDefined();
+    expect(res.media?.downloaded).toBe(1);
+
+    // Both files on disk are localized to ../../media/<sharedKey>
+    for (const item of res.items) {
+      const disk = fs.readFileSync(path.join(tempDir, item.filePath), 'utf8');
+      expect(disk).toContain(`../../media/${sharedKey}`);
+    }
+  });
+
+  it('T9: always returns batchResult.media even when batch has 0 media references (compatibility invariant)', async () => {
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        return new Response(
+          JSON.stringify({
+            items: [],
+            nextCursor: null,
+            totalCount: 0,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/_emdash/api/content/posts')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6NOIMAGE111111111111111',
+                slug: 'no-image-post',
+                status: 'draft',
+                title: 'No Image Post',
+                version: 1,
+                _rev: 'rev_1',
+                data: {
+                  title: 'No Image Post',
+                  content: 'Plain text body.',
+                },
+              },
+            ],
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn,
+      mediaSync: true,
+    });
+
+    expect(res.media).toBeDefined();
+    expect(res.media?.downloaded).toBe(0);
+    expect(res.media?.mirroredStorageKeys).toEqual([]);
+  });
+
+  it('T11: single-article pull triggers on-demand bylines sync when rawItem contains unknown byline ID', async () => {
+    const articleId = '01M6ARTICLEBYLINE000000001';
+    const knownBylineId = '01M6BYLINE0000000000000000';
+    const unknownBylineId = '01M6BYLINE9999999999999999';
+
+    // Seed cache with known byline only
+    cache.saveBylines([
+      {
+        id: knownBylineId,
+        slug: 'author-one',
+        displayName: 'Author One',
+      },
+    ]);
+
+    let bylinesSyncCalled = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/_emdash/api/mcp')) {
+        const bodyStr = String(init?.body || '');
+        if (bodyStr.includes('byline_list')) {
+          bylinesSyncCalled++;
+          return new Response(
+            JSON.stringify({
+              result: {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      items: [
+                        { id: knownBylineId, slug: 'author-one', displayName: 'Author One' },
+                        { id: unknownBylineId, slug: 'author-new', displayName: 'Author New' },
+                      ],
+                    }),
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+      }
+      if (url.includes(`/_emdash/api/content/posts/${articleId}`)) {
+        return new Response(
+          JSON.stringify({
+            id: articleId,
+            slug: 'byline-test-post',
+            collection: 'posts',
+            status: 'draft',
+            version: 1,
+            _rev: 'rev_1',
+            data: {
+              title: 'Byline Test Post',
+              body: 'Content by new author.',
+            },
+            bylines: [{ bylineId: unknownBylineId }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn,
+      mediaSync: false,
+    });
+
+    expect(bylinesSyncCalled).toBe(1);
+    const content = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    expect(content).toContain('bylines:\n  - author-new');
+  });
+
+  it('does not trigger on-demand bylines sync when rawItem contains already-cached byline slug or ID (R6)', async () => {
+    const articleId = '01M6ARTICLEBYLINE000000002';
+    const knownBylineId = '01M6BYLINE0000000000000000';
+
+    // Seed cache with known byline
+    cache.saveBylines([
+      {
+        id: knownBylineId,
+        slug: 'author-one',
+        displayName: 'Author One',
+      },
+    ]);
+
+    let bylinesSyncCalled = 0;
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/_emdash/api/mcp')) {
+        bylinesSyncCalled++;
+        return new Response(
+          JSON.stringify({ result: { content: [{ type: 'text', text: '{}' }] } }),
+          {
+            status: 200,
+          },
+        );
+      }
+      if (url.includes(`/_emdash/api/content/posts/${articleId}`)) {
+        return new Response(
+          JSON.stringify({
+            id: articleId,
+            slug: 'cached-byline-post',
+            collection: 'posts',
+            status: 'draft',
+            version: 1,
+            _rev: 'rev_1',
+            data: {
+              title: 'Cached Byline Post',
+              body: 'Content by known author.',
+            },
+            // EmDash response can carry both bylineId and byline.slug
+            bylines: [{ bylineId: knownBylineId, byline: { slug: 'author-one' } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, terms: [] }), { status: 200 });
+    });
+
+    const res = await pullArticle('posts', articleId, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      mediaSync: false,
+    });
+
+    // Known bylines (both id and slug) must NOT trigger syncRemoteBylines
+    expect(bylinesSyncCalled).toBe(0);
+    const content = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    expect(content).toContain('bylines:\n  - author-one');
+  });
+});

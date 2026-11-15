@@ -218,6 +218,27 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
     const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ ok: true, terms: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/_emdash/api/media/01M6TF1XXBS2KC9EVYG6RBT0J0')) {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+              filename: 'test.jpg',
+              storageKey: STORAGE_KEY,
+              mimeType: 'image/jpeg',
+              size: 3,
+              url: CANONICAL_URL,
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
       if (url.includes('/lock')) {
         return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
       }
@@ -609,6 +630,476 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
         fetchFn,
       }),
     ).rejects.toThrow(/LOCAL_IMAGE_DETECTED|Preflight Guards/);
+  });
+});
+
+describe('v0.1.29 Single-Article On-Demand Media Mirroring (T1-T6)', () => {
+  let tempDir: string;
+  let cache: CacheDatabase;
+  const FEATURED_ID = '01M67P0MBMJQQXH2K95HHCYRYB';
+  const FEATURED_STORAGE_KEY = '01M67P0MBMJQQXH2K95HHCYRYB.jpg';
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-single-pull-media-'));
+    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
+    cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+  });
+
+  afterEach(() => {
+    cache.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const createItemWithBoth = (rev: string) => ({
+    id: ARTICLE_ID,
+    slug: 'media-test-post',
+    collection: 'posts',
+    status: 'draft',
+    publishedAt: null,
+    _rev: rev,
+    data: {
+      title: 'Media Test Post',
+      featuredImage: FEATURED_ID,
+      content: [
+        {
+          _type: 'block',
+          style: 'normal',
+          children: [{ _type: 'span', text: 'Intro paragraph.' }],
+        },
+        {
+          _type: 'image',
+          alt: 'Body Image',
+          asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+        },
+      ],
+    },
+  });
+
+  it('T1: single pull automatically mirrors both body storageKey and featuredImage in 1-pass and allows clean push', async () => {
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+                filename: 'test.jpg',
+                storageKey: STORAGE_KEY,
+                mimeType: 'image/jpeg',
+                size: 3,
+                url: CANONICAL_URL,
+              },
+              {
+                id: FEATURED_ID,
+                filename: 'featured.jpg',
+                storageKey: FEATURED_STORAGE_KEY,
+                mimeType: 'image/jpeg',
+                size: 4,
+                url: `/_emdash/api/media/file/${FEATURED_STORAGE_KEY}`,
+              },
+            ],
+            nextCursor: null,
+            totalCount: 2,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes(`/_emdash/api/media/file/${STORAGE_KEY}`)) {
+        return new Response(Buffer.from('img'), { status: 200 });
+      }
+      if (url.includes(`/_emdash/api/media/file/${FEATURED_STORAGE_KEY}`)) {
+        return new Response(Buffer.from('feat'), { status: 200 });
+      }
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ ok: true, terms: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/_emdash/api/media/01M6TF1XXBS2KC9EVYG6RBT0J0')) {
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+              filename: 'test.jpg',
+              storageKey: STORAGE_KEY,
+              mimeType: 'image/jpeg',
+              size: 3,
+              url: CANONICAL_URL,
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (init?.method === 'PUT' || init?.method === 'DELETE') {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            item: { id: ARTICLE_ID, version: 2, _rev: 'rev_2' },
+            _rev: 'rev_2',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: createItemWithBoth('rev_1'),
+      fetchFn,
+    });
+
+    expect(res.media).toBeDefined();
+    expect(res.media?.downloaded).toBe(2);
+    expect(fs.existsSync(path.join(tempDir, 'media', STORAGE_KEY))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tempDir, 'media', `${STORAGE_KEY.replace(/\.jpg$/, '')}.yaml`)),
+    ).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, 'media', FEATURED_STORAGE_KEY))).toBe(true);
+
+    const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    expect(disk).toContain(`![Body Image](${LOCAL_REF})`);
+    expect(disk).not.toContain(CANONICAL_URL);
+
+    const diff = inspectArticleDiff({
+      workspaceRoot: tempDir,
+      cache,
+      id: ARTICLE_ID,
+    });
+    expect(diff.status).toBe('synced');
+    expect(diff.diff?.hasChanges).toBe(false);
+
+    // Edit body and push
+    const editedDisk = disk + '\nAdded new line.';
+    fs.writeFileSync(path.join(tempDir, res.filePath), editedDisk, 'utf8');
+
+    const pushRes = await pushArticle(res.filePath, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      fetchFn,
+    });
+    expect(pushRes.id).toBe(ARTICLE_ID);
+  });
+
+  it('T2: 1-GET optimization for article with featuredImage only (no media list scan)', async () => {
+    const listFetchMock = vi.fn();
+    const detailFetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          item: {
+            id: FEATURED_ID,
+            filename: 'featured.jpg',
+            storageKey: FEATURED_STORAGE_KEY,
+            mimeType: 'image/jpeg',
+            size: 4,
+            url: `/_emdash/api/media/file/${FEATURED_STORAGE_KEY}`,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        listFetchMock();
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      if (url.includes(`/_emdash/api/media/${FEATURED_ID}`)) {
+        return detailFetchMock();
+      }
+      if (url.includes(`/_emdash/api/media/file/${FEATURED_STORAGE_KEY}`)) {
+        return new Response(Buffer.from('feat'), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const featuredOnlyItem = {
+      id: ARTICLE_ID,
+      slug: 'featured-only',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: {
+        title: 'Featured Only',
+        featuredImage: FEATURED_ID,
+        content: [
+          { _type: 'block', style: 'normal', children: [{ _type: 'span', text: 'Just text.' }] },
+        ],
+      },
+    };
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: featuredOnlyItem,
+      fetchFn,
+    });
+
+    expect(res.media?.downloaded).toBe(1);
+    expect(listFetchMock).toHaveBeenCalledTimes(0);
+    expect(detailFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('T3: 0-HTTP short-circuit and media_state upsert when fully mirrored', async () => {
+    // Setup fully mirrored asset with companion containing valid ULID id
+    const stem = STORAGE_KEY.replace(/\.jpg$/, '');
+    fs.writeFileSync(path.join(tempDir, 'media', STORAGE_KEY), Buffer.from('img'));
+    fs.writeFileSync(
+      path.join(tempDir, 'media', `${stem}.yaml`),
+      `id: 01M6TF1XXBS2KC9EVYG6RBT0J0\nfilename: test.jpg\nstorageKey: ${STORAGE_KEY}\nsize: 3\n`,
+      'utf8',
+    );
+
+    const fetchFn = vi.fn();
+    const bodyOnlyItem = {
+      id: ARTICLE_ID,
+      slug: 'body-only',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: {
+        title: 'Body Only',
+        content: [
+          {
+            _type: 'image',
+            alt: 'Body Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: bodyOnlyItem,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(res.media?.downloaded).toBe(0);
+    expect(res.media?.skipped).toBe(1);
+    const mediaFetchUrls = fetchFn.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((u: string) => u.includes('media'));
+    expect(mediaFetchUrls.length).toBe(0);
+
+    const state = cache.getMediaStateByStorageKey(STORAGE_KEY);
+    expect(state).toBeDefined();
+    expect(state?.mediaId).toBe('01M6TF1XXBS2KC9EVYG6RBT0J0');
+    expect(state?.localContentHash).toBeDefined();
+    expect(state?.remoteRecordRef).toBe('media-record:01M6TF1XXBS2KC9EVYG6RBT0J0');
+  });
+
+  it('T4: fast-path auto-heals unmirrored article without --force', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '01M6TF1XXBS2KC9EVYG6RBT0J0',
+                filename: 'test.jpg',
+                storageKey: STORAGE_KEY,
+                mimeType: 'image/jpeg',
+                size: 3,
+                url: CANONICAL_URL,
+              },
+            ],
+            nextCursor: null,
+            totalCount: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes(`/_emdash/api/media/file/${STORAGE_KEY}`)) {
+        return new Response(Buffer.from('img'), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    });
+    const fetchFn = fetchMock as unknown as typeof fetch;
+
+    const bodyOnlyItem = {
+      id: ARTICLE_ID,
+      slug: 'fast-heal',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: {
+        title: 'Fast Heal',
+        content: [
+          {
+            _type: 'image',
+            alt: 'Body Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    // 1st pull with mediaSync: false -> saves canonical URL without mirroring
+    await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      mediaSync: false,
+      rawItem: bodyOnlyItem,
+      fetchFn,
+    });
+
+    const disk1 = fs.readFileSync(
+      path.join(tempDir, 'posts', 'draft', `${todayPrefix}_${ARTICLE_ID}-fast-heal.md`),
+      'utf8',
+    );
+    expect(disk1).toContain(CANONICAL_URL);
+
+    // 2nd pull (default mediaSync: true) on same remote _rev -> Fast-path mirrors media and heals disk to relative ref!
+    const healRes = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: bodyOnlyItem,
+      fetchFn,
+    });
+
+    expect(healRes.updated).toBe(true);
+    expect(healRes.healed).toBe(true);
+    const disk2 = fs.readFileSync(path.join(tempDir, healRes.filePath), 'utf8');
+    expect(disk2).toContain(LOCAL_REF);
+
+    // 3rd pull -> Pure fast-path skip (0 media fetches)
+    vi.clearAllMocks();
+    const skipRes = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: bodyOnlyItem,
+      fetchFn,
+    });
+    expect(skipRes.skipped).toBe(true);
+    expect(skipRes.updated).toBe(false);
+    const mediaCalls = fetchMock.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((u: string) => u.includes('media'));
+    expect(mediaCalls.length).toBe(0);
+  });
+
+  it('T5: mediaSync: false suppresses all media fetches and keeps canonical URLs', async () => {
+    const fetchFn = vi.fn();
+    const bodyOnlyItem = {
+      id: ARTICLE_ID,
+      slug: 'no-media-post',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: {
+        title: 'No Media Post',
+        content: [
+          {
+            _type: 'image',
+            alt: 'Body Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      mediaSync: false,
+      rawItem: bodyOnlyItem,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const mediaFetchUrls = fetchFn.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((u: string) => u.includes('media'));
+    expect(mediaFetchUrls.length).toBe(0);
+    const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    expect(disk).toContain(CANONICAL_URL);
+  });
+
+  it('T6: non-destructive fallback and orphan warning on remote 404 / empty media response', async () => {
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/media?')) {
+        return new Response(JSON.stringify({ items: [], totalCount: 0 }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const missingMediaItem = {
+      id: ARTICLE_ID,
+      slug: 'orphan-post',
+      collection: 'posts',
+      status: 'draft',
+      publishedAt: null,
+      _rev: 'rev_1',
+      data: {
+        title: 'Orphan Post',
+        content: [
+          {
+            _type: 'image',
+            alt: 'Missing Image',
+            asset: { url: CANONICAL_URL, storageKey: STORAGE_KEY },
+          },
+        ],
+      },
+    };
+
+    const res = await pullArticle('posts', ARTICLE_ID, {
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      localMediaRefs: true,
+      rawItem: missingMediaItem,
+      fetchFn,
+    });
+
+    // Pull itself succeeds, does not throw
+    expect(res.updated).toBe(true);
+    expect(res.media?.orphanStorageKeys).toContain(STORAGE_KEY);
+    const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
+    // Maintained as canonical remote URL since not mirrored
+    expect(disk).toContain(CANONICAL_URL);
   });
 });
 

@@ -44,6 +44,7 @@ import {
 } from '../src/cli/commands/pull.js';
 import * as remoteIndexModule from '../src/sync/media/remote_index.js';
 import { storageKeyToMarkdownRef } from '../src/utils/naming.js';
+import { mediaMirrorNames } from '../src/sync/media/naming_mirror.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
@@ -1830,6 +1831,115 @@ locale: ja
       } finally {
         cache.close();
       }
+    });
+
+    it('bounds the library walk of an article-targeted media pull at `limit` instead of scanning everything', async () => {
+      // One page per requested batch size: a bounded walk must stop after its window, never paginate to the end.
+      const mockFetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        void _url;
+        void init;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], nextCursor: 'next-page', totalCount: 5000 } }),
+        });
+      });
+
+      const postsDir = path.join(tempDir, 'posts', 'draft');
+      fs.mkdirSync(postsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(postsDir, `20261115_${OLD_ARTICLE}-bounded.md`),
+        [
+          '---',
+          `id: ${OLD_ARTICLE}`,
+          'slug: bounded',
+          'title: Bounded',
+          'collection: posts',
+          'status: draft',
+          '---',
+          '',
+          `![body](/_emdash/api/media/file/${REMOTE_KEY}.jpg)`,
+          '',
+        ].join('\n'),
+      );
+
+      const res = await pullArticleMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        article: OLD_ARTICLE,
+        limit: 120,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      // A page of `limit` records plus one short-circuited empty page is the whole walk.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // The key was never seen inside the window, and nothing confirms it locally: report, never assert absent.
+      expect(res.orphanStorageKeys).toEqual([`${REMOTE_KEY}.jpg`]);
+    });
+
+    it('reports a targeted storageKey that was not downloaded instead of claiming a successful pull', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      // Local mirror metadata confirms this key, so it is healthy but nothing gets (re)downloaded.
+      const confirmedKey = asStorageKey(`${LOCAL_ONLY_KEY}.jpg`);
+      const confirmedStem = storageKeyToMarkdownRef(confirmedKey);
+      fs.writeFileSync(
+        path.join(mediaDir, `${confirmedStem}.yaml`),
+        `id: ${OLD_RECORD}\nfilename: local-only.jpg\nstorageKey: ${confirmedKey}\nsize: 7\n`,
+        'utf8',
+      );
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { items: [], nextCursor: null, totalCount: 0 } }),
+      });
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        storageKeys: [confirmedKey],
+        downloadFiles: false,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(res.total).toBe(0);
+      expect(res.downloaded).toBe(0);
+      expect(res.orphanStorageKeys).toBeUndefined();
+      expect(res.verifiedStorageKeys).toEqual([confirmedKey]);
+    });
+  });
+
+  describe('Mirror extension derivation (mediaMirrorNames)', () => {
+    it('keeps the advertised filename extension when a migrated key carries a different one', () => {
+      const names = mediaMirrorNames({
+        id: '01MJZZMIRRNAME9999999999991',
+        filename: 'sample-image.jpg',
+        mimeType: 'image/jpeg',
+        size: 15,
+        storageKey: asStorageKey('01MJZZMIRSTKKEY1.01MJZZMIRSTKKEY2.jpeg'),
+      });
+
+      // The stem comes from the key, the extension from the name the server advertises.
+      expect(names.markdownRef).toBe('01MJZZMIRSTKKEY1.01MJZZMIRSTKKEY2');
+      expect(names.ext).toBe('.jpg');
+    });
+
+    it('falls back to the storageKey extension when a record carries no filename', () => {
+      const names = mediaMirrorNames({
+        id: '01MJZZMIRRNAME9999999999992',
+        filename: '',
+        mimeType: 'image/png',
+        size: 15,
+        storageKey: asStorageKey('01MJZZMIRSTKKEY3.01MJZZMIRSTKKEY4.png'),
+      });
+
+      // Without a filename the key's final segment is the only type evidence; an inner `.ulid` segment is not.
+      expect(names.markdownRef).toBe('01MJZZMIRSTKKEY3.01MJZZMIRSTKKEY4');
+      expect(names.ext).toBe('.png');
     });
   });
 });

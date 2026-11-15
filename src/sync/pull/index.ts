@@ -49,7 +49,7 @@ import {
   resolveCanonicalArticlePath,
 } from '../workspace/index.js';
 import { loadLocalTaxonomyCandidates } from '../taxonomies.js';
-import { syncRemoteBylines } from '../bylines.js';
+import { syncRemoteBylines, extractRemoteBylineIds } from '../bylines.js';
 import { updateConfigSyncedVersion } from '../../utils/config.js';
 import { fetchAssignedTerms as fetchAssignedTermsShared, computeTaxonomyHash } from '../terms.js';
 import { extractCanonicalRemoteTitle, getRemoteMaxBatchLimit, listRemoteArticles } from './list.js';
@@ -59,9 +59,12 @@ import {
   quarantineDivergentLocalCopies,
 } from './quarantine.js';
 import { tryFastPathOrHeal } from './fast_path.js';
+import { mirrorArticleReferencedMedia, createMediaMirrorSession } from './media_stage.js';
 import type {
   FastPathContext,
   ListRemoteArticlesOptions,
+  MediaMirrorSession,
+  PullArticleMediaSummary,
   PullOptions,
   PullResult,
   QuarantinedLocalCopy,
@@ -81,11 +84,15 @@ export {
   getRemoteMaxBatchLimit,
   listRemoteArticles,
   formatQuarantineNotice,
+  mirrorArticleReferencedMedia,
+  createMediaMirrorSession,
 };
 
 export type {
   FastPathContext,
   ListRemoteArticlesOptions,
+  MediaMirrorSession,
+  PullArticleMediaSummary,
   PullOptions,
   PullResult,
   QuarantinedLocalCopy,
@@ -121,7 +128,11 @@ export async function pullArticle(
   const getBylineIdToSlug = async (): Promise<Record<string, string>> => {
     if (bylineIdToSlug) return bylineIdToSlug;
     const cachedMaps = options.cache.getBylineMaps();
-    if (Object.keys(cachedMaps.idToSlug).length > 0) {
+    const remoteBylineIds = rawItem ? extractRemoteBylineIds(rawItem) : [];
+    const hasUnknownByline =
+      Object.keys(cachedMaps.idToSlug).length === 0 ||
+      remoteBylineIds.some((ref) => !cachedMaps.idToSlug[ref] && !cachedMaps.slugToId[ref]);
+    if (!hasUnknownByline) {
       bylineIdToSlug = cachedMaps.idToSlug;
       return bylineIdToSlug;
     }
@@ -185,7 +196,10 @@ export async function pullArticle(
   // 1. Fast-path check: If rawItem is provided in options, test fast-path / heal
   if (rawItem) {
     const fastResult = await tryFastPathOrHeal(fastPathCtx, rawItem);
-    if (fastResult) return fastResult;
+    if (fastResult) {
+      updateConfigSyncedVersion(options.workspaceRoot);
+      return fastResult;
+    }
 
     // Fast-path missed: remote content changed or local repair required.
     // EmDash list API returns stale creation-time posts.data for drafts, and liveData for published articles.
@@ -246,7 +260,10 @@ export async function pullArticle(
 
     // Step 2b (D5): Test fast-path / non-destructive heal for single-article pull as well!
     const singleHealResult = await tryFastPathOrHeal(fastPathCtx, rawItem);
-    if (singleHealResult) return singleHealResult;
+    if (singleHealResult) {
+      updateConfigSyncedVersion(options.workspaceRoot);
+      return singleHealResult;
+    }
   }
 
   // Ensure byline ID-to-slug mapping is loaded
@@ -320,6 +337,15 @@ export async function pullArticle(
     },
     existingPrefix,
   );
+
+  let mediaSummary: PullArticleMediaSummary | undefined = undefined;
+  if (options.mediaSync !== false) {
+    mediaSummary = await mirrorArticleReferencedMedia(
+      options,
+      canonicalMarkdown,
+      frontmatter.featuredImage,
+    );
+  }
 
   const markdownContent = localizeDiskMarkdown(
     canonicalMarkdown,
@@ -469,5 +495,6 @@ export async function pullArticle(
     updated: true,
     title: frontmatter.title,
     quarantined: quarantined.length > 0 ? quarantined : undefined,
+    media: mediaSummary,
   };
 }

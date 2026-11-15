@@ -24,6 +24,34 @@ import type { CacheDatabase } from '../../db/cache.js';
 import type { MapperOptions } from '../../client/mapper.js';
 import type { TaxonomyCandidates } from '../../utils/frontmatter.js';
 
+export interface PullArticleMediaSummary {
+  total: number;
+  downloaded: number;
+  skipped: number;
+  mirroredStorageKeys: string[];
+  verifiedStorageKeys: string[];
+  orphanStorageKeys: string[];
+  unresolvedFeaturedImageId?: string;
+  mediaFetchFailed?: boolean;
+}
+
+export interface MediaMirrorSession {
+  mirrorArticleReferencedMedia(options: {
+    canonicalMarkdown: string;
+    featuredImage?: string | null;
+  }): Promise<PullArticleMediaSummary | undefined>;
+  finalizeBatchMediaResult(): Promise<{
+    walkedCount: number;
+    remoteTotalCount: number | null;
+    complete: boolean;
+    downloaded: number;
+    skipped: number;
+    mirroredStorageKeys: string[];
+    verifiedStorageKeys: string[];
+    orphanStorageKeys: string[];
+  }>;
+}
+
 export interface PullOptions extends MapperOptions {
   workspaceRoot: string;
   cache: CacheDatabase;
@@ -41,6 +69,20 @@ export interface PullOptions extends MapperOptions {
    * editor preview can render the image from the mirror. Push restores the canonical form before any payload.
    */
   localMediaRefs?: boolean;
+  /**
+   * When false, skips on-demand mirroring of media referenced by the article.
+   * Defaults to true.
+   */
+  mediaSync?: boolean;
+  /**
+   * Optional shared media mirror session across multiple pull operations (e.g. in pullBatch).
+   */
+  mediaSession?: MediaMirrorSession;
+  /**
+   * Bounds the library walk a single-article pull uses to resolve body storageKeys and an unresolved
+   * `featuredImage` (default `mediaSyncLimit`). Ignored when a shared `mediaSession` already owns the walk.
+   */
+  mediaSyncLimit?: number;
 }
 
 export interface PullResult {
@@ -63,6 +105,8 @@ export interface PullResult {
   quarantined?: QuarantinedLocalCopy[];
   quarantineFilePath?: string;
   suggestion?: string;
+  /** Media assets referenced by this article that were mirrored or verified during pull. */
+  media?: PullArticleMediaSummary;
 }
 
 /**

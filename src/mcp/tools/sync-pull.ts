@@ -81,6 +81,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe('Skip taxonomy (categories/tags) sync. Pull articles only.'),
+      noMedia: z
+        .boolean()
+        .optional()
+        .describe('Skip automatic on-demand media mirroring (defaults to false)'),
       includeMedia: z
         .boolean()
         .optional()
@@ -109,14 +113,22 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
 
         if (targetId) {
           let res: PullResult;
+          let taxonomiesMsg = '';
+          const mediaSync = args.noMedia ? false : !args.postsOnly;
           try {
             if (!args.postsOnly) {
-              await pullTaxonomies({
+              const taxResult = await pullTaxonomies({
                 workspaceRoot: ctx.root,
                 origin,
                 token: ctx.auth.token,
                 refreshToken: ctx.auth.refreshToken,
-              }).catch(() => null);
+              });
+              const failNotes: string[] = [];
+              if (taxResult.categoriesFailed) failNotes.push('categories');
+              if (taxResult.tagsFailed) failNotes.push('tags');
+              if (failNotes.length > 0) {
+                taxonomiesMsg = `\n⚠️ Taxonomies: Failed to fetch remote ${failNotes.join(' and ')} (preserved existing local definitions).`;
+              }
             }
             res = await pullArticle(collection, targetId, {
               workspaceRoot: ctx.root,
@@ -126,9 +138,37 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
               refreshToken: ctx.auth.refreshToken,
               force: args.force,
               localMediaRefs,
+              mediaSync,
+              mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
             });
           } catch (error) {
             return formatToolError(error);
+          }
+
+          let mediaMsg = '';
+          if (res.media && res.media.total > 0) {
+            mediaMsg = `\nMedia: ${res.media.total} item(s) (${res.media.downloaded} downloaded, ${res.media.skipped} up-to-date)`;
+            const orphanWarning = formatOrphanMediaWarning(res.media.orphanStorageKeys);
+            if (orphanWarning) {
+              mediaMsg += `\n\n${orphanWarning}`;
+            }
+          }
+
+          if (args.includeMedia) {
+            const mediaResult = await pullMedia({
+              workspaceRoot: ctx.root,
+              origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+              limit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+              downloadFiles: args.metadataOnly !== true,
+              cache: ctx.cache,
+            });
+            mediaMsg += `\nMedia library: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date).`;
+            const orphanWarning = formatOrphanMediaWarning(mediaResult.orphanStorageKeys);
+            if (orphanWarning) {
+              mediaMsg += `\n\n${orphanWarning}`;
+            }
           }
 
           const actionText = res.healed
@@ -148,7 +188,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             : '\n\nYou can now read or edit this local Markdown file directly.';
 
           return formatToolTextWithMeta(
-            `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${quarantineLine}${warnLine}${nextStep}`,
+            `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${mediaMsg}${taxonomiesMsg}${quarantineLine}${warnLine}${nextStep}`,
             ctx.meta,
           );
         }
@@ -200,7 +240,9 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           prune: shouldPrune,
           localMediaRefs,
           // Local-first media mirroring is default-ON for a batch pull; postsOnly skips it, matching the CLI.
+          // The shared walk is bounded by `mediaSyncLimit`, matching the CLI too.
           mediaSync: !postsOnly,
+          mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
         });
 
         const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
@@ -370,6 +412,19 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
                 },
               ],
             };
+          }
+
+          // Nothing was (re)downloaded, yet the key is not an orphan: the library walk left it outside its
+          // window or local mirror metadata already confirms it. Say which, instead of claiming a pull.
+          if (res.total === 0) {
+            return formatToolTextWithMeta(
+              `ℹ️ Targeted storageKey '${args.storageKey}' was not downloaded: ${
+                res.verifiedStorageKeys && res.verifiedStorageKeys.length > 0
+                  ? 'confirmed by local mirror metadata already in media/'
+                  : 'not found within the bounded library walk'
+              }. Run "emit pull-media --all" (or a larger --limit) for a complete library pass.${metaSuffix}`,
+              ctx.meta,
+            );
           }
 
           return formatToolTextWithMeta(

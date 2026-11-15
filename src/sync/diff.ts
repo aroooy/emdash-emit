@@ -26,6 +26,7 @@ import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
 import { retrackLocalHashOnly } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
+import { parseMarkdown } from '../utils/frontmatter.js';
 import { calculateHash } from './workspace/index.js';
 import { reconstructBaseline } from './baseline-reconstruction.js';
 import { formatRevForDisplay } from '../client/api.js';
@@ -62,7 +63,21 @@ export function resolveArticleTarget(options: ResolveArticleTargetOptions): Reso
     // callers can then report an accurate "Local file not found" instead of a false
     // filename-shape complaint, and sync_pull can still target a pruned path by ID.
     const ulid = extractUlidFromFilename(path.join(options.workspaceRoot, targetFile));
-    if (ulid) targetId = ulid;
+    if (ulid) {
+      targetId = ulid;
+    } else {
+      // Fallback: if the file exists on disk, read frontmatter.id
+      const fullPath = path.resolve(options.workspaceRoot, targetFile);
+      if (fs.existsSync(fullPath)) {
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const parsed = parseMarkdown(content);
+          if (parsed.frontmatter.id) {
+            targetId = parsed.frontmatter.id;
+          }
+        } catch {}
+      }
+    }
   }
 
   if (targetId && !targetFile && options.cache) {
