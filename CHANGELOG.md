@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-11-16
+
+### Added
+
+- **Preserved Opaque Blocks Diagnostic & Guidance Pipeline (`src/client/portable-text.ts`, `src/presentation/pull_report.ts`)**:
+  - Implemented `countPreservedOpaqueBlocks` in Layer 0 (`src/client/portable-text.ts`) with strict code block exclusion via `stripCodeBlocks` to accurately count Tier 3 comment fences (`<!--ec:block ... -->`) without false positives from documentation code samples.
+  - Added `preservedBlocks?: number` to `PullResult` (Layer 2) across full pull, differential fast-path skip, healing, and `localEditsPreserved` branches.
+  - Implemented pure string formatter `formatPreservedBlocksHint` in Layer 3 (`src/presentation/pull_report.ts`), returning standardized helpful diagnostic hints (`💡 Preserved N styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.`) for CLI pull and MCP `sync_pull`.
+  - Added unit test suite `tests/pull_report.test.ts` and symmetry tests in `tests/presentation_symmetry.test.ts`.
+
+### Documentation
+
+- **The Dual-Track Image Model & Authoring Rules (`README.md`, `AGENTS.md`)**:
+  - Documented the Dual-Track Image Model (Track A: Plain Image Local-First preview vs Track B: Preserved Block Round-trip Fidelity), clarifying the intentional design trade-off between local editor preview and server-side layout attribute protection.
+  - Established golden authoring rules for images: always author new images using standard Markdown (`![alt](../../media/drafts/...)`), and manipulate preserved blocks by moving or deleting entire comment lines without manually crafting JSON.
+  - Enhanced tool descriptions for MCP `sync_pull`, `sync_push`, and `sync_diff` with explicit preserved block safety guidelines for autonomous AI agents.
+
 ## [0.1.35] - 2026-11-16
 
 ### Fixed

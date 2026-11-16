@@ -30,7 +30,7 @@
 - [📝 Markdown & YAML Frontmatter Specification](#-markdown--yaml-frontmatter-specification)
   - [Frontmatter Schema](#frontmatter-schema)
   - [Critical Content Rules](#critical-content-rules)
-  - [EmDash Custom Block Preservation](#emdash-custom-block-preservation)
+  - [EmDash Custom Block Preservation & The Dual-Track Image Model](#emdash-custom-block-preservation--the-dual-track-image-model)
   - [Media Management & Upload Workflow](#media-management--upload-workflow)
 - [🤖 The Golden Path for AI & Humans (4-Step Cycle)](#-the-golden-path-for-ai--humans-4-step-cycle)
   - [The 4-Step Authoring Cycle](#the-4-step-authoring-cycle)
@@ -461,16 +461,41 @@ Markdown body begins here...
    - Emit never fabricates media metadata from local `media/*.yaml` files: companion files are used only to cross-check a reference. In a workspace that mirrors media (`media/` exists and is non-empty), a missing or mismatched companion file is reported as a push warning — it means Emit could not confirm the media ID exists, not that the payload is invalid. Workspaces that do not mirror media produce no such warning.
    - Preflight Guard **G10** rejects invalid file paths outside `media/` and malformed values before pushing.
 
-### EmDash Custom Block Preservation
+### EmDash Custom Block Preservation & The Dual-Track Image Model
 
-EmDash supports rich visual blocks (e.g., galleries, callouts, audio players). When converted from EmDash's internal AST to Markdown, Emit wraps non-standard blocks in opaque comment fences:
+EmDash supports rich visual blocks (galleries, callouts, embeds) and layout-styled images (with `alignment: left|center|right`, `displayWidth`, etc.). When converted from EmDash's internal Portable Text AST to Markdown, Emit wraps non-standard blocks and styled image blocks in single-line opaque comment fences (Tier 3 fallback):
 
 ```html
-<!--ec:block type="core:gallery" id="01M6XYZ..." data="{\"columns\":3,\"images\":[...]}" -->
-<!--/ec:block-->
+<!--ec:block {"_type":"image","_key":"k0","alt":"example.jpg","alignment":"left","asset":{"url":"/_emdash/api/media/file/01M7...jpg"}} -->
 ```
 
-- **Rule**: Do not modify or delete these comment fences unless you intentionally want to remove the block. Emit preserves them losslessly on round-trips.
+#### The Dual-Track Image Model (Local-First vs Round-trip Fidelity)
+
+To balance **Local-First offline editing** with **perfect CMS round-trip fidelity**, Emit uses two distinct tracks for images in Markdown articles:
+
+| Track | Target Image | Markdown Representation | Editor Preview | Core Purpose & Trade-off |
+|---|---|---|:---:|---|
+| **Track A: Plain Image** | Images without layout attributes | `![alt](../../media/<storageKey>.<ext>)` | 🖼️ **Visible** | **Local-First Preview**: Mirrored into `media/` and referenced with relative paths so local editors (VS Code, Obsidian) preview them offline. |
+| **Track B: Preserved Block** | Styled images (`alignment`, `displayWidth`) & custom blocks | `<!--ec:block {"_type":"image",...,"url":"/_emdash/api/media/file/<storageKey>",...} -->` | ❌ **Hidden** (comment) | **Round-trip Fidelity**: Standard Markdown lacks alignment/width syntax. To prevent accidental attribute deletion on `push`, Emit preserves the raw server JSON. *Local editor preview is intentionally traded off to protect CMS styling.* |
+
+#### Authoring Guidelines for Images & Preserved Blocks
+
+Follow these simple rules when authoring or editing articles:
+
+1. **Adding New Images**:
+   - Always use standard Markdown image syntax (`![alt](../../media/drafts/my-image.png)` or existing canonical URLs).
+   - **Never craft `<!--ec:block ... -->` comments manually**. When you push, Emit automatically uploads draft images and creates standard image blocks on EmDash.
+2. **Moving a Preserved Block**:
+   - Cut and paste the entire `<!--ec:block ... -->` comment line to the desired position in the Markdown body.
+3. **Deleting a Preserved Block**:
+   - Delete the entire `<!--ec:block ... -->` comment line.
+4. **Changing Attributes (alignment, width)**:
+   - Recommended: adjust styling directly in the EmDash Web admin.
+   - Advanced: carefully edit attributes within the JSON payload. Preflight Guard **G9** (`MODIFIED_OPAQUE_BLOCK`) protects against unintended modification or accidental removal.
+5. **Execution Hint**:
+   - When pulling an article with preserved blocks, Emit surfaces a diagnostic hint:
+     `💡 Preserved N styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.`
+     (Shown on single-article pulls across updated/skipped/local-edits-preserved states, and in batch mode alongside updated articles or MCP recent article listings).
 
 ### Media Management & Upload Workflow
 
