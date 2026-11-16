@@ -22,6 +22,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  countPreservedOpaqueBlocks,
   detectUnsupportedMarkdownSyntax,
   extractOpaqueBlockLines,
   isPlainImageBlock,
@@ -340,6 +341,42 @@ describe('Portable Text <-> Markdown Conversion', () => {
 
       // Backtick code fences must never trigger the tilde warning
       expect(detectUnsupportedMarkdownSyntax('```json\n{ "a": 1 }\n```')).toHaveLength(0);
+    });
+  });
+
+  describe('countPreservedOpaqueBlocks', () => {
+    it('counts opaque block fences while strictly excluding code blocks', () => {
+      const markdown = [
+        '# Article with styled images and code blocks',
+        '',
+        '<!--ec:block {"_type":"image","_key":"k0","alt":"img.png","alignment":"left"} -->',
+        '',
+        'Here is a code example explaining opaque blocks:',
+        '',
+        '```markdown',
+        '<!--ec:block {"_type":"image","sample":true} -->',
+        '<!--ec:block {"_type":"callout"} -->',
+        '```',
+        '',
+        '<!--ec:block {"_type":"image","_key":"k1","alt":"img2.png","displayWidth":400} -->',
+        '',
+        'End of article.',
+      ].join('\n');
+
+      expect(countPreservedOpaqueBlocks(markdown)).toBe(2);
+    });
+
+    it('returns 0 when markdown has no opaque blocks or only code-fenced samples', () => {
+      const codeOnly = [
+        '# Tutorial',
+        '',
+        '```html',
+        '<!--ec:block {"_type":"test"} -->',
+        '```',
+      ].join('\n');
+      expect(countPreservedOpaqueBlocks(codeOnly)).toBe(0);
+      expect(countPreservedOpaqueBlocks('Plain markdown without any blocks.')).toBe(0);
+      expect(countPreservedOpaqueBlocks('')).toBe(0);
     });
   });
 });

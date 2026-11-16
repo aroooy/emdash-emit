@@ -28,6 +28,7 @@ import {
   formatMediaCoverageLine as formatCoverageCli,
   formatTaxonomySyncFailure as formatTaxonomySyncFailureCli,
   formatTaxonomySyncSuccess as formatTaxonomySyncSuccessCli,
+  formatPreservedBlocksHint as formatPreservedBlocksHintCli,
 } from '../src/cli/commands/pull.js';
 import {
   formatOrphanMediaWarning,
@@ -35,6 +36,7 @@ import {
   formatArticleDiffReport,
 } from '../src/presentation/article_report.js';
 import {
+  formatPreservedBlocksHint,
   formatTaxonomySyncFailure,
   formatTaxonomySyncSuccess,
 } from '../src/presentation/pull_report.js';
@@ -159,6 +161,23 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
       const fromCli = formatTaxonomySyncSuccessCli(tc.counts, tc.options);
       expect(fromPresentation).toBe(fromCli);
       expect(fromPresentation).toContain('✅ ');
+    }
+  });
+
+  it('formatPreservedBlocksHint produces byte-identical output between CLI re-export and presentation module', () => {
+    const testCases = [
+      { count: undefined, indent: '' },
+      { count: 0, indent: '' },
+      { count: -1, indent: '  ' },
+      { count: 1, indent: '' },
+      { count: 3, indent: '  ' },
+      { count: 5, indent: '    ' },
+    ];
+
+    for (const tc of testCases) {
+      const fromPresentation = formatPreservedBlocksHint(tc.count, tc.indent);
+      const fromCli = formatPreservedBlocksHintCli(tc.count, tc.indent);
+      expect(fromPresentation).toBe(fromCli);
     }
   });
 

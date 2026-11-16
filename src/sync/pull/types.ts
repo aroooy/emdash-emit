@@ -115,6 +115,8 @@ export interface PullResult {
   suggestion?: string;
   /** Media assets referenced by this article that were mirrored or verified during pull. */
   media?: PullArticleMediaSummary;
+  /** Count of preserved opaque blocks (<!--ec:block ... -->) retaining custom/styled attributes. */
+  preservedBlocks?: number;
 }
 
 /**

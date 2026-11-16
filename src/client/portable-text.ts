@@ -675,6 +675,15 @@ export function extractOpaqueBlockLines(markdown: string): string[] {
 }
 
 /**
+ * Counts valid opaque block fences (`<!--ec:block ... -->`) in Markdown body,
+ * strictly excluding code fences (``` ... ```).
+ */
+export function countPreservedOpaqueBlocks(markdown: string): number {
+  const cleaned = stripCodeBlocks(markdown);
+  return extractOpaqueBlockLines(cleaned).length;
+}
+
+/**
  * Verifies that all opaque block fences present in baseMarkdown are intact in localMarkdown (G9 guard).
  * Returns true if untampered, false if any base opaque block fence was modified or removed.
  */

@@ -49,6 +49,7 @@ import {
 } from '../../presentation/article_report.js';
 import {
   formatArticleMediaSummary,
+  formatPreservedBlocksHint,
   formatPullStatusBreakdown,
   formatPullWindowLabel,
   formatTaxonomySyncFailure,
@@ -65,6 +66,7 @@ export {
 // 2. Re-exports from presentation/pull_report.js (new, required by tests/media.test.ts and tests/cli.test.ts)
 export {
   formatArticleMediaSummary,
+  formatPreservedBlocksHint,
   formatPullStatusBreakdown,
   formatPullWindowLabel,
   formatTaxonomySyncFailure,
@@ -248,8 +250,12 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
                 console.log(
                   `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath}; remote changes NOT applied)`,
                 );
+                const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
+                if (hint) console.log(hint);
               } else if (!item.skipped) {
                 console.log(`  [${current}/${total}] ✅ Pulled ${item.slug} -> ${item.filePath}`);
+                const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
+                if (hint) console.log(hint);
               } else if (current % 50 === 0 || current === total) {
                 process.stdout.write(`  [${current}/${total}] Synced...\r`);
               }
@@ -373,10 +379,16 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             console.log(
               `   Push them with "emit push ${res.filePath}", or re-run with --force to accept remote.`,
             );
+            const hint = formatPreservedBlocksHint(res.preservedBlocks, '  ');
+            if (hint) console.log(hint);
           } else if (res.skipped) {
             console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);
+            const hint = formatPreservedBlocksHint(res.preservedBlocks, '  ');
+            if (hint) console.log(hint);
           } else {
             console.log(`✅ Pulled ${res.slug} -> ${res.filePath}`);
+            const hint = formatPreservedBlocksHint(res.preservedBlocks, '  ');
+            if (hint) console.log(hint);
           }
 
           if (res.media && res.media.total > 0) {

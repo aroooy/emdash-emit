@@ -41,6 +41,7 @@ import {
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 import {
+  formatPreservedBlocksHint,
   formatTaxonomySyncFailure,
   formatTaxonomySyncSuccess,
 } from '../../presentation/pull_report.js';
@@ -55,7 +56,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull: Pull remote article(s) and taxonomies
   server.tool(
     'sync_pull',
-    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true for an additional bounded media-library pass (mediaSyncLimit, default 300) — referenced images in pulled articles are already mirrored on-demand without it. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools.',
+    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true for an additional bounded media-library pass (mediaSyncLimit, default 300) — referenced images in pulled articles are already mirrored on-demand without it. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools. Note: Articles may contain <!--ec:block ... --> comment fences preserving custom blocks or styled images (alignment, displayWidth). Keep these comment lines intact when editing. To add new images, always use standard Markdown syntax (![alt](../../media/drafts/...)).',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -186,6 +187,8 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
                 ? 'ℹ️ Article is already up-to-date'
                 : '✅ Successfully pulled article';
           const titleText = res.title ? ` "${res.title}"` : '';
+          const preservedHint = formatPreservedBlocksHint(res.preservedBlocks);
+          const preservedLine = preservedHint ? `\n${preservedHint}` : '';
           const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
           const quarantineNotice = formatQuarantineNotice(res.quarantined);
           const quarantineLine = quarantineNotice ? `\n\n${quarantineNotice}` : '';
@@ -195,7 +198,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             : '\n\nYou can now read or edit this local Markdown file directly.';
 
           return formatToolTextWithMeta(
-            `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${mediaMsg}${taxonomiesMsg}${quarantineLine}${warnLine}${nextStep}`,
+            `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${preservedLine}${mediaMsg}${taxonomiesMsg}${quarantineLine}${warnLine}${nextStep}`,
             ctx.meta,
           );
         }
@@ -251,9 +254,11 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         );
         const updatedItems = sortedItems.filter((i) => i.updated);
         const sampleItems = (updatedItems.length > 0 ? updatedItems : sortedItems).slice(0, 10);
-        const listLines = sampleItems.map(
-          (item) => `  - [${item.status}] ${item.filePath}${item.title ? ` (${item.title})` : ''}`,
-        );
+        const listLines = sampleItems.map((item) => {
+          const mainLine = `  - [${item.status}] ${item.filePath}${item.title ? ` (${item.title})` : ''}`;
+          const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
+          return hint ? `${mainLine}\n${hint}` : mainLine;
+        });
         const headerLabel =
           updatedItems.length > 0 ? 'Updated Articles' : 'Recent Articles in Workspace';
         const detailBlock =

@@ -126,3 +126,12 @@ export function formatPullStatusBreakdown(
 export function formatPullWindowLabel(status: string | undefined, limit: number): string {
   return status === 'all' ? `${limit}/status` : `${limit}`;
 }
+
+/**
+ * Formats a hint message when an article contains preserved opaque blocks.
+ * Returns empty string when count is 0 or undefined.
+ */
+export function formatPreservedBlocksHint(count: number | undefined, indent = ''): string {
+  if (!count || count <= 0) return '';
+  return `${indent}💡 Preserved ${count} styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.`;
+}

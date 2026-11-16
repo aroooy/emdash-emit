@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SyncState } from '../../db/cache.js';
+import { countPreservedOpaqueBlocks } from '../../client/portable-text.js';
 import { apiResponseToLocal } from '../../client/mapper.js';
 import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
@@ -506,5 +507,6 @@ export async function pullArticle(
     title: frontmatter.title,
     quarantined: quarantined.length > 0 ? quarantined : undefined,
     media: mediaSummary,
+    preservedBlocks: countPreservedOpaqueBlocks(markdownContent),
   };
 }

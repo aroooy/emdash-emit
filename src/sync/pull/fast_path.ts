@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { countPreservedOpaqueBlocks } from '../../client/portable-text.js';
 import { retrackLocalHashOnly } from '../../db/baseline.js';
 import { apiResponseToLocal } from '../../client/mapper.js';
 import { extractRev, extractComparisonRev, isSameRev } from '../../client/api.js';
@@ -88,6 +89,7 @@ export async function tryFastPathOrHeal(
 
   try {
     const currentDiskContent = fs.readFileSync(fullExistingPath, 'utf8');
+    const preservedBlocks = countPreservedOpaqueBlocks(currentDiskContent);
     // `sync_state.local_hash` always tracks the exact bytes on disk, so a workspace that spells mirrored
     // images as local references must be compared against the same spelling — not against the canonical
     // remote form. Reconstructing the expected disk content keeps the fast-path skip honest under both
@@ -146,6 +148,7 @@ export async function tryFastPathOrHeal(
               healed: true,
               meaningChanged: false,
               title: rawTitle,
+              preservedBlocks,
             };
           } catch {
             // Re-spelling broke the parse (it should not): fall through to the normal paths untouched.
@@ -200,6 +203,7 @@ export async function tryFastPathOrHeal(
                 meaningChanged: false,
                 title: rawTitle,
                 media: mediaSummary,
+                preservedBlocks,
               };
             }
           }
@@ -302,6 +306,7 @@ export async function tryFastPathOrHeal(
                   prunedTaxonomies: hasPrunedTax ? removedTerms : undefined,
                   title: rawTitle,
                   media: mediaSummary,
+                  preservedBlocks,
                 };
               } catch {
                 // Re-spelling broke the parse (should not happen): fall through to skip
@@ -326,6 +331,7 @@ export async function tryFastPathOrHeal(
             skipped: true,
             title: rawTitle,
             media: mediaSummary,
+            preservedBlocks,
           };
         } catch {
           // Branch 2: Broken YAML on hash-matched untouched file.
@@ -364,6 +370,7 @@ export async function tryFastPathOrHeal(
               healed: true,
               meaningChanged: false,
               title: rawTitle,
+              preservedBlocks,
             };
           }
           // Not healable locally: fall through to the full remote pull, which re-serializes canonical
@@ -383,6 +390,7 @@ export async function tryFastPathOrHeal(
           skipped: true,
           localEditsPreserved: true,
           title: rawTitle,
+          preservedBlocks,
         };
       } catch {
         // Local frontmatter is invalid. Attempt non-destructive lenient frontmatter repair.
@@ -470,6 +478,7 @@ export async function tryFastPathOrHeal(
             healed: true,
             meaningChanged: false,
             title: rawTitle,
+            preservedBlocks,
           };
         }
       }
