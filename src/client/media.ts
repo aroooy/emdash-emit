@@ -444,6 +444,268 @@ async function requestUploadTarget(
  * Executes the confirmed 4-phase EmDash media upload contract with server-side
  * deduplication, local `media_state` idempotency, and orphan-pending compensation.
  */
+/**
+ * [Dedup / B-4] Resolve a reusable upload from the local `media_state` cache, verifying via
+ * GET /_emdash/api/media/{mediaId} that the record still exists and is ready on remote.
+ * Returns null when no reusable record exists (stale entries are purged so Phase A proceeds).
+ */
+async function resolveReusableUpload(
+  options: UploadMediaOptions,
+  fetchFn: typeof fetch,
+  localHash: string,
+  serverContentHash: string,
+): Promise<UploadMediaResult | null> {
+  const existingLocal = options.cache!.getMediaStateByContentHash(localHash);
+  if (
+    !existingLocal ||
+    (existingLocal.status !== 'ready' && existingLocal.status !== 'uploaded') ||
+    !existingLocal.mediaId ||
+    !existingLocal.storageKey ||
+    !existingLocal.url
+  ) {
+    return null;
+  }
+
+  const remoteCheck = await fetchRemoteMediaDetail(existingLocal.mediaId, {
+    origin: options.origin,
+    token: options.token,
+    fetchFn,
+  });
+
+  if (
+    remoteCheck.exists === false ||
+    (remoteCheck.exists === true && remoteCheck.item.status && remoteCheck.item.status !== 'ready')
+  ) {
+    // Remote record was deleted or invalidated; purge stale local state and proceed to Phase A
+    options.cache!.deleteMediaStateByContentHash(localHash);
+    return null;
+  }
+
+  const mimeType = options.contentType || resolveImageMimeType(options.filename)!;
+  const bufferSize = options.buffer?.length ?? 0;
+  const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+  const confirmedStorageKey = detail?.storageKey || existingLocal.storageKey;
+  const confirmedUrl = toRootRelativeMediaUrl(
+    detail?.url || existingLocal.url,
+    confirmedStorageKey,
+    options.origin,
+  );
+  return {
+    mediaId: existingLocal.mediaId,
+    storageKey: confirmedStorageKey,
+    url: confirmedUrl,
+    localHash,
+    contentHash: detail?.contentHash || serverContentHash,
+    size: detail?.size ?? bufferSize,
+    mimeType: detail?.mimeType || mimeType,
+    filename: detail?.filename || options.filename,
+    width: detail?.width ?? null,
+    height: detail?.height ?? null,
+    createdAt: detail?.createdAt,
+    deduplicated: true,
+    remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+    remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
+  };
+}
+
+/**
+ * [Phase A follow-up / B-1] Finalize a server-side deduplication hit returned by the upload-url
+ * endpoint: fetch authoritative createdAt/dimensions via GET and record the uploaded state.
+ */
+async function finalizeServerDedupHit(
+  options: UploadMediaOptions,
+  fetchFn: typeof fetch,
+  existingTarget: MediaExistingResponse,
+  localHash: string,
+  bufferSize: number,
+  mimeType: string,
+  serverContentHash: string,
+): Promise<UploadMediaResult> {
+  const remoteCheck = await fetchRemoteMediaDetail(existingTarget.mediaId, {
+    origin: options.origin,
+    token: options.token,
+    fetchFn,
+  });
+  const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
+  const confirmedStorageKey = detail?.storageKey || existingTarget.storageKey;
+  const canonicalUrl = toRootRelativeMediaUrl(
+    detail?.url || existingTarget.url,
+    confirmedStorageKey,
+    options.origin,
+  );
+  options.cache?.saveMediaState({
+    localHash,
+    mediaId: existingTarget.mediaId,
+    storageKey: confirmedStorageKey,
+    url: canonicalUrl,
+    status: 'uploaded',
+  });
+  return {
+    mediaId: existingTarget.mediaId,
+    storageKey: confirmedStorageKey,
+    url: canonicalUrl,
+    localHash,
+    contentHash: detail?.contentHash || serverContentHash,
+    size: detail?.size ?? bufferSize,
+    mimeType: detail?.mimeType || mimeType,
+    filename: detail?.filename || options.filename,
+    width: detail?.width ?? null,
+    height: detail?.height ?? null,
+    createdAt: detail?.createdAt,
+    deduplicated: true,
+    remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
+    remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
+  };
+}
+
+/**
+ * [Phase B] Stream the binary via PUT — same-origin streaming when the upload target shares
+ * the API origin, otherwise a plain signed-URL PUT. Pure transport: no cache writes here.
+ */
+async function putBinaryStream(
+  options: UploadMediaOptions,
+  fetchFn: typeof fetch,
+  rawFetchFn: typeof fetch,
+  target: MediaUploadUrlResponse,
+  mimeType: string,
+  buffer: Buffer,
+): Promise<void> {
+  const putUrlObj = new URL(target.uploadUrl, options.origin);
+  const originUrlObj = new URL(options.origin);
+  const isSameOrigin = putUrlObj.origin === originUrlObj.origin;
+
+  const putHeaders: Record<string, string> = {
+    ...target.headers,
+  };
+  if (!putHeaders['Content-Type'] && !putHeaders['content-type']) {
+    putHeaders['Content-Type'] = mimeType;
+  }
+  if (isSameOrigin) {
+    putHeaders['Authorization'] = `Bearer ${options.token}`;
+  }
+
+  const putFn = isSameOrigin ? fetchFn : rawFetchFn;
+  const putRes = await putFn(putUrlObj.toString(), {
+    method: target.method || 'PUT',
+    headers: putHeaders,
+    body: new Uint8Array(buffer),
+  });
+
+  if (!putRes.ok) {
+    throw new ApiError({
+      message: `Failed to upload binary for "${options.filename}": ${putRes.statusText}`,
+      code: 'MEDIA_BINARY_UPLOAD_FAILED',
+      status: putRes.status,
+      endpoint: putUrlObj.toString(),
+      suggestion: 'Check network stability and retry pushing.',
+    });
+  }
+}
+
+/**
+ * [Phase C] Confirm the upload (`POST /_emdash/api/media/{mediaId}/confirm`) and perform the
+ * confirm-transition `media_state` writes as this phase's legitimate side effect — they are
+ * inseparable from the storageKey rewrite EmDash issues on confirm.
+ */
+async function confirmUpload(
+  options: UploadMediaOptions,
+  fetchFn: typeof fetch,
+  pendingMediaId: MediaRecordId,
+  initialStorageKey: StorageKey,
+  localHash: string,
+  serverContentHash: string,
+  bufferSize: number,
+  mimeType: string,
+): Promise<UploadMediaResult> {
+  const confirmEndpoint = mediaConfirmEndpoint(options.origin, pendingMediaId);
+  const confirmRes = await fetchFn(confirmEndpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      size: bufferSize,
+    }),
+  });
+
+  if (!confirmRes.ok) {
+    throw new ApiError({
+      message: `Failed to confirm media "${options.filename}" (${pendingMediaId}): ${confirmRes.statusText}`,
+      code: 'MEDIA_CONFIRM_FAILED',
+      status: confirmRes.status,
+      endpoint: confirmEndpoint,
+      suggestion: 'The uploaded file could not be confirmed by EmDash.',
+    });
+  }
+
+  const confirmJson = await confirmRes.json();
+  const confirmData = unwrapEnvelope<Record<string, unknown>>(confirmJson);
+  const item = ((confirmData.item && typeof confirmData.item === 'object'
+    ? confirmData.item
+    : confirmData) ?? {}) as Record<string, unknown>;
+
+  if (item.status && item.status !== 'ready') {
+    throw new ApiError({
+      message: `Media "${options.filename}" (${pendingMediaId}) confirmed with unexpected status "${String(item.status)}".`,
+      code: 'MEDIA_NOT_READY',
+      endpoint: confirmEndpoint,
+      suggestion: 'Retry pushing the article.',
+    });
+  }
+
+  // IMPORTANT: Use the confirmed storageKey and url (EmDash rewrites storageKey to a double-ULID on confirm)
+  const confirmedMediaId =
+    (typeof item.id === 'string' && toMediaRecordId(item.id)) || pendingMediaId;
+  const confirmedStorageKey =
+    (typeof item.storageKey === 'string' && toStorageKey(item.storageKey)) || initialStorageKey;
+  const confirmedUrl = toRootRelativeMediaUrl(
+    typeof item.url === 'string' ? item.url : undefined,
+    confirmedStorageKey,
+    options.origin,
+  );
+
+  // Confirm transition: remove temporary initial storageKey entry when a new confirmed key is issued
+  if (options.cache && confirmedStorageKey !== initialStorageKey) {
+    options.cache.deleteMediaState(initialStorageKey);
+  }
+
+  options.cache?.saveMediaState({
+    localHash,
+    localContentHash: localHash,
+    mediaId: confirmedMediaId,
+    storageKey: confirmedStorageKey,
+    url: confirmedUrl,
+    status: 'uploaded',
+  });
+
+  // Best-effort sync of alt / caption to the media record itself (B-2)
+  await syncRemoteMediaMetadata(
+    confirmedMediaId,
+    { alt: options.alt, caption: options.caption },
+    { origin: options.origin, token: options.token, fetchFn },
+  );
+
+  return {
+    mediaId: confirmedMediaId,
+    storageKey: confirmedStorageKey,
+    url: confirmedUrl,
+    localHash,
+    contentHash:
+      typeof item.contentHash === 'string' && item.contentHash
+        ? item.contentHash
+        : serverContentHash,
+    size: typeof item.size === 'number' ? item.size : bufferSize,
+    mimeType: typeof item.mimeType === 'string' ? item.mimeType : mimeType,
+    filename: typeof item.filename === 'string' ? item.filename : options.filename,
+    width: typeof item.width === 'number' ? item.width : null,
+    height: typeof item.height === 'number' ? item.height : null,
+    createdAt: typeof item.createdAt === 'string' ? item.createdAt : undefined,
+    deduplicated: false,
+  };
+}
+
 export async function uploadMediaFile(options: UploadMediaOptions): Promise<UploadMediaResult> {
   const fetchFn = createAuthedFetch(options);
   const rawFetchFn = options.fetchFn || fetch;
@@ -475,56 +737,12 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
   const { localHash, serverContentHash } = computeMediaHashes(buffer);
 
-  // Check local media_state for recovery from the "upload succeeded -> article PUT failed" window,
+  // [Dedup] Check local media_state for recovery from the "upload succeeded -> article PUT failed" window,
   // verifying against GET /_emdash/api/media/{mediaId} that the record has not been deleted on remote (B-4).
   if (options.cache) {
-    const existingLocal = options.cache.getMediaStateByContentHash(localHash);
-    if (
-      existingLocal &&
-      (existingLocal.status === 'ready' || existingLocal.status === 'uploaded') &&
-      existingLocal.mediaId &&
-      existingLocal.storageKey &&
-      existingLocal.url
-    ) {
-      const remoteCheck = await fetchRemoteMediaDetail(existingLocal.mediaId, {
-        origin: options.origin,
-        token: options.token,
-        fetchFn,
-      });
-
-      if (
-        remoteCheck.exists === false ||
-        (remoteCheck.exists === true &&
-          remoteCheck.item.status &&
-          remoteCheck.item.status !== 'ready')
-      ) {
-        // Remote record was deleted or invalidated; purge stale local state and proceed to Phase A
-        options.cache.deleteMediaStateByContentHash(localHash);
-      } else {
-        const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
-        const confirmedStorageKey = detail?.storageKey || existingLocal.storageKey;
-        const confirmedUrl = toRootRelativeMediaUrl(
-          detail?.url || existingLocal.url,
-          confirmedStorageKey,
-          options.origin,
-        );
-        return {
-          mediaId: existingLocal.mediaId,
-          storageKey: confirmedStorageKey,
-          url: confirmedUrl,
-          localHash,
-          contentHash: detail?.contentHash || serverContentHash,
-          size: detail?.size ?? buffer.length,
-          mimeType: detail?.mimeType || mimeType,
-          filename: detail?.filename || options.filename,
-          width: detail?.width ?? null,
-          height: detail?.height ?? null,
-          createdAt: detail?.createdAt,
-          deduplicated: true,
-          remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
-          remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
-        };
-      }
+    const reusable = await resolveReusableUpload(options, fetchFn, localHash, serverContentHash);
+    if (reusable) {
+      return reusable;
     }
   }
 
@@ -541,41 +759,15 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
   // Handle server-side deduplication hit (B-1: fetch authoritative createdAt/dimensions via GET)
   if ('existing' in initialTarget) {
-    const remoteCheck = await fetchRemoteMediaDetail(initialTarget.mediaId, {
-      origin: options.origin,
-      token: options.token,
+    return await finalizeServerDedupHit(
+      options,
       fetchFn,
-    });
-    const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
-    const confirmedStorageKey = detail?.storageKey || initialTarget.storageKey;
-    const canonicalUrl = toRootRelativeMediaUrl(
-      detail?.url || initialTarget.url,
-      confirmedStorageKey,
-      options.origin,
+      initialTarget,
+      localHash,
+      buffer.length,
+      mimeType,
+      serverContentHash,
     );
-    options.cache?.saveMediaState({
-      localHash,
-      mediaId: initialTarget.mediaId,
-      storageKey: confirmedStorageKey,
-      url: canonicalUrl,
-      status: 'uploaded',
-    });
-    return {
-      mediaId: initialTarget.mediaId,
-      storageKey: confirmedStorageKey,
-      url: canonicalUrl,
-      localHash,
-      contentHash: detail?.contentHash || serverContentHash,
-      size: detail?.size ?? buffer.length,
-      mimeType: detail?.mimeType || mimeType,
-      filename: detail?.filename || options.filename,
-      width: detail?.width ?? null,
-      height: detail?.height ?? null,
-      createdAt: detail?.createdAt,
-      deduplicated: true,
-      remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
-      remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
-    };
   }
 
   let target: MediaUploadUrlResponse = initialTarget;
@@ -599,41 +791,15 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
         { origin: options.origin, token: options.token, fetchFn },
       );
       if ('existing' in retriedTarget) {
-        const remoteCheck = await fetchRemoteMediaDetail(retriedTarget.mediaId, {
-          origin: options.origin,
-          token: options.token,
+        return await finalizeServerDedupHit(
+          options,
           fetchFn,
-        });
-        const detail = remoteCheck.exists === true ? remoteCheck.item : undefined;
-        const confirmedStorageKey = detail?.storageKey || retriedTarget.storageKey;
-        const canonicalUrl = toRootRelativeMediaUrl(
-          detail?.url || retriedTarget.url,
-          confirmedStorageKey,
-          options.origin,
+          retriedTarget,
+          localHash,
+          buffer.length,
+          mimeType,
+          serverContentHash,
         );
-        options.cache?.saveMediaState({
-          localHash,
-          mediaId: retriedTarget.mediaId,
-          storageKey: confirmedStorageKey,
-          url: canonicalUrl,
-          status: 'uploaded',
-        });
-        return {
-          mediaId: retriedTarget.mediaId,
-          storageKey: confirmedStorageKey,
-          url: canonicalUrl,
-          localHash,
-          contentHash: detail?.contentHash || serverContentHash,
-          size: detail?.size ?? buffer.length,
-          mimeType: detail?.mimeType || mimeType,
-          filename: detail?.filename || options.filename,
-          width: detail?.width ?? null,
-          height: detail?.height ?? null,
-          createdAt: detail?.createdAt,
-          deduplicated: true,
-          remoteVerification: remoteCheck.exists === true ? 'verified' : 'unknown',
-          remoteVerificationNote: remoteCheck.exists === 'unknown' ? remoteCheck.reason : undefined,
-        };
       }
       target = retriedTarget;
     }
@@ -653,127 +819,25 @@ export async function uploadMediaFile(options: UploadMediaOptions): Promise<Uplo
 
   try {
     // [Phase B] Stream binary via PUT (either same-origin streaming or signed external URL)
-    const putUrlObj = new URL(target.uploadUrl, options.origin);
-    const originUrlObj = new URL(options.origin);
-    const isSameOrigin = putUrlObj.origin === originUrlObj.origin;
+    await putBinaryStream(options, fetchFn, rawFetchFn, target, mimeType, buffer);
 
-    const putHeaders: Record<string, string> = {
-      ...target.headers,
-    };
-    if (!putHeaders['Content-Type'] && !putHeaders['content-type']) {
-      putHeaders['Content-Type'] = mimeType;
-    }
-    if (isSameOrigin) {
-      putHeaders['Authorization'] = `Bearer ${options.token}`;
-    }
-
-    const putFn = isSameOrigin ? fetchFn : rawFetchFn;
-    const putRes = await putFn(putUrlObj.toString(), {
-      method: target.method || 'PUT',
-      headers: putHeaders,
-      body: new Uint8Array(buffer),
-    });
-
-    if (!putRes.ok) {
-      throw new ApiError({
-        message: `Failed to upload binary for "${options.filename}": ${putRes.statusText}`,
-        code: 'MEDIA_BINARY_UPLOAD_FAILED',
-        status: putRes.status,
-        endpoint: putUrlObj.toString(),
-        suggestion: 'Check network stability and retry pushing.',
-      });
-    }
-
-    // [Phase C] Confirm upload (`POST /_emdash/api/media/{mediaId}/confirm`)
-    const confirmEndpoint = mediaConfirmEndpoint(options.origin, pendingMediaId);
-    const confirmRes = await fetchFn(confirmEndpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        size: buffer.length,
-      }),
-    });
-
-    if (!confirmRes.ok) {
-      throw new ApiError({
-        message: `Failed to confirm media "${options.filename}" (${pendingMediaId}): ${confirmRes.statusText}`,
-        code: 'MEDIA_CONFIRM_FAILED',
-        status: confirmRes.status,
-        endpoint: confirmEndpoint,
-        suggestion: 'The uploaded file could not be confirmed by EmDash.',
-      });
-    }
-
-    const confirmJson = await confirmRes.json();
-    const confirmData = unwrapEnvelope<Record<string, unknown>>(confirmJson);
-    const item = ((confirmData.item && typeof confirmData.item === 'object'
-      ? confirmData.item
-      : confirmData) ?? {}) as Record<string, unknown>;
-
-    if (item.status && item.status !== 'ready') {
-      throw new ApiError({
-        message: `Media "${options.filename}" (${pendingMediaId}) confirmed with unexpected status "${String(item.status)}".`,
-        code: 'MEDIA_NOT_READY',
-        endpoint: confirmEndpoint,
-        suggestion: 'Retry pushing the article.',
-      });
-    }
-
-    // IMPORTANT: Use the confirmed storageKey and url (EmDash rewrites storageKey to a double-ULID on confirm)
-    const confirmedMediaId =
-      (typeof item.id === 'string' && toMediaRecordId(item.id)) || pendingMediaId;
-    const confirmedStorageKey =
-      (typeof item.storageKey === 'string' && toStorageKey(item.storageKey)) || initialStorageKey;
-    const confirmedUrl = toRootRelativeMediaUrl(
-      typeof item.url === 'string' ? item.url : undefined,
-      confirmedStorageKey,
-      options.origin,
-    );
-
-    // Confirm transition: remove temporary initial storageKey entry when a new confirmed key is issued
-    if (options.cache && confirmedStorageKey !== initialStorageKey) {
-      options.cache.deleteMediaState(initialStorageKey);
-    }
-
-    options.cache?.saveMediaState({
+    // [Phase C] Confirm upload (`POST /_emdash/api/media/{mediaId}/confirm`), including the
+    // confirm-transition state writes as its legitimate side effect (inseparable from the
+    // storageKey rewrite EmDash performs on confirm — see AGENTS.md media invariants).
+    return await confirmUpload(
+      options,
+      fetchFn,
+      pendingMediaId,
+      initialStorageKey,
       localHash,
-      localContentHash: localHash,
-      mediaId: confirmedMediaId,
-      storageKey: confirmedStorageKey,
-      url: confirmedUrl,
-      status: 'uploaded',
-    });
-
-    // Best-effort sync of alt / caption to the media record itself (B-2)
-    await syncRemoteMediaMetadata(
-      confirmedMediaId,
-      { alt: options.alt, caption: options.caption },
-      { origin: options.origin, token: options.token, fetchFn },
+      serverContentHash,
+      buffer.length,
+      mimeType,
     );
-
-    return {
-      mediaId: confirmedMediaId,
-      storageKey: confirmedStorageKey,
-      url: confirmedUrl,
-      localHash,
-      contentHash:
-        typeof item.contentHash === 'string' && item.contentHash
-          ? item.contentHash
-          : serverContentHash,
-      size: typeof item.size === 'number' ? item.size : buffer.length,
-      mimeType: typeof item.mimeType === 'string' ? item.mimeType : mimeType,
-      filename: typeof item.filename === 'string' ? item.filename : options.filename,
-      width: typeof item.width === 'number' ? item.width : null,
-      height: typeof item.height === 'number' ? item.height : null,
-      createdAt: typeof item.createdAt === 'string' ? item.createdAt : undefined,
-      deduplicated: false,
-    };
   } catch (err) {
-    // [Compensation] Clean up orphan pending/failed record on server
+    // [Compensation] Clean up orphan pending/failed record on server. This block intentionally
+    // stays in the orchestrator body: the alreadyReadyItem path merges failure handling with a
+    // success return, and must not be scattered across phase functions.
     const comp = await compensateOrphanMedia(pendingMediaId, {
       origin: options.origin,
       token: options.token,
