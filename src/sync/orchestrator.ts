@@ -42,6 +42,11 @@ import {
 } from './taxonomies.js';
 import { pullMedia, type PullMediaResult } from './media.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
+import {
+  resolveConcurrency,
+  resolveMediaSyncLimit,
+  resolvePostsSyncLimit,
+} from '../utils/sync-limit-precedence.js';
 
 export interface UnpushedConflictItem {
   id: string;
@@ -175,6 +180,9 @@ export async function pullSingleArticle(
   );
   const canPruneTaxonomies = !options.postsOnly && !taxonomiesFailed;
 
+  // R-2 (v0.1.37): media walk bound resolved through the shared Layer 0 helper (see pullBatch).
+  const mediaSyncLimit = resolveMediaSyncLimit({}, { mediaSyncLimit: options.mediaSyncLimit });
+
   const article = await pullArticle(options.collection, options.targetId, {
     workspaceRoot: options.workspaceRoot,
     cache: options.cache,
@@ -184,7 +192,7 @@ export async function pullSingleArticle(
     force: options.force,
     localMediaRefs: options.localMediaRefs,
     mediaSync: options.mediaSync,
-    mediaSyncLimit: options.mediaSyncLimit,
+    mediaSyncLimit,
     fetchFn: options.fetchFn,
     canPruneTaxonomies,
   });
@@ -196,7 +204,7 @@ export async function pullSingleArticle(
       origin: options.origin,
       token: options.token,
       refreshToken: options.refreshToken,
-      limit: options.mediaSyncLimit,
+      limit: mediaSyncLimit,
       downloadFiles: options.metadataOnly !== true,
       cache: options.cache,
       fetchFn: options.fetchFn,
@@ -211,6 +219,14 @@ export async function pullSingleArticle(
  * Reusable across CLI and MCP servers to ensure consistent behavior.
  */
 export async function pullBatch(options: PullBatchOptions): Promise<PullBatchResult> {
+  // R-2 (v0.1.37): the batch window is resolved through the shared Layer 0 precedence helper so
+  // CLI, MCP, and this orchestrator can never drift apart. `options.all` intentionally keeps an
+  // unbounded window: transport receives undefined limit with all:true below, while pruning
+  // diagnostics (windowMsg / SyncPruneConflictError) report the DEFAULT_CONFIG fallback that a
+  // non-all run would use — matching listRemoteArticles' own ?? 100 transport fallback is out
+  // of scope here; only the presentation value changes.
+  const limit = resolvePostsSyncLimit({}, { postsSyncLimit: options.limit });
+  const mediaSyncLimit = resolveMediaSyncLimit({}, { mediaSyncLimit: options.mediaSyncLimit });
   // Synchronize remote taxonomies safely unless postsOnly
   let taxonomiesResult: OrchestratorTaxonomiesResult | undefined = undefined;
 
@@ -265,7 +281,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
           fetchFn: options.fetchFn,
           downloadFiles: true,
           isSharedSession: true,
-          limit: options.mediaSyncLimit,
+          limit: mediaSyncLimit,
         })
       : undefined;
 
@@ -273,7 +289,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     origin: options.origin,
     token: options.token,
     refreshToken: options.refreshToken,
-    limit: options.limit,
+    limit: options.all ? undefined : limit,
     all: options.all,
     status: options.status,
     fetchFn: options.fetchFn,
@@ -346,7 +362,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     if (unpushedConflicts.length > 0) {
       const affectedArticles = new Set(unpushedConflicts.map((i) => i.id)).size;
       const filesList = unpushedConflicts.map((i) => `  - ${i.filePath} (${i.slug})`).join('\n');
-      const windowMsg = options.limit ? ` (currently: ${options.limit})` : '';
+      const windowMsg = limit ? ` (currently: ${limit})` : '';
       const message =
         `Pull aborted: ${unpushedConflicts.length} file(s) belonging to ${affectedArticles} article(s) outside the sync window have unpushed local edits!\n\n` +
         `The following file(s) would be pruned from local cache, but contain unpushed changes` +
@@ -358,7 +374,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
         `  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed\n` +
         `  3. Keep them for now:    emit pull --no-prune (skips window pruning; local files stay untouched)\n`;
 
-      throw new SyncPruneConflictError(message, unpushedConflicts, options.limit);
+      throw new SyncPruneConflictError(message, unpushedConflicts, limit);
     }
   }
 
@@ -368,7 +384,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
   let preserved = 0;
   let quarantined = 0;
 
-  const concurrency = options.concurrency || 8;
+  const concurrency = resolveConcurrency({}, { concurrency: options.concurrency });
   let index = 0;
 
   const worker = async () => {

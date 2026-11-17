@@ -49,7 +49,7 @@ import { resolveArticleTarget } from '../../sync/diff.js';
 import { compareArticleFilenameDesc } from '../../utils/naming.js';
 import { formatToolError, formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 import { toStorageKey } from '../../utils/media-id.js';
-import { DEFAULT_CONFIG } from '../../utils/config.js';
+import { resolveMediaSyncLimit, resolvePostsSyncLimit } from '../../utils/sync-limit-precedence.js';
 import { resolveLocalMediaRefsOption } from '../../utils/media-ref-precedence.js';
 
 export function registerSyncPullTools(server: McpServer, resolveContext: ContextResolver): void {
@@ -140,7 +140,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
               mediaSync,
               includeMedia: args.includeMedia,
               metadataOnly: args.metadataOnly === true,
-              mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+              mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
             });
           } catch (error) {
             return formatToolError(error);
@@ -204,8 +204,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         }
 
         // Batch sync mode: taxonomies + articles (+ media if includeMedia)
-        const limit =
-          ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
+        const limit = resolvePostsSyncLimit(ctx.config);
         const shouldPrune =
           args.prune !== undefined ? args.prune : args.noPrune ? false : undefined;
         const postsOnly = args.postsOnly === true;
@@ -228,7 +227,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           // Local-first media mirroring is default-ON for a batch pull; postsOnly skips it, matching the CLI.
           // The shared walk is bounded by `mediaSyncLimit`, matching the CLI too.
           mediaSync: !postsOnly,
-          mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+          mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
         });
 
         let taxonomiesMsg = '';
@@ -288,7 +287,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           if (orphanWarning) mediaMsg += `\n${orphanWarning}`;
         }
         if (includeMedia) {
-          const mediaLimit = ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
+          const mediaLimit = resolveMediaSyncLimit(ctx.config);
           const mediaResult = await pullMedia({
             workspaceRoot: ctx.root,
             origin,
@@ -441,7 +440,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           refreshToken: ctx.auth.refreshToken,
           article: args.article,
           collection: args.collection || ctx.config.defaultCollection,
-          limit: args.limit || ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+          limit: resolveMediaSyncLimit(ctx.config, { mediaSyncLimit: args.limit }),
           all: args.all,
           downloadFiles: args.downloadFiles,
           cache: ctx.cache,

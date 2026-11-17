@@ -278,6 +278,7 @@ export function resolveConcurrency(
 ### 5.3 Symmetry レール拡張（新規静的検査）
 
 - CLI（`src/cli/commands/pull.ts`）と MCP（`src/mcp/tools/sync-pull.ts`）が limit 解決関数を**同一の `src/utils/sync-limit-precedence.js` から import していること**をソース走査で検証（Rule 5 / Axis 3 と同型の静的検査）。これにより将来のフォールバック式直書きの再発を gate で防ぐ。
+- **実装時追記**: 併せて「`src/cli/`・`src/mcp/`・`src/sync/orchestrator.ts` 内に `postsSyncLimit || ` / `mediaSyncLimit || ` / `|| 8;` のフォールバック式が復活していないこと」を grep ベースで検証する（散在の再発そのものを gate で遮断）。
 
 ### 5.4 Characterization test（Phase 1 前段・Rev.2 追加）
 

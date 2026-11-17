@@ -33,7 +33,11 @@ import {
   type PullTaxonomiesResult,
 } from '../../sync/taxonomies.js';
 import { pullMedia } from '../../sync/media.js';
-import { DEFAULT_CONFIG } from '../../utils/config.js';
+import {
+  resolveConcurrency,
+  resolveMediaSyncLimit,
+  resolvePostsSyncLimit,
+} from '../../utils/sync-limit-precedence.js';
 import { toStorageKey, type StorageKey } from '../../utils/media-id.js';
 import { isCanonicalUlid } from '../../utils/ulid.js';
 import {
@@ -194,12 +198,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           }
 
           // Pull articles and taxonomies via orchestrator facade
-          const limit =
-            ctx.config.postsSyncLimit || ctx.config.syncLimit || DEFAULT_CONFIG.postsSyncLimit;
+          const limit = resolvePostsSyncLimit(ctx.config);
 
-          const concurrency = options.concurrency
-            ? parseInt(options.concurrency, 10)
-            : ctx.config.concurrency || 8;
+          const concurrency = resolveConcurrency(ctx.config, {
+            concurrency: options.concurrency ? parseInt(options.concurrency, 10) : undefined,
+          });
 
           const windowLabel = formatPullWindowLabel(options.status, limit);
           console.log(
@@ -231,7 +234,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             // the full-library walk stays on the dedicated `emit pull-media --all` command below. The shared
             // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
             mediaSync: !postsOnly,
-            mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+            mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
             onProgress: ({ current, total, item }) => {
               if (item.deleted) {
                 console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
@@ -303,7 +306,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
 
           // 3. Pull media (if --media)
           if (includeMedia) {
-            const mediaLimit = ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
+            const mediaLimit = resolveMediaSyncLimit(ctx.config);
             const downloadFiles = options.metadataOnly !== true;
             console.log(
               `\nPulling media from remote (limit: ${mediaLimit}${downloadFiles ? '' : ', metadata only'})...`,
@@ -341,7 +344,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             mediaSync,
             includeMedia,
             metadataOnly: options.metadataOnly === true,
-            mediaSyncLimit: ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit,
+            mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
           });
 
           if (singlePull.taxonomies) {
@@ -487,7 +490,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         ? undefined
         : options.limit
           ? parseInt(options.limit, 10)
-          : ctx.config.mediaSyncLimit || DEFAULT_CONFIG.mediaSyncLimit;
+          : resolveMediaSyncLimit(ctx.config);
 
       try {
         if (options.storageKey && options.storageKey.length > 0) {
