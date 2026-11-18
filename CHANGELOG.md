@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-11-18
+
+### Added
+
+- **Sync Limit & Concurrency Precedence Resolver (`src/utils/sync-limit-precedence.ts`)**:
+  - Centralized `resolvePostsSyncLimit` / `resolveMediaSyncLimit` / `resolveConcurrency` in a pure Layer 0 helper with exact pre-refactor `||` precedence semantics, replacing 12 scattered fallback chains across CLI `pull`, MCP `sync_pull`, and the Layer 2 orchestrator.
+  - Removed the magic number `8` for concurrency in favor of `DEFAULT_CONFIG`.
+  - Added `tests/sync_limit_precedence.test.ts` including a static symmetry rail that forbids inline fallback chains from regressing in consumers.
+
+### Changed
+
+- **Guard Registry Source Metadata (`src/sync/guards.ts`)**: Refreshed the stale `source:` line metadata for G12 / G15 / G16 / G17, which pointed at the pre-modularization `src/sync/push.ts`, to their actual emission sites in `src/sync/push/guards.ts` (lines 46, 72, 98, 123).
+
+### Refactored
+
+- **Characterization Snapshot Rails (`tests/cli_pull_snapshot.test.ts`, `tests/doctor_snapshot.test.ts`)**: Added byte-invariance snapshot tests for the CLI batch-pull output and `emit doctor` report as invariance gates to be consumed by the giant-function splits below.
+- **`uploadMediaFile` Phase Helpers (`src/client/media.ts`)**: Extracted the four transport phases into focused private helpers — `resolveReusableUpload` (reuse/dedup recovery), `finalizeServerDedupHit` (server dedup short-circuit), `putBinaryStream` (upload-url + binary PUT streaming), and `confirmUpload` (confirm POST plus `media_state`/companion writes) — leaving `uploadMediaFile` as a linear orchestrator over the 4-stage flow. No payload, endpoint, guard, or state-write changes.
+- **`runWorkspaceDoctor` Check Groups (`src/sync/doctor.ts`)**: Split the 619-line monolith into three private helpers — `runEnvironmentChecks`, `runContentIntegrityChecks`, and `runMediaIntegrityChecks` — behind a shared read-only `DoctorCheckContext`. DB write authority (`clearConflictsByKind`) remains in the orchestrator via an `afterAutoClear` callback, preserving the exact check sequence and write ordering (snapshot-identical output).
+- **CLI Batch Pull Stages (`src/cli/commands/pull.ts`)**: Extracted the batch branch into named stages — `runBatchPull`, `printBatchPullProgress`, `printBatchTaxonomyHint`, `printBatchPullSummary`, and `runBatchIncludeMediaStage` — using a local structural `BatchPullSummary` type so the Layer 2 consumer allowlist stays untouched.
+- **Barrel Re-export Convergence (`src/sync/pull.ts`, `src/sync/push.ts`, `src/sync/media.ts`)**: The three thin barrels are now reserved exclusively as the public npm façade re-exported by `src/index.ts`. All 41 repository-internal import sites (Layer 2 `orchestrator`/`doctor`/media stages, Layer 3 CLI/MCP, and 19 test files) were rewired to the implementation entities (`sync/pull/index.js`, `sync/push/index.js`, `sync/media/index.js`). The layering sibling snapshot and the G11 label source check follow the new paths; `ALLOWED_LAYER_2_SYMBOLS` remains unchanged.
+
 ## [0.1.36] - 2026-11-16
 
 ### Added

@@ -217,7 +217,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['QUARANTINED_COPY_NOT_PUSHABLE'],
     stage: 'push',
     severity: 'error',
-    source: 'src/sync/push.ts:581',
+    source: 'src/sync/push/guards.ts:46',
     description: 'conflicts/ 配下の退避ファイル直接 Push 禁止',
   },
   {
@@ -244,7 +244,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['DELETE_PENDING_ARTICLE'],
     stage: 'push',
     severity: 'error',
-    source: 'src/sync/push.ts:674',
+    source: 'src/sync/push/guards.ts:72',
     description: '削除保留中記事の Push 抑止',
   },
   {
@@ -253,7 +253,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['TAXONOMY_CONFLICT_PENDING'],
     stage: 'push',
     severity: 'error',
-    source: 'src/sync/push.ts:711',
+    source: 'src/sync/push/guards.ts:98',
     description: 'タクソノミー未反映状態での Push 抑止',
   },
   {
@@ -262,7 +262,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['TAXONOMY_APPLY_PENDING'],
     stage: 'push',
     severity: 'error',
-    source: 'src/sync/push.ts:726',
+    source: 'src/sync/push/guards.ts:123',
     description: 'タクソノミー同期保留中の Push 抑止',
   },
   {
