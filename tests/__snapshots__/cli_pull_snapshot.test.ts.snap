@@ -1,0 +1,124 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull halts on SyncPruneConflictError when a windowed-out article has unpushed edits 1`] = `
+{
+  "err": [
+    "  ⚠️ Taxonomies: Failed to fetch remote categories and tags (preserved existing local definitions).",
+    "
+❌ Pull aborted: 1 file(s) belonging to 1 article(s) outside the sync window have unpushed local edits!
+
+The following file(s) would be pruned from local cache, but contain unpushed changes (both the canonical file and any duplicate copy sharing its ULID are inspected):
+  - posts/published/20260101_01M67OLDARTICLE0000000000-gamma.md (gamma)
+
+💡 Why did this happen?
+The modified article(s) are older than the workspace sync window (currently: 30).
+
+Recommended actions:
+  1. Push local changes:   emit push <filePath>
+  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed
+  3. Keep them for now:    emit pull --no-prune (skips window pruning; local files stay untouched)
+",
+  ],
+  "exitCode": 1,
+  "out": [
+    "Syncing categories and tags...",
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+  ],
+  "raw": [],
+}
+`;
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull mirrors a body-referenced storageKey and reports the coverage line 1`] = `
+{
+  "err": [],
+  "exitCode": undefined,
+  "out": [
+    "Syncing categories and tags...",
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+    "  ✅ Taxonomies: 0 categories, 0 tags",
+    "  [1/1] ✅ Pulled alpha -> posts/published/20260101_01M67P0MBMJQQXH2K95HHCYRYA-Article-alpha.md",
+    "
+🎉 Articles: 1 total [1 published, 0 draft] (1 updated, 0 skipped/up-to-date)",
+    "
+🖼️  Media (local-first): walked 1/1 record(s), mirrored 1 referenced asset(s) (1 downloaded, 0 up-to-date).",
+  ],
+  "raw": [],
+}
+`;
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull prunes a windowed-out article cleanly and renders the 🗑️ progress line 1`] = `
+{
+  "err": [],
+  "exitCode": undefined,
+  "out": [
+    "Syncing categories and tags...",
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+    "  ✅ Taxonomies: 0 categories, 0 tags",
+    "  [1/2] ✅ Pulled alpha -> posts/published/20260101_01M67P0MBMJQQXH2K95HHCYRYA-Article-alpha.md",
+    "    💡 Preserved 1 styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.",
+    "  [2/2] 🗑️  Pruned gamma -> posts/published/20260101_01M67OLDARTICLE0000000000-gamma.md",
+    "
+🎉 Articles: 1 total [1 published, 0 draft] (1 updated, 0 skipped/up-to-date, 1 pruned)",
+    "
+🖼️  Media (local-first): walked 0 record(s), mirrored 0 referenced asset(s) (0 downloaded, 0 up-to-date).",
+  ],
+  "raw": [],
+}
+`;
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull renders taxonomy summary, per-item progress and media coverage line 1`] = `
+{
+  "err": [],
+  "exitCode": undefined,
+  "out": [
+    "Syncing categories and tags...",
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+    "  ✅ Taxonomies: 1 categories, 2 tags",
+    "
+Available Categories:
+  - camera
+
+Available Tags:
+  - webdev, camera
+",
+    "  [1/2] ✅ Pulled alpha -> posts/published/20260101_01M67P0MBMJQQXH2K95HHCYRYA-Article-alpha.md",
+    "    💡 Preserved 1 styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.",
+    "  [2/2] ✅ Pulled beta -> posts/published/20260101_01M67P0MBMJQQXH2K95HHCYRYB-Article-beta.md",
+    "    💡 Preserved 1 styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.",
+    "
+🎉 Articles: 2 total [2 published, 0 draft] (2 updated, 0 skipped/up-to-date)",
+    "
+🖼️  Media (local-first): walked 0 record(s), mirrored 0 referenced asset(s) (0 downloaded, 0 up-to-date).",
+  ],
+  "raw": [],
+}
+`;
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull with --posts-only skips taxonomy sync lines entirely 1`] = `
+{
+  "err": [],
+  "exitCode": undefined,
+  "out": [
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+    "  [1/1] ✅ Pulled alpha -> posts/published/20260101_01M67P0MBMJQQXH2K95HHCYRYA-Article-alpha.md",
+    "    💡 Preserved 1 styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.",
+    "
+🎉 Articles: 1 total [1 published, 0 draft] (1 updated, 0 skipped/up-to-date)",
+  ],
+  "raw": [],
+}
+`;
+
+exports[`CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C) > batch pull with an empty remote prints the no-articles path verbatim 1`] = `
+{
+  "err": [],
+  "exitCode": undefined,
+  "out": [
+    "Syncing categories and tags...",
+    "Fetching articles from remote (posts, status: all, window: 30/status, concurrency: 8)...",
+    "  ✅ Taxonomies: 0 categories, 0 tags",
+    "No remote articles found.",
+  ],
+  "raw": [],
+}
+`;

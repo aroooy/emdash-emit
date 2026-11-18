@@ -1,0 +1,223 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > healthy single-article workspace matches the full check-by-check snapshot 1`] = `
+{
+  "checks": [
+    {
+      "details": {
+        "createdWithVersion": "<VERSION>",
+        "currentVersion": "<VERSION>",
+        "lastSyncedVersion": "<VERSION>",
+      },
+      "id": "version_compatibility",
+      "message": "Workspace running v<VERSION> (created with v<VERSION>, last synced with v<VERSION>)",
+      "name": "Version Compatibility",
+      "status": "ok",
+    },
+    {
+      "id": "origin_consistency",
+      "message": "Origins are consistent (https://aroooy.net).",
+      "name": "Origin Consistency",
+      "status": "ok",
+    },
+    {
+      "id": "frontmatter_integrity",
+      "message": "All 1 article(s) have valid frontmatter syntax.",
+      "name": "Frontmatter Integrity",
+      "status": "ok",
+    },
+    {
+      "id": "conflicts_quarantine",
+      "message": "No unresolved conflicts or rescue backups in posts/conflicts/.",
+      "name": "Conflicts & Quarantine",
+      "status": "ok",
+    },
+    {
+      "id": "sync_status",
+      "message": "All 1 tracked article(s) in sync with base snapshots.",
+      "name": "Sync Status",
+      "status": "ok",
+    },
+    {
+      "id": "media_references",
+      "message": "All referenced local media files exist on disk.",
+      "name": "Media References",
+      "status": "ok",
+    },
+  ],
+  "createdWithVersion": "<VERSION>",
+  "emitVersion": "<VERSION>",
+  "lastSyncedVersion": "<VERSION>",
+  "overallStatus": "healthy",
+  "workspace": "<WORKSPACE_ROOT>",
+}
+`;
+
+exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > media library census and file-route probe match the snapshot 1`] = `
+{
+  "checks": [
+    {
+      "details": {
+        "createdWithVersion": "<VERSION>",
+        "currentVersion": "<VERSION>",
+        "lastSyncedVersion": "<VERSION>",
+      },
+      "id": "version_compatibility",
+      "message": "Workspace running v<VERSION> (created with v<VERSION>, last synced with v<VERSION>)",
+      "name": "Version Compatibility",
+      "status": "ok",
+    },
+    {
+      "id": "origin_consistency",
+      "message": "Origins are consistent (https://aroooy.net).",
+      "name": "Origin Consistency",
+      "status": "ok",
+    },
+    {
+      "id": "frontmatter_integrity",
+      "message": "All 1 article(s) have valid frontmatter syntax.",
+      "name": "Frontmatter Integrity",
+      "status": "ok",
+    },
+    {
+      "id": "conflicts_quarantine",
+      "message": "No unresolved conflicts or rescue backups in posts/conflicts/.",
+      "name": "Conflicts & Quarantine",
+      "status": "ok",
+    },
+    {
+      "details": {
+        "invalid": 0,
+        "modified": 0,
+        "synced": 0,
+        "total": 1,
+        "untracked": 1,
+      },
+      "id": "sync_status",
+      "message": "0 modified and 1 untracked article(s) pending push.",
+      "name": "Sync Status",
+      "status": "warning",
+    },
+    {
+      "id": "media_references",
+      "message": "Remote media library holds 2 record(s); this workspace mirrors 1",
+      "name": "Media References",
+      "status": "ok",
+    },
+  ],
+  "createdWithVersion": "<VERSION>",
+  "emitVersion": "<VERSION>",
+  "lastSyncedVersion": "<VERSION>",
+  "overallStatus": "warnings",
+  "workspace": "<WORKSPACE_ROOT>",
+}
+`;
+
+exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > mixed-defect workspace matches the full check-by-check snapshot 1`] = `
+{
+  "checks": [
+    {
+      "details": {
+        "createdWithVersion": "<VERSION>",
+        "currentVersion": "<VERSION>",
+        "lastSyncedVersion": "<VERSION>",
+      },
+      "id": "version_compatibility",
+      "message": "Workspace running v<VERSION> (created with v<VERSION>, last synced with v<VERSION>)",
+      "name": "Version Compatibility",
+      "status": "ok",
+    },
+    {
+      "details": {
+        "configOrigin": "https://aroooy.net",
+        "profileOrigin": "https://other.example.com",
+      },
+      "id": "origin_consistency",
+      "message": "Config origin (https://aroooy.net) differs from resolved profile origin (https://other.example.com). Profile origin will be preferred for sync.",
+      "name": "Origin Consistency",
+      "status": "warning",
+    },
+    {
+      "details": [
+        "posts/draft/broken.md",
+      ],
+      "id": "frontmatter_integrity",
+      "message": "1 article(s) have unrecoverable frontmatter syntax errors.",
+      "name": "Frontmatter Integrity",
+      "status": "error",
+    },
+    {
+      "details": [
+        {
+          "filePath": "posts/conflicts/y.deleted.md",
+          "type": "deleted",
+        },
+        {
+          "filePath": "posts/conflicts/x.conflict.md",
+          "type": "conflict",
+        },
+      ],
+      "id": "conflicts_quarantine",
+      "message": "2 quarantined file(s) found in posts/conflicts/ (1 sync conflicts, 1 deletion rescue copies). Run "emit conflicts list" to inspect.",
+      "name": "Conflicts & Quarantine",
+      "status": "warning",
+    },
+    {
+      "details": [
+        {
+          "filePath": "posts/draft/gone.md",
+          "id": "01M67SNAPSH0T0000000000003",
+          "slug": "ghost-post",
+        },
+      ],
+      "id": "taxonomy_apply_pending",
+      "message": "1 article(s) have unapplied taxonomy terms from a previous failed sync.",
+      "name": "Taxonomy Apply Pending",
+      "status": "warning",
+      "suggestion": "Run "emit pull-taxonomies", verify the terms exist on remote (missing terms or permission errors must be fixed there first), then "emit push <file>".",
+    },
+    {
+      "details": [
+        {
+          "filePath": "posts/draft/gone.md",
+          "id": "01M67SNAPSH0T0000000000003",
+          "slug": "ghost-post",
+        },
+      ],
+      "id": "delete_pending",
+      "message": "1 article(s) are marked as delete_pending (unconfirmed remote deletion).",
+      "name": "Delete Pending Articles",
+      "status": "warning",
+      "suggestion": "Confirm the remote deletion, then "emit delete <file>" to finish local cleanup, or "emit push <file> --revive" to intentionally revive.",
+    },
+    {
+      "details": {
+        "invalid": 2,
+        "modified": 0,
+        "synced": 0,
+        "total": 4,
+        "untracked": 2,
+      },
+      "id": "sync_status",
+      "message": "0 modified and 2 untracked article(s) pending push.",
+      "name": "Sync Status",
+      "status": "warning",
+    },
+    {
+      "details": [
+        "/_emdash/api/media/file/01M67FENCED00000000000000A.png (code-example/custom-block in posts/draft/media-refs.md)",
+        "/_emdash/api/media/file/01M67MISSING000000000000AA.png (malformed reference in posts/draft/media-refs.md)",
+      ],
+      "id": "media_references",
+      "message": "All referenced local media files exist on disk. (1 informational/custom-block reference(s) ignored; 1 malformed reference(s) skipped (not valid media file keys))",
+      "name": "Media References",
+      "status": "ok",
+    },
+  ],
+  "createdWithVersion": "<VERSION>",
+  "emitVersion": "<VERSION>",
+  "lastSyncedVersion": "<VERSION>",
+  "overallStatus": "errors",
+  "workspace": "<WORKSPACE_ROOT>",
+}
+`;
