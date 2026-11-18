@@ -238,14 +238,36 @@ export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaRefe
 }
 
 /**
- * Runs a comprehensive health diagnostic across the workspace.
+ * Shared read-only context threaded through the three check groups. `checks` is appended to in strict
+ * id order, so the group call order inside `runWorkspaceDoctor` is what fixes the report's sequence.
+ *
+ * Deliberately carries no DB write authority: the conflict-pending auto-clear stays in the orchestrator,
+ * and the slug classification it depends on is published back onto this context so later checks keep
+ * observing exactly one shared array.
  */
-export async function runWorkspaceDoctor(
-  options: RunWorkspaceDoctorOptions,
-): Promise<DoctorReport> {
-  const collection = options.collection || options.config.defaultCollection || 'posts';
-  const checks: DoctorCheckResult[] = [];
-  const currentVersion = getPackageVersion();
+interface DoctorCheckContext {
+  options: RunWorkspaceDoctorOptions;
+  collection: string;
+  cache: CacheDatabase;
+  checks: DoctorCheckResult[];
+  /** Quarantined copies under `<collection>/conflicts/`, read once and reused by checks 4 and 4b. */
+  conflictItems: ReturnType<typeof listConflicts>;
+  /** Every `sync_state` row, read once for checks 4b–4d. */
+  allStates: ReturnType<CacheDatabase['getAllSyncStates']>;
+  /** Populated by `runContentIntegrityChecks`; consumed by the orchestrator's auto-clear writes. */
+  pendingConflictSlugs?: {
+    autoClearedBodySlugs: string[];
+    autoClearedTaxSlugs: string[];
+    manualBodySlugs: string[];
+    manualTaxSlugs: string[];
+  };
+}
+
+/**
+ * Checks 1, 2 and 7 — the environment-level checks that read no article bodies.
+ */
+function runEnvironmentChecks(ctx: DoctorCheckContext, currentVersion: string): void {
+  const { options, checks } = ctx;
 
   // 1. Version Compatibility Check
   const createdWith = options.config.createdWithVersion;
@@ -283,6 +305,38 @@ export async function runWorkspaceDoctor(
       message: `Origins are consistent (${profileOrigin || configOrigin || 'default'}).`,
     });
   }
+
+  // 7. MCP Process Check
+  const mcpCheck = checkMcpProcess();
+  if (mcpCheck.isOutdated) {
+    checks.push({
+      id: 'mcp_process',
+      name: 'MCP Server Process',
+      status: 'warning',
+      message: mcpCheck.message || 'An MCP server process is running with an outdated version.',
+      details: mcpCheck.state ? { ...mcpCheck.state } : undefined,
+    });
+  } else if (mcpCheck.status === 'alive') {
+    checks.push({
+      id: 'mcp_process',
+      name: 'MCP Server Process',
+      status: 'ok',
+      message: `MCP server process is running healthy (PID ${mcpCheck.state?.pid}, v${mcpCheck.state?.version}).`,
+    });
+  }
+}
+
+/**
+ * Checks 3, 4, 4b, 4c, 4d and 5 — workspace content and cache-flag integrity. Read-only except for the
+ * `afterAutoClear` callback: the DB writes that clear stale pending flags belong to the orchestrator, so
+ * this group classifies each pending record and then lets the caller dispatch the clears before the
+ * `conflict_pending_autoclear` check is pushed (which is what preserves the original check order).
+ */
+function runContentIntegrityChecks(
+  ctx: DoctorCheckContext,
+  afterAutoClear: (slugs: NonNullable<DoctorCheckContext['pendingConflictSlugs']>) => void,
+): void {
+  const { options, collection, cache, checks, conflictItems, allStates } = ctx;
 
   // 3. Frontmatter Syntax & Schema Integrity Check
   const invalidFiles: string[] = [];
@@ -342,7 +396,6 @@ export async function runWorkspaceDoctor(
   }
 
   // 4. Conflicts & Quarantine Check
-  const conflictItems = listConflicts(options.workspaceRoot, collection);
   if (conflictItems.length > 0) {
     const conflictCount = conflictItems.filter((i) => i.type === 'conflict').length;
     const deletedCount = conflictItems.filter((i) => i.type === 'deleted').length;
@@ -367,7 +420,6 @@ export async function runWorkspaceDoctor(
   }
 
   // 4b. Conflict Pending Alignment & Auditing
-  const allStates = options.cache.getAllSyncStates();
   const autoClearedBodySlugs: string[] = [];
   const autoClearedTaxSlugs: string[] = [];
   const manualBodySlugs: string[] = [];
@@ -385,7 +437,7 @@ export async function runWorkspaceDoctor(
       const diskHash = calculateHash(diskContent);
       hasDivergence = !isLocalFileUnmodified({
         workspaceRoot: options.workspaceRoot,
-        cache: options.cache,
+        cache,
         id: state.id,
         relPath: state.localFilePath,
         localContent: diskContent,
@@ -406,7 +458,6 @@ export async function runWorkspaceDoctor(
             c.filePath.endsWith('.local-dropped.md')),
       );
       if (!hasConflictCopy && !hasDivergence && !hasBodyMarkers) {
-        options.cache.clearConflictsByKind(state.id, 'body');
         autoClearedBodySlugs.push(state.slug);
       } else {
         manualBodySlugs.push(state.slug);
@@ -417,7 +468,6 @@ export async function runWorkspaceDoctor(
     if (state.taxonomyConflictPending === 1) {
       const hasConflictCopy = conflictItems.some((c) => c.id === state.id || c.slug === state.slug);
       if (!hasConflictCopy && !hasDivergence) {
-        options.cache.clearConflictsByKind(state.id, 'taxonomy');
         autoClearedTaxSlugs.push(state.slug);
       } else {
         manualTaxSlugs.push(state.slug);
@@ -426,6 +476,15 @@ export async function runWorkspaceDoctor(
   }
 
   const totalAutoCleared = autoClearedBodySlugs.length + autoClearedTaxSlugs.length;
+  ctx.pendingConflictSlugs = {
+    autoClearedBodySlugs,
+    autoClearedTaxSlugs,
+    manualBodySlugs,
+    manualTaxSlugs,
+  };
+  // The orchestrator owns the DB writes; pushing this check after they land keeps the report sequence
+  // byte-identical to the pre-split implementation.
+  afterAutoClear(ctx.pendingConflictSlugs);
   if (totalAutoCleared > 0) {
     checks.push({
       id: 'conflict_pending_autoclear',
@@ -493,7 +552,7 @@ export async function runWorkspaceDoctor(
   }
 
   // 5. Sync Status & Pending Modifications Check
-  const wsStatus = getWorkspaceStatus(options.workspaceRoot, options.cache, collection);
+  const wsStatus = getWorkspaceStatus(options.workspaceRoot, cache, collection);
   if (wsStatus.summary.modified > 0 || wsStatus.summary.untracked > 0) {
     checks.push({
       id: 'sync_status',
@@ -516,6 +575,14 @@ export async function runWorkspaceDoctor(
       message: `All ${wsStatus.summary.synced} tracked article(s) in sync with base snapshots.`,
     });
   }
+}
+
+/**
+ * Check 6 — media reference integrity, including the cache/baseline fallbacks, the optional live
+ * file-route probe and the optional remote library census. Reads no DB state beyond `media_state`.
+ */
+async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
+  const { options, collection, checks } = ctx;
 
   // 6. Media References Integrity Check
   // Index every local resolution source so a body URL can be matched even when the companion YAML
@@ -823,37 +890,60 @@ export async function runWorkspaceDoctor(
         : {}),
     });
   }
+}
 
-  // 7. MCP Process Check
-  const mcpCheck = checkMcpProcess();
-  if (mcpCheck.isOutdated) {
-    checks.push({
-      id: 'mcp_process',
-      name: 'MCP Server Process',
-      status: 'warning',
-      message: mcpCheck.message || 'An MCP server process is running with an outdated version.',
-      details: mcpCheck.state ? { ...mcpCheck.state } : undefined,
-    });
-  } else if (mcpCheck.status === 'alive') {
-    checks.push({
-      id: 'mcp_process',
-      name: 'MCP Server Process',
-      status: 'ok',
-      message: `MCP server process is running healthy (PID ${mcpCheck.state?.pid}, v${mcpCheck.state?.version}).`,
-    });
-  }
+/**
+ * Runs a comprehensive health diagnostic across the workspace.
+ *
+ * The three check groups are called in strict sequence, and each appends to the shared `checks` array in
+ * the report's documented id order (1, 2, 3, 4, 4b, 4c, 4d, 5, 6, 7). The only side effect kept here is
+ * the stale pending-flag auto-clear, which must land between the classification in check 4b and the
+ * `conflict_pending_autoclear` push so the sequence stays unchanged.
+ */
+export async function runWorkspaceDoctor(
+  options: RunWorkspaceDoctorOptions,
+): Promise<DoctorReport> {
+  const collection = options.collection || options.config.defaultCollection || 'posts';
+  const currentVersion = getPackageVersion();
+
+  const ctx: DoctorCheckContext = {
+    options,
+    collection,
+    cache: options.cache,
+    checks: [],
+    conflictItems: listConflicts(options.workspaceRoot, collection),
+    allStates: options.cache.getAllSyncStates(),
+  };
+
+  runEnvironmentChecks(ctx, currentVersion);
+
+  runContentIntegrityChecks(ctx, ({ autoClearedBodySlugs, autoClearedTaxSlugs }) => {
+    // The original loop cleared each record inline; resolving the slug back to its row reproduces the
+    // identical per-kind `clearConflictsByKind` calls without giving the check group write authority.
+    const stateForSlug = (slug: string) => ctx.allStates.find((s) => s.slug === slug);
+    for (const slug of autoClearedBodySlugs) {
+      const state = stateForSlug(slug);
+      if (state) options.cache.clearConflictsByKind(state.id, 'body');
+    }
+    for (const slug of autoClearedTaxSlugs) {
+      const state = stateForSlug(slug);
+      if (state) options.cache.clearConflictsByKind(state.id, 'taxonomy');
+    }
+  });
+
+  await runMediaIntegrityChecks(ctx);
 
   // Determine overall status
-  const hasErrors = checks.some((c) => c.status === 'error');
-  const hasWarnings = checks.some((c) => c.status === 'warning');
+  const hasErrors = ctx.checks.some((c) => c.status === 'error');
+  const hasWarnings = ctx.checks.some((c) => c.status === 'warning');
   const overallStatus = hasErrors ? 'errors' : hasWarnings ? 'warnings' : 'healthy';
 
   return {
     workspace: options.workspaceRoot,
     emitVersion: currentVersion,
-    createdWithVersion: createdWith,
-    lastSyncedVersion: lastSynced,
+    createdWithVersion: options.config.createdWithVersion,
+    lastSyncedVersion: options.config.lastSyncedVersion,
     overallStatus,
-    checks,
+    checks: ctx.checks,
   };
 }
