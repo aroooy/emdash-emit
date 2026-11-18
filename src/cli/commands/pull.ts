@@ -22,7 +22,7 @@
 
 import path from 'node:path';
 import type { Command } from 'commander';
-import { formatQuarantineNotice } from '../../sync/pull.js';
+import { formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
 import { pullBatch, pullSingleArticle } from '../../sync/orchestrator.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { ApiError } from '../../client/error.js';
@@ -112,6 +112,210 @@ function printTaxonomySyncSummary(
   console.log(`${indent}${successLine}${suffix}`);
 }
 
+/**
+ * The subset of a batch pull result that the presentation helpers below need. Declared structurally
+ * rather than imported because `PullBatchResult` is a Layer 2 internal type that `tests/layering.test.ts`
+ * deliberately keeps out of the consumer allowlist; `pullBatch()`'s return value satisfies this shape, so
+ * the CLI still renders every field without widening that boundary.
+ */
+interface BatchPullSummary {
+  total: number;
+  updated: number;
+  skipped: number;
+  deleted?: number;
+  preserved?: number;
+  items: PullResult[];
+  media?: {
+    walkedCount: number;
+    remoteTotalCount: number | null;
+    complete: boolean;
+    downloaded: number;
+    skipped: number;
+    mirroredStorageKeys: string[];
+    verifiedStorageKeys: string[];
+    orphanStorageKeys: string[];
+  };
+}
+
+/** Per-article progress line for a batch pull, keyed on the item's terminal state. */
+function printBatchPullProgress(progress: {
+  current: number;
+  total: number;
+  item: PullResult;
+}): void {
+  const { current, total, item } = progress;
+  if (item.deleted) {
+    console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
+  } else if (item.healed) {
+    if (item.prunedTaxonomies) {
+      const notice = formatPrunedTaxonomiesNotice(item.prunedTaxonomies);
+      console.log(
+        `  [${current}/${total}] ${notice ?? `🛠️  Repaired frontmatter for ${item.slug}`}`,
+      );
+    } else {
+      console.log(
+        `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved). Push the file to apply changes to the server.`,
+      );
+    }
+  } else if (item.localEditsPreserved) {
+    console.log(
+      `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath}; remote changes NOT applied)`,
+    );
+    const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
+    if (hint) console.log(hint);
+  } else if (!item.skipped) {
+    console.log(`  [${current}/${total}] ✅ Pulled ${item.slug} -> ${item.filePath}`);
+    const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
+    if (hint) console.log(hint);
+  } else if (current % 50 === 0 || current === total) {
+    process.stdout.write(`  [${current}/${total}] Synced...\r`);
+  }
+}
+
+/** Taxonomy sync summary plus the local term hint that follows it in batch mode. */
+function printBatchTaxonomyHint(
+  taxResult: PullTaxonomiesResult & { error?: string },
+  workspaceRoot: string,
+): void {
+  printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
+  const taxSummary = getLocalTaxonomiesSummary(workspaceRoot);
+  const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
+  if (taxHint) {
+    console.log(`\n${taxHint}\n`);
+  }
+}
+
+/** Final counts, preserved-edit guidance, quarantine notices and the local-first media line. */
+function printBatchPullSummary(
+  status: 'all' | 'draft' | 'published',
+  result: BatchPullSummary,
+): void {
+  const deletedMsg = result.deleted ? `, ${result.deleted} pruned` : '';
+  const statusBreakdown = formatPullStatusBreakdown(status, result.items);
+  console.log(
+    `\n🎉 Articles: ${result.total} total${statusBreakdown} (${result.updated} updated, ${result.skipped} skipped/up-to-date${deletedMsg})`,
+  );
+
+  if (result.preserved && result.preserved > 0) {
+    console.log(
+      `🛡️  ${result.preserved} article(s) had unpushed local edits: Emit kept your local version (remote changes were NOT applied). ` +
+        `Push them with "emit push <filePath>", or re-run with --force to accept the remote version.`,
+    );
+  }
+
+  for (const item of result.items) {
+    const notice = formatQuarantineNotice(item.quarantined);
+    if (notice) console.log(`\n${notice}`);
+  }
+
+  // Local-first media mirror summary. The walk is JSON-only; only assets referenced by pulled
+  // article bodies were downloaded. Report the coverage honestly and never claim a record is absent.
+  if (result.media) {
+    const m = result.media;
+    const totalLabel =
+      typeof m.remoteTotalCount === 'number' && m.remoteTotalCount > 0
+        ? `${m.walkedCount}/${m.remoteTotalCount}`
+        : `${m.walkedCount}${m.complete ? '' : '+'}`;
+    console.log(
+      `\n🖼️  Media (local-first): walked ${totalLabel} record(s), mirrored ${m.mirroredStorageKeys.length} referenced asset(s) (${m.downloaded} downloaded, ${m.skipped} up-to-date).`,
+    );
+    if (m.orphanStorageKeys.length > 0) {
+      reportOrphanStorageKeys(m.orphanStorageKeys);
+    }
+  }
+}
+
+/** Full remote media library stage, only reached under `--media`. */
+async function runBatchIncludeMediaStage(
+  ctx: Awaited<ReturnType<CliContextResolver>>,
+  metadataOnly: boolean | undefined,
+): Promise<void> {
+  const mediaLimit = resolveMediaSyncLimit(ctx.config);
+  const downloadFiles = metadataOnly !== true;
+  console.log(
+    `\nPulling media from remote (limit: ${mediaLimit}${downloadFiles ? '' : ', metadata only'})...`,
+  );
+  const mediaResult = await pullMedia({
+    workspaceRoot: ctx.root,
+    origin: ctx.origin,
+    token: ctx.auth.token,
+    refreshToken: ctx.auth.refreshToken,
+    limit: mediaLimit,
+    downloadFiles,
+    cache: ctx.cache,
+  });
+  console.log(
+    `  ✅ Media: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
+  );
+}
+
+/** Batch mode: taxonomies + articles (+ full media library under `--media`). */
+async function runBatchPull(
+  ctx: Awaited<ReturnType<CliContextResolver>>,
+  args: {
+    collection: string;
+    status: 'all' | 'draft' | 'published';
+    concurrencyOption?: string;
+    force?: boolean;
+    prune: boolean;
+    postsOnly: boolean;
+    localMediaRefs: boolean | undefined;
+    includeMedia: boolean;
+    metadataOnly?: boolean;
+  },
+): Promise<void> {
+  const { collection, status, postsOnly, localMediaRefs } = args;
+
+  if (!postsOnly) {
+    console.log('Syncing categories and tags...');
+  }
+
+  // Pull articles and taxonomies via orchestrator facade
+  const limit = resolvePostsSyncLimit(ctx.config);
+
+  const concurrency = resolveConcurrency(ctx.config, {
+    concurrency: args.concurrencyOption ? parseInt(args.concurrencyOption, 10) : undefined,
+  });
+
+  const windowLabel = formatPullWindowLabel(status, limit);
+  console.log(
+    `Fetching articles from remote (${collection}, status: ${status}, window: ${windowLabel}, concurrency: ${concurrency})...`,
+  );
+  const batchResult = await pullBatch({
+    collection,
+    workspaceRoot: ctx.root,
+    cache: ctx.cache,
+    origin: ctx.origin,
+    token: ctx.auth.token,
+    refreshToken: ctx.auth.refreshToken,
+    limit,
+    status,
+    force: args.force,
+    localMediaRefs,
+    concurrency,
+    prune: args.prune,
+    postsOnly,
+    onTaxonomySync: (taxResult) => printBatchTaxonomyHint(taxResult, ctx.root),
+    // Local-first media mirroring is default-ON for a batch pull. `--posts-only` skips it entirely;
+    // the full-library walk stays on the dedicated `emit pull-media --all` command below. The shared
+    // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
+    mediaSync: !postsOnly,
+    mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
+    onProgress: printBatchPullProgress,
+  });
+
+  if (batchResult.total === 0 && (!batchResult.deleted || batchResult.deleted === 0)) {
+    console.log('No remote articles found.');
+    return;
+  }
+
+  printBatchPullSummary(status, batchResult);
+
+  if (args.includeMedia) {
+    await runBatchIncludeMediaStage(ctx, args.metadataOnly);
+  }
+}
+
 export function registerPullCommands(program: Command, resolveContext: CliContextResolver): void {
   // emit pull [target]
   program
@@ -192,138 +396,17 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         }
 
         if (!targetId) {
-          // Batch mode: taxonomies + articles (+ media if --media)
-          if (!postsOnly) {
-            console.log('Syncing categories and tags...');
-          }
-
-          // Pull articles and taxonomies via orchestrator facade
-          const limit = resolvePostsSyncLimit(ctx.config);
-
-          const concurrency = resolveConcurrency(ctx.config, {
-            concurrency: options.concurrency ? parseInt(options.concurrency, 10) : undefined,
-          });
-
-          const windowLabel = formatPullWindowLabel(options.status, limit);
-          console.log(
-            `Fetching articles from remote (${collection}, status: ${options.status}, window: ${windowLabel}, concurrency: ${concurrency})...`,
-          );
-          const batchResult = await pullBatch({
+          await runBatchPull(ctx, {
             collection,
-            workspaceRoot: ctx.root,
-            cache: ctx.cache,
-            origin: ctx.origin,
-            token: ctx.auth.token,
-            refreshToken: ctx.auth.refreshToken,
-            limit,
             status: options.status,
+            concurrencyOption: options.concurrency,
             force: options.force,
-            localMediaRefs,
-            concurrency,
             prune: options.prune,
             postsOnly,
-            onTaxonomySync: (taxResult) => {
-              printTaxonomySyncSummary(taxResult, '  ', 'Taxonomies:');
-              const taxSummary = getLocalTaxonomiesSummary(ctx.root);
-              const taxHint = formatTaxonomiesHint(taxSummary, { maxTags: 30 });
-              if (taxHint) {
-                console.log(`\n${taxHint}\n`);
-              }
-            },
-            // Local-first media mirroring is default-ON for a batch pull. `--posts-only` skips it entirely;
-            // the full-library walk stays on the dedicated `emit pull-media --all` command below. The shared
-            // walk is bounded by `mediaSyncLimit`, so a fleet-scale library never costs an unbounded scan.
-            mediaSync: !postsOnly,
-            mediaSyncLimit: resolveMediaSyncLimit(ctx.config),
-            onProgress: ({ current, total, item }) => {
-              if (item.deleted) {
-                console.log(`  [${current}/${total}] 🗑️  Pruned ${item.slug} -> ${item.filePath}`);
-              } else if (item.healed) {
-                if (item.prunedTaxonomies) {
-                  const notice = formatPrunedTaxonomiesNotice(item.prunedTaxonomies);
-                  console.log(
-                    `  [${current}/${total}] ${notice ?? `🛠️  Repaired frontmatter for ${item.slug}`}`,
-                  );
-                } else {
-                  console.log(
-                    `  [${current}/${total}] 🛠️  Repaired frontmatter syntax for ${item.slug} (${item.filePath}, local body preserved). Push the file to apply changes to the server.`,
-                  );
-                }
-              } else if (item.localEditsPreserved) {
-                console.log(
-                  `\n  [${current}/${total}] 🛡️  Kept local edits for ${item.slug} (${item.filePath}; remote changes NOT applied)`,
-                );
-                const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
-                if (hint) console.log(hint);
-              } else if (!item.skipped) {
-                console.log(`  [${current}/${total}] ✅ Pulled ${item.slug} -> ${item.filePath}`);
-                const hint = formatPreservedBlocksHint(item.preservedBlocks, '    ');
-                if (hint) console.log(hint);
-              } else if (current % 50 === 0 || current === total) {
-                process.stdout.write(`  [${current}/${total}] Synced...\r`);
-              }
-            },
+            localMediaRefs,
+            includeMedia,
+            metadataOnly: options.metadataOnly,
           });
-
-          if (batchResult.total === 0 && (!batchResult.deleted || batchResult.deleted === 0)) {
-            console.log('No remote articles found.');
-            return;
-          }
-
-          const deletedMsg = batchResult.deleted ? `, ${batchResult.deleted} pruned` : '';
-          const statusBreakdown = formatPullStatusBreakdown(options.status, batchResult.items);
-          console.log(
-            `\n🎉 Articles: ${batchResult.total} total${statusBreakdown} (${batchResult.updated} updated, ${batchResult.skipped} skipped/up-to-date${deletedMsg})`,
-          );
-
-          if (batchResult.preserved && batchResult.preserved > 0) {
-            console.log(
-              `🛡️  ${batchResult.preserved} article(s) had unpushed local edits: Emit kept your local version (remote changes were NOT applied). ` +
-                `Push them with "emit push <filePath>", or re-run with --force to accept the remote version.`,
-            );
-          }
-
-          for (const item of batchResult.items) {
-            const notice = formatQuarantineNotice(item.quarantined);
-            if (notice) console.log(`\n${notice}`);
-          }
-
-          // Local-first media mirror summary. The walk is JSON-only; only assets referenced by pulled
-          // article bodies were downloaded. Report the coverage honestly and never claim a record is absent.
-          if (batchResult.media) {
-            const m = batchResult.media;
-            const totalLabel =
-              typeof m.remoteTotalCount === 'number' && m.remoteTotalCount > 0
-                ? `${m.walkedCount}/${m.remoteTotalCount}`
-                : `${m.walkedCount}${m.complete ? '' : '+'}`;
-            console.log(
-              `\n🖼️  Media (local-first): walked ${totalLabel} record(s), mirrored ${m.mirroredStorageKeys.length} referenced asset(s) (${m.downloaded} downloaded, ${m.skipped} up-to-date).`,
-            );
-            if (m.orphanStorageKeys.length > 0) {
-              reportOrphanStorageKeys(m.orphanStorageKeys);
-            }
-          }
-
-          // 3. Pull media (if --media)
-          if (includeMedia) {
-            const mediaLimit = resolveMediaSyncLimit(ctx.config);
-            const downloadFiles = options.metadataOnly !== true;
-            console.log(
-              `\nPulling media from remote (limit: ${mediaLimit}${downloadFiles ? '' : ', metadata only'})...`,
-            );
-            const mediaResult = await pullMedia({
-              workspaceRoot: ctx.root,
-              origin: ctx.origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-              limit: mediaLimit,
-              downloadFiles,
-              cache: ctx.cache,
-            });
-            console.log(
-              `  ✅ Media: ${mediaResult.total} items (${mediaResult.downloaded} downloaded, ${mediaResult.skipped} up-to-date)`,
-            );
-          }
         } else {
           // Single article mode: pull article and synchronize taxonomies (unless --posts-only)
           if (includeMedia) {
