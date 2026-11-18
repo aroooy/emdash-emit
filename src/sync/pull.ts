@@ -20,4 +20,9 @@
  * SOFTWARE.
  */
 
+/**
+ * Public npm façade for the pull pipeline (re-exported by `src/index.ts`).
+ * Repository-internal consumers import the implementation directly from
+ * `./pull/index.js`; this barrel must not be used as an internal re-export hop.
+ */
 export * from './pull/index.js';

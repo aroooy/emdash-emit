@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pushArticle } from '../src/sync/push.js';
+import { pushArticle } from '../src/sync/push/index.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/workspace/index.js';

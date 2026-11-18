@@ -29,7 +29,7 @@ import {
   formatQuarantineNotice,
   pullArticle,
   extractCanonicalRemoteTitle,
-} from '../src/sync/pull.js';
+} from '../src/sync/pull/index.js';
 import {
   calculateHash,
   CONFLICTS_SUBDIR,
@@ -37,7 +37,7 @@ import {
   resolveCanonicalArticlePath,
 } from '../src/sync/workspace/index.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
-import { pushArticle, PushValidationError } from '../src/sync/push.js';
+import { pushArticle, PushValidationError } from '../src/sync/push/index.js';
 import { countQuarantinedCopies, getWorkspaceStatus } from '../src/sync/status.js';
 import { parseMarkdown, serializeMarkdown } from '../src/utils/frontmatter.js';
 

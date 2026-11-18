@@ -251,12 +251,14 @@ describe('Architectural Layering Invariants', () => {
     // Layer 2 sibling coupling permitted on the current axis, recorded as an explicit snapshot so a NEW
     // sibling dependency fails the gate. Each entry is resolved by name, never by wildcard: `orchestrator`
     // is the designated coordinator of Layer 2 (pull/push/media), `doctor` reads the conflict inventory from
-    // `conflicts`, and `push/media_stage` reaches the media barrel that re-exports its own directory.
+    // `conflicts`, and both media stages reach each other's knowledge through the `sync/media/index.ts`
+    // implementation barrel. These edges target the directory `index.ts` entities, never the thin
+    // `src/sync/{pull,push,media}.ts` public façade barrels.
     const ALLOWED_LAYER_2_SIBLING_IMPORTS: Record<string, ReadonlySet<string>> = {
-      'sync/orchestrator.ts': new Set(['./pull.js', './push.js', './media.js']),
-      'sync/doctor.ts': new Set(['./conflicts.js', './media.js']),
-      'sync/push/media_stage.ts': new Set(['../media.js']),
-      'sync/pull/media_stage.ts': new Set(['../media.js']),
+      'sync/orchestrator.ts': new Set(['./pull/index.js', './push/index.js', './media/index.js']),
+      'sync/doctor.ts': new Set(['./conflicts.js', './media/index.js']),
+      'sync/push/media_stage.ts': new Set(['../media/index.js']),
+      'sync/pull/media_stage.ts': new Set(['../media/index.js']),
     };
 
     const violations: { file: string; line: number; source: string }[] = [];

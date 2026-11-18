@@ -25,8 +25,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullArticle } from '../src/sync/pull.js';
-import { pushArticle, PushValidationError } from '../src/sync/push.js';
+import { pullArticle } from '../src/sync/pull/index.js';
+import { pushArticle, PushValidationError } from '../src/sync/push/index.js';
 import {
   formatFrontmatterYaml,
   lenientRepairMarkdownFrontmatter,

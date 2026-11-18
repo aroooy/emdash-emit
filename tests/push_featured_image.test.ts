@@ -26,7 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
-import { pushArticle, PushValidationError } from '../src/sync/push.js';
+import { pushArticle, PushValidationError } from '../src/sync/push/index.js';
 import { formatDatePrefix, serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 
 /**

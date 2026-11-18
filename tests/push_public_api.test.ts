@@ -21,13 +21,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import * as pushModule from '../src/sync/push.js';
+import * as pushModule from '../src/sync/push/index.js';
 import type {
   PushOptions,
   PushResult,
   TaxonomyResolutionStrategy,
   ResolvedTaxonomyItem,
-} from '../src/sync/push.js';
+} from '../src/sync/push/index.js';
 
 describe('src/sync/push Public API Contracts', () => {
   it('exports exact public API runtime symbols', () => {

@@ -21,7 +21,7 @@
  */
 
 import type { Command } from 'commander';
-import { pushArticle, type PushResult } from '../../sync/push.js';
+import { pushArticle, type PushResult } from '../../sync/push/index.js';
 import { pushAll } from '../../sync/orchestrator.js';
 import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';

@@ -23,7 +23,7 @@
 import { ApiError } from '../client/error.js';
 import { CanonicalHasUnpushedEditsError, QuarantinedPathRequiredError } from '../sync/conflicts.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
-import { PushValidationError } from '../sync/push.js';
+import { PushValidationError } from '../sync/push/index.js';
 import { FrontmatterParseError } from '../utils/frontmatter.js';
 
 /**

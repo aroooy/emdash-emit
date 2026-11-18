@@ -712,7 +712,7 @@ describe('Emit CLI (Commander)', () => {
       expect(errLines[1]).toContain('💡 Suggestion:');
 
       // 4. PushValidationError formats preflight guard errors and suggestions (v0.1.28 H3)
-      const { PushValidationError } = await import('../src/sync/push.js');
+      const { PushValidationError } = await import('../src/sync/push/index.js');
       invokeFailure(
         new PushValidationError('Push blocked by Preflight Guards (1 error(s)).', [
           {

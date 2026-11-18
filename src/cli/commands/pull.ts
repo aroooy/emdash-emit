@@ -22,7 +22,7 @@
 
 import path from 'node:path';
 import type { Command } from 'commander';
-import { formatQuarantineNotice, type PullResult } from '../../sync/pull.js';
+import { formatQuarantineNotice, type PullResult } from '../../sync/pull/index.js';
 import { pullBatch, pullSingleArticle } from '../../sync/orchestrator.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { ApiError } from '../../client/error.js';
@@ -32,7 +32,7 @@ import {
   formatTaxonomiesHint,
   type PullTaxonomiesResult,
 } from '../../sync/taxonomies.js';
-import { pullMedia } from '../../sync/media.js';
+import { pullMedia } from '../../sync/media/index.js';
 import {
   resolveConcurrency,
   resolveMediaSyncLimit,

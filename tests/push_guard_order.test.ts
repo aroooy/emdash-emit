@@ -24,7 +24,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { pushArticle, PushValidationError } from '../src/sync/push.js';
+import { pushArticle, PushValidationError } from '../src/sync/push/index.js';
 import { CacheDatabase } from '../src/db/cache.js';
 import { runPreflightChecks } from '../src/sync/preflight.js';
 import { parseMarkdown } from '../src/utils/frontmatter.js';

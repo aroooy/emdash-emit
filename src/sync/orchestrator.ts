@@ -29,9 +29,9 @@ import {
   createMediaMirrorSession,
   type PullResult,
   type ListRemoteArticlesOptions,
-} from './pull.js';
+} from './pull/index.js';
 import { findLocalFilesByUlid } from './workspace/index.js';
-import { pushArticle, type PushResult, type PushOptions } from './push.js';
+import { pushArticle, type PushResult, type PushOptions } from './push/index.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
@@ -40,7 +40,7 @@ import {
   pullTaxonomies,
   type PullTaxonomiesResult,
 } from './taxonomies.js';
-import { pullMedia, type PullMediaResult } from './media.js';
+import { pullMedia, type PullMediaResult } from './media/index.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
 import {
   resolveConcurrency,

@@ -29,7 +29,7 @@ import { initWorkspace } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { toStorageKey, toMediaRecordId } from '../src/utils/media-id.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
-import { pushArticle } from '../src/sync/push.js';
+import { pushArticle } from '../src/sync/push/index.js';
 import {
   listConflicts,
   diffConflict,

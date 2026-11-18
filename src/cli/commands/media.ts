@@ -21,7 +21,7 @@
  */
 
 import type { Command } from 'commander';
-import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media.js';
+import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';

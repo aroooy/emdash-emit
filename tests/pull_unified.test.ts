@@ -26,7 +26,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pullTaxonomies } from '../src/sync/taxonomies.js';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullArticle } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull/index.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';

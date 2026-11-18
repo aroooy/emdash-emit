@@ -35,7 +35,7 @@ import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
 import { mediaFileEndpoint } from '../client/endpoints.js';
 import { calculateHash } from './workspace/index.js';
-import { collectRemoteStorageKeys } from './media.js';
+import { collectRemoteStorageKeys } from './media/index.js';
 import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
 import { VALID_MEDIA_FILE_KEY, FENCE_POLICY, isCodeFenceDelimiter } from '../utils/media-refs.js';
 

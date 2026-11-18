@@ -21,6 +21,8 @@
  */
 
 /**
- * Backward-compatible barrel re-export for media sync pipeline.
+ * Public npm façade for the media sync pipeline (re-exported by `src/index.ts`).
+ * Repository-internal consumers import the implementation directly from
+ * `./media/index.js`; this barrel must not be used as an internal re-export hop.
  */
 export * from './media/index.js';

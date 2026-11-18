@@ -176,8 +176,8 @@ describe('Guard Registry and Error Codes Invariants (L6)', () => {
     );
     expect(unsupportedWarnings.length).toBeGreaterThan(0);
 
-    // G11 label: [LOCAL_IMAGE_AUTO_UPLOAD] prefix exists in push.ts
-    const pushSource = fs.readFileSync(path.resolve(srcDir, 'sync/push.ts'), 'utf-8');
+    // G11 label: [LOCAL_IMAGE_AUTO_UPLOAD] prefix exists in the push media stage implementation.
+    const pushSource = fs.readFileSync(path.resolve(srcDir, 'sync/push/media_stage.ts'), 'utf-8');
     expect(pushSource.includes('[LOCAL_IMAGE_AUTO_UPLOAD]')).toBe(true);
   });
 

@@ -33,7 +33,7 @@ import { runWorkspaceDoctor } from '../src/sync/doctor.js';
 import { deleteArticle } from '../src/sync/delete.js';
 import { pullBatch } from '../src/sync/orchestrator.js';
 import { resolveConflict } from '../src/sync/conflicts.js';
-import { pullArticle } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull/index.js';
 import { quarantineDivergentLocalCopies } from '../src/sync/pull/quarantine.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { DEFAULT_CONFIG } from '../src/utils/config.js';

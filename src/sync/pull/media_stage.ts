@@ -48,7 +48,7 @@ import {
   type EmDashMediaItem,
   type LocalMediaMirrorCandidate,
   type RemoteStorageKeyIndex,
-} from '../media.js';
+} from '../media/index.js';
 import type { MediaMirrorSession, PullArticleMediaSummary, PullOptions } from './types.js';
 
 export interface MediaMirrorSessionOptions {

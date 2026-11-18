@@ -31,9 +31,9 @@ import { initWorkspace, loadConfig, persistLocalMediaRefs } from '../src/utils/c
 import { resolveLocalMediaRefsOption } from '../src/utils/media-ref-precedence.js';
 import { inspectArticleDiff } from '../src/sync/diff.js';
 import { pullBatch, pushAll } from '../src/sync/orchestrator.js';
-import { pullArticle } from '../src/sync/pull.js';
+import { pullArticle } from '../src/sync/pull/index.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
-import { pushArticle } from '../src/sync/push.js';
+import { pushArticle } from '../src/sync/push/index.js';
 import { getWorkspaceStatus } from '../src/sync/status.js';
 
 const ARTICLE_ID = '01M67LQCALREF556YVG6RBT0J0';

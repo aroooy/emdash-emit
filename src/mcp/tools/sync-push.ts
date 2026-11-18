@@ -23,7 +23,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { pushArticle } from '../../sync/push.js';
+import { pushArticle } from '../../sync/push/index.js';
 import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {

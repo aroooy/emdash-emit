@@ -22,7 +22,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media.js';
+import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';

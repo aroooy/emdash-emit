@@ -24,7 +24,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ContextResolver, McpMeta, ServerContext } from './context.js';
 import { ApiError } from '../client/error.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
-import { PushValidationError } from '../sync/push.js';
+import { PushValidationError } from '../sync/push/index.js';
 import { AmbiguousProfileError } from '../utils/profile.js';
 import { FrontmatterParseError } from '../utils/frontmatter.js';
 import { DuplicateSlugError } from '../sync/new.js';

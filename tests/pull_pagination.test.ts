@@ -24,7 +24,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getRemoteMaxBatchLimit, listRemoteArticles, pullArticle } from '../src/sync/pull.js';
+import { getRemoteMaxBatchLimit, listRemoteArticles, pullArticle } from '../src/sync/pull/index.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
 describe('Pull Pagination & Dynamic Limit Engine', () => {

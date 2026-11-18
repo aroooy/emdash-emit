@@ -30,7 +30,7 @@ import { initWorkspace, loadConfig } from '../src/utils/config.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
 import { runWorkspaceDoctor, scanArticleMediaDetailed } from '../src/sync/doctor.js';
-import { collectArticleStorageKeys } from '../src/sync/media.js';
+import { collectArticleStorageKeys } from '../src/sync/media/index.js';
 
 describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   let tempDir: string;

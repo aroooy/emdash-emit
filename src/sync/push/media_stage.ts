@@ -32,7 +32,7 @@ import {
   type UploadMediaResult,
 } from '../../client/media.js';
 import { classifyCodeFenceLines } from '../../client/portable-text.js';
-import { promoteDraftMediaFile } from '../media.js';
+import { promoteDraftMediaFile } from '../media/index.js';
 import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import { resolveDraftImagePath, type DraftImageReference } from '../preflight.js';

@@ -36,7 +36,7 @@ import {
   pullArticleMedia,
   mirrorReferencedAssetsFromIndex,
   type EmDashMediaItem,
-} from '../src/sync/media.js';
+} from '../src/sync/media/index.js';
 import {
   formatArticleMediaSummary,
   formatMediaCoverageLine,

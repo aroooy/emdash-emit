@@ -23,7 +23,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { formatQuarantineNotice } from '../../sync/pull.js';
+import { formatQuarantineNotice } from '../../sync/pull/index.js';
 import {
   pullBatch,
   pullSingleArticle,
@@ -34,7 +34,7 @@ import {
   getLocalTaxonomiesSummary,
   formatTaxonomiesHint,
 } from '../../sync/taxonomies.js';
-import { pullMedia } from '../../sync/media.js';
+import { pullMedia } from '../../sync/media/index.js';
 import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,

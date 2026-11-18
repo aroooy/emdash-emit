@@ -28,7 +28,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { CacheDatabase } from '../src/db/cache.js';
 import { ApiError } from '../src/client/error.js';
 import { SyncPruneConflictError } from '../src/sync/orchestrator.js';
-import { PushValidationError } from '../src/sync/push.js';
+import { PushValidationError } from '../src/sync/push/index.js';
 import { AmbiguousProfileError, setProfile } from '../src/utils/profile.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { formatToolError } from '../src/mcp/tool-errors.js';

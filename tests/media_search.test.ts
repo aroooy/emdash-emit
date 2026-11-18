@@ -12,7 +12,7 @@ import {
   pullMedia,
   searchRemoteMedia,
   type EmDashMediaItem,
-} from '../src/sync/media.js';
+} from '../src/sync/media/index.js';
 
 describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
   let tempDir: string;
