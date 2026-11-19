@@ -34,11 +34,58 @@ export function registerConflictsCommand(
   program: Command,
   resolveContext: CliContextResolver,
 ): void {
+  const runList = async (options: { collection?: string; profile?: string } = {}) => {
+    try {
+      const ctx = resolveContext(options.profile, { optionalAuth: true });
+      const collection = options.collection || ctx.config.defaultCollection || 'posts';
+      const items = listConflicts(ctx.root, collection);
+
+      if (items.length === 0) {
+        console.log(`✅ No conflicts or rescue backups found in ${collection}/conflicts/.`);
+        return;
+      }
+
+      console.log(`📁 Quarantined Files in ${collection}/conflicts/ (${items.length} total):\n`);
+      for (const item of items) {
+        const typeLabel =
+          item.type === 'conflict'
+            ? '⚠️  [SYNC CONFLICT]'
+            : item.type === 'dropped'
+              ? '🛡️  [FORCE DROPPED]'
+              : item.type === 'deleted'
+                ? '🗑️  [DELETED RESCUE]'
+                : '❓ [UNKNOWN]';
+        const titleStr = item.title ? ` - "${item.title}"` : '';
+        const canonicalStr = item.canonicalPath
+          ? ` (canonical: ${item.canonicalPath})`
+          : ' (canonical: absent)';
+        console.log(`  ${typeLabel} ${item.filePath}${titleStr}${canonicalStr}`);
+        console.log(
+          `     ID: ${item.id || 'unknown'} | Slug: ${item.slug || 'unknown'} | Size: ${item.sizeBytes} B | Created: ${item.createdAt}\n`,
+        );
+      }
+
+      console.log('Commands:');
+      console.log('  emit conflicts diff <filePath>                 Inspect differences');
+      console.log(
+        '  emit conflicts resolve <filePath> --accept-local      Apply quarantined copy to canonical',
+      );
+      console.log(
+        '  emit conflicts resolve <filePath> --accept-canonical  Discard quarantined copy\n',
+      );
+    } catch (err) {
+      reportActionFailure(err);
+    }
+  };
+
   const conflicts = program
     .command('conflicts')
     .description(
       'Manage quarantined sync conflict copies and deletion rescue backups in posts/conflicts/',
-    );
+    )
+    .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
+    .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .action(runList);
 
   // emit conflicts list
   conflicts
@@ -46,49 +93,7 @@ export function registerConflictsCommand(
     .description('List all quarantined conflict and deleted backup files')
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (options) => {
-      try {
-        const ctx = resolveContext(options.profile, { optionalAuth: true });
-        const collection = options.collection || ctx.config.defaultCollection || 'posts';
-        const items = listConflicts(ctx.root, collection);
-
-        if (items.length === 0) {
-          console.log(`✅ No conflicts or rescue backups found in ${collection}/conflicts/.`);
-          return;
-        }
-
-        console.log(`📁 Quarantined Files in ${collection}/conflicts/ (${items.length} total):\n`);
-        for (const item of items) {
-          const typeLabel =
-            item.type === 'conflict'
-              ? '⚠️  [SYNC CONFLICT]'
-              : item.type === 'dropped'
-                ? '🛡️  [FORCE DROPPED]'
-                : item.type === 'deleted'
-                  ? '🗑️  [DELETED RESCUE]'
-                  : '❓ [UNKNOWN]';
-          const titleStr = item.title ? ` - "${item.title}"` : '';
-          const canonicalStr = item.canonicalPath
-            ? ` (canonical: ${item.canonicalPath})`
-            : ' (canonical: absent)';
-          console.log(`  ${typeLabel} ${item.filePath}${titleStr}${canonicalStr}`);
-          console.log(
-            `     ID: ${item.id || 'unknown'} | Slug: ${item.slug || 'unknown'} | Size: ${item.sizeBytes} B | Created: ${item.createdAt}\n`,
-          );
-        }
-
-        console.log('Commands:');
-        console.log('  emit conflicts diff <filePath>                 Inspect differences');
-        console.log(
-          '  emit conflicts resolve <filePath> --accept-local      Apply quarantined copy to canonical',
-        );
-        console.log(
-          '  emit conflicts resolve <filePath> --accept-canonical  Discard quarantined copy\n',
-        );
-      } catch (err) {
-        reportActionFailure(err);
-      }
-    });
+    .action(runList);
 
   // emit conflicts diff <filePath>
   conflicts

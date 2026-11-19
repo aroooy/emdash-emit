@@ -1144,6 +1144,12 @@ describe('Emit CLI (Commander)', () => {
       const confOut = logLines.join('\n');
       expect(confOut).toContain('No conflicts or rescue backups found');
 
+      // 1b. emit conflicts (no args) defaults to list (v0.1.39 P2)
+      logLines.length = 0;
+      await program.parseAsync(['node', 'emit', 'conflicts']);
+      const confBareOut = logLines.join('\n');
+      expect(confBareOut).toContain('No conflicts or rescue backups found');
+
       // 2. emit doctor in clean workspace
       logLines.length = 0;
       await program.parseAsync(['node', 'emit', 'doctor']);
