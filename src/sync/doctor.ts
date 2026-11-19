@@ -37,6 +37,8 @@ import { mediaFileEndpoint } from '../client/endpoints.js';
 import { calculateHash } from './workspace/index.js';
 import { collectRemoteStorageKeys } from './media/index.js';
 import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
+import { detectWorkspaceLinkDrift } from '../utils/profile.js';
+import { workspaceLinkDriftLines } from '../utils/profile-resolution.js';
 import { VALID_MEDIA_FILE_KEY, FENCE_POLICY, isCodeFenceDelimiter } from '../utils/media-refs.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
@@ -65,6 +67,12 @@ export interface RunWorkspaceDoctorOptions {
   config: EmitConfig;
   profileName?: string;
   profileOrigin?: string;
+  /**
+   * The workspace path registered on the resolved profile (`profiles.yaml`), when there is one. Doctor
+   * compares it against `workspaceRoot` for the v0.1.38 workspace link check; without it there is nothing
+   * to compare and the check must stay silent rather than guess.
+   */
+  profileWorkspace?: string;
   collection?: string;
   strictMedia?: boolean;
   /**
@@ -303,6 +311,29 @@ function runEnvironmentChecks(ctx: DoctorCheckContext, currentVersion: string): 
       name: 'Origin Consistency',
       status: 'ok',
       message: `Origins are consistent (${profileOrigin || configOrigin || 'default'}).`,
+    });
+  }
+
+  // 2b. Workspace Link Consistency Check (v0.1.38 P2)
+  //
+  // Pushed only when a link is actually registered and stale: an unregistered profile has no link to have
+  // gone wrong, and pushing an `ok` check for it would add a line to every healthy report without saying
+  // anything. Runs after check 2 because the origin comparison above is what tells a user whether the
+  // registered path even points at the right site.
+  const linkDrift = detectWorkspaceLinkDrift(
+    options.profileName,
+    options.profileWorkspace,
+    options.workspaceRoot,
+  );
+  if (linkDrift) {
+    const lines = workspaceLinkDriftLines(linkDrift);
+    checks.push({
+      id: 'workspace_link_consistency',
+      name: 'Workspace Link Consistency',
+      status: 'warning',
+      message: lines.headline,
+      suggestion: `Re-link with "${lines.relinkCommand}" so the registered workspace path matches this directory.`,
+      details: { ...linkDrift },
     });
   }
 

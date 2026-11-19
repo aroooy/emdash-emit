@@ -38,7 +38,7 @@
  * resolution must never disagree with what the command actually used.
  */
 
-import type { ResolveProfileResult } from './profile.js';
+import type { ResolveProfileResult, WorkspaceLinkDrift } from './profile.js';
 
 /**
  * Discriminated presentation source. Broader than `ResolveProfileResult.source`, which collapses the two
@@ -57,6 +57,43 @@ export const ACTIVE_DEFAULT_MARKER = '(active default — used only outside regi
 
 /** The marker for the profile whose registered workspace contains the current directory. */
 export const CWD_MATCH_MARKER = '(matches current directory)';
+
+/**
+ * The remediation both CLI and MCP name when a profile's registered workspace no longer matches the
+ * workspace in use (v0.1.38 P2). `emit init --profile` is the only supported way to re-link, so one shared
+ * string keeps a warning from pointing at a command that cannot do the job.
+ */
+export function formatRelinkSuggestion(profileName: string): string {
+  return `emit init --profile ${profileName}`;
+}
+
+/**
+ * The drift warning shared by the CLI context resolver and `emit doctor` (v0.1.38 P2), returned as separate
+ * lines so each surface renders it its own way — the CLI prints prose, doctor emits a structured check. Both
+ * paths are stated verbatim because guessing which one the user meant is exactly what the drift made
+ * impossible, and no reason for the mismatch is invented: Emit observes two paths, not why they diverged.
+ */
+export function workspaceLinkDriftLines(drift: WorkspaceLinkDrift): {
+  headline: string;
+  detail: string;
+  relinkCommand: string;
+} {
+  return {
+    headline: `Profile "${drift.profileName}" is registered to ${drift.registeredWorkspace}, but this command runs in a different directory.`,
+    detail: `Emit is using the registered path (${drift.registeredWorkspace}) for the connection, while the workspace being operated on is ${drift.actualWorkspace}.`,
+    relinkCommand: formatRelinkSuggestion(drift.profileName),
+  };
+}
+
+/** The CLI rendering of {@link workspaceLinkDriftLines}: one wrapped warning block on stderr. */
+export function formatWorkspaceLinkDriftWarning(drift: WorkspaceLinkDrift): string {
+  const lines = workspaceLinkDriftLines(drift);
+  return [
+    `⚠️ ${lines.headline}`,
+    `   ${lines.detail}`,
+    `   Re-link it with: ${lines.relinkCommand}`,
+  ].join('\n');
+}
 
 /**
  * Normalizes the raw resolver result into a display source.

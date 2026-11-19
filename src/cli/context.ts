@@ -40,8 +40,10 @@ import {
 import {
   findProfileByDirectory,
   loadProfilesFile,
+  detectWorkspaceLinkDrift,
   AmbiguousProfileError,
 } from '../utils/profile.js';
+import { formatWorkspaceLinkDriftWarning } from '../utils/profile-resolution.js';
 
 export interface CliContext {
   root: string;
@@ -260,6 +262,22 @@ export function createCliContextResolver(): CliContextResolver {
     });
     if (resolution.warning) {
       console.warn(resolution.warning);
+    }
+
+    /**
+     * v0.1.38 P2 — a profile registered to a folder that has since moved or been renamed stops matching by
+     * directory, so the connection silently falls back to `.emit/config.json` and `emit init` refuses to
+     * re-link (guard 2 of `resolveInitPlan()` sees a workspace already registered). Warn instead of staying
+     * quiet, and point at the one command that can repair it. `resolveContext()` writes no files, so this
+     * stays detection-and-warning only; the relink itself belongs to `emit init --profile`.
+     */
+    const drift = detectWorkspaceLinkDrift(
+      auth.profileName || cwdProf?.name,
+      resolvedProf?.workspace,
+      workspaceRoot,
+    );
+    if (drift) {
+      console.warn(formatWorkspaceLinkDriftWarning(drift));
     }
 
     return {

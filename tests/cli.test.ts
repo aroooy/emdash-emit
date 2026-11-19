@@ -25,10 +25,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import yaml from 'js-yaml';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
-import { registerStatusInitCommands, resolveInitPlan } from '../src/cli/commands/status.js';
+import {
+  registerStatusInitCommands,
+  resolveInitPlan,
+  resolveInitRelink,
+} from '../src/cli/commands/status.js';
 import { resolveOriginPriority, resolveExplicitBooleanOption } from '../src/cli/context.js';
+import { createCliContextResolver } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
 import { loadProfilesFile, setProfile } from '../src/utils/profile.js';
 
@@ -42,6 +48,7 @@ describe('Emit CLI (Commander)', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('defines all required commands', () => {
@@ -481,6 +488,251 @@ describe('Emit CLI (Commander)', () => {
       effectiveOrigin: 'https://manual.example.com',
       shouldLinkProfile: false,
       warning: null,
+    });
+  });
+  /**
+   * v0.1.38 P2 — T2-3: the re-link decision that lets `emit init --profile` repair a moved folder, without
+   * weakening `resolveInitPlan()`'s original guards. The drift case only ever arises for a profile the user
+   * named explicitly, so an auto-resolved profile that already carries a workspace must still be left alone.
+   */
+  it('re-links only an explicitly named drifted profile, never an auto-resolved one', () => {
+    const drifted = {
+      profileName: 'aroooy.net',
+      registeredWorkspace: '/old/location/my-blog',
+      actualWorkspace: '/new/location/my-blog',
+    };
+    const explicitDrifted = {
+      name: 'aroooy.net',
+      source: 'explicit' as const,
+      config: {
+        origin: 'https://aroooy.net',
+        token: 'pat_123',
+        workspace: '/old/location/my-blog',
+      },
+    };
+
+    // The repair case: naming the profile is the intent, so its stale link moves here.
+    expect(resolveInitRelink({}, explicitDrifted, drifted)).toBe(true);
+    // --no-link still outranks everything.
+    expect(resolveInitRelink({ link: false }, explicitDrifted, drifted)).toBe(false);
+
+    // An auto-resolved profile that already owns a workspace is not the one being repaired — guard 2 holds.
+    const autoLinked = { ...explicitDrifted, source: 'workspace' as const };
+    expect(resolveInitRelink({}, autoLinked, drifted)).toBe(false);
+    // No drift and no existing link keeps the original auto-link behaviour.
+    expect(
+      resolveInitRelink(
+        {},
+        {
+          name: 'aroooy.net',
+          source: 'single',
+          config: { origin: 'https://aroooy.net', token: 't' },
+        },
+        null,
+      ),
+    ).toBe(true);
+    // Nothing resolved, nothing to link.
+    expect(resolveInitRelink({}, null, drifted)).toBe(false);
+  });
+
+  /**
+   * v0.1.38 P2 — T2-3 (end-to-end): `emit init --profile <name>` must be a non-destructive repair for a moved
+   * workspace folder. The pre-v0.1.38 behaviour is pinned in the characterization suite, where re-init dropped
+   * keys written elsewhere; this asserts the opposite — every unrelated key and `createdWithVersion` survive,
+   * only `origin` changes, and the profile link follows. `--no-link` must still refuse to touch the link even
+   * when a drift is present, because an explicit refusal outranks the repair.
+   *
+   * HOME points at a throwaway directory so the machine-level profiles.yaml cannot leak into resolution:
+   * without that isolation a developer's own registered workspace would decide these outcomes on some machines.
+   */
+  it('emit init --profile re-links a drifted profile and preserves unrelated config keys', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-init-home-'));
+    const originalHome = process.env.HOME;
+    const originalCwd = process.cwd();
+    process.env.HOME = homeDir;
+    // `init` writes profiles through the default path, so homedir must be pinned for this to be hermetic.
+    vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+
+    const workspaceDir = path.join(tempDir, 'moved-blog');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    initWorkspace(workspaceDir, { origin: 'https://aroooy.net' });
+
+    // A key written by another code path (e.g. `persistLocalMediaRefs`) plus a non-default limit and the
+    // version that first created this workspace — all of them must survive the repair.
+    const configPath = path.join(workspaceDir, '.emit', 'config.json');
+    const seeded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    seeded.createdWithVersion = '0.1.30';
+    seeded.postsSyncLimit = 250;
+    seeded.localMediaRefs = false;
+    seeded.customMarker = 'must-survive-reinit';
+    fs.writeFileSync(configPath, JSON.stringify(seeded, null, 2), 'utf8');
+
+    const profilesPath = path.join(homeDir, '.config', 'emit', 'profiles.yaml');
+    fs.mkdirSync(path.dirname(profilesPath), { recursive: true });
+    setProfile(
+      'a',
+      {
+        origin: 'https://new.example.com',
+        token: 'pat_keep_me',
+        workspace: path.join(tempDir, 'old-location', 'my-blog'),
+      },
+      false,
+      profilesPath,
+    );
+
+    const logLines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map(String).join(' '));
+    };
+    // The throwaway HOME is removed in `finally`, so the profiles.yaml content must be captured while it exists.
+    let profilesYaml = '';
+    try {
+      process.chdir(workspaceDir);
+      await program.parseAsync(['node', 'emit', 'init', '--profile', 'a']);
+      profilesYaml = fs.readFileSync(profilesPath, 'utf8');
+    } finally {
+      console.log = originalLog;
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+
+    const printed = logLines.join('\n');
+    expect(printed).toContain('Re-linked profile "a"');
+
+    // The link now points at the folder actually being operated on. `init` stores the resolved cwd, which
+    // differs from the raw `/var/...` temp path on macOS (`/private/var/...`), so both sides go through realpath.
+    const profiles = yaml.load(profilesYaml) as {
+      profiles: Record<string, { workspace?: string; token?: string }>;
+    };
+    expect(profiles.profiles.a.workspace).toBe(fs.realpathSync(workspaceDir));
+    // Credentials and origin are carried over, never dropped by a re-link.
+    expect(profiles.profiles.a.token).toBe('pat_keep_me');
+
+    const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(after.origin).toBe('https://new.example.com');
+    expect(after.createdWithVersion).toBe('0.1.30');
+    expect(after.postsSyncLimit).toBe(250);
+    expect(after.localMediaRefs).toBe(false);
+    expect(after.customMarker).toBe('must-survive-reinit');
+  });
+
+  it('emit init --profile --no-link leaves a drifted link untouched', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-init-nolink-home-'));
+    const originalHome = process.env.HOME;
+    const originalCwd = process.cwd();
+    process.env.HOME = homeDir;
+    vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+
+    const workspaceDir = path.join(tempDir, 'nolink-blog');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    initWorkspace(workspaceDir, { origin: 'https://aroooy.net' });
+
+    const stalePath = path.join(tempDir, 'old-location', 'my-blog');
+    const profilesPath = path.join(homeDir, '.config', 'emit', 'profiles.yaml');
+    fs.mkdirSync(path.dirname(profilesPath), { recursive: true });
+    setProfile(
+      'a',
+      { origin: 'https://new.example.com', token: 'pat_keep_me', workspace: stalePath },
+      false,
+      profilesPath,
+    );
+
+    const originalLog = console.log;
+    console.log = () => {};
+    let profilesYaml = '';
+    try {
+      process.chdir(workspaceDir);
+      await program.parseAsync(['node', 'emit', 'init', '--profile', 'a', '--no-link']);
+      profilesYaml = fs.readFileSync(profilesPath, 'utf8');
+    } finally {
+      console.log = originalLog;
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+
+    // Explicit refusal outranks the repair: the registered path is exactly as stale as before. The stale
+    // path is registered verbatim (it never exists on disk), so it needs no realpath normalization.
+    const profiles = yaml.load(profilesYaml) as {
+      profiles: Record<string, { workspace?: string }>;
+    };
+    expect(profiles.profiles.a.workspace).toBe(stalePath);
+  });
+
+  describe('workspace link drift warning (v0.1.38 P2)', () => {
+    let homeDir: string;
+    let originalHome: string | undefined;
+    let originalCwd: string;
+
+    beforeEach(() => {
+      homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-drift-home-'));
+      originalHome = process.env.HOME;
+      originalCwd = process.cwd();
+      process.env.HOME = homeDir;
+      // `os.homedir()` does not reliably follow `process.env.HOME` on every platform, so it is pinned too.
+      // That isolation is what keeps a developer's own machine-level profiles.yaml out of these resolutions:
+      // an ambient registration would otherwise decide the drift outcome on some machines only.
+      vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+    });
+
+    afterEach(() => {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      vi.restoreAllMocks();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    });
+
+    function resolveWithCapturedWarnings(cwd: string): string {
+      const warnLines: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnLines.push(args.map(String).join(' '));
+      };
+      try {
+        process.chdir(cwd);
+        createCliContextResolver()(undefined, { optionalAuth: true });
+      } finally {
+        console.warn = originalWarn;
+      }
+      return warnLines.join('\n');
+    }
+
+    it('warns when a profile workspace link has drifted after a folder move', () => {
+      const workspaceDir = path.join(tempDir, 'moved-blog');
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      initWorkspace(workspaceDir, { origin: 'https://aroooy.net' });
+
+      // Registered to a path that no longer exists — the folder moved into `moved-blog`.
+      setProfile('aroooy.net', {
+        origin: 'https://aroooy.net',
+        token: 'test-token',
+        workspace: path.join(tempDir, 'old-location', 'my-blog'),
+      });
+
+      const warning = resolveWithCapturedWarnings(workspaceDir);
+      expect(warning).toContain('Profile "aroooy.net" is registered to');
+      expect(warning).toContain(path.join(tempDir, 'old-location', 'my-blog'));
+      expect(warning).toContain(workspaceDir);
+      // Points at the one command that can repair it.
+      expect(warning).toContain('emit init --profile aroooy.net');
+    });
+
+    it('stays silent when the profile link matches, including from a nested directory', () => {
+      initWorkspace(tempDir, { origin: 'https://aroooy.net' });
+      setProfile('aroooy.net', {
+        origin: 'https://aroooy.net',
+        token: 'test-token',
+        workspace: tempDir,
+      });
+
+      // Running from posts/draft inside the linked workspace is normal, not drift.
+      const warning = resolveWithCapturedWarnings(path.join(tempDir, 'posts', 'draft'));
+      expect(warning).not.toContain('is registered to');
     });
   });
 

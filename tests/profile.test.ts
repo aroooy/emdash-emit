@@ -32,6 +32,7 @@ import {
   removeProfile,
   findProfileByDirectory,
   resolveTargetProfile,
+  detectWorkspaceLinkDrift,
   AmbiguousProfileError,
 } from '../src/utils/profile.js';
 
@@ -335,5 +336,64 @@ describe('Profile Management (profiles.yaml)', () => {
 
     // Unknown directories still resolve to null instead of guessing
     expect(findProfileByDirectory(path.join(tmpDir, 'nowhere'), customProfilesPath)).toBeNull();
+  });
+});
+
+/**
+ * v0.1.38 P2 — T2-1: a profile registered to a folder that has since moved must be reported as drift, and
+ * the symlink/trailing-slash spellings of an unchanged folder must not be. Both surfaces (the CLI context
+ * warning and `emit doctor`) call this one function, so the rules are pinned here rather than in either
+ * consumer's tests.
+ */
+describe('detectWorkspaceLinkDrift (v0.1.38 P2)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-drift-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reports drift when the registered workspace no longer matches the resolved root', () => {
+    const oldPath = path.join(tmpDir, 'src', 'my-blog');
+    const newPath = path.join(tmpDir, 'src', 'workspaces', 'my-blog');
+    fs.mkdirSync(newPath, { recursive: true });
+
+    const drift = detectWorkspaceLinkDrift('aroooy.net', oldPath, newPath);
+    expect(drift).not.toBeNull();
+    expect(drift?.profileName).toBe('aroooy.net');
+    // Both paths are reported verbatim: the user has to recognise which one is stale.
+    expect(drift?.registeredWorkspace).toBe(oldPath);
+    expect(drift?.actualWorkspace).toBe(newPath);
+  });
+
+  it('treats a nested run inside the registered workspace as no drift', () => {
+    const root = path.join(tmpDir, 'blog');
+    fs.mkdirSync(root, { recursive: true });
+    expect(detectWorkspaceLinkDrift('site', root, path.join(root, 'posts', 'draft'))).toBeNull();
+  });
+
+  it('treats trailing-slash and symlink spellings of the same folder as no drift', () => {
+    const real = path.join(tmpDir, 'real-blog');
+    fs.mkdirSync(real, { recursive: true });
+    // macOS resolves /var -> /private/var, so an unresolved spelling must compare equal too.
+    expect(detectWorkspaceLinkDrift('site', real + path.sep, real)).toBeNull();
+
+    const link = path.join(tmpDir, 'link-blog');
+    fs.symlinkSync(real, link, 'dir');
+    expect(detectWorkspaceLinkDrift('site', real, link)).toBeNull();
+    expect(detectWorkspaceLinkDrift('site', link, real)).toBeNull();
+  });
+
+  it('returns null when there is no link to have gone stale', () => {
+    const root = path.join(tmpDir, 'blog');
+    fs.mkdirSync(root, { recursive: true });
+    // No registered workspace at all — nothing moved.
+    expect(detectWorkspaceLinkDrift('site', undefined, root)).toBeNull();
+    expect(detectWorkspaceLinkDrift('site', '   ', root)).toBeNull();
+    // No profile resolved (e.g. auth came from the environment) — there is no registration to compare.
+    expect(detectWorkspaceLinkDrift(undefined, root, path.join(tmpDir, 'elsewhere'))).toBeNull();
   });
 });

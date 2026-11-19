@@ -430,7 +430,7 @@ emit profile set-token <name> [--token <token>] [--stdin]
 | --- | --- | --- |
 | **P0** characterization snapshot | ✅ 完了 | `tests/v0138_characterization.test.ts`（新規）。`profile list` / `profile current` の出力、`initWorkspace` の生成ファイルと config キー集合、doctor の check 順序、`profile` サブコマンド・`doctor` オプション一覧を inline snapshot で固定。実測で判明した事実を 2 件反映: doctor の無条件 spine は `version_compatibility → origin_consistency → frontmatter_integrity → conflicts_quarantine → sync_status → media_references`（`mcp_process` は MCP プロセスが古い場合のみ push）、`.emit/config.json` の既定キーは 9 個（`concurrency` / `defaultLocale` を含む） |
 | **P1** 解決根拠の可視化 | ✅ 完了 | `src/utils/profile-resolution.ts`（Layer 0 新規: `toResolutionSource()` / `formatResolutionRationale()` / `cwdMatchedProfileName()` / マーカー定数 2 個）。CLI `profile current` に `Resolved by:` 行、`profile list` のラベルを `(matches current directory)` と `(active default — used only outside registered workspaces)` へ分離。MCP `profile_list` へ `resolvedByDirectory` と per-profile `matchesCwd` を追加（既存キーは不変）。テスト: `tests/profile_resolution.test.ts`（新規 7 件）、`tests/mcp_tool_errors.test.ts` に T1-4、`tests/presentation_symmetry.test.ts` に T5-1（文言の二重定義検出）。README §3・§`emit profile` を更新 |
-| **P2** workspace link drift 検出 | ⬜ 未着手 | — |
+| **P2** workspace link drift 検出 | ✅ 完了 | `src/utils/profile.ts` に `detectWorkspaceLinkDrift()`（Layer 0、`resolveDirectoryForComparison()` 使用で symlink / 末尾スラッシュ誤検知なし、ネスト実行は drift 扱いしない）。CLI は `src/cli/context.ts` で stderr 警告（`formatWorkspaceLinkDriftWarning`）、doctor は Check 2b `workspace_link_consistency`（`origin_consistency` の直後、drift 時のみ push）で同じ判定関数を共有。文言は `src/utils/profile-resolution.ts` の `workspaceLinkDriftLines()` / `formatRelinkSuggestion()` の 1 ソース。修復は `emit init --profile <name>`（新規ヘルパー `resolveInitRelink()`、`--no-link` は常に優先、`resolveInitPlan()` の 3-guard は無変更）。`initWorkspace()` は既存 config をマージする非破壊化（`createdWithVersion` と非接続キーを保持）。テスト: `tests/profile.test.ts` T2-1、`tests/doctor.test.ts` T2-2、`tests/cli.test.ts` T2-3（unit + end-to-end + `--no-link` 拒否 + nested 無警告）。characterization の re-init スナップショットは P2 で意図的に反転（破棄 → 保持） |
 | **P3** `.emit/.gitignore` | ⬜ 未着手 | — |
 | **P4-A** `profile set-token` | ⬜ 未着手 | — |
 | **P4-B** `doctor --check-auth` | ✅ 承認済み・⬜ 未着手 | オーナー承認取得済（§9 カテゴリ 3） |
@@ -440,6 +440,16 @@ emit profile set-token <name> [--token <token>] [--stdin]
 - `(active)` ラベルの意味は変えず、**ラベル文言のみ**修正した。`setActiveProfile()` の永続化キーと解決順序は無変更で、`profile list` が「実際に使われる profile」と「fallback」を別々に示すようになった。
 - MCP は `src/cli/` を import できない（Axis 3）ため、文言は Layer 0 に置く以外に選択肢がなかった。`tests/presentation_symmetry.test.ts` の T5-1 が定数の再定義を機械的に検出する。
 - 対称性テストはコメントを除去してから字句を検査する。変更説明の散文（`(active)` の旧意味を解説するコメント）を再定義と誤認しないため。
+
+**P2 で生きた設計判断**
+
+- drift の判定関数は Layer 0（`src/utils/profile.ts`）に 1 個だけ置き、CLI 警告と doctor Check 2b が同じ関数を呼ぶ。警告文言も `workspaceLinkDriftLines()` の 1 ソースで、CLI は prose、doctor は structured check に各自レンダリングする。
+- **解決順序は無変更**（profile workspace > cwd）。本版は検出と警告のみで、drift 時も registered path が接続に使えることを `tests/cli.test.ts` で固定した。順序を変えると「移動直後に別サイトへ push する」事故を招く。
+- nested 実行（登録 workspace 配下の `posts/draft` など）は drift にしない。`findProfileByDirectory()` が正確に一致させている以上、接続はすでに正しい。
+- 再張り替えは**明示的に名前を挙げた profile だけ**が対象（`resolveInitRelink()` の `source === 'explicit' && drift`）。auto-resolved で workspace を持つ profile は「登録パスがここを含む」意味なので guard 2 を維持。`--no-link` は常に優先。
+- `initWorkspace()` の非破壊化は P2 の前提: 修復コマンドが limits / locale / `localMediaRefs` / `createdWithVersion` を戻してはいけない。characterization スナップショットの反転（`customMarker` 破棄 → 保持、`postsSyncLimit` 30 → 250）はこの 1 点だけの意図的な変更で、P0 の snapshot がそれを機械的に示す。
+- テスト hermeticity: `os.homedir()` は `process.env.HOME` に追随しないため `vi.spyOn` で固定し、throwaway HOME の `profiles.yaml` は削除前に読み出す。macOS の `/var` → `/private/var` 解決は比較側にも realpath を適用（登録パスは存在しないので verbatim 比較）。
+
 
 
 

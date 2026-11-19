@@ -24,6 +24,7 @@ import type { Command } from 'commander';
 import { runWorkspaceDoctor } from '../../sync/doctor.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
+import { loadProfilesFile } from '../../utils/profile.js';
 
 export function registerDoctorCommand(program: Command, resolveContext: CliContextResolver): void {
   program
@@ -56,6 +57,9 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
           config: ctx.config,
           profileName: ctx.auth?.profileName,
           profileOrigin: ctx.auth?.origin,
+          profileWorkspace: ctx.auth?.profileName
+            ? loadProfilesFile().profiles[ctx.auth.profileName]?.workspace
+            : undefined,
           collection,
           strictMedia: Boolean(options.strictMedia),
           checkMediaUrls: Boolean(options.checkMediaUrls),

@@ -206,20 +206,23 @@ describe('v0.1.38 characterization: initWorkspace generated files', () => {
     `);
   });
 
-  it('re-running init overwrites .emit/config.json wholesale (the P2 hazard)', () => {
+  it('re-running init preserves unrelated keys instead of overwriting config wholesale (v0.1.38 P2 fix)', () => {
     initWorkspace(tempDir, { origin: 'https://aroooy.net', postsSyncLimit: 250 });
     const configPath = path.join(tempDir, '.emit', 'config.json');
 
-    // A key written by another code path (e.g. `persistLocalMediaRefs`) is lost on re-init today.
+    // A key written by another code path (e.g. `persistLocalMediaRefs`) must survive a re-init: repair via
+    // `emit init --profile` is the whole point of P2, and silently resetting limits/locale would make it a
+    // destructive command. This snapshot was flipped deliberately in P2 — before that, re-init dropped it.
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     parsed.customMarker = 'must-survive-reinit';
     fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2), 'utf8');
 
     initWorkspace(tempDir, { origin: 'https://other.example.com' });
     const after = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(after.customMarker).toBeUndefined();
+    expect(after.customMarker).toBe('must-survive-reinit');
     expect(after.origin).toBe('https://other.example.com');
-    expect(loadConfig(tempDir).postsSyncLimit).toBe(30);
+    // The previously written limit is kept too — only the keys named in `initialConfig` change.
+    expect(loadConfig(tempDir).postsSyncLimit).toBe(250);
   });
 });
 

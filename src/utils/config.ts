@@ -79,6 +79,12 @@ export const DEFAULT_CONFIG = {
 
 /**
  * Initializes a new .emit workspace directory with default config.
+ *
+ * On a workspace that already has one, the existing values are merged rather than replaced: re-running
+ * `emit init` to repair a stale profile link (v0.1.38 P2) must not silently reset limits, locale, or the
+ * `localMediaRefs` spelling that `persistLocalMediaRefs` wrote, and it must not rewrite
+ * `createdWithVersion` — that field records which release first created the workspace, and doctor's version
+ * check reads it. Only the keys named in `initialConfig` change.
  */
 export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<EmitConfig>): void {
   const paths = getWorkspacePaths(workspaceRoot);
@@ -93,9 +99,21 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
   fs.mkdirSync(postsPublishedDir, { recursive: true });
 
   const currentVersion = getPackageVersion();
+
+  let existing: Partial<EmitConfig> = {};
+  if (fs.existsSync(paths.configPath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(paths.configPath, 'utf8')) as Partial<EmitConfig>;
+    } catch {
+      // An unreadable config falls back to defaults rather than aborting init; the rewrite below replaces it.
+      existing = {};
+    }
+  }
+
   const config: EmitConfig = {
     ...DEFAULT_CONFIG,
-    createdWithVersion: currentVersion,
+    ...existing,
+    createdWithVersion: existing.createdWithVersion ?? currentVersion,
     lastSyncedVersion: currentVersion,
     ...initialConfig,
   };
@@ -105,6 +123,7 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
 
 /**
  * Persists the `localMediaRefs` workspace preference into `.emit/config.json`.
+
  *
  * The setting decides how mirrored body images are spelled on disk, so it must survive across commands: a pull
  * that writes `media/<storageKey>` references has to be matched by every later push and diff. Only touches the

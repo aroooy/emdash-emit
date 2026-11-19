@@ -161,6 +161,62 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(cCheck?.message).toContain('1 quarantined file(s) found');
   });
 
+  /**
+   * v0.1.38 P2 — T2-2: the workspace link check reports drift and otherwise stays silent, and it must land
+   * immediately after `origin_consistency` so the report reads origin first, then path. Pushing an `ok` line
+   * for a profile with no registered workspace would add noise to every healthy report without saying anything,
+   * which is why that case asserts absence rather than success.
+   */
+  it('reports a drifted workspace link as a warning naming the re-link command', async () => {
+    const config = loadConfig(tempDir);
+    const report = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+      profileName: 'aroooy.net',
+      profileOrigin: 'https://aroooy.net',
+      // Registered to a folder that no longer exists — the workspace moved here.
+      profileWorkspace: path.join(tempDir, '..', 'old-location', 'my-blog'),
+    });
+
+    expect(report.overallStatus).toBe('warnings');
+
+    const linkCheck = report.checks.find((c) => c.id === 'workspace_link_consistency');
+    expect(linkCheck?.status).toBe('warning');
+    expect(linkCheck?.message).toContain('Profile "aroooy.net" is registered to');
+    expect(linkCheck?.suggestion).toContain('emit init --profile aroooy.net');
+
+    // Sequence: the link check sits directly after the origin check, inside the synchronous environment group.
+    const ids = report.checks.map((c) => c.id);
+    expect(ids.indexOf('workspace_link_consistency')).toBe(ids.indexOf('origin_consistency') + 1);
+  });
+
+  it('omits the workspace link check when the link matches or no workspace is registered', async () => {
+    const config = loadConfig(tempDir);
+
+    // Matching link — nothing to report.
+    const matched = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+      profileName: 'aroooy.net',
+      profileOrigin: 'https://aroooy.net',
+      profileWorkspace: tempDir,
+    });
+    expect(matched.checks.map((c) => c.id)).not.toContain('workspace_link_consistency');
+    expect(matched.overallStatus).toBe('healthy');
+
+    // No registered workspace at all — there is no link to have gone stale.
+    const unlinked = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config,
+      profileName: 'aroooy.net',
+      profileOrigin: 'https://aroooy.net',
+    });
+    expect(unlinked.checks.map((c) => c.id)).not.toContain('workspace_link_consistency');
+  });
+
   it('reports healable frontmatter syntax errors as a pull-repairable warning', async () => {
     const draftDir = path.join(tempDir, 'posts', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });

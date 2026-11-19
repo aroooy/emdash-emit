@@ -25,7 +25,7 @@ import { getWorkspaceStatus, filterStatusItems } from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
 import type { CliContextResolver } from '../context.js';
 import { sameOrigin } from '../context.js';
-import type { ResolveProfileResult } from '../../utils/profile.js';
+import type { ResolveProfileResult, WorkspaceLinkDrift } from '../../utils/profile.js';
 
 export interface InitPlanResult {
   effectiveOrigin?: string;
@@ -63,6 +63,33 @@ export function resolveInitPlan(
   }
 
   return { effectiveOrigin, shouldLinkProfile, warning };
+}
+
+/**
+ * Whether `emit init` should (re-)register the resolved profile's workspace path.
+ *
+ * `resolveInitPlan()`'s guard deliberately refuses to link a profile that already carries a workspace — on a
+ * first init that prevents one folder from stealing another's link. But the same guard makes `emit init`
+ * useless for the repair case (v0.1.38 P2): after a folder move, the stale path is exactly what is registered,
+ * so the plain rule would leave the drift in place while telling the user to run this very command.
+ *
+ * An explicitly named profile (`emit init --profile <name>`) resolves that contradiction: naming the profile
+ * is the intent, so re-pointing its workspace at the current directory is what was asked for. `--no-link`
+ * still wins — an explicit refusal outranks everything. A drift-free auto-resolved init keeps the original
+ * guard-2 behaviour unchanged.
+ */
+export function resolveInitRelink(
+  options: { link?: boolean },
+  resolvedProfile: ResolveProfileResult | null,
+  drift: WorkspaceLinkDrift | null,
+): boolean {
+  if (options.link === false) return false;
+  if (!resolvedProfile) return false;
+  // Only a profile the user named by hand may have an existing link moved. An auto-resolved profile that
+  // carries a workspace cannot be the one being repaired — it matched by directory, which means its
+  // registered path already contains this one.
+  if (resolvedProfile.source === 'explicit' && drift) return true;
+  return !resolvedProfile.config.workspace;
 }
 
 export function registerStatusInitCommands(
@@ -272,15 +299,22 @@ export function registerStatusInitCommands(
       '--no-link',
       'Do not automatically link this workspace directory to the resolved profile',
     )
-    .action(async (options: { origin?: string; link?: boolean }) => {
+    .option(
+      '-p, --profile <name>',
+      'Initialize against this named profile, re-pointing its workspace here if it has moved',
+    )
+    .action(async (options: { origin?: string; link?: boolean; profile?: string }) => {
       const root = process.cwd();
       const { initWorkspace } = await import('../../utils/config.js');
       const { getWorkspacePaths } = await import('../../utils/workspace.js');
-      const { resolveTargetProfile, setProfile } = await import('../../utils/profile.js');
+      const { resolveTargetProfile, setProfile, detectWorkspaceLinkDrift } =
+        await import('../../utils/profile.js');
 
       let resolvedProfile = null;
       try {
-        resolvedProfile = resolveTargetProfile({ cwd: root });
+        // An explicit --profile pins the resolution: it must not lose to a current-directory match, since
+        // the profile being repaired is precisely the one whose registered path no longer contains here.
+        resolvedProfile = resolveTargetProfile({ cwd: root, profile: options.profile });
       } catch {
         // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
       }
@@ -295,6 +329,13 @@ export function registerStatusInitCommands(
         console.warn(warning);
       }
 
+      const drift = detectWorkspaceLinkDrift(
+        resolvedProfile?.name,
+        resolvedProfile?.config.workspace,
+        root,
+      );
+      const shouldRelinkProfile = resolveInitRelink(options, resolvedProfile, drift);
+
       initWorkspace(root, effectiveOrigin ? { origin: effectiveOrigin } : undefined);
       const paths = getWorkspacePaths(root);
 
@@ -308,6 +349,14 @@ export function registerStatusInitCommands(
           workspace: root,
         });
         console.log(`🔗 Linked profile "${resolvedProfile.name}" -> workspace ${root}`);
+      } else if (shouldRelinkProfile && resolvedProfile && drift) {
+        setProfile(resolvedProfile.name, {
+          ...resolvedProfile.config,
+          workspace: root,
+        });
+        console.log(
+          `🔗 Re-linked profile "${resolvedProfile.name}": ${drift.registeredWorkspace} -> ${root}`,
+        );
       }
     });
 }

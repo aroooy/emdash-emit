@@ -255,6 +255,15 @@ emit profile list
 2. **Explicit Profile Flag**: You can explicitly specify `--profile <name>` (or pass `profile: "<name>"` in MCP) from any directory to override automatic detection.
 3. **Ambiguity Safeguard**: If you run a command outside of any registered workspace and omit `--profile`, Emit aborts with an `AmbiguousProfileError` instead of guessing or silently pushing to the wrong site.
 4. **Visible Resolution Rationale**: `emit profile current` prints the deciding path (`Resolved by: ...`), and MCP tools report it as `_meta.resolvedBy`. The `active` profile set by `emit profile use` is only a fallback for commands run outside registered workspaces — inside a linked workspace, directory detection already picks the right site, so no manual switch is needed.
+5. **Moved Folder Detection**: If you rename or move a workspace folder, the profile's registered path goes stale and directory detection silently stops matching. Emit reports it instead of letting the connection fall back unnoticed:
+
+   ```text
+   ⚠️ Profile "work" is registered to /Users/me/src/work-blog, but this command runs in a different directory.
+      Emit is using the registered path (/Users/me/src/work-blog) for the connection, while the workspace being operated on is /Users/me/src/workspaces/work-blog.
+      Re-link it with: emit init --profile work
+   ```
+
+   `emit doctor` reports the same condition as its `Workspace Link Consistency` check. Comparison goes through the identical symlink-safe rule, so a symlinked path or trailing-slash spelling of an unchanged folder is never reported as drift.
 
 ### 4. Authentication Resolution Order & Token Auto-Refresh
 
@@ -608,11 +617,15 @@ To ensure autonomous AI agents and automated scripts cannot corrupt workspace st
 Initializes the current directory as an Emit local workspace.
 
 ```bash
-emit init [--origin <url>]
+emit init [--origin <url>] [-p, --profile <name>]
 
 ```
 
 - `--origin <url>`: Optional EmDash origin URL. If omitted, uses the active profile.
+- `-p, --profile <name>`: Initialize against this named profile. When that profile's registered workspace points at a folder that has since moved or been renamed, `emit init` re-points it at the current directory and reports `🔗 Re-linked profile ...`. Naming the profile explicitly is what makes the move repairable — a plain `emit init` will not move a link that already exists.
+- `--no-link`: Do not register this directory with any profile.
+
+Re-running `emit init` on an existing workspace is non-destructive: only the keys you pass change, and the existing `defaultCollection`, `defaultLocale`, sync limits, `concurrency`, `localMediaRefs` and `createdWithVersion` are preserved.
 
 **Example Output:**
 
@@ -869,10 +882,11 @@ Runs an automated diagnostic health check across the local workspace and cache d
 emit doctor [-c, --collection <collection>] [--strict-media] [--check-media-urls] [--check-media-library] [-p, --profile <name>]
 ```
 
-Validates 6 critical health vectors:
+Validates 6 critical health vectors, plus a conditional link check:
 
 1. **Version Compatibility**: Checks tool version against `createdWithVersion` / `lastSyncedVersion` in config.
 2. **Origin Consistency**: Verifies `.emit/config.json`, profile origin, and environment variables.
+   - **2b. Workspace Link Consistency** (reported only when a registered profile workspace no longer matches the directory being operated on): states both paths and names `emit init --profile <name>` as the re-link command. A profile with no registered workspace adds no line at all, so a healthy report stays quiet.
 3. **Frontmatter Integrity**: Ensures all local Markdown files have valid parseable frontmatter.
 4. **Conflicts & Quarantine**: Flags unresolved conflict copies and deletion backups in `conflicts/`.
 5. **Sync Status**: Verifies local baseline hash tracking.

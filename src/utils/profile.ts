@@ -194,6 +194,49 @@ export function findProfileByDirectory(
   return bestMatch ? { name: bestMatch.name, config: bestMatch.config } : null;
 }
 
+export interface WorkspaceLinkDrift {
+  profileName: string;
+  /** The path recorded in `profiles.yaml` — the one that is now stale. */
+  registeredWorkspace: string;
+  /** The workspace root the command actually resolved to. */
+  actualWorkspace: string;
+}
+
+/**
+ * Reports when a profile's registered workspace no longer points at the workspace being operated on.
+ *
+ * A folder move or rename leaves `profiles.yaml` pointing at the old location, so directory-driven
+ * resolution silently stops matching and the connection starts coming from `.emit/config.json` instead —
+ * which prints no warning at all, and a later `emit init` would then refuse to re-link because guard 2 of
+ * `resolveInitPlan()` sees a workspace already registered. Emit must surface that state rather than let it
+ * sit invisible until someone pushes to the wrong site.
+ *
+ * A registered path that merely *contains* the operated-on directory is not drift: running from
+ * `posts/draft` inside the linked workspace is normal, and `findProfileByDirectory()` matched precisely so
+ * the connection is already correct. Only a registration that matches nothing here is stale.
+ *
+ * Comparison goes through `resolveDirectoryForComparison()`, the same realpath rule as directory-driven
+ * resolution, so a symlinked or trailing-slash spelling of an unchanged folder is never reported as drift.
+ * An unregistered workspace is not drift either: there is no link to have gone stale.
+ */
+export function detectWorkspaceLinkDrift(
+  profileName: string | undefined,
+  registeredWorkspace: string | undefined,
+  actualWorkspaceRoot: string,
+): WorkspaceLinkDrift | null {
+  if (!profileName) return null;
+  const registered = registeredWorkspace?.trim();
+  if (!registered) return null;
+
+  const registeredDir = resolveDirectoryForComparison(registered);
+  const actualDir = resolveDirectoryForComparison(actualWorkspaceRoot);
+  // Equal, or the operated-on directory sitting inside the linked workspace: the link still works.
+  if (actualDir === registeredDir || actualDir.startsWith(registeredDir + path.sep)) {
+    return null;
+  }
+  return { profileName, registeredWorkspace: registered, actualWorkspace: actualWorkspaceRoot };
+}
+
 export interface ResolveProfileOptions {
   profile?: string;
   cwd?: string;
