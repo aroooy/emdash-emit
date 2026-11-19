@@ -26,8 +26,10 @@ import {
   detectUnsupportedMarkdownSyntax,
   extractOpaqueBlockLines,
   isPlainImageBlock,
+  isPlainTableBlock,
   markdownToPortableText,
   portableTextToMarkdown,
+  resetKeyCounter,
   verifyOpaqueBlocksUntampered,
   type PortableTextBlock,
 } from '../src/client/portable-text.js';
@@ -282,7 +284,7 @@ describe('Portable Text <-> Markdown Conversion', () => {
   });
 
   describe('Unsupported Syntax Detection', () => {
-    it('detects markdown tables and raw HTML outside code blocks', () => {
+    it('detects raw HTML outside code blocks (GFM tables are now supported: T5-6)', () => {
       const invalidMd = [
         '# Title',
         '',
@@ -294,9 +296,8 @@ describe('Portable Text <-> Markdown Conversion', () => {
       ].join('\n');
 
       const warnings = detectUnsupportedMarkdownSyntax(invalidMd);
-      expect(warnings.length).toBe(2);
-      expect(warnings[0]).toMatch(/Markdown tables are not supported/i);
-      expect(warnings[1]).toMatch(/Raw HTML block tags are not supported/i);
+      expect(warnings.length).toBe(1);
+      expect(warnings[0]).toMatch(/Raw HTML block tags are not supported/i);
     });
 
     it('ignores tables or HTML tags inside code fences', () => {
@@ -377,6 +378,191 @@ describe('Portable Text <-> Markdown Conversion', () => {
       expect(countPreservedOpaqueBlocks(codeOnly)).toBe(0);
       expect(countPreservedOpaqueBlocks('Plain markdown without any blocks.')).toBe(0);
       expect(countPreservedOpaqueBlocks('')).toBe(0);
+    });
+  });
+
+  describe('GFM Table <-> EmDash Table Block (v0.1.39 P5)', () => {
+    it('T5-1: converts GFM pipe table to canonical table block with headers and alignments', () => {
+      const markdown = [
+        '| Header Left | Header Center | Header Right | Default |',
+        '| :--- | :---: | ---: | --- |',
+        '| A1 | B1 | C1 | D1 |',
+        '| A2 | B2 | C2 | D2 |',
+      ].join('\n');
+
+      const blocks = markdownToPortableText(markdown);
+      expect(blocks).toHaveLength(1);
+
+      const table = blocks[0] as Record<string, unknown>;
+      expect(table._type).toBe('table');
+      expect(table.hasHeaderRow).toBe(true);
+
+      const rows = table.rows as Array<{
+        _type: string;
+        cells: Array<{
+          _type: string;
+          isHeader: boolean;
+          textAlign?: string;
+          content: Array<{ _type: string; text: string }>;
+        }>;
+      }>;
+      expect(rows).toHaveLength(3);
+
+      // Header row
+      expect(rows[0]._type).toBe('tableRow');
+      expect(rows[0].cells).toHaveLength(4);
+      expect(rows[0].cells[0].isHeader).toBe(true);
+      expect(rows[0].cells[0].textAlign).toBe('left');
+      expect(rows[0].cells[0].content[0].text).toBe('Header Left');
+
+      expect(rows[0].cells[1].isHeader).toBe(true);
+      expect(rows[0].cells[1].textAlign).toBe('center');
+      expect(rows[0].cells[1].content[0].text).toBe('Header Center');
+
+      expect(rows[0].cells[2].isHeader).toBe(true);
+      expect(rows[0].cells[2].textAlign).toBe('right');
+      expect(rows[0].cells[2].content[0].text).toBe('Header Right');
+
+      expect(rows[0].cells[3].isHeader).toBe(true);
+      expect(rows[0].cells[3].textAlign).toBeUndefined();
+
+      // Body row
+      expect(rows[1]._type).toBe('tableRow');
+      expect(rows[1].cells[0].isHeader).toBe(false);
+      expect(rows[1].cells[0].textAlign).toBe('left');
+      expect(rows[1].cells[0].content[0].text).toBe('A1');
+
+      expect(rows[1].cells[1].isHeader).toBe(false);
+      expect(rows[1].cells[1].textAlign).toBe('center');
+      expect(rows[1].cells[1].content[0].text).toBe('B1');
+    });
+
+    it('T5-2: parses inline marks in cells and ensures empty cells have fallback spans', () => {
+      const markdown = [
+        '| Syntax | Description | Extra |',
+        '| --- | --- | --- |',
+        '| **bold** | _italic_ and `code` | [link](https://example.com) |',
+        '| ~~strike~~ | | |',
+      ].join('\n');
+
+      const blocks = markdownToPortableText(markdown);
+      const table = blocks[0] as Record<string, unknown>;
+      const rows = table.rows as Array<{
+        cells: Array<{
+          content: Array<{ _type: string; text: string; marks: string[] }>;
+          markDefs: Array<{ _key: string; _type: string; href?: string }>;
+        }>;
+      }>;
+
+      // Row 1 with inline marks
+      const row1 = rows[1];
+      expect(row1.cells[0].content[0].text).toBe('bold');
+      expect(row1.cells[0].content[0].marks).toContain('strong');
+
+      expect(row1.cells[1].content.some((s) => s.text === 'italic' && s.marks.includes('em'))).toBe(
+        true,
+      );
+      expect(row1.cells[1].content.some((s) => s.text === 'code' && s.marks.includes('code'))).toBe(
+        true,
+      );
+
+      expect(row1.cells[2].content[0].text).toBe('link');
+      expect(row1.cells[2].markDefs).toHaveLength(1);
+      expect(row1.cells[2].markDefs[0].href).toBe('https://example.com');
+
+      // Row 2 with empty cells
+      const row2 = rows[2];
+      expect(row2.cells[0].content[0].marks).toContain('strike-through');
+      expect(row2.cells[1].content).toHaveLength(1);
+      expect(row2.cells[1].content[0].text).toBe('');
+      expect(row2.cells[2].content).toHaveLength(1);
+      expect(row2.cells[2].content[0].text).toBe('');
+    });
+
+    it('T5-3: lossless round-trip between canonical table block and GFM pipe table', () => {
+      const originalMd = [
+        '| Feature | Supported | Alignment |',
+        '| :--- | :---: | ---: |',
+        '| Bold text | **Yes** | Left |',
+        '| Empty cell |  | Right |',
+      ].join('\n');
+
+      resetKeyCounter();
+      const blocks = markdownToPortableText(originalMd);
+      const renderedMd = portableTextToMarkdown(blocks).trim();
+
+      expect(renderedMd).toBe(originalMd);
+
+      resetKeyCounter();
+      const reParsedBlocks = markdownToPortableText(renderedMd);
+      expect(reParsedBlocks).toEqual(blocks);
+    });
+
+    it('T5-4: falls back to Tier-3 opaque comment fence for non-GFM table features', () => {
+      // 1. Table with colspan > 1
+      const colspanTable: PortableTextBlock = {
+        _type: 'table',
+        _key: 'tbl_colspan',
+        hasHeaderRow: true,
+        rows: [
+          {
+            _type: 'tableRow',
+            _key: 'r1',
+            cells: [
+              {
+                _type: 'tableCell',
+                _key: 'c1',
+                colspan: 2,
+                content: [{ _type: 'span', _key: 's1', text: 'Merged', marks: [] }],
+              },
+            ],
+          },
+        ],
+      };
+      expect(isPlainTableBlock(colspanTable)).toBe(false);
+      const mdColspan = portableTextToMarkdown([colspanTable]).trim();
+      expect(mdColspan).toBe(`<!--ec:block ${JSON.stringify(colspanTable)} -->`);
+
+      // 2. Table with hasHeaderRow = false
+      const noHeaderTable: PortableTextBlock = {
+        _type: 'table',
+        _key: 'tbl_nohead',
+        hasHeaderRow: false,
+        rows: [
+          {
+            _type: 'tableRow',
+            _key: 'r1',
+            cells: [
+              {
+                _type: 'tableCell',
+                _key: 'c1',
+                content: [{ _type: 'span', _key: 's1', text: 'Data', marks: [] }],
+              },
+            ],
+          },
+        ],
+      };
+      expect(isPlainTableBlock(noHeaderTable)).toBe(false);
+      const mdNoHead = portableTextToMarkdown([noHeaderTable]).trim();
+      expect(mdNoHead).toBe(`<!--ec:block ${JSON.stringify(noHeaderTable)} -->`);
+
+      // Round-trip preservation via opaque fence
+      const parsedColspan = markdownToPortableText(mdColspan);
+      expect(parsedColspan[0]).toEqual(colspanTable);
+    });
+
+    it('T5-5: table cell containing image markdown is treated as cell content, not block image', () => {
+      const markdown = [
+        '| Icon | Description |',
+        '| --- | --- |',
+        '| ![Logo](https://example.com/logo.png) | Company Logo |',
+      ].join('\n');
+
+      const blocks = markdownToPortableText(markdown);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]._type).toBe('table');
+      // No block-level image was generated
+      expect(blocks.some((b) => b._type === 'image')).toBe(false);
     });
   });
 });

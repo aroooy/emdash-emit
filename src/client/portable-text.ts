@@ -93,6 +93,132 @@ export function isPlainImageBlock(block: Record<string, unknown>): boolean {
 }
 
 /**
+ * Reports whether a table block carries only plain properties expressible in standard GFM Markdown.
+ * Returns false if the table uses extended features such as colspan/rowspan > 1, custom column widths,
+ * multiple paragraphs inside a cell, header rows in body positions, or lacks a header row.
+ */
+export function isPlainTableBlock(block: Record<string, unknown>): boolean {
+  if (block._type !== 'table') return false;
+  if (!Array.isArray(block.rows) || block.rows.length === 0) return false;
+
+  // GFM requires a header row. If hasHeaderRow is explicitly false, it cannot be GFM.
+  if (block.hasHeaderRow === false) return false;
+
+  const firstRow = block.rows[0] as Record<string, unknown> | undefined;
+  if (
+    !firstRow ||
+    firstRow._type !== 'tableRow' ||
+    !Array.isArray(firstRow.cells) ||
+    firstRow.cells.length === 0
+  ) {
+    return false;
+  }
+
+  const colCount = firstRow.cells.length;
+
+  for (let rIndex = 0; rIndex < block.rows.length; rIndex++) {
+    const row = block.rows[rIndex] as Record<string, unknown>;
+    if (!row || row._type !== 'tableRow' || !Array.isArray(row.cells)) return false;
+    if (row.cells.length !== colCount) return false;
+
+    for (const cell of row.cells as Array<Record<string, unknown>>) {
+      if (!cell || cell._type !== 'tableCell') return false;
+
+      // Colspan / Rowspan > 1 cannot be represented in GFM
+      if (typeof cell.colspan === 'number' && cell.colspan > 1) return false;
+      if (typeof cell.rowspan === 'number' && cell.rowspan > 1) return false;
+      if (typeof cell.colSpan === 'number' && cell.colSpan > 1) return false;
+      if (typeof cell.rowSpan === 'number' && cell.rowSpan > 1) return false;
+      if (cell.colwidth !== undefined || cell.colWidth !== undefined) return false;
+
+      // In GFM, only row 0 is header. A subsequent row having isHeader: true cannot be GFM.
+      if (rIndex > 0 && cell.isHeader === true) return false;
+
+      // Cell content inspection: must be inline spans or single normal block without newlines
+      if (Array.isArray(cell.content)) {
+        if (cell.content.length > 1) {
+          const isAllSpans = cell.content.every(
+            (c) => c && typeof c === 'object' && (c as Record<string, unknown>)._type === 'span',
+          );
+          if (!isAllSpans) return false;
+        }
+        for (const item of cell.content as Array<Record<string, unknown>>) {
+          if (!item || typeof item !== 'object') return false;
+          if (item._type === 'span') {
+            if (typeof item.text === 'string' && item.text.includes('\n')) return false;
+          } else if (item._type === 'block') {
+            if (item.style && item.style !== 'normal') return false;
+            if (Array.isArray(item.children)) {
+              for (const child of item.children as Array<Record<string, unknown>>) {
+                if (child && typeof child.text === 'string' && child.text.includes('\n')) {
+                  return false;
+                }
+              }
+            }
+          } else {
+            return false;
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+function renderTableCell(cell: Record<string, unknown>): string {
+  let cellText = '';
+  if (Array.isArray(cell.content)) {
+    const markDefs = (cell.markDefs as MarkDef[]) ?? [];
+    for (const item of cell.content as Array<Record<string, unknown>>) {
+      if (item && typeof item === 'object') {
+        if (item._type === 'span') {
+          cellText += renderSpans([item as PortableTextSpan], markDefs);
+        } else if (item._type === 'block') {
+          const block = item as PortableTextBlock;
+          cellText += renderSpans(block.children ?? [], block.markDefs ?? markDefs);
+        }
+      }
+    }
+  }
+  return cellText.replace(/\\\|/g, '|').replace(/\|/g, '\\|').trim();
+}
+
+function renderTableBlock(block: Record<string, unknown>): string {
+  const rows = block.rows as Array<Record<string, unknown>>;
+  if (!rows || rows.length === 0) return '';
+
+  const firstRow = rows[0];
+  const firstCells = (firstRow.cells as Array<Record<string, unknown>>) ?? [];
+
+  const alignments = firstCells.map((c) => (c.textAlign as string | undefined) ?? undefined);
+
+  const lines: string[] = [];
+
+  // Header row
+  const headerTexts = firstCells.map(renderTableCell);
+  lines.push(`| ${headerTexts.join(' | ')} |`);
+
+  // Delimiter row
+  const delimTexts = alignments.map((align) => {
+    if (align === 'center') return ':---:';
+    if (align === 'right') return '---:';
+    if (align === 'left') return ':---';
+    return '---';
+  });
+  lines.push(`| ${delimTexts.join(' | ')} |`);
+
+  // Body rows
+  for (let i = 1; i < rows.length; i++) {
+    const cells = (rows[i].cells as Array<Record<string, unknown>>) ?? [];
+    const cellTexts = cells.map(renderTableCell);
+    lines.push(`| ${cellTexts.join(' | ')} |`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Convert Portable Text blocks to Markdown.
  * Unknown block types are serialized as opaque fences.
  */
@@ -126,6 +252,10 @@ export function portableTextToMarkdown(blocks: PortableTextBlock[]): string {
       const alt = (block.alt as string) || '';
       const url = (block.asset as { url?: string })?.url || '';
       lines.push(`![${alt}](${url})`);
+      prevWasList = false;
+    } else if (block._type === 'table' && isPlainTableBlock(block)) {
+      if (i > 0) lines.push('');
+      lines.push(renderTableBlock(block));
       prevWasList = false;
     } else {
       // Tier 3: Unknown or extended block -> opaque fence
@@ -312,12 +442,159 @@ export function markdownToPortableText(markdown: string): PortableTextBlock[] {
       continue;
     }
 
+    // Table (GFM pipe table)
+    if (isTableStart(lines, i)) {
+      const { tableBlock, nextIndex } = parseTableBlock(lines, i);
+      blocks.push(tableBlock);
+      i = nextIndex;
+      continue;
+    }
+
     // Paragraph
     blocks.push(makeBlock(line));
     i++;
   }
 
   return blocks;
+}
+
+function splitTableRow(rowStr: string): string[] {
+  let trimmed = rowStr.trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
+
+  const cells: string[] = [];
+  let current = '';
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+    } else if (ch === '\\') {
+      escaped = true;
+      current += ch;
+    } else if (ch === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isDelimiterRow(rowStr: string): boolean {
+  const trimmed = rowStr.trim();
+  if (!trimmed.includes('-')) return false;
+  const cells = splitTableRow(trimmed);
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-+:?$/.test(c.trim()));
+}
+
+function parseDelimiterAlignments(rowStr: string): Array<'left' | 'center' | 'right' | undefined> {
+  const cells = splitTableRow(rowStr);
+  return cells.map((cell) => {
+    const trimmed = cell.trim();
+    const left = trimmed.startsWith(':');
+    const right = trimmed.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return undefined;
+  });
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  if (index + 1 >= lines.length) return false;
+  const currentLine = lines[index].trim();
+  const nextLine = lines[index + 1].trim();
+
+  if (
+    !currentLine.includes('|') ||
+    currentLine.startsWith('```') ||
+    OPAQUE_FENCE_PATTERN.test(currentLine)
+  ) {
+    return false;
+  }
+
+  if (!isDelimiterRow(nextLine)) return false;
+
+  const headerCols = splitTableRow(currentLine).length;
+  const delimCols = splitTableRow(nextLine).length;
+  return headerCols === delimCols && headerCols > 0;
+}
+
+function parseTableBlock(
+  lines: string[],
+  startIndex: number,
+): { tableBlock: PortableTextBlock; nextIndex: number } {
+  const headerLine = lines[startIndex].trim();
+  const delimLine = lines[startIndex + 1].trim();
+  const alignments = parseDelimiterAlignments(delimLine);
+  const headerColTexts = splitTableRow(headerLine);
+
+  const headerCells = headerColTexts.map((text, colIdx) => {
+    const { spans, markDefs } = parseInline(text);
+    const align = alignments[colIdx];
+    return {
+      _type: 'tableCell',
+      _key: generateKey(),
+      content: spans,
+      markDefs,
+      isHeader: true,
+      ...(align ? { textAlign: align } : {}),
+    };
+  });
+
+  const headerRow = {
+    _type: 'tableRow',
+    _key: generateKey(),
+    cells: headerCells,
+  };
+
+  const rows = [headerRow];
+  let curr = startIndex + 2;
+
+  while (
+    curr < lines.length &&
+    lines[curr].trim() !== '' &&
+    lines[curr].includes('|') &&
+    !lines[curr].trim().startsWith('```') &&
+    !OPAQUE_FENCE_PATTERN.test(lines[curr].trim())
+  ) {
+    const rowLine = lines[curr].trim();
+    const cellTexts = splitTableRow(rowLine);
+    const cells = alignments.map((align, colIdx) => {
+      const text = cellTexts[colIdx] ?? '';
+      const { spans, markDefs } = parseInline(text);
+      return {
+        _type: 'tableCell',
+        _key: generateKey(),
+        content: spans,
+        markDefs,
+        isHeader: false,
+        ...(align ? { textAlign: align } : {}),
+      };
+    });
+
+    rows.push({
+      _type: 'tableRow',
+      _key: generateKey(),
+      cells,
+    });
+    curr++;
+  }
+
+  const tableBlock: PortableTextBlock = {
+    _type: 'table',
+    _key: generateKey(),
+    hasHeaderRow: true,
+    rows,
+  };
+
+  return { tableBlock, nextIndex: curr };
 }
 
 // ---------------------------------------------------------------------------
@@ -639,13 +916,6 @@ export function stripCodeBlocks(markdown: string): string {
 export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
   const cleaned = stripCodeBlocks(markdown);
   const warnings: string[] = [];
-
-  // Markdown tables (| col | col |)
-  if (/^\|(?:[^\r\n|]+\|)+$/m.test(cleaned)) {
-    warnings.push(
-      'Markdown tables are not supported by the line-based parser and will degrade to plain text paragraphs.',
-    );
-  }
 
   // Raw block HTML tags
   if (/<(?:div|section|article|table|form|iframe|script)[\s>]/i.test(cleaned)) {

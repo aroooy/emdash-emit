@@ -688,5 +688,22 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         fs.rmSync(tempWs, { recursive: true, force: true });
       }
     });
+
+    it('T5-5: table cell containing remote image markdown is treated as cell content, not standalone image', () => {
+      const parsedWithTable: ParsedMarkdown = {
+        ...validParsed,
+        body: [
+          '# Post with Table',
+          '',
+          '| Icon | Name |',
+          '| --- | --- |',
+          '| ![Logo](https://example.com/logo.png) | Example |',
+        ].join('\n'),
+      };
+      const res = runPreflightChecks(filePath, parsedWithTable);
+      expect(res.valid).toBe(true);
+      expect(res.errors).toHaveLength(0);
+      expect(res.draftImages).toHaveLength(0);
+    });
   });
 });

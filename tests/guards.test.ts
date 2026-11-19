@@ -170,9 +170,9 @@ describe('Guard Registry and Error Codes Invariants (L6)', () => {
       "Duplicate top-level heading matching title ('# Duplicate Title') was automatically trimmed from body.",
     );
 
-    // G8: UNSUPPORTED_SYNTAX_WARNING produces warnings array for tables / raw HTML / tilde fences
+    // G8: UNSUPPORTED_SYNTAX_WARNING produces warnings array for raw HTML / tilde fences
     const unsupportedWarnings = detectUnsupportedMarkdownSyntax(
-      '| Col1 | Col2 |\n|---|---|\n| Val1 | Val2 |',
+      '<div class="callout">raw html</div>',
     );
     expect(unsupportedWarnings.length).toBeGreaterThan(0);
 
