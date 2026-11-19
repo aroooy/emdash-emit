@@ -61,7 +61,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     }
   });
 
-  function setupHealthyArticle() {
+  function setupHealthyArticle(options?: { frontmatter?: Partial<Frontmatter>; body?: string }) {
     const frontmatter: Frontmatter = {
       id: articleId,
       slug: 'doctor-healthy-post',
@@ -71,8 +71,9 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       locale: 'ja',
       taxonomies: { categories: ['tech'] },
       bylines: [],
+      ...options?.frontmatter,
     };
-    const body = 'Healthy Content\n';
+    const body = options?.body ?? 'Healthy Content\n';
     const content = serializeMarkdown(frontmatter, body);
     const relPath = path.join('posts', 'draft', `20261108_${articleId}-doctor-healthy-post.md`);
     const fullPath = path.join(tempDir, relPath);
@@ -1280,6 +1281,143 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       // `mcp_process` is conditional (it only appears when a heartbeat file exists), so the stable prefix is
       // asserted as an ordering relation above rather than as fixed positions.
       expect(ids.slice(0, 2)).toEqual(['version_compatibility', 'origin_consistency']);
+    });
+  });
+
+  describe('Unreferenced / Isolated Media Check (v0.1.39 P3)', () => {
+    it('T3-1: detects unreferenced companion-backed media while excluding referenced ones', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      // Referenced asset
+      const sunsetId = '01AR0000000000000000000001';
+      const sunsetKey = '01AR0000000000000000000001.png';
+      fs.writeFileSync(path.join(mediaDir, 'sunset.png'), 'png-bytes', 'utf8');
+      fs.writeFileSync(
+        path.join(mediaDir, 'sunset.yaml'),
+        `id: ${sunsetId}\nstorageKey: ${sunsetKey}\n`,
+        'utf8',
+      );
+
+      // Unreferenced asset
+      const isolatedId = '01AR0000000000000000000002';
+      const isolatedKey = '01AR0000000000000000000002.png';
+      fs.writeFileSync(path.join(mediaDir, 'isolated.png'), 'png-bytes', 'utf8');
+      fs.writeFileSync(
+        path.join(mediaDir, 'isolated.yaml'),
+        `id: ${isolatedId}\nstorageKey: ${isolatedKey}\n`,
+        'utf8',
+      );
+
+      // Article referencing sunset
+      setupHealthyArticle({
+        body: `Here is an image: ![Sunset](/_emdash/api/media/file/${sunsetKey})\n`,
+      });
+
+      const report = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+
+      const check = report.checks.find((c) => c.id === 'media_isolated');
+      expect(check).toBeDefined();
+      expect(check?.status).toBe('ok');
+      expect(check?.message).toContain('1 local media file(s) in media/ are not referenced');
+
+      const details = check?.details as {
+        unreferenced: Array<{ filePath: string; storageKey?: string; id?: string }>;
+      };
+      expect(details.unreferenced.some((item) => item.filePath.includes('isolated.png'))).toBe(
+        true,
+      );
+      expect(details.unreferenced.some((item) => item.filePath.includes('sunset.png'))).toBe(false);
+
+      // Does not turn overallStatus to warnings
+      expect(report.overallStatus).toBe('healthy');
+    });
+
+    it('T3-2: does not report media referenced in frontmatter featuredImage as unreferenced', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      // Hero image referenced by ULID in frontmatter
+      const heroId = '01AR0000000000000000000003';
+      const heroKey = '01AR0000000000000000000003.jpg';
+      fs.writeFileSync(path.join(mediaDir, 'hero.jpg'), 'jpg-bytes', 'utf8');
+      fs.writeFileSync(
+        path.join(mediaDir, 'hero.yaml'),
+        `id: ${heroId}\nstorageKey: ${heroKey}\n`,
+        'utf8',
+      );
+
+      setupHealthyArticle({
+        frontmatter: {
+          id: articleId,
+          slug: 'featured-post',
+          title: 'Featured Post',
+          collection: 'posts',
+          status: 'draft',
+          locale: 'ja',
+          taxonomies: {},
+          bylines: [],
+          featuredImage: heroId,
+        },
+        body: 'Post with featured hero image but no body image.\n',
+      });
+
+      const report = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+
+      const check = report.checks.find((c) => c.id === 'media_isolated');
+      // No unreferenced media -> check is absent
+      expect(check).toBeUndefined();
+      expect(report.overallStatus).toBe('healthy');
+    });
+
+    it('T3-3: treats companion-less media as unattributable without asserting deletion', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      // Unreferenced companion-backed media
+      fs.writeFileSync(path.join(mediaDir, 'orphaned.png'), 'png-bytes', 'utf8');
+      fs.writeFileSync(
+        path.join(mediaDir, 'orphaned.yaml'),
+        'id: 01M67ORPHAN0000000000000001\nstorageKey: orphan-key.png\n',
+        'utf8',
+      );
+
+      // Stray binary file with NO companion yaml
+      fs.writeFileSync(path.join(mediaDir, 'stray.png'), 'stray-bytes', 'utf8');
+
+      setupHealthyArticle({
+        body: 'Clean article.\n',
+      });
+
+      const report = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+
+      const check = report.checks.find((c) => c.id === 'media_isolated');
+      expect(check).toBeDefined();
+
+      const details = check?.details as {
+        unreferenced: Array<{ filePath: string }>;
+        unattributable?: string[];
+      };
+
+      // stray.png is NOT in unreferenced
+      expect(details.unreferenced.some((item) => item.filePath.includes('stray.png'))).toBe(false);
+      // stray.png is recorded under unattributable
+      expect(details.unattributable).toContain('media/stray.png');
+      // Epistemic check: does not instruct user to delete files
+      expect(check?.suggestion).not.toContain('delete');
+      expect(check?.suggestion).toContain('never removes unreferenced files automatically');
     });
   });
 });

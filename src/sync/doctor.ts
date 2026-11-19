@@ -735,6 +735,16 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   // what lets `/_emdash/api/media/file/<storageKey>` resolve to a file on disk.
   const knownMediaStems = new Set<string>();
 
+  interface LocalCompanionAsset {
+    stem: string;
+    yamlPath: string;
+    storageKey?: string;
+    mediaId?: string;
+    binaryFile?: string;
+  }
+  const localCompanions = new Map<string, LocalCompanionAsset>();
+  const nonYamlMediaFiles = new Set<string>();
+
   if (fs.existsSync(mediaDir)) {
     const mediaFiles = fs.readdirSync(mediaDir);
     for (const f of mediaFiles) {
@@ -753,18 +763,29 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
             unknown
           > | null;
           if (doc) {
-            if (typeof doc.id === 'string' && doc.id) {
-              knownMediaIds.add(doc.id);
+            const mediaId = typeof doc.id === 'string' && doc.id ? doc.id : undefined;
+            if (mediaId) {
+              knownMediaIds.add(mediaId);
             }
             // The storageKey field is missing on older mirrors, but their `url:` still names the key,
             // so both forms count as confirmed local metadata.
             const metaKey = storageKeyFromMediaMeta(doc);
             if (metaKey) knownStorageKeys.add(metaKey);
+            const stem = f.slice(0, -5);
+            localCompanions.set(stem, {
+              stem,
+              yamlPath: path.posix.join('media', f),
+              storageKey: metaKey,
+              mediaId,
+            });
           }
         } catch {
           // ignore corrupted individual yaml
         }
-      } else {
+      } else if (!f.startsWith('.')) {
+        if (f !== 'drafts') {
+          nonYamlMediaFiles.add(f);
+        }
         // media/<markdownRef>.<ext>: the stem is the sanitized storageKey, so it is recorded whole and
         // matched against the key a body URL carries. Legacy id-based names stay readable too, because a
         // workspace that has not been re-pulled yet still holds them.
@@ -773,6 +794,14 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
         knownMediaStems.add(stem.replace(/^\d{8}_/, ''));
         const dash = stem.indexOf('-');
         if (dash !== -1) knownMediaStems.add(stem.slice(dash + 1));
+      }
+    }
+    for (const [stem, comp] of localCompanions.entries()) {
+      for (const bf of nonYamlMediaFiles) {
+        if (bf.startsWith(stem + '.')) {
+          comp.binaryFile = path.posix.join('media', bf);
+          break;
+        }
       }
     }
     const draftsDir = path.join(mediaDir, 'drafts');
@@ -818,6 +847,11 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
     if (!m) return null;
     return VALID_MEDIA_FILE_KEY.test(m[1]) ? m[1] : null;
   };
+  const referencedStorageKeys = new Set<string>();
+  const referencedMediaIds = new Set<string>();
+  const referencedStems = new Set<string>();
+  for (const k of knownFeaturedStorageKeys) referencedStorageKeys.add(k);
+
   for (const status of ['draft', 'published']) {
     const dir = path.join(options.workspaceRoot, collection, status);
     if (!fs.existsSync(dir)) continue;
@@ -827,6 +861,45 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
       try {
         const content = fs.readFileSync(path.join(dir, file), 'utf8');
         const detailed = scanArticleMediaDetailed(content);
+
+        let featuredImg: string | undefined;
+        try {
+          const parsed = parseMarkdown(content);
+          featuredImg = parsed.frontmatter.featuredImage ?? undefined;
+        } catch {
+          const match = content.match(/^featuredImage:\s*["']?([^"'\r\n]+)["']?/m);
+          if (match) featuredImg = match[1].trim();
+        }
+
+        if (featuredImg) {
+          referencedMediaIds.add(featuredImg.trim());
+          const ulidMatch = featuredImg.match(/[0-9A-HJ-NP-Z]{26}/i);
+          if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
+          const m = featuredImg.match(/(?:^|\/)media\/file\/([^?#]+)/);
+          if (m) referencedStorageKeys.add(m[1]);
+          const stemMatch = featuredImg.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
+          if (stemMatch) referencedStems.add(stemMatch[1].replace(/\.[^.]+$/, ''));
+        }
+
+        for (const ref of [
+          ...detailed.normalRefs,
+          ...detailed.informationalRefs,
+          ...detailed.invalidRefs,
+        ]) {
+          const m = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
+          if (m) {
+            referencedStorageKeys.add(m[1]);
+            const stem = storageKeyToMarkdownRef(m[1]);
+            if (stem) referencedStems.add(stem);
+          }
+          const localMatch = ref.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
+          if (localMatch) {
+            const stem = localMatch[1].replace(/\.[^.]+$/, '');
+            referencedStems.add(stem);
+          }
+          const ulidMatch = ref.match(/[0-9A-HJ-NP-Z]{26}/i);
+          if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
+        }
 
         const checkRef = (ref: string): boolean => {
           // Check 1: EmDash public storageKey route: /_emdash/api/media/file/<storageKey>
@@ -1027,6 +1100,46 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
       invalidMediaRefs.length > 0
         ? { details: [...verifiedFileRouteOnly, ...informationalUnresolved, ...invalidMediaRefs] }
         : {}),
+    });
+  }
+
+  // Check: Unreferenced / Isolated Media (v0.1.39 P3)
+  const isolatedMedia: Array<{ filePath: string; storageKey?: string; id?: string }> = [];
+  for (const [stem, comp] of localCompanions.entries()) {
+    const isReferenced =
+      (comp.mediaId && referencedMediaIds.has(comp.mediaId.toUpperCase())) ||
+      (comp.storageKey && referencedStorageKeys.has(comp.storageKey)) ||
+      referencedStems.has(stem);
+
+    if (!isReferenced) {
+      isolatedMedia.push({
+        filePath: comp.binaryFile || comp.yamlPath,
+        storageKey: comp.storageKey,
+        id: comp.mediaId,
+      });
+    }
+  }
+
+  const unattributableFiles: string[] = [];
+  for (const f of nonYamlMediaFiles) {
+    const stem = f.replace(/\.[^.]+$/, '');
+    if (!localCompanions.has(stem)) {
+      unattributableFiles.push(path.posix.join('media', f));
+    }
+  }
+
+  if (isolatedMedia.length > 0) {
+    checks.push({
+      id: 'media_isolated',
+      name: 'Unreferenced Media',
+      status: 'ok',
+      message: `${isolatedMedia.length} local media file(s) in media/ are not referenced by any article or featuredImage.`,
+      suggestion:
+        'These files exist in media/ with valid metadata but are not currently embedded in any article body or frontmatter featuredImage. Emit never removes unreferenced files automatically.',
+      details: {
+        unreferenced: isolatedMedia,
+        ...(unattributableFiles.length > 0 ? { unattributable: unattributableFiles } : {}),
+      },
     });
   }
 }
