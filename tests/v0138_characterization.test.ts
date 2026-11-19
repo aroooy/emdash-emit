@@ -302,8 +302,11 @@ describe('v0.1.38 characterization: doctor check sequence', () => {
     `);
 
     const doctorCmd = program.commands.find((c) => c.name() === 'doctor') as Command;
+    // Flipped deliberately in P4-B: `--check-auth` is one new opt-in probe flag, so the option set grew by
+    // exactly one entry. Everything else stays pinned — an accidentally default-online doctor would show up here.
     expect(doctorCmd.options.map((o) => o.long).sort()).toMatchInlineSnapshot(`
       [
+        "--check-auth",
         "--check-media-library",
         "--check-media-urls",
         "--collection",

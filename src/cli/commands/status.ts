@@ -358,6 +358,13 @@ export function registerStatusInitCommands(
       } else {
         console.log('   Git:      .emit/.gitignore already exists — left untouched');
       }
+      /**
+       * v0.1.38 P4-B discoverability: a freshly initialized workspace is where a wrong or missing PAT first
+       * bites, and the fix is one flag on a command the user already knows. No `profile verify` verb is added.
+       */
+      console.log(
+        '\nTip: verify credentials with "emit doctor --check-auth" before the first push.',
+      );
 
       if (shouldLinkProfile && resolvedProfile) {
         setProfile(resolvedProfile.name, {

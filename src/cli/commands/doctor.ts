@@ -46,6 +46,10 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
       '--check-media-library',
       'Walk the whole remote media library page by page via metadata only (no binary downloads) and report its record count against local mirrors',
     )
+    .option(
+      '--check-auth',
+      'Opt-in: probe credential validity with one authenticated GET /_emdash/api/content/<collection>?limit=1 and report the HTTP status (plain doctor stays offline without this flag)',
+    )
     .action(async (options) => {
       try {
         const ctx = resolveContext(options.profile, { optionalAuth: true });
@@ -64,6 +68,7 @@ export function registerDoctorCommand(program: Command, resolveContext: CliConte
           strictMedia: Boolean(options.strictMedia),
           checkMediaUrls: Boolean(options.checkMediaUrls),
           checkMediaLibrary: Boolean(options.checkMediaLibrary),
+          checkAuth: Boolean(options.checkAuth),
           token: ctx.auth?.token,
           refreshToken: ctx.auth?.refreshToken,
         });

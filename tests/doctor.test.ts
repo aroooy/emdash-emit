@@ -1123,4 +1123,163 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(afterState?.taxonomyConflictPending).toBe(0);
     expect(afterState?.conflictPending).toBe(0);
   });
+
+  /**
+   * v0.1.38 P4-B — T4-3 / T4-5 / T4-6: the credential probe is opt-in, addresses exactly one endpoint, and
+   * never claims more than the HTTP status can support. Every case runs against a fetch stub so the four
+   * verdicts are checked deterministically rather than against a live instance.
+   */
+  describe('auth validity probe (--check-auth)', () => {
+    /** Records what the probe asked for, so the endpoint choice is asserted instead of assumed. */
+    function recordingFetch(handler: (url: string) => Response | Promise<Response>) {
+      const urls: string[] = [];
+      const headers: string[] = [];
+      const fetchFn = async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        urls.push(url);
+        headers.push(String(new Headers(init?.headers ?? {}).get('authorization') ?? ''));
+        return handler(url);
+      };
+      return { fetchFn, urls, headers };
+    }
+
+    const runWith = async (
+      stub: ReturnType<typeof recordingFetch>,
+      extra: Record<string, unknown> = {},
+    ) =>
+      runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+        profileName: 'aroooy.net',
+        profileOrigin: 'https://aroooy.net',
+        token: 'tok-probe',
+        checkAuth: true,
+        fetchFn: stub.fetchFn as unknown as typeof fetch,
+        ...extra,
+      });
+
+    it('reports ok for an accepted token and names the auth source', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 200 }));
+      const report = await runWith(stub);
+
+      const check = report.checks.find((c) => c.id === 'auth_validity');
+      expect(check?.status).toBe('ok');
+      expect(check?.message).toContain('Configured credentials are accepted by https://aroooy.net');
+      expect(check?.message).toContain('profile "aroooy.net"');
+      // A report that echoed the token would turn a diagnostic into a secret dump.
+      expect(JSON.stringify(report)).not.toContain('tok-probe');
+      expect(stub.headers[0]).toBe('Bearer tok-probe');
+    });
+
+    it('reports an error for 401 and routes the user to profile set-token', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 401 }));
+      const report = await runWith(stub);
+
+      const check = report.checks.find((c) => c.id === 'auth_validity');
+      expect(check?.status).toBe('error');
+      expect(check?.message).toContain('rejected by https://aroooy.net (HTTP 401)');
+      expect(check?.suggestion).toContain('emit profile set-token');
+      expect(report.overallStatus).toBe('errors');
+    });
+
+    it('treats 403 as a rejection too, since scope loss looks identical from here', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 403 }));
+      const report = await runWith(stub);
+      expect(report.checks.find((c) => c.id === 'auth_validity')?.status).toBe('error');
+    });
+
+    it('reports 5xx as unverifiable, never as an invalid token', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 503 }));
+      const report = await runWith(stub);
+
+      const check = report.checks.find((c) => c.id === 'auth_validity');
+      expect(check?.status).toBe('warning');
+      expect(check?.message).toContain(
+        'Could not verify credentials against https://aroooy.net (HTTP 503)',
+      );
+      // Epistemic rule: an origin that failed to answer says nothing about the credential.
+      expect(check?.message).toContain('does not prove the token is invalid');
+      expect(report.overallStatus).toBe('warnings');
+    });
+
+    it('reports an unreachable origin as a skip rather than a defect', async () => {
+      const stub = recordingFetch(() => {
+        throw new TypeError('fetch failed');
+      });
+      const report = await runWith(stub);
+
+      const check = report.checks.find((c) => c.id === 'auth_validity');
+      expect(check?.status).toBe('warning');
+      expect(check?.message).toContain(
+        'Credential verification skipped: https://aroooy.net unreachable',
+      );
+    });
+
+    it('warns without probing when no token is configured', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 200 }));
+      const report = await runWith(stub, { token: undefined });
+
+      const check = report.checks.find((c) => c.id === 'auth_validity');
+      expect(check?.status).toBe('warning');
+      expect(check?.message).toContain('No token is configured');
+      expect(check?.suggestion).toContain('emit profile set-token');
+      expect(stub.urls).toHaveLength(0);
+    });
+
+    it('probes only the content endpoint for the resolved collection (T4-5)', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 200 }));
+      await runWith(stub, { collection: 'articles' });
+
+      expect(stub.urls).toEqual(['https://aroooy.net/_emdash/api/content/articles?limit=1']);
+      // A taxonomy endpoint would report a posts-only token as broken, so nothing may be sent there.
+      expect(stub.urls.join('\n')).not.toContain('/api/taxonomies');
+    });
+
+    it('accepts a posts-only token, which a taxonomy endpoint would have failed (T4-6)', async () => {
+      // The stub answers 200 for articles and 403 for anything else. The probe must never learn about that
+      // second response — that false negative is exactly why the target endpoint was chosen.
+      const stub = recordingFetch((url) =>
+        url.includes('/api/content/')
+          ? new Response('{}', { status: 200 })
+          : new Response('{}', { status: 403 }),
+      );
+      const report = await runWith(stub);
+
+      expect(report.checks.find((c) => c.id === 'auth_validity')?.status).toBe('ok');
+      expect(stub.urls).toHaveLength(1);
+    });
+
+    it('stays offline and pushes no auth check when the flag is absent', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 200 }));
+      const report = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+        profileName: 'aroooy.net',
+        profileOrigin: 'https://aroooy.net',
+        token: 'tok-probe',
+        fetchFn: stub.fetchFn as unknown as typeof fetch,
+      });
+
+      expect(report.checks.map((c) => c.id)).not.toContain('auth_validity');
+      expect(stub.urls).toHaveLength(0);
+      expect(report.overallStatus).toBe('healthy');
+    });
+
+    it('runs the probe after the synchronous groups, keeping the report order stable', async () => {
+      const stub = recordingFetch(() => new Response('{}', { status: 200 }));
+      const report = await runWith(stub);
+
+      const ids = report.checks.map((c) => c.id);
+      // The awaited probe is pushed after the whole environment group and before the content group, so it
+      // lands after mcp_process (Check 7) and ahead of frontmatter_integrity (Check 3). That gap between
+      // logical id order and execution order is deliberate and documented on runWorkspaceDoctor.
+      expect(ids.indexOf('auth_validity')).toBeGreaterThan(ids.indexOf('mcp_process'));
+      expect(ids.indexOf('auth_validity')).toBeLessThan(ids.indexOf('frontmatter_integrity'));
+      // `mcp_process` is conditional (it only appears when a heartbeat file exists), so the stable prefix is
+      // asserted as an ordering relation above rather than as fixed positions.
+      expect(ids.slice(0, 2)).toEqual(['version_compatibility', 'origin_consistency']);
+    });
+  });
 });

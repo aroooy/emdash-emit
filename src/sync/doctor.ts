@@ -33,7 +33,8 @@ import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
-import { mediaFileEndpoint } from '../client/endpoints.js';
+import { mediaFileEndpoint, articleContentEndpoint } from '../client/endpoints.js';
+import { createAuthedFetch } from '../client/http.js';
 import { calculateHash } from './workspace/index.js';
 import { collectRemoteStorageKeys } from './media/index.js';
 import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
@@ -96,6 +97,14 @@ export interface RunWorkspaceDoctorOptions {
    * is skipped silently when none are available, keeping plain `emit doctor` offline.
    */
   checkMediaLibrary?: boolean;
+  /**
+   * Probe credential validity against the resolved origin (`GET /_emdash/api/content/<collection>?limit=1`,
+   * status only). Opt-in (v0.1.38 P4-B) so plain `emit doctor` stays offline, exactly like the media probes.
+   * The probe addresses the same endpoint Emit actually pushes to, because the question this check answers is
+   * whether Emit holds a token with the rights it needs — a taxonomy endpoint would report a false failure for
+   * a token that can sync articles but not manage terms.
+   */
+  checkAuth?: boolean;
   /** Optional fetch override used by the file-route probe (tests inject stubs here). */
   fetchFn?: typeof fetch;
 }
@@ -355,6 +364,105 @@ function runEnvironmentChecks(ctx: DoctorCheckContext, currentVersion: string): 
       message: `MCP server process is running healthy (PID ${mcpCheck.state?.pid}, v${mcpCheck.state?.version}).`,
     });
   }
+}
+
+/**
+ * Check 2c — opt-in credential validity probe (v0.1.38 P4-B).
+ *
+ * Deliberately kept out of `runEnvironmentChecks()`, which is a pure synchronous function: every HTTP probe in
+ * doctor lives in an awaited group, and the position of that `await` inside `runWorkspaceDoctor()` is what
+ * fixes this check's place in the report (logical id order 2c sits after `workspace_link_consistency` and
+ * before Check 3, while execution order puts it ahead of the content and media groups).
+ *
+ * The probe reads only the HTTP status — never a body — against `articleContentEndpoint(origin, collection)`,
+ * the same resource Emit pushes to. That choice is what keeps a posts-only token from being reported as
+ * broken: an endpoint that requires taxonomy management would return 403 for credentials Emit can sync with.
+ */
+async function runRemoteAuthCheck(ctx: DoctorCheckContext): Promise<void> {
+  const { options, collection, checks } = ctx;
+  if (!options.checkAuth) return;
+
+  const origin = options.profileOrigin || options.config.origin;
+  const token = options.token || '';
+  const authSource = options.profileName
+    ? `profile "${options.profileName}"`
+    : 'resolved credentials';
+
+  if (!token) {
+    checks.push({
+      id: 'auth_validity',
+      name: 'Auth Validity',
+      status: 'warning',
+      message: `No token is configured for ${origin}, so credential validity could not be checked.`,
+      suggestion:
+        'Store one with "emit profile add <name> --origin <origin> --token <pat>", or rotate it later with "emit profile set-token <name>".',
+    });
+    return;
+  }
+
+  const probeFetch = createAuthedFetch({
+    origin,
+    token,
+    refreshToken: options.refreshToken,
+    fetchFn: options.fetchFn,
+  });
+
+  let status: number | null = null;
+  try {
+    const url = `${articleContentEndpoint(origin, collection)}?limit=1`;
+    const res = await probeFetch(url, { method: 'GET' });
+    status = res.status;
+  } catch {
+    // Unreachable origin: the token was never offered, so nothing about it is known.
+  }
+
+  if (status !== null && status >= 200 && status < 300) {
+    checks.push({
+      id: 'auth_validity',
+      name: 'Auth Validity',
+      status: 'ok',
+      message: `Configured credentials are accepted by ${origin} (auth source: ${authSource}).`,
+      details: { origin, collection, httpStatus: status },
+    });
+    return;
+  }
+
+  if (status === 401 || status === 403) {
+    checks.push({
+      id: 'auth_validity',
+      name: 'Auth Validity',
+      status: 'error',
+      message:
+        `Configured credentials were rejected by ${origin} (HTTP ${status}). ` +
+        'The token may be revoked or lack the required scope.',
+      suggestion:
+        'Issue a new Personal Access Token in the EmDash admin, then run "emit profile set-token <name>". ' +
+        'Verify again with "emit doctor --check-auth".',
+      details: { origin, collection, httpStatus: status },
+    });
+    return;
+  }
+
+  if (status !== null) {
+    checks.push({
+      id: 'auth_validity',
+      name: 'Auth Validity',
+      status: 'warning',
+      message:
+        `Could not verify credentials against ${origin} (HTTP ${status}). ` +
+        'This does not prove the token is invalid.',
+      details: { origin, collection, httpStatus: status },
+    });
+    return;
+  }
+
+  checks.push({
+    id: 'auth_validity',
+    name: 'Auth Validity',
+    status: 'warning',
+    message: `Credential verification skipped: ${origin} unreachable.`,
+    details: { origin, collection },
+  });
 }
 
 /**
@@ -927,9 +1035,12 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
  * Runs a comprehensive health diagnostic across the workspace.
  *
  * The three check groups are called in strict sequence, and each appends to the shared `checks` array in
- * the report's documented id order (1, 2, 3, 4, 4b, 4c, 4d, 5, 6, 7). The only side effect kept here is
- * the stale pending-flag auto-clear, which must land between the classification in check 4b and the
- * `conflict_pending_autoclear` push so the sequence stays unchanged.
+ * the report's documented id order (1, 2, 2b, 2c, 3, 4, 4b, 4c, 4d, 5, 6, 7). Note that logical id order and
+ * execution order are not identical: `mcp_process` (Check 7) is pushed inside the synchronous environment
+ * group, while the awaited auth probe (2c) and the media group (6) run after it. The `await` positions in
+ * this function are what fix the report sequence, so any new check must be placed deliberately. The only side
+ * effect kept here is the stale pending-flag auto-clear, which must land between the classification in check
+ * 4b and the `conflict_pending_autoclear` push so the sequence stays unchanged.
  */
 export async function runWorkspaceDoctor(
   options: RunWorkspaceDoctorOptions,
@@ -947,6 +1058,11 @@ export async function runWorkspaceDoctor(
   };
 
   runEnvironmentChecks(ctx, currentVersion);
+
+  // Check 2c — the auth probe is awaited here, immediately after the synchronous environment group, which is
+  // what places it in the report ahead of the content checks. It never runs unless `checkAuth` was requested,
+  // so a plain `emit doctor` still performs zero HTTP requests.
+  await runRemoteAuthCheck(ctx);
 
   runContentIntegrityChecks(ctx, ({ autoClearedBodySlugs, autoClearedTaxSlugs }) => {
     // The original loop cleared each record inline; resolving the slug back to its row reproduces the

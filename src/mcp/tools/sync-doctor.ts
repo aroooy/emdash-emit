@@ -54,6 +54,12 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
         .describe(
           'Walk the whole remote media library via metadata only (GET /_emdash/api/media; no binary downloads) and report its record count against the number of assets this workspace mirrors, so a missing-file count reads as coverage instead of data loss',
         ),
+      checkAuth: z
+        .boolean()
+        .optional()
+        .describe(
+          'Opt-in credential validity probe: one authenticated GET /_emdash/api/content/<collection>?limit=1 against the resolved origin. 2xx is accepted; 401/403 is reported as an error with a "emit profile set-token" remediation; any other status or an unreachable origin only says the token could not be verified. Without this flag the doctor performs no auth request',
+        ),
     },
     async (args) =>
       withResolvedContext(resolveContext, args, async (ctx) => {
@@ -68,6 +74,7 @@ export function registerSyncDoctorTool(server: McpServer, resolveContext: Contex
           strictMedia: Boolean(args.strictMedia),
           checkMediaUrls: Boolean(args.checkMediaUrls),
           checkMediaLibrary: Boolean(args.checkMediaLibrary),
+          checkAuth: Boolean(args.checkAuth),
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
         });

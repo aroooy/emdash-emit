@@ -914,14 +914,15 @@ emit conflicts resolve <filePath> --accept-canonical [-c, --collection <collecti
 Runs an automated diagnostic health check across the local workspace and cache database.
 
 ```bash
-emit doctor [-c, --collection <collection>] [--strict-media] [--check-media-urls] [--check-media-library] [-p, --profile <name>]
+emit doctor [-c, --collection <collection>] [--strict-media] [--check-media-urls] [--check-media-library] [--check-auth] [-p, --profile <name>]
 ```
 
-Validates 6 critical health vectors, plus a conditional link check:
+Validates 6 critical health vectors, plus two conditional checks:
 
 1. **Version Compatibility**: Checks tool version against `createdWithVersion` / `lastSyncedVersion` in config.
 2. **Origin Consistency**: Verifies `.emit/config.json`, profile origin, and environment variables.
    - **2b. Workspace Link Consistency** (reported only when a registered profile workspace no longer matches the directory being operated on): states both paths and names `emit init --profile <name>` as the re-link command. A profile with no registered workspace adds no line at all, so a healthy report stays quiet.
+   - **2c. Auth Validity** (only with `--check-auth`): see the auth flag below.
 3. **Frontmatter Integrity**: Ensures all local Markdown files have valid parseable frontmatter.
 4. **Conflicts & Quarantine**: Flags unresolved conflict copies and deletion backups in `conflicts/`.
 5. **Sync Status**: Verifies local baseline hash tracking.
@@ -931,6 +932,19 @@ Media flags:
 
 - `--check-media-urls`: Probe `HEAD /_emdash/api/media/file/<storageKey>` for references no local source resolves, downgrading ones the origin still serves to informational notes.
 - `--check-media-library`: Walk the whole remote library page by page via metadata only (no binary downloads) and state how many records it holds against how many this workspace mirrors, so a missing-file count reads as coverage rather than data loss.
+
+Auth flag:
+
+- `--check-auth` (**opt-in**): Makes exactly one authenticated request — `GET /_emdash/api/content/<collection>?limit=1`, the same resource Emit pushes to — and reports only the HTTP status. Without this flag the doctor performs no auth request at all, so plain runs stay offline.
+
+  | Result | Check status | Meaning |
+  | --- | --- | --- |
+  | `2xx` | `ok` | The origin accepts your credentials; the auth source (profile name) is named. |
+  | `401` / `403` | `error` | The token was rejected — likely revoked or missing a scope. Remediation: issue a new PAT, then `emit profile set-token <name>`. |
+  | `404` / `5xx` | `warning` | Could not verify. **This does not prove the token is invalid.** |
+  | unreachable | `warning` | Verification skipped; nothing about the credential is known. |
+
+  The probe deliberately targets the article endpoint rather than a taxonomy one: a token that can sync articles but not manage terms must not be reported as broken. MCP clients pass the same switch as `checkAuth: true` on `sync_doctor`.
 
 ---
 
@@ -1212,6 +1226,19 @@ Push your changes with 'emit push <file>' or discard them before pulling.
 **Cause**: Two different things look identical here. (1) The asset was never mirrored locally: `emit pull-media` walks the remote library newest-first and stops at `mediaSyncLimit` (default 300), so images referenced by older articles have no file under `media/`. (2) You are trying to resolve a body URL against local filenames in a workspace that still holds legacy names: body URLs carry the R2 `storageKey`, while a legacy `media/<yyyyMMdd>_<ULID>-<name>.<ext>` is named after the media record `id`, and those two ULIDs never match for the same image. Run `emit pull-media --article <id>` (or a one-time maintenance run of `emit pull-media --all`) and mirrors are renamed to the storageKey-derived stem, so the body URL and the file on disk share one key.
 
 **Solution**: Run `emit doctor --check-media-library` first (a metadata-only walk) — its `Media References` check reports how many references have no local file _and_ how many records the remote library holds against how many this workspace mirrors, which distinguishes "not mirrored" from "broken reference". To fetch missing images without pulling the entire library, run `emit pull-media --article <id>`. Reserve `emit pull-media --all` strictly for deliberate full offline backups. Only for what remains unresolved after indexing should you verify by `storageKey` through the EmDash admin UI or `wrangler d1 SELECT`, never by guessing a record id. The live site is unaffected in either case, because the public file route serves the R2 object directly. See [docs/media-id-spaces.md](docs/media-id-spaces.md).
+
+### Q: `Auth Validity`: Configured credentials were rejected by <origin> (HTTP 401)
+
+**Cause**: The token Emit resolved for this workspace was refused by the instance — most often a Personal Access Token that was revoked, rotated elsewhere, or issued without the scope needed to read and write articles. This check only runs when you ask for it: `emit doctor --check-auth` (MCP: `sync_doctor` with `checkAuth: true`).
+
+**Solution**: Confirm which credential is in play with `emit profile current`, then rotate it without retyping the whole profile:
+
+```bash
+security find-generic-password -s emdash-arooy -w | emit profile set-token arooy --stdin
+emit doctor --check-auth
+```
+
+A `404` or `5xx` from that probe is reported as a warning, not an error: an instance that failed to answer says nothing about whether the token works. Only `401`/`403` mean the credentials were actually refused.
 
 ### Q: `[NETWORK_ERROR]`: Network request failed (`fetch failed`)
 

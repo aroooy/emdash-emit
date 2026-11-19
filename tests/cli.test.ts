@@ -121,6 +121,21 @@ describe('Emit CLI (Commander)', () => {
     expect(libOpt?.description).toContain('no binary downloads');
   });
 
+  /**
+   * v0.1.38 P4-B — T4-4: the auth probe must be discoverable as an opt-in, because a doctor that reaches the
+   * network by default would break the offline-by-default contract every other check depends on.
+   */
+  it('doctor command exposes --check-auth and states that it is opt-in', () => {
+    const doctorCmd = program.commands.find((c) => c.name() === 'doctor');
+    expect(doctorCmd).toBeDefined();
+    const optionNames = doctorCmd?.options.map((o) => o.long) || [];
+    expect(optionNames).toContain('--check-auth');
+
+    const authOpt = doctorCmd?.options.find((o) => o.long === '--check-auth');
+    expect(authOpt?.description).toContain('Opt-in');
+    expect(authOpt?.description).toContain('plain doctor stays offline without this flag');
+  });
+
   it('push command description mentions auto-uploading media/drafts/* images', () => {
     const pushCmd = program.commands.find((c) => c.name() === 'push');
     expect(pushCmd).toBeDefined();

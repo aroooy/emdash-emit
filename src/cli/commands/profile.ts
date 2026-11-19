@@ -290,6 +290,11 @@ export function registerProfileCommands(program: Command): void {
             ? `✅ Token updated for profile "${name}".`
             : `✅ Token cleared for profile "${name}" (this profile now relies on environment variables).`,
         );
+        if (token) {
+          // The rotation is only worth trusting once it has been confirmed against the instance, and this is
+          // the moment a user is most likely to check. No new verb is introduced for it.
+          console.log('Tip: verify credentials with "emit doctor --check-auth".');
+        }
       } catch (error) {
         reportProfileFailure(error);
       }
