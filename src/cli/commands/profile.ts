@@ -21,6 +21,7 @@
  */
 
 import type { Command } from 'commander';
+import readline from 'node:readline/promises';
 import type { ProfileConfig } from '../../utils/profile.js';
 import {
   loadProfilesFile,
@@ -37,6 +38,86 @@ import {
   formatResolutionRationale,
   toResolutionSource,
 } from '../../utils/profile-resolution.js';
+
+/**
+ * Reads one line of input with terminal echo disabled, so a token typed at a prompt does not land on the
+ * screen or in shell history (v0.1.38 P4-A).
+ *
+ * The masking is applied only when stdin really is a TTY. Under a pipe or CI there is no terminal state to
+ * protect, and `setRawMode` would throw; and when stdin is not readable the read can never complete, so it
+ * fails with an actionable line instead of hanging forever — which is what a caller that piped nothing into
+ * an interactive prompt did wrong.
+ */
+export async function readSecretLine(
+  prompt: string,
+  io: { stdin?: NodeJS.ReadStream; stdout?: NodeJS.WriteStream } = {},
+): Promise<string> {
+  const stdin = io.stdin ?? process.stdin;
+  const stdout = io.stdout ?? process.stdout;
+
+  if (!stdin.readable) {
+    throw new Error(
+      'No input available for the token prompt. Pass --token <token>, use --stdin, or run this command on a terminal.',
+    );
+  }
+
+  const ttyStdin = stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const isTty = Boolean(ttyStdin.isTTY);
+  const wasRaw = isTty && ttyStdin.isRaw === true;
+
+  const restoreTerminal = () => {
+    if (isTty) ttyStdin.setRawMode(wasRaw);
+  };
+
+  if (isTty) ttyStdin.setRawMode(true);
+  // An interrupted read (Ctrl-C) kills the process through the default SIGINT handler, so the await below may
+  // never settle and a `finally` block would not run. Restoring on the stream's own 'close' covers that case;
+  // the once() guard keeps the two paths from fighting over the terminal state.
+  let restored = false;
+  const restoreOnce = () => {
+    if (restored) return;
+    restored = true;
+    restoreTerminal();
+  };
+  stdin.once('close', restoreOnce);
+
+  try {
+    const rl = readline.createInterface({ input: stdin, output: stdout });
+    try {
+      // The prompt itself is written through the interface so it stays visible while echo is off.
+      const answer = await rl.question(prompt);
+      if (isTty) stdout.write('\n');
+      return answer.trim();
+    } finally {
+      rl.close();
+    }
+  } finally {
+    stdin.removeListener('close', restoreOnce);
+    restoreOnce();
+  }
+}
+
+/**
+ * Reads a whole token from a redirected stdin (`--stdin`).
+ *
+ * Kept separate from the interactive read because the contract differs: a pipe has no prompt to show, and an
+ * empty pipe is a caller error worth naming rather than a silently blanked credential.
+ */
+export async function readTokenFromStdin(
+  stdin: NodeJS.ReadStream = process.stdin,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  const token = Buffer.concat(chunks).toString('utf8').trim();
+  if (!token) {
+    throw new Error(
+      'Nothing was piped into --stdin. Pipe the token itself, e.g. `security find-generic-password ... | emit profile set-token <name> --stdin`.',
+    );
+  }
+  return token;
+}
 
 export function registerProfileCommands(program: Command): void {
   /**
@@ -156,6 +237,59 @@ export function registerProfileCommands(program: Command): void {
       try {
         setActiveProfile(name);
         console.log(`✅ Active profile set to "${name}".`);
+      } catch (error) {
+        reportProfileFailure(error);
+      }
+    });
+
+  // emit profile set-token <name>
+  profileCmd
+    .command('set-token <name>')
+    .description('Replace only the token of an existing profile, without printing or echoing it')
+    .option(
+      '--token <token>',
+      'Provide the token directly (visible in shell history; prefer --stdin)',
+    )
+    .option(
+      '--stdin',
+      'Read the token from a redirected stdin — for keychain piping and CI (no prompt, no echo)',
+    )
+    .action(async (name, options: { token?: string; stdin?: boolean }) => {
+      try {
+        const existing = loadProfilesFile().profiles[name];
+        if (!existing) {
+          throw new Error(
+            `Profile "${name}" not found. Available profiles: ${
+              Object.keys(loadProfilesFile().profiles).join(', ') || 'none'
+            }`,
+          );
+        }
+
+        let token: string;
+        if (options.token !== undefined) {
+          // An explicit flag wins even when it is blank, because that is the only way to state "clear it".
+          token = options.token.trim();
+        } else if (options.stdin) {
+          token = await readTokenFromStdin();
+        } else {
+          token = await readSecretLine(`Token for profile "${name}" (input hidden): `);
+        }
+
+        /**
+         * The overwrite warning must land before the write, and it names only that a credential is being
+         * replaced — never the old value. A user who ran this by habit on the wrong profile needs to know a
+         * token changed; nothing in this output can help an onlooker read it.
+         */
+        if (existing.token) {
+          console.log(`Replaces the existing token for profile "${name}".`);
+        }
+
+        setProfile(name, { ...existing, token });
+        console.log(
+          token
+            ? `✅ Token updated for profile "${name}".`
+            : `✅ Token cleared for profile "${name}" (this profile now relies on environment variables).`,
+        );
       } catch (error) {
         reportProfileFailure(error);
       }

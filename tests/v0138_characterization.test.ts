@@ -288,12 +288,15 @@ describe('v0.1.38 characterization: doctor check sequence', () => {
 
   it('registers every subcommand and option that P1–P4 extend', () => {
     const profileCmd = program.commands.find((c) => c.name() === 'profile') as Command;
+    // Flipped deliberately in P4-A: `set-token` is the first way to rotate a credential without retyping the
+    // whole profile, so the subcommand set grew by exactly one entry.
     expect(profileCmd.commands.map((c) => c.name()).sort()).toMatchInlineSnapshot(`
       [
         "add",
         "current",
         "list",
         "remove",
+        "set-token",
         "use",
       ]
     `);

@@ -24,10 +24,12 @@ import { Command } from 'commander';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import yaml from 'js-yaml';
 import { program } from '../src/bin/emit.js';
 import { formatPullStatusBreakdown, formatPullWindowLabel } from '../src/cli/commands/pull.js';
+import { readSecretLine, readTokenFromStdin } from '../src/cli/commands/profile.js';
 import {
   registerStatusInitCommands,
   resolveInitPlan,
@@ -296,6 +298,254 @@ describe('Emit CLI (Commander)', () => {
       else process.env.HOME = originalHome;
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * v0.1.38 P4-A — T4-1: `emit profile set-token` replaces only the token, so rotating a credential must not
+   * disturb the origin or workspace link that carry the site identity. The stdout assertions are the security
+   * half of the test: neither the old nor the new secret may appear in any printed line.
+   */
+  describe('profile set-token (v0.1.38 P4-A)', () => {
+    let homeDir: string;
+    let originalHome: string | undefined;
+    const logLines: string[] = [];
+    const errLines: string[] = [];
+
+    beforeEach(() => {
+      homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'emit-set-token-home-')));
+      originalHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+    });
+
+    afterEach(() => {
+      console.log = originalLog;
+      console.error = originalError;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      vi.restoreAllMocks();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    });
+
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    const runCli = async (args: string[]) => {
+      logLines.length = 0;
+      errLines.length = 0;
+      console.log = (...a: unknown[]) => logLines.push(a.map(String).join(' '));
+      console.error = (...a: unknown[]) => errLines.push(a.map(String).join(' '));
+      await program.parseAsync(['node', 'emit', ...args]);
+    };
+
+    it('replaces only the token, keeping origin and workspace link', async () => {
+      setProfile('demo', {
+        origin: 'https://demo.example.com',
+        token: 'tok-old',
+        workspace: '/tmp/emit-ws-1',
+      });
+
+      await runCli(['profile', 'set-token', 'demo', '--token', 'tok-new']);
+
+      const profile = loadProfilesFile().profiles['demo'];
+      expect(profile.token).toBe('tok-new');
+      expect(profile.origin).toBe('https://demo.example.com');
+      expect(profile.workspace).toBe('/tmp/emit-ws-1');
+
+      const printed = [...logLines, ...errLines].join('\n');
+      expect(printed).toContain('Token updated for profile "demo"');
+      // The overwrite is announced before the write so a wrong-profile habit is visible, but no value is quoted.
+      expect(printed).toContain('Replaces the existing token');
+      expect(printed).not.toContain('tok-old');
+      expect(printed).not.toContain('tok-new');
+    });
+
+    it('honors an explicit empty --token as an intentional clear', async () => {
+      setProfile('demo', { origin: 'https://demo.example.com', token: 'tok-old' });
+
+      await runCli(['profile', 'set-token', 'demo', '--token', '']);
+
+      // The written YAML carries no `token:` key at all (`saveProfilesFile` drops an empty one), and
+      // `loadProfilesFile()` normalizes the absent field to '' — which is what makes every later auth path
+      // fall through to the environment instead of sending a blank bearer.
+      expect(loadProfilesFile().profiles['demo'].token).toBe('');
+      const rawProfiles = yaml.load(
+        fs.readFileSync(path.join(homeDir, '.config/emit/profiles.yaml'), 'utf8'),
+      ) as {
+        profiles: Record<string, Record<string, string>>;
+      };
+      expect(rawProfiles.profiles['demo']).not.toHaveProperty('token');
+      const printed = [...logLines, ...errLines].join('\n');
+      expect(printed).toContain('Token cleared for profile "demo"');
+      expect(printed).not.toContain('tok-old');
+    });
+
+    it('rejects an unknown profile name with one actionable line', async () => {
+      const originalExit = process.exit;
+      const EXIT_SENTINEL = Symbol('emit-test-exit');
+      let exitCode: number | undefined;
+      process.exit = ((code?: number) => {
+        exitCode = code ?? 0;
+        throw EXIT_SENTINEL;
+      }) as typeof process.exit;
+
+      try {
+        try {
+          await runCli(['profile', 'set-token', 'ghost', '--token', 'tok-x']);
+        } catch (error) {
+          if (error !== EXIT_SENTINEL) throw error;
+        }
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain('❌ Profile "ghost" not found');
+        expect(errLines.join('\n')).not.toContain('    at ');
+      } finally {
+        process.exit = originalExit;
+      }
+    });
+
+    it('reads the token from a piped stdin without echoing it', async () => {
+      setProfile('demo', { origin: 'https://demo.example.com', token: 'tok-old' });
+
+      // `--stdin` is what makes keychain piping and CI work; the value never reaches argv, so shell history
+      // stays clean, and it must not surface in the command output either. The action reads process.stdin,
+      // so the pipe is installed there for the duration of the call.
+      const originalStdin = process.stdin;
+      Object.defineProperty(process, 'stdin', {
+        value: Readable.from(['tok-piped\n']),
+        configurable: true,
+      });
+      try {
+        await runCli(['profile', 'set-token', 'demo', '--stdin']);
+      } finally {
+        Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true });
+      }
+
+      expect(loadProfilesFile().profiles['demo'].token).toBe('tok-piped');
+      const printed = [...logLines, ...errLines].join('\n');
+      expect(printed).toContain('Token updated for profile "demo"');
+      expect(printed).not.toContain('tok-piped');
+      expect(printed).not.toContain('tok-old');
+    });
+
+    it('prefers an explicit --token over --stdin when both are given', async () => {
+      setProfile('demo', { origin: 'https://demo.example.com', token: 'tok-old' });
+
+      // A flag the user typed is the more specific intent than a pipe that may be left attached by a wrapper
+      // script, so precedence order decides — never the arrival order of the two sources.
+      const originalStdin = process.stdin;
+      Object.defineProperty(process, 'stdin', {
+        value: Readable.from(['tok-from-pipe\n']),
+        configurable: true,
+      });
+      try {
+        await runCli(['profile', 'set-token', 'demo', '--stdin', '--token', 'tok-flag']);
+      } finally {
+        Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true });
+      }
+
+      expect(loadProfilesFile().profiles['demo'].token).toBe('tok-flag');
+    });
+
+    it('fails an empty pipe instead of blanking the credential', async () => {
+      const piped = Readable.from(['   \n']) as unknown as NodeJS.ReadStream;
+      await expect(readTokenFromStdin(piped)).rejects.toThrow(/Nothing was piped into --stdin/);
+    });
+
+    /**
+     * T4-2: the terminal must come back exactly as it was found. A process that leaves raw mode on breaks
+     * the user's shell for the rest of the session, so both the enable and the restore are asserted against a
+     * fake stream rather than inferred from the code path — including the case where the read itself fails.
+     */
+    function fakeTtyStdin(chunks: string[]) {
+      const calls: Array<'on' | 'restore'> = [];
+      let rawMode = false;
+      const stdin = Readable.from(chunks) as unknown as NodeJS.ReadStream & {
+        isTTY?: boolean;
+        isRaw?: boolean;
+        setRawMode?: (mode: boolean) => void;
+      };
+      stdin.isTTY = true;
+      stdin.isRaw = false;
+      stdin.setRawMode = (mode: boolean) => {
+        rawMode = mode;
+        calls.push(mode ? 'on' : 'restore');
+        return stdin;
+      };
+      return { stdin, calls, wasRawMode: () => rawMode };
+    }
+
+    it('masks input on a TTY and restores the terminal state afterwards', async () => {
+      const tty = fakeTtyStdin(['tok-typed\n']);
+      const out: string[] = [];
+      const stdout = new Writable({
+        write(chunk, _enc, cb) {
+          out.push(String(chunk));
+          cb();
+        },
+      }) as unknown as NodeJS.WriteStream;
+
+      const token = await readSecretLine('Token: ', { stdin: tty.stdin, stdout });
+
+      expect(token).toBe('tok-typed');
+      // Echo was disabled for the read and re-enabled afterwards — never left on.
+      expect(tty.calls).toEqual(['on', 'restore']);
+      expect(tty.wasRawMode()).toBe(false);
+    });
+
+    it('restores the terminal when an interrupted read closes stdin', async () => {
+      // Ctrl-C during the prompt: the CLI installs no SIGINT handler of its own, so Node raises the default one
+      // and the process dies. An abandoned readline promise therefore never settles — which is precisely why the
+      // restore cannot be written as a `finally` block around the await; it has to run the moment the stream
+      // ends. This test drives that path: the prompt is interrupted while live, and the terminal must already be
+      // back in cooked mode when the stream closes.
+      const stdin = new Readable({ read() {} }) as unknown as NodeJS.ReadStream & {
+        isTTY?: boolean;
+        isRaw?: boolean;
+        setRawMode?: (mode: boolean) => void;
+      };
+      stdin.isTTY = true;
+      stdin.isRaw = false;
+      const rawModes: boolean[] = [];
+      stdin.setRawMode = (mode: boolean) => {
+        rawModes.push(mode);
+        stdin.isRaw = mode;
+        return stdin;
+      };
+
+      const stdout = new Writable({
+        write(_chunk, _enc, cb) {
+          cb();
+        },
+      }) as unknown as NodeJS.WriteStream;
+
+      const closed = new Promise<void>((resolve) => stdin.once('close', () => resolve()));
+      // readline attaches synchronously inside createInterface, so this interrupt lands on a live prompt
+      // rather than arriving before the read starts.
+      queueMicrotask(() => stdin.destroy());
+
+      void readSecretLine('Token: ', { stdin, stdout });
+      await closed;
+
+      expect(rawModes[0]).toBe(true);
+      expect(stdin.isRaw).toBe(false);
+    });
+
+    it('refuses an interactive prompt when stdin is not readable instead of hanging', async () => {
+      const stdin = Readable.from([]) as unknown as NodeJS.ReadStream;
+      Object.defineProperty(stdin, 'readable', { value: false });
+      await expect(readSecretLine('Token: ', { stdin })).rejects.toThrow(
+        /No input available for the token prompt/,
+      );
+    });
+
+    it('registers set-token with --token and --stdin', () => {
+      const profileCmd = program.commands.find((c) => c.name() === 'profile') as Command;
+      const setToken = profileCmd.commands.find((c) => c.name() === 'set-token');
+      expect(setToken).toBeDefined();
+      expect(setToken?.registeredArguments.map((a) => a.name())).toEqual(['name']);
+      expect(setToken?.options.map((o) => o.long)).toContain('--token');
+      expect(setToken?.options.map((o) => o.long)).toContain('--stdin');
+    });
   });
 
   it('resolveInitPlan inherits profile origin and enforces 3-guard auto-link rules', () => {

@@ -661,6 +661,12 @@ emit profile current
 # Remove a profile
 emit profile remove <name>
 
+# Rotate only the token of an existing profile (prompts with input hidden)
+emit profile set-token <name>
+
+# Pipe a token from a keychain or CI secret store — nothing lands in shell history
+security find-generic-password -s emdash-arooy -w | emit profile set-token arooy --stdin
+
 # (Optional) Set a fallback default profile for when operating outside any workspace
 emit profile use <name>
 ```
@@ -671,6 +677,29 @@ to guess whether a manual switch is required. In `emit profile list`, `(matches 
 profile a command run here would actually use, while `(active default — used only outside registered
 workspaces)` marks the fallback set by `emit profile use`. A registered workspace directory always wins over
 the active default, so **no profile switch is needed when you are inside a linked workspace**.
+
+#### Rotating a token: `emit profile set-token`
+
+`emit profile add` requires `--origin`, which makes rotating one credential awkward and pushes users toward
+editing `~/.config/emit/profiles.yaml` by hand — the path where a stray paste leaks a token into a Git diff.
+`set-token` replaces **only** the token, leaving `origin`, `workspace`, `defaultCollection` and `defaultLocale`
+untouched:
+
+```bash
+emit profile set-token <name>                      # prompts with terminal echo off
+emit profile set-token <name> --stdin              # reads a redirected stdin (keychain pipe, CI)
+emit profile set-token <name> --token <pat>        # explicit value (visible in shell history; prefer --stdin)
+emit profile set-token <name> --token ''           # clears the credential on purpose
+```
+
+Resolution order is `--token` → `--stdin` → interactive prompt. The command never prints the old or the new
+value: when a token already exists it first states `Replaces the existing token for profile "<name>".`, so a
+mistaken run on the wrong profile is visible without anything readable to an onlooker. An unknown `<name>` is
+rejected with one actionable line, and a non-interactive stdin that carries nothing fails instead of silently
+blanking the credential.
+
+`profiles.yaml` itself keeps mode `0600`; it never contained a plaintext token in the output of any command, and
+it still does not.
 
 ---
 
