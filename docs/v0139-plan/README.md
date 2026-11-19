@@ -1,0 +1,239 @@
+# v0.1.39 計画書: ガイド文案の CLI/MCP 対称化・conflicts デフォルト一覧化・孤立メディア整理の足場・メディア移動の説明明確化・GFM テーブル対応
+
+- **対象バージョン**: `v0.1.39`
+- **作成日**: 2026-11-19（改訂: メディア移動明確化 P4 追加／git 自動除外・インボックス固定フォルダは不採用・廃案として明記／**EmDash 1.5 テーブル対応 P5 統合**）
+- **ステータス**: 起案（Pending Review — **P3 は Ask First カテゴリ 3（オーケストレーター／公開 facade 変更）・場合によりカテゴリ 1（新規 npm パッケージ）に該当しうるため、実装前にプロジェクトオーナーの明示確認を要する。P5 も新 npm パッケージ採用時はカテゴリ 1 に該当しうる（Emit 独自パースなら回避可）**。P1・P2・P4 はカテゴリ 1〜4 のいずれにも該当しない通常改修（P4 はドキュメントのみ）。メディア git 自動除外と AI インボックス固定フォルダは「ユーザー主権」思想により**不採用・廃案**）
+- **起点**: 外部ユーザー感想「Emit 使用所感」（2026-11-19, 対象 v0.1.38）、後続の運用アイデア検討、および EmDash 1.5 テーブル機能リリースに伴う「GFM Table ↔ EmDash テーブルブロック相互変換」要望
+- **目的**:
+  1. **P1: ガード文案の CLI/MCP 対称化** — G3（`UNINTENDED_PUBLISH_GUARD`）の preflight 案内が MCP 記法 `allowPublish: true` のみを提示し、CLI フラグ `--allow-publish` を記載しない。同じガードで `src/sync/guards.ts` のレジストリ文案には CLI フラグが入っており、**同一ガード種別で 2 箇所の文案が不揃い**。delete ガード（両表記）に揃える。
+  2. **P2: `emit conflicts` 無引数の Git ライク化** — 現状は親コマンドの action 欠如によりヘルプ表示＋非ゼロ終了になる。「コンフリクトがあるか確認したい」動機で単体実行する運用に合わせて、既定で `list` を実行し、無ければ既存の `✅ No conflicts or rescue backups found ...` を出す。
+  3. **P3: 孤立メディア整理の足場（要確認）** — 「どの記事からも参照が切れた孤立メディア（Orphan Media）」の検知・整理要望。**既存の `pull-media --prune` は「リモートで削除されたレコードに紐づくメディア」を剪定する別物**であり、ユーザー要望（＝ローカルには残り続けるが生きたレコードとしては存在し、どの本文からも参照されないアセット）とは意味合いが異なる。本計画では**検知レポートのみ**を扱い、削除系は意図的にスコープ外とする。
+  4. **P4: メディア自動移動のドキュメント明確化** — 前回の感想で「push 後も `media/drafts/` の元ファイルが残る（安全設計）」という**認識誤り**が生じた。実際は `promoteDraftMediaFile` が既定 `removeDraft: true` で **drafts → media へ移動（コピーではない）**する（`src/sync/media/mirror_item.ts:258-264`、呼び出し側 `src/sync/push/media_stage.ts:313`）。push 時のアナウンス `[LOCAL_IMAGE_AUTO_UPLOAD] ... promoted to: ...`（`media_stage.ts:334-337`）は**既に実装済み**。よってコード変更ではなく README / MCP description / guide で挙動を明文化し、誤解を防ぐ。
+  5. **P5: GFM テーブル ↔ EmDash テーブルブロック相互変換（EmDash 1.5 対応）** — 現状 `emit push` で GFM パイプテーブルが行ベースパーサに認識されずプレーンテキスト段落へ劣化し、Web 側で `<p>| ... |</p>` 化する（`src/client/portable-text.ts:644-647` に警告のみ）。EmDash 1.5 のネイティブ テーブルブロック（`table` / `tableRow` / `tableCell`）へ双方向変換し、GFM で表現できない表は既存 Tier-3 不透明フェンス `<!--ec:block -->` で非破壊保存する。
+
+
+
+---
+
+## 1. 要望評価の要約と本計画での扱い
+
+要望書（ユーザー感想）の 3 項目を実コードで検証した結果、**全項目が事実として妥当**。うち P3 は既存機能と意味が重なる部分があるため、そのままではなく再定義して採用する。
+
+| 要望 | 実測で確認できた事実 | 判定 | 本版での扱い |
+| --- | --- | --- | --- |
+| 1 push ガード文案に CLI フラグが無い | preflight（`src/sync/preflight.ts:398-399`）の `suggestion` は `allowPublish: true` のみで `--allow-publish` を含まない。一方 guards レジストリ（`src/sync/guards.ts:298-299`）は `(or --allow-publish flag in CLI)` を含む。**同一ガードで文案が不揃い**。delete（`src/sync/delete.ts:62,69`）は両表記 | 完全に妥当。指摘以上の不整合（2 箇所のズレ）も存在 | **P1 として採用**。preflight 文案を delete と同型 `--allow-publish (or allowPublish: true in MCP)` に統一 |
+| 2 `emit conflicts` 単体で list を | `conflicts` は親コマンドで action ハンドラを持たず（`src/cli/commands/conflicts.ts:37-41`）、subcommand は list/diff/resolve/prune のみ。無引数時は commander 既定でヘルプ＋非ゼロ終了。`list` は空時に `✅ No conflicts or rescue backups found ...`（`conflicts.ts:56`）を出す | 現状認識・提案ともに妥当。実装コスト小 | **P2 として採用**。ただし既存の明示的 `emit conflicts`（ヘルプ）利用を壊さないよう挙動変更の波及を確認する |
+| 3 孤立メディア検知・整理 | `pull-media --prune` / `--all` は**リモートで削除されたレコード由来のローカルミラー**を剪定（`src/sync/media/pull_library.ts:215-240`）。`--all` は `[UNREFERENCED_REMOTE_MEDIA]`（＝参照されているのに未ミラー）を報告（同 242-270 行）。**「ローカルに存在するが本文から参照されない孤立メディア」の検知・剪定は未実装** | 要望は妥当で新規価値あり。ただし既存 `--prune` と語義が近いため混同回避が必要 | **P3 は検知レポートのみ先行**（削除系は Ask First 対象として本版スコープ外）。AGENTS.md の知見要件・剪定権限原則に適合する範囲に限定 |
+| 4 「投稿メディアが drafts に残る」認識 | `promoteDraftMediaFile` は既定 `removeDraft: true` で **drafts → media へ移動**（`src/sync/media/mirror_item.ts:258-264`）。呼び出し側 `push/media_stage.ts:313` も `removeDraft: true`。push 時アナウンス `[LOCAL_IMAGE_AUTO_UPLOAD] ... promoted to:`（同 334-337）は**実装済み** | 認識と実装にズレ。自動移動自体は既に実現済み、不足は**説明** | **P4 として採用**。コードでなく README / MCP description / guide で「drafts→media へ移動（コピーではない）」を明文化 |
+| 5 メディアの git 自動除外 | Emit は `.emit/.gitignore` のみ書き、ルート `.gitignore` は作らない（`config.ts:153-160`、README §6）。メディア追跡はユーザー主権 | 「ユーザー主権・フォルダ自由」思想に反する | **不採用**（§6）。案内のみ。自動除外は行わない |
+| 6 AI 受け渡しインボックスの固定フォルダ自動生成 | `emit init` が生成するのは同期が前提とする構造（`posts/draft`, `posts/published`）のみ。インボックスは Emit の同期機構に不要なユーザー側運用 | 固定フォルダを Emit が作る＝ワークスペース構造への介入で思想に反する | **廃案**（§6） |
+| 7 GFM テーブル→EmDash テーブルブロック（push, pull） | `portable-text.ts:644-647` はテーブルを検知して警告するだけで、`markdownToPortableText` に table 分岐は無い（240-318 行の line-based パーサ）。よって劣化報告は正確。EmDash ネイティブ形状は `{ _type:'table', rows:[{ _type:'tableRow', cells:[{ _type:'tableCell', content, isHeader? }] }], hasHeaderRow? }`（上流 issue #4347 / PR #4606・#4607） | 妥当で実装価値大。ただし canonical スキーマは live EmDash 1.5 で実測確定が前提 | **P5 として採用**（§3.5）。GFM 表現可→table block、不可（結合セル等）→Tier-3 フェンス |
+
+
+
+---
+
+## 2. 現状の実測スナップショット（2026-11-19 / v0.1.38）
+
+すべての数値は実際のコードから計測した結果であり、推定を含まない。
+
+| 項目 | 実測値 | 検査コマンド |
+| --- | --- | --- |
+| G3 preflight 文案の CLI フラグ | **記載なし**（`allowPublish: true` のみ） | `grep -n "allowPublish" src/sync/preflight.ts` |
+| G3 guards レジストリ文案の CLI フラグ | **記載あり**（`(or --allow-publish flag in CLI)`） | `grep -n "allow-publish" src/sync/guards.ts` |
+| delete ガード文案 | 両表記（`--allow-delete-published (or allowDeletePublished: true in MCP)`） | `grep -n "allow-delete-published" src/sync/delete.ts` |
+| `conflicts` サブコマンド | list(45) / diff(95) / resolve(125) / prune(173)。親に action なし | `grep -n "\.command(" src/cli/commands/conflicts.ts` |
+| 既存メディア剪定の意味 | 「リモートで削除されたレコード由来」を削除。孤立（未参照）検知は無し | `grep -n "prune" src/sync/media/pull_library.ts` |
+| テーブル劣化警告 | 警告のみ送出、table ブロック生成なし | `grep -n "tables are not supported" src/client/portable-text.ts` |
+
+### 2.1 本計画が触るファイルの実測規模
+
+| ファイル | 行数 | 本版での役割 |
+| --- | --- | --- |
+| `src/sync/preflight.ts` | 806 | P1 の文案統一地点（G3 は 391–401 行） |
+| `src/sync/guards.ts` | 378 | P1 の参照先正本文案（G3 は 298–299 行）。変更不要だが整合確認 |
+| `src/cli/commands/conflicts.ts` | 223 | P2 の実装地点（親コマンド定義 37–41 行） |
+| `src/sync/delete.ts` | 332 | P1 の文案モデル（62, 69 行）。変更不要 |
+| `src/sync/media/pull_library.ts` | （media/index 経由） | P3 検知の拡張候補地（既存 census 242–270 行） |
+| `src/sync/doctor.ts` | 1096 | P3 検知レポート追加候補地（check 登録は `checks.push()`） |
+| `src/client/portable-text.ts` | 698 | **P5 の中心**。line-based パーサ（`markdownToPortableText` 240–318 行、警告 644–647 行）と PT→MD シリアライズに table 分岐を追加。Tier-3 フェンス機構を再利用 |
+| `src/client/mapper.ts` | 269 | **P5** の配線地点（`localToApiPayload` は `markdownToPortableText(body)` を呼ぶだけ、108–135 行）。変更不要の可能性大 |
+
+
+### 2.2 ギャップの実測根拠
+
+#### G-1: 同一ガードで文案が 2 箇所不揃い（P1）
+
+`src/sync/preflight.ts:394-400`（実発火経路の suggestion）:
+
+```text
+code: 'UNINTENDED_PUBLISH_GUARD',
+message: 'Article status was changed from draft to published, but allowPublish: true was not provided.',
+suggestion: 'To publish the article live, re-run with allowPublish: true. Otherwise, keep status as draft.'
+```
+
+同じ G3 のレジストリ文案 `src/sync/guards.ts:298-299`:
+
+```text
+'To promote a draft article to published status, provide explicit confirmation with allowPublish: true (or --allow-publish flag in CLI).'
+```
+
+CLI から実行したユーザーは preflight 側の suggestion のみを目にするため、`--allow-publish` を知らずにヘルプを開くことになる。delete ガード（`src/sync/delete.ts:62,69`）が `--allow-delete-published (or allowDeletePublished: true in MCP)` と両表記しているのが望ましい規範。
+
+#### G-2: `emit conflicts` 単体はヘルプ＋非ゼロ終了（P2）
+
+`src/cli/commands/conflicts.ts:37-41` の親コマンドには `.action(...)` が無く、subcommand のみ登録。commander は action を持つ末端コマンドが解決されない場合 help を表示し非ゼロで終わるため、「一覧を見たいだけ」の単体実行がエラーになる。`list` 側の空時メッセージ（56 行）は既に親切なので、既定委譲で UX が揃う。
+
+#### G-3: 孤立メディア検知の欠落と既存 `--prune` との語義差（P3）
+
+`src/sync/media/pull_library.ts:215-240` の剪定は「active-id セット（＝今回列挙したリモートレコード）に無い companion 由来ミラー」を削除する。これは**リモートでレコード自体が消えた**ケースであり、ユーザー要望の「レコードは生きているがどの本文からも参照されない」**未参照アセット**とは別概念。既存 census（242-270 行）も逆方向（参照済み・未ミラー）を報告するのみで、ローカルにある未参照資産の棚卸しはしていない。
+
+#### G-4: GFM テーブルが table ブロックへ変換されない（P5）
+
+`src/client/portable-text.ts` の `markdownToPortableText`（240–318 行）は code fence / heading / blockquote / list / image / paragraph の分岐のみで、**テーブル分岐が存在しない**。パイプ行は paragraph に落ちる。645 行付近の `detectUnsupportedMarkdownSyntax` は `/^\|(?:[^\r\n|]+\|)+$/m` で検知して警告するだけで救済しない。よってユーザー報告（push 時警告＋Web 側 `<p>| ... |</p>`）は正確。
+
+上流 EmDash のネイティブ形状（issue #4347 / PR #4606・#4607）:
+```ts
+{ _type: 'table', hasHeaderRow?: boolean,
+  rows: [ { _type: 'tableRow',
+    cells: [ { _type: 'tableCell', isHeader?: boolean, content: [ ...PT block... ] } ] } ] }
+```
+列アライメントは `textAlign`、セル内容は inline span（strong/em/link 等の marks）。GFM で表現できない機能（colspan/rowspan>1 の結合セル、colwidth、本文行の header 化、複数行セル内容）は Tier-3 フェンスへ安全フォールバックする設計が上流で採られている。**Emit も同じ方針を踏襲**すれば既存の画像 Tier-3 機構（v0.1.35）と対称に実装できる。
+
+---
+
+## 3. 実装計画
+
+### 3.1 P1: G3 preflight 文案の CLI/MCP 対称化
+
+- `src/sync/preflight.ts:398-399` の `suggestion` を delete と同型へ統一:
+  ```text
+  'To publish the article live, re-run with --allow-publish (or allowPublish: true in MCP). Otherwise, keep status as draft.'
+  ```
+- guards レジストリ文案（`src/sync/guards.ts:298-299`）は既に両表記のため変更不要。ただし「文案の語順が preflight と guards でズレない」ことをテストで固定する（下記 T1-3）。
+- **テスト更新**: `tests/preflight.test.ts:82` の `expect(res.errors[0].suggestion).toContain('allowPublish: true')` は維持しつつ、`--allow-publish` を含む assertions を追加（後述 T1-1/T1-2）。文案変更で既存テストが落ちないようにする。
+
+### 3.2 P2: `emit conflicts` 無引数の既定 list 化
+
+- 親 `conflicts` コマンドに `.action()` を追加し、サブコマンドが解決されなかった場合（`cmd.args.length === 0`）に list ハンドラを委譲実行する。既存の明示サブコマンド動作は不変。
+- list ロジックは現行 `conflicts.ts:49-...` の action 本体を小さな共有関数（例: `runConflictsList(collection)`）へ抽出し、明示 `list` と無引数委譲の両方から呼ぶ（実装重複を防ぐ）。
+- collection 既定は現行 list と同一（`options.collection || ctx.config.defaultCollection || 'posts'`）。
+- **注意**: 委譲時も `resolveContext(profile, { optionalAuth: true })` を通す。エラー時は既存の `reportActionFailure()` 経由で `❌ ...` 1 行＋exit 1 に統一（CLI failure presentation 準拠）。
+
+### 3.3 P3: 孤立メディア検知レポート（削除なし・要確認）
+
+- **スコープ**: ローカル `media/` のうち、companion YAML で特定できる storageKey が、`draft`/`published` 全記事本文の参照集合に存在しないものを「未参照（isolated）」として列挙する**読み取り専用レポート**のみ。
+- 実装候補は doctor check 追加（例: `id: 'media_isolated'`）。既存 census の参照収集（`collectArticleStorageKeys` を全記事から集約する処理、248-262 行）と companion storageKey 収集（`storageKeyFromMediaMeta`）を再利用し、「ローカルにミラーはあるが本文参照が無い」差分を出す。
+- **AGENTS.md 準拠の必須条件**:
+  - 剪定権限はリモートレコードのみ。本 check は**削除しない**（削除系は本版スコープ外）。
+  - companion が無いファイルは attribution 不能のため報告対象にしないか、「unattributable」と明示して区別する（`mediaRecordIdForStem` の原則踏襲）。
+  - 「未参照＝即削除可」と断定しない。featuredImage は本文ではなく frontmatter に保持されるため、**frontmatter `featuredImage` の参照も必ず参照集合に含める**（見落としによる誤検知防止）。
+- **Ask First**: doctor check 追加自体は新規エラーコードを作らない限り guard registry を触らないが、MCP `sync_doctor` への引数透過を伴う場合カテゴリ 3 の検討対象。実装可否・削除系の要否はオーナー確認後に確定。
+
+### 3.4 P4: メディア自動移動のドキュメント明確化（コード変更なし）
+
+- **方針**: push 時の自動移動とアナウンスは既に実装済み（`promoteDraftMediaFile` の `removeDraft: true`、`[LOCAL_IMAGE_AUTO_UPLOAD] ... promoted to:`）。**挙動は変えず、説明だけを整える**。
+- **README**: メディア運用セクションに「push 成功後、`media/drafts/<file>` は `media/<markdownRef>.<ext>` へ**移動**される（コピーではなく元 drafts ファイルは残らない）」を明記。前回の認識誤り（「安全設計で残る」）を直接是正する。
+- **MCP `sync_push` description / guide**: 同じ一言（drafts→media へ移動、reuse は再アップロードしない）を追記。
+- **アナウンス措詞（任意・低優先）**: `[LOCAL_IMAGE_AUTO_UPLOAD] ... promoted to:` の `promoted to` を初見向けに平易化するかは任意。変更する場合は `tests/push_media_pipeline.test.ts` 等の文言 assertion とあわせて更新すること。
+- **不採用（§6 参照）**: メディアの git 自動除外、AI 受け渡しインボックス固定フォルダの自動生成はいずれも「ユーザー主権・フォルダ自由」思想に反するため本版で実装しない。
+
+### 3.5 P5: GFM テーブル ↔ EmDash テーブルブロック（EmDash 1.5）
+
+**前提条件（P0 ゲート）**: live EmDash 1.5 インスタンスでテーブルを含む記事を `emit pull` / GET し、canonical な PT 形状（`table`/`tableRow`/`tableCell`/`isHeader`/`hasHeaderRow`/`textAlign` の正確なキー・型・大文字小文字）を**実測確定**してから実装する。上流 PR #4606/#4607 の記述は参考だが、デプロイ版と食い違えば 409/422 または無音の欠落が起きる（AGENTS.md「live で観測」原則）。
+
+- **P5-A push（`markdownToPortableText`, `portable-text.ts:240–318`）**:
+  - パイプテーブルブロック検出を追加（ヘッダ行＋区切り線 `| --- |`、`:` によるアライメント）。連続行を束ねて単一の `{ _type:'table', rows:[...] }` を生成。
+  - セル内容は既存 `parseInline` を再利用して inline span + markDefs（strong/em/code/link）へ変換。空セルも有効な fallback span を付与。
+  - ヘッダ行は `isHeader: true` / テーブルに `hasHeaderRow: true`、列アライメントは `textAlign` に写像。
+  - **GFM で表現できない表**（結合セル colspan/rowspan>1、colwidth、本文行 header 化、複数行セル）は table を作らず **Tier-3 `<!--ec:block -->` フェンス**へフォールバック（既存画像機構と対称）。
+  - 645 行の「tables are not supported」警告は、救済実装に伴い**削除または文言変更**（対応済みになった旨へ）。
+- **P5-B pull（PT→Markdown シリアライズ側）**: canonical table を GFM パイプテーブルへ逆変換。GFM 非表現機能を持つ table は `<!--ec:block -->` で出力し、Guard **G9（MODIFIED_OPAQUE_BLOCK）**で非破壊保護。
+- **P5-C ラウンドトリップ可逆性**: pull→編集→push で GFM 表が保持され、サーバー側の結合セル等が失われないことを保証（既存 `tests/portable-text.test.ts` の Tier-3 round-trip と同型の検証）。
+- **Guard/G5・G11 との相互作用**: テーブルセル内の画像行は standalone line 前提の画像検知と干渉しうる。テーブル内部の `![...]()` は table cell content として扱い、G5/G11 の「standalone line」判定と衝突させない方針を明文化する。
+- **依存方針**: Emit が独自に GFM テーブルをパースすれば新規 npm パッケージは不要（カテゴリ 1 回避）。上流と同じ `marked` lexer を採用するなら**カテゴリ 1 で Ask First**。既定は**独自パース志向**。
+
+
+---
+
+## 4. テスト計画（Vitest）
+
+### P1
+- **T1-1**: `runPreflightChecks` で `previousStatus: 'draft'` / `allowPublish: false` → `UNINTENDED_PUBLISH_GUARD` の `suggestion` が `'--allow-publish'` を含む（現状 82 行の `allowPublish: true` assertion も維持）。
+- **T1-2**: 同一 suggestion が `'allowPublish: true in MCP'`（MCP 記法）も含む＝両表記。
+- **T1-3**: guards レジストリ文案と preflight suggestion の双方に `--allow-publish` / `allowPublish: true` が現れること（不揃い再発防止）。既存 `tests/guards.test.ts` の guard registry 規則は変更しない。
+
+### P2
+- **T2-1**: クリーン workspace で `program.parseAsync(['node','emit','conflicts'])` → 非ゼロにせず、出力が `No conflicts or rescue backups found` を含む。
+- **T2-2**: `.conflict.md` を 1 件配置した workspace で `emit conflicts`（無引数）→ list と同一に `[SYNC CONFLICT]` 行を列挙。明示 `emit conflicts list` の出力と一致すること。
+- **T2-3**: 既存の明示サブコマンド（`list` / `diff` / `resolve` / `prune`）が従来どおり動作し、委譲追加で回帰しないこと（`tests/cli.test.ts` の既存 conflicts テストを維持）。
+
+### P3
+- **T3-1**: 本文から参照されない companion 付きメディア + 参照されるメディアを配置 → check が未参照のみを列挙、参照済みは除外。
+- **T3-2**: frontmatter `featuredImage` のみに依存するメディアは**未参照に分類されない**（誤検知防止の負例）。
+- **T3-3**: companion 不在ファイルは unattributable 扱いで削除候補にならない／断定メッセージを出さない（epistemic ルール）。
+
+### P4
+- **T4-1**（既存回帰）: `tests/media.test.ts` の promote テストが「drafts 元ファイルが移動され残らない」ことを既に担保していることを確認（挙動不変の確認のみで新規テストは不要）。
+- **T4-2**（任意・措詞変更時）: アナウンス文言を平易化する場合、`tests/push_media_pipeline.test.ts` の `promoted to:` assertion を新文言へ同期更新。
+
+### P5
+- **T5-1**: GFM パイプテーブル → `{ _type:'table', rows:[{ _type:'tableRow', cells:[...] }] }` 変換。ヘッダ行で `isHeader`/`hasHeaderRow`、列アライメント（`:---`/`:---:`/`---:`）が `textAlign` に反映されること。
+- **T5-2**: セル内インライン装飾（`**b**`, `*i*`, `` `code` ``, `[a](url)`）が cell content の inline span + markDefs になること。空セルも fallback span を持つこと。
+- **T5-3**: ラウンドトリップ可逆性 — canonical table → GFM → 再パースで構造が保存される（既存 Tier-3 round-trip と同型）。
+- **T5-4**: GFM 非表現機能（colspan/rowspan>1・colwidth・複数行セル）の remote table を pull すると `<!--ec:block -->` にフォールバックし、再 push で失われないこと。G9 が保護すること。
+- **T5-5**: テーブルセル内の画像が G5/G11 の standalone line 判定と衝突しないこと（cell content 扱い）。
+- **T5-6**（警告文言）: 「tables are not supported」警告を削除/変更する場合、`tests/portable-text.test.ts:298` の該当 assertion を新挙動へ更新。
+
+
+
+---
+
+## 5. Ask First ポリシー対応
+
+| カテゴリ | 該当有無 | 内容 |
+| --- | --- | --- |
+| 1. 新規 npm パッケージ | P3 で追加の可能性（現状の収集ロジックで足りるなら不使用）。**P5 も上流と同じ `marked` lexer を採用する場合追加**。Emit 独自パースなら不使用で回避可 | 実装前に確認。既定は既存 Layer 0 helper／既存パーサの再利用で**不使用を志向** |
+| 2. 永続化スキーマ / config キー | **不使用** | doctor check は cache スキーマを変えない。新 config キーも追加しない |
+| 3. 公開 facade / オーケストレーター API 破壊的変更 | P3 の MCP `sync_doctor` 引数透過で該当しうる | 実装前にオーナー確認。P1・P2 は該当せず |
+| 4. 権威仕様削除 / 核心原則の改訂 | **不使用** | AGENTS.md / docs の既存原則（剪定権限＝リモートレコードのみ、epistemic 要件）を維持したまま追加実装する |
+
+> **P4 はカテゴリ 1〜4 のいずれにも該当しない**: ドキュメント（README / MCP description / guide）への説明追記のみで、コード・config キー・facade は変更しない。メディア git 自動除外とインボックス固定フォルダは「ユーザー主権」原則を**維持する**決定であり、核心原則の改訂には当たらない。
+
+---
+
+## 6. スコープ外・却下事項
+
+- **孤立メディアの自動削除（`emit media prune` 等）**: 本版では行わない。削除は「pruning 権限はリモートレコードのみ」「attribution 不能なファイルは消さない」原則と衝突しやすく、誤削除が復旧不能のため、検知レポートの実効性が確認できた後続版で検討する。
+- **`media-search --orphaned` フラグ**: 同上。まず doctor の読み取り専用 check で棚卸しを提供し、検索系への拡張は必要性検証後に判断。
+- **P1 でのエラーコード変更**: `UNINTENDED_PUBLISH_GUARD` の code 自体と guard id（3）は不変。文案のみ修正するため guard registry の Rule 1〜5 は影響を受けない。
+- **メディアの git 自動除外（不採用）**: Emit は `.emit/.gitignore`（自身のキャッシュ DB 類）のみを書き、ルート `.gitignore` は作成・編集しない（`src/utils/config.ts:153-160`、README §6、`tests/config_gitignore.test.ts:116`）。メディア画像を追跡するか除外するかの判断は**ユーザー主権・責任**であり、Emit が自動でワークフォルダ内の画像を Git 除外しない。必要ならユーザーがルート `.gitignore` に `media/*.jpg` 等を書く（README §6 に案内あり）。
+- **AI 受け渡しインボックスの固定フォルダ自動生成（廃案）**: `emit init` が生成するのは同期機構が前提とする構造（`posts/draft`, `posts/published`）に限定する。ユーザーが任意で作る受け渡し用フォルダを Emit が固定化・デフォルト git 除外することは、「ワークスペース構造と Git 追跡方針はユーザーの主権」という思想に反するため採用しない。
+
+
+---
+
+## 7. リスクと留意点
+
+| # | リスク | 対策 |
+| --- | --- | --- |
+| R1 | P2 の委譲で既存 `emit conflicts`（ヘルプ表示）に依存した運用・テストが壊れる | 明示サブコマンドは不変。無引数のみを list に回す。T2-3 で回帰固定 |
+| R2 | P3 の未参照判定が featuredImage 参照を見落とし正常メディアを誤検知 | 参照集合に frontmatter `featuredImage` を必ず含める（T3-2） |
+| R3 | P3 が「未参照＝削除可」と誤誘導し epistemic 原則に反する | レポートは事実列挙のみ。削除示唆・INSERT 推奨を出さない（AGENTS.md §7/§Media 準拠、T3-3） |
+| R4 | P1 文案変更で既存 preflight テストが落ちる | `allowPublish: true` assertion を維持しつつ CLI フラグ assertions を追加（T1-1） |
+| R5 | P5 の canonical table スキーマ推測が live EmDash 1.5 と不一致で 409/422 または無音の欠落を起こす | 実装前に GET 実測で確定する P0 ゲートを必須化（§3.5）。上流 PR 記述は参考扱い |
+| R6 | P5 のテーブルセル内画像が G5/G11 の standalone line 判定と衝突し誤アップロード／誤拒否を起こす | table cell content は cell 内で扱い G5/G11 対象外にする方針を明文化（T5-5） |
+
+---
+
+## 8. 完了条件（DoD）
+
+- [x] `emit push` の G3 ガード文案が `--allow-publish (or allowPublish: true in MCP)` を含む
+- [x] `emit conflicts` 無引数が list を実行し、クリーン時は `✅ No conflicts or rescue backups found ...` を表示（exit 0）
+- [x] P3 の孤立メディア検知 check が読み取り専用で追加され、削除を示唆しない（要オーナー確認の上実装）
+- [x] README / MCP description / guide に「push 後 drafts→media へ**移動**（コピーではない）」が明記され、前回の認識誤りを是正している（P4）
+- [x] メディアの git 自動除外・インボックス固定フォルダを**実装していない**こと（思想維持の確認）
+- [x] live EmDash 1.5 で canonical table スキーマを実測確定した後、GFM テーブルが `table`/`tableRow`/`tableCell` ブロックへ双方向変換され、GFM 非表現機能は Tier-3 フェンスで非破壊保存される（P5）
+- [x] P5 のラウンドトリップ可逆性テスト（T5-3/T5-4）と Guard G9/G5 相互作用テスト（T5-4/T5-5）が PASS
+- [x] `tests/layering.test.ts`（Axis 0〜5）・`tests/guards.test.ts`（Rule 1〜5）PASS、新規エラーコード追加なし
+- [x] 静的品質ゲート `npm run check` が 100% green
