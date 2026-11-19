@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-11-19
+
+### Added
+
+- **Profile Resolution Rationale (`src/utils/profile-resolution.ts`, CLI, MCP)**:
+  - New Layer 0 helper publishing one shared source for how a profile was chosen (`current directory match`, `origin match`, `explicit --profile`, `only configured profile`, `active default`), consumed by `emit profile current`, the `emit profile list` labels, and MCP `profile_list` (`resolvedBy` / `matchesCwd`).
+  - `emit profile list` now separates `(matches current directory)` from `(active default — used only outside registered workspaces)`, removing the long-standing misreading of the old bare `(active)` marker. No resolution order changed: a registered workspace containing the current directory still wins over the `active` fallback, so no manual `profile use` is needed inside a linked workspace.
+- **Workspace Link Drift Detection (`src/utils/profile.ts:detectWorkspaceLinkDrift`)**:
+  - Detects the case where a profile's registered `workspace` path no longer matches the directory being operated on after a folder move or rename, and reports both paths. Shared by the CLI warning in `resolveContext()` (stderr) and doctor check `workspace_link_consistency` (Check 2b), so the two can never disagree. Comparison goes through `resolveDirectoryForComparison()`, so symlinks (`/var` vs `/private/var`) and trailing slashes do not produce false drift, and a registered path that does not exist yet is not reported as drift.
+  - The check is pushed only when a link exists and is stale; an unregistered profile adds no line, keeping a healthy report quiet.
+- **Non-Destructive Link Repair (`emit init --profile <name>`)**: re-points a drifted profile's workspace at the current directory and prints `🔗 Re-linked profile ...`. `initWorkspace()` now merges into an existing `.emit/config.json` instead of overwriting it, preserving `defaultCollection`, `defaultLocale`, sync limits, `concurrency`, `localMediaRefs`, unrelated keys written by other code paths, and `createdWithVersion`. The three `resolveInitPlan()` auto-link guards are unchanged.
+- **Generated `.emit/.gitignore` (`src/utils/config.ts:ensureEmitGitignore`)**: `emit init` now ships ignore rules for its own machine-local SQLite cache (`cache.db`, `cache.db-wal`, `cache.db-shm`, `cache.db.bak-*`, `mcp_state.json`), so a new workspace never commits the database binary. An existing file is never rewritten or appended to, and nothing outside `.emit/` is ever written — repository-level ignore policy (notably whether `media/` is tracked) stays the user's, per README §6. `initWorkspace()` returns `{ gitignoreCreated }` so the CLI reports what actually happened.
+- **Credential Rotation Without Retyping the Profile (`emit profile set-token <name>`)**: replaces only the token, carrying `origin`, `workspace`, `defaultCollection` and `defaultLocale` forward. Input resolves `--token` → `--stdin` → interactive prompt with terminal echo disabled on a TTY; `--stdin` supports keychain piping (`security find-generic-password ... | emit profile set-token <name> --stdin`) and CI without the value ever reaching argv or shell history. The command announces `Replaces the existing token ...` before writing and never prints either value; an unknown name is rejected with one actionable line, and an empty pipe fails instead of silently blanking the credential.
+- **Opt-In Auth Validity Probe (`emit doctor --check-auth`, MCP `sync_doctor checkAuth: true`)**: new async `runRemoteAuthCheck()` (Check 2c) sends exactly one authenticated `GET /_emdash/api/content/<collection>?limit=1` and reads only the HTTP status — `2xx` → `ok` naming the auth source, `401`/`403` → `error` with an `emit profile set-token <name>` remediation, any other status or an unreachable origin → `warning`. The article endpoint (the resource Emit actually pushes to) is used deliberately so a posts-only token is never reported as broken. Plain `emit doctor` performs no auth request at all, and the probe introduces no new error code, leaving the guard registry untouched.
+
+### Changed
+
+- **Doctor Check Sequence**: the report's documented order gained `workspace_link_consistency` (2b, inside the synchronous environment group) and `auth_validity` (2c, awaited immediately after it). `runEnvironmentChecks()` remains a pure synchronous function with no HTTP inside; the `await` positions in `runWorkspaceDoctor()` are what fix the sequence, and its docblock now states that logical id order and execution order differ on purpose.
+- **Characterization Snapshot Flips (deliberate)**: `tests/v0138_characterization.test.ts` pinned the pre-v0.1.38 behavior first (P0), then recorded exactly three intended changes — `.emit/` now holds `.gitignore`, the profile subcommand set gained `set-token`, and the doctor option set gained `--check-auth`.
+
+### Fixed
+
+- **Flaky Profile Tests on macOS**: drift tests compare through `fs.realpathSync`, mock `os.homedir()` (not only `process.env.HOME`) so an ambient `~/.config/emit/profiles.yaml` cannot decide an outcome, and read `profiles.yaml` before deleting the throwaway `HOME` in cleanup.
+
 ## [0.1.37] - 2026-11-18
 
 ### Added

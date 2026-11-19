@@ -382,19 +382,30 @@ emit profile set-token <name> [--token <token>] [--stdin]
 
 ## 8. 完了条件（DoD: Definition of Done）
 
-1. [ ] `src/utils/profile-resolution.ts` が新設され、`profile list` / `profile current` / MCP `profile_list` が**同じ 1 ソース**の解決根拠文言を使っていること（T5-1）。
-2. [ ] `emit profile list` の `(active)` ラベルが「cwd 自動解決が優先される」意味を明示した文言に変わっており、`(matches current directory)` が cwd 一致時に出ること。
-3. [ ] `detectWorkspaceLinkDrift()` が新設され、CLI 警告と doctor Check `workspace_link_consistency`（Check 2 の直後）が同じ判定関数を使っていること。
-4. [ ] `emit init --profile <name>` が再実行可能で、既存 config の非接続キーと `createdWithVersion` を保持したまま workspace link を張り替えること。`resolveInitPlan()` の 3-guard は無変更。
-5. [ ] `emit init` が `.emit/.gitignore`（`cache.db`, `cache.db-wal`, `cache.db-shm`, `cache.db.bak-*`）を作成し、**既存ファイルは絶対に上書きしない**こと。ルート `.gitignore` への書き込みがコード中に存在しないこと。
-6. [ ] `emit profile set-token <name>` が追加され、`--token` / `--stdin` / TTY 入力の順で解決し、TTY では入力が秘匿されること。**新規 npm パッケージは追加されていない**こと（`git diff package.json` に dependencies 変更なし）。
-7. [ ] `emit doctor --check-auth` と MCP `sync_doctor checkAuth: true` が追加され、2xx / 401・403 / 404・5xx / 通信不能の 4 判定が §3.5 の表どおりであること。未指定時は doctor がオフラインを維持すること。認証 probe の送信先が `articleContentEndpoint(origin, collection)` であり、`runEnvironmentChecks()` は同期関数のまま（fetch を含まない）であること。
-8. [ ] P0 の snapshot コミットが先行しており、P1・P2 の変更で `.snap` 差分が**意図した行のみ**であること。
-9. [ ] `tests/layering.test.ts`（Axis 0–5）と `tests/guards.test.ts`（Rule 1–5）が**無変更**で green。`ALLOWED_LAYER_2_SYMBOLS` および layering スナップショット例外リストに追加がないこと。
-10. [ ] 非 CLI 層（`src/utils/`, `src/sync/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`）に `console.log` / `console.debug` が **0 件**であること（Axis 5）。新規の警告・診断文言はすべて Layer 3（CLI/MCP）または doctor の `DoctorCheckResult` 経由で出す。
-11. [ ] README（§3 Multi-Site / §6 `.gitignore` / CLI Command Reference の `emit init`・`emit profile`・`emit doctor`）、`AGENTS.md`、MCP instructions の記述が実装と一致していること。
-12. [ ] `CHANGELOG.md` に v0.1.38 セクションが `[Unreleased]` 直下へ追記され、`package.json` / `package-lock.json` が `0.1.38` になっていること。
-13. [ ] `npm run check`（format:check, typecheck, check:cycles, test）が 100% green。
+1. [x] `src/utils/profile-resolution.ts` が新設され、`profile list` / `profile current` / MCP `profile_list` が**同じ 1 ソース**の解決根拠文言を使っていること（T5-1）。
+2. [x] `emit profile list` の `(active)` ラベルが「cwd 自動解決が優先される」意味を明示した文言に変わっており、`(matches current directory)` が cwd 一致時に出ること。
+3. [x] `detectWorkspaceLinkDrift()` が新設され、CLI 警告と doctor Check `workspace_link_consistency`（Check 2 の直後）が同じ判定関数を使っていること。
+4. [x] `emit init --profile <name>` が再実行可能で、既存 config の非接続キーと `createdWithVersion` を保持したまま workspace link を張り替えること。`resolveInitPlan()` の 3-guard は無変更。
+5. [x] `emit init` が `.emit/.gitignore`（`cache.db`, `cache.db-wal`, `cache.db-shm`, `cache.db.bak-*`）を作成し、**既存ファイルは絶対に上書きしない**こと。ルート `.gitignore` への書き込みがコード中に存在しないこと。
+6. [x] `emit profile set-token <name>` が追加され、`--token` / `--stdin` / TTY 入力の順で解決し、TTY では入力が秘匿されること。**新規 npm パッケージは追加されていない**こと（`git diff package.json` に dependencies 変更なし）。
+7. [x] `emit doctor --check-auth` と MCP `sync_doctor checkAuth: true` が追加され、2xx / 401・403 / 404・5xx / 通信不能の 4 判定が §3.5 の表どおりであること。未指定時は doctor がオフラインを維持すること。認証 probe の送信先が `articleContentEndpoint(origin, collection)` であり、`runEnvironmentChecks()` は同期関数のまま（fetch を含まない）であること。
+8. [x] P0 の snapshot コミットが先行しており、P1・P2 の変更で `.snap` 差分が**意図した行のみ**であること。
+9. [x] `tests/layering.test.ts`（Axis 0–5）と `tests/guards.test.ts`（Rule 1–5）が**無変更**で green。`ALLOWED_LAYER_2_SYMBOLS` および layering スナップショット例外リストに追加がないこと。
+10. [x] 非 CLI 層（`src/utils/`, `src/sync/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`）に `console.log` / `console.debug` が **0 件**であること（Axis 5）。新規の警告・診断文言はすべて Layer 3（CLI/MCP）または doctor の `DoctorCheckResult` 経由で出す。
+11. [x] README（§3 Multi-Site / §6 `.gitignore` / CLI Command Reference の `emit init`・`emit profile`・`emit doctor`）、`AGENTS.md`、MCP instructions の記述が実装と一致していること。
+12. [x] `CHANGELOG.md` に v0.1.38 セクションが `[Unreleased]` 直下へ追記され、`package.json` / `package-lock.json` が `0.1.38` になっていること。
+13. [x] `npm run check`（format:check, typecheck, check:cycles, test）が 100% green。
+
+**DoD 検証の実測値（2026-11-19 / P5 完了時点）**
+
+| 項目 | 実測 | 検査 |
+| --- | --- | --- |
+| 非 CLI 層の `console.log` / `console.debug` | **0 件**（Axis 5 PASS） | `grep -rn 'console\.\(log\|debug\)' src \| grep -v 'src/cli/' \| wc -l` |
+| 新規 npm 依存 | **0 件**（`readline` は `node:` 標準） | `git diff origin/main..HEAD -- package.json` に dependencies 変更なし |
+| `.gitignore` 書き込み箇所 | `ensureEmitGitignore()` の `path.join(emitDir, '.gitignore')` **1 箇所のみ**（`.emit/` 内） | `grep -rn "\.gitignore" src/utils/config.ts` |
+| 解決根拠文言の共有元 | `src/utils/profile-resolution.ts` を CLI 2 ファイル・MCP 1 ファイル・doctor が import | `grep -rln 'profile-resolution' src` |
+| layering / guards | 無変更で **12 tests green** | `npx vitest run tests/layering.test.ts tests/guards.test.ts` |
+| 静的品質ゲート | `npm run check` green（70 files / 765 tests、循環依存 0） | `npm run check` |
 
 ---
 
@@ -431,9 +442,10 @@ emit profile set-token <name> [--token <token>] [--stdin]
 | **P0** characterization snapshot | ✅ 完了 | `tests/v0138_characterization.test.ts`（新規）。`profile list` / `profile current` の出力、`initWorkspace` の生成ファイルと config キー集合、doctor の check 順序、`profile` サブコマンド・`doctor` オプション一覧を inline snapshot で固定。実測で判明した事実を 2 件反映: doctor の無条件 spine は `version_compatibility → origin_consistency → frontmatter_integrity → conflicts_quarantine → sync_status → media_references`（`mcp_process` は MCP プロセスが古い場合のみ push）、`.emit/config.json` の既定キーは 9 個（`concurrency` / `defaultLocale` を含む） |
 | **P1** 解決根拠の可視化 | ✅ 完了 | `src/utils/profile-resolution.ts`（Layer 0 新規: `toResolutionSource()` / `formatResolutionRationale()` / `cwdMatchedProfileName()` / マーカー定数 2 個）。CLI `profile current` に `Resolved by:` 行、`profile list` のラベルを `(matches current directory)` と `(active default — used only outside registered workspaces)` へ分離。MCP `profile_list` へ `resolvedByDirectory` と per-profile `matchesCwd` を追加（既存キーは不変）。テスト: `tests/profile_resolution.test.ts`（新規 7 件）、`tests/mcp_tool_errors.test.ts` に T1-4、`tests/presentation_symmetry.test.ts` に T5-1（文言の二重定義検出）。README §3・§`emit profile` を更新 |
 | **P2** workspace link drift 検出 | ✅ 完了 | `src/utils/profile.ts` に `detectWorkspaceLinkDrift()`（Layer 0、`resolveDirectoryForComparison()` 使用で symlink / 末尾スラッシュ誤検知なし、ネスト実行は drift 扱いしない）。CLI は `src/cli/context.ts` で stderr 警告（`formatWorkspaceLinkDriftWarning`）、doctor は Check 2b `workspace_link_consistency`（`origin_consistency` の直後、drift 時のみ push）で同じ判定関数を共有。文言は `src/utils/profile-resolution.ts` の `workspaceLinkDriftLines()` / `formatRelinkSuggestion()` の 1 ソース。修復は `emit init --profile <name>`（新規ヘルパー `resolveInitRelink()`、`--no-link` は常に優先、`resolveInitPlan()` の 3-guard は無変更）。`initWorkspace()` は既存 config をマージする非破壊化（`createdWithVersion` と非接続キーを保持）。テスト: `tests/profile.test.ts` T2-1、`tests/doctor.test.ts` T2-2、`tests/cli.test.ts` T2-3（unit + end-to-end + `--no-link` 拒否 + nested 無警告）。characterization の re-init スナップショットは P2 で意図的に反転（破棄 → 保持） |
-| **P3** `.emit/.gitignore` | ⬜ 未着手 | — |
-| **P4-A** `profile set-token` | ⬜ 未着手 | — |
-| **P4-B** `doctor --check-auth` | ✅ 承認済み・⬜ 未着手 | オーナー承認取得済（§9 カテゴリ 3） |
+| **P3** `.emit/.gitignore` | ✅ 完了 | `src/utils/config.ts` に `EMIT_GITIGNORE_TEMPLATE` / `ensureEmitGitignore(emitDir)`（Layer 0）。`initWorkspace()` が末尾で呼び、`{ gitignoreCreated }` を返す（CLI が filesystem を再検査せずに報告できる）。パターンは `cache.db` / `-wal` / `-shm` / `.bak-*` / `mcp_state.json`。既存ファイルは byte-for-byte で一切触らない。ルート `.gitignore` への書き込みはコード中に存在しない（X-1）。テスト: `tests/config_gitignore.test.ts`（T3-1、使い捨て repository で `git check-ignore` を実行し実 Git 意味論で照合。`config.json` が無視されないことも確認）。characterization の `.emit/` 生成ファイル一覧は P3 で意図的に反転（`config.json` のみ → `.gitignore` を追加）。README §6 と `emit init` 例示出力を更新 |
+| **P4-A** `profile set-token` | ✅ 完了 | `src/cli/commands/profile.ts` に `set-token <name>`（`--token` > `--stdin` > TTY 秘匿プロンプト）。Layer 3 ローカルの `readSecretLine()` / `readTokenFromStdin()`（新規 npm パッケージなし、`node:readline/promises`）。既存 profile の token だけ差し替え、`origin` / `workspace` / `defaultCollection` / `defaultLocale` はそのまま引き継ぐ。書き込み前に `Replaces the existing token ...` を 1 行出し、新旧どちらの値も一切 print しない。未知 name は `reportProfileFailure()` 経由で 1 行 + exit 1。raw mode 復元は `finally` と stdin `close` の両方（Ctrl-C では await が完了しないため）。テスト: `tests/cli.test.ts` T4-1 / T4-2（置換範囲、出力への秘密漏れ否定、空 `--token` の明示的 clear、`--token` が `--stdin` に勝つ順序、fake TTY で raw mode の on/off 対）。characterization の profile サブコマンド一覧に `set-token` が 1 件増えた |
+| **P4-B** `doctor --check-auth` | ✅ 完了（オーナー承認済） | `src/sync/doctor.ts` に async `runRemoteAuthCheck()`（Check 2c `auth_validity`）。`runWorkspaceDoctor()` 内で `runEnvironmentChecks()` の直後に `await` するため同期グループは純粋なまま。送信先は `articleContentEndpoint(origin, collection)` + `limit=1` を `createAuthedFetch` で 1 回だけ叩き、HTTP ステータスのみ判定（2xx ok / 401・403 error + `emit profile set-token` 案内 / その他・通信不能 warning）。新規 error code は生まないため `guards.test.ts` は無変更。MCP `sync_doctor` へ `checkAuth` 引数、CLI へ `--check-auth`（description に opt-in 明記）。案内は `emit profile set-token` 成功時と `emit init` 末尾の `Tip: verify credentials with "emit doctor --check-auth".` のみで新動詞は作らない。テスト: `tests/doctor.test.ts` T4-3 / T4-5 / T4-6（fetch スタブ 4 判定、叩く URL が collection 解決と一致、taxonomies へ送らない、posts-only token が ok、未指定時は 0 リクエスト・check 非 push）、`tests/cli.test.ts` T4-4。characterization の doctor オプション一覧に `--check-auth` が 1 件増えた |
+| **P5** リリース準備 | ✅ 完了 | `CHANGELOG.md` へ v0.1.38 セクション（Added / Changed / Fixed）を `[Unreleased]` 直下へ追記、`package.json` / `package-lock.json` を `0.1.38` へ。README（§6 `.gitignore`、`emit init` / `emit profile` / `emit doctor` の Command Reference、Troubleshooting の認証 Q、MCP instructions）と AGENTS.md（オプトイン remote probe、秘密入力処理、init 生成 Git hygiene の 3 invariant）を実装と一致させた |
 
 **P1 で生きた設計判断**
 
@@ -449,6 +461,19 @@ emit profile set-token <name> [--token <token>] [--stdin]
 - 再張り替えは**明示的に名前を挙げた profile だけ**が対象（`resolveInitRelink()` の `source === 'explicit' && drift`）。auto-resolved で workspace を持つ profile は「登録パスがここを含む」意味なので guard 2 を維持。`--no-link` は常に優先。
 - `initWorkspace()` の非破壊化は P2 の前提: 修復コマンドが limits / locale / `localMediaRefs` / `createdWithVersion` を戻してはいけない。characterization スナップショットの反転（`customMarker` 破棄 → 保持、`postsSyncLimit` 30 → 250）はこの 1 点だけの意図的な変更で、P0 の snapshot がそれを機械的に示す。
 - テスト hermeticity: `os.homedir()` は `process.env.HOME` に追随しないため `vi.spyOn` で固定し、throwaway HOME の `profiles.yaml` は削除前に読み出す。macOS の `/var` → `/private/var` 解決は比較側にも realpath を適用（登録パスは存在しないので verbatim 比較）。
+
+**P3 / P4-A / P4-B で生きた設計判断**
+
+- **P3**: `.gitignore` の生成先は `.emit/` に限定した。ルート側を作ると「`media/` を追跡するか」という README §6 のユーザー判断を Emit が奪うことになり、X-1 の不採用理由と衝突する。既存ファイルは append ですらなくさない（ユーザーが編集した可能性があり、`Localized Diff` チェックリストとも相性が悪い）。テンプレートの正しさは文字列一致ではなく**使い捨て repository での `git check-ignore`** で検証した – パターン名を打ち間違えると「守っているつもりで DB がコミットされる」事故になるため、実 Git 意味論が唯一の証明である。`config.json` が無視されないことも negative case で固定した（過広なルールは workspace 設定を黙って落とす）。
+- **P3 の戻り値**: `initWorkspace()` は `{ gitignoreCreated }` を返す。CLI が filesystem を再検査すると「作らなかった」ケース（既存ファイル）と「作成失敗」を区別できないため、事実は生成側が申告する。
+- **P4-A**: 新規依存は追加しない（Ask First カテゴリ 1 を回避）。`node:readline/promises` + TTY のときだけ `setRawMode` で足りる。秘匿は**対話パスのみ**で、pipe には terminal state がない（`setRawMode` は throw する）。解決順序を `--token` > `--stdin` > プロンプト と固定した: 明示フラグはラッパースクリプトが残す pipe より意図が強い。
+- **P4-A の復元経路**: raw mode の戻しは `finally` だけでは不十分だった。対話を中断（Ctrl-C）すると既定 SIGINT でプロセスが死に、await が完了しないので `finally` が走らない。stdin の `close` でも復元する（`once` ガードで二重復元はしない）。この事実はテストが先に暴露した – fake TTY で「stream close 時点で cooked に戻っている」ことを assert している。
+- **P4-A の秘密非露出**: 新旧どちらの token も print しない。既存 token を置換する事実だけを `Replaces the existing token for profile "<name>".` で伝え、誤 profile 実行に気付ける情報だけを残す（傍目には読めない）。空 `--token` は唯一の「clear」意思表示として尊重し、空 pipe はエラー（認証情報を黙って消さない）。
+- **P4-B**: probe は `runEnvironmentChecks()` に入れず、`runWorkspaceDoctor()` の `await` 位置で順序を決めた。v0.1.37 Part B の同期/非同期責務分割を壊さないためで、docblock に「論理 id 順と実行順は異なる」ことを明記した（`mcp_process` は条件付き push なので、順序不変は position 固定ではなく関係で assert する）。
+- **P4-B の送信先**: `articleContentEndpoint(origin, collection)` に固定。taxonomy 系だと「記事は同期できるが taxonomy 管理権限がない」token を error にする偽陰性が出る（T4-6 が posts 200 / その他 403 の stub で回帰レール）。body は解析せず status のみ。
+- **P4-B の epistemic 規則**: 401/403 以外で「token が無効」と断定しない。5xx や通信不能は skip 扱い（`--check-media-urls` の「served key は object の存在を証明するだけ」と同じ型）。新規 error code を作らないので guard registry と layering テストは無変更で通る。
+- **P4-B の発見性**: `emit profile verify` のような新動詞は増やさず、`set-token` 成功時と `init` 末尾の `Tip: verify credentials with "emit doctor --check-auth".` に案内を寄せる。README / MCP instructions も同じ表記で統一した。
+- **P5**: characterization スナップショットの反転は P3（`.gitignore`）・P4-A（`set-token`）・P4-B（`--check-auth`）の 3 箇所だけで、いずれも「1 エントリ増えた」形に限定した。config キー集合と doctor の spine は無変更で、これが「Localized Diff」チェックリストの実証になっている。
 
 
 
