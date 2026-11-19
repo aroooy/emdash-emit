@@ -317,7 +317,11 @@ Running `emit init` generates `.emit/config.json` with the following keys (`src/
 
 ### 6. Recommended `.gitignore`
 
-When tracking your local blog repository with Git, use the following recommended `.gitignore` configuration:
+`emit init` writes a `.emit/.gitignore` covering Emit's own cache database (`cache.db`, `cache.db-wal`, `cache.db-shm`, `cache.db.bak-*`), so a brand-new workspace never commits the SQLite binary by accident. That file is created only when it does not already exist — if you have edited it, or re-run `emit init` to repair a profile link, Emit leaves it untouched.
+
+It applies **only to newly initialized workspaces**. An existing workspace should get the repository-level rules below instead; Emit deliberately never creates or edits your root `.gitignore`, because whether `media/` itself is tracked is your call.
+
+Use the following recommended `.gitignore` configuration:
 
 ```gitignore
 # Emit Local Cache Database (Strictly exclude binary SQLite DBs)
@@ -625,7 +629,7 @@ emit init [--origin <url>] [-p, --profile <name>]
 - `-p, --profile <name>`: Initialize against this named profile. When that profile's registered workspace points at a folder that has since moved or been renamed, `emit init` re-points it at the current directory and reports `🔗 Re-linked profile ...`. Naming the profile explicitly is what makes the move repairable — a plain `emit init` will not move a link that already exists.
 - `--no-link`: Do not register this directory with any profile.
 
-Re-running `emit init` on an existing workspace is non-destructive: only the keys you pass change, and the existing `defaultCollection`, `defaultLocale`, sync limits, `concurrency`, `localMediaRefs` and `createdWithVersion` are preserved.
+Re-running `emit init` on an existing workspace is non-destructive: only the keys you pass change, and the existing `defaultCollection`, `defaultLocale`, sync limits, `concurrency`, `localMediaRefs` and `createdWithVersion` are preserved. `init` also creates `.emit/.gitignore` so the local SQLite cache is never committed (see §6); an existing one is left untouched.
 
 **Example Output:**
 
@@ -633,6 +637,8 @@ Re-running `emit init` on an existing workspace is non-destructive: only the key
 ✅ Initialized Emit workspace at: /Volumes/ext/github/my-blog
    Config: /Volumes/ext/github/my-blog/.emit/config.json
    Database: /Volumes/ext/github/my-blog/.emit/cache.db
+   Git:      .emit/.gitignore created (excludes the local SQLite cache)
+             If this workspace is a Git repo, see README §6 "Recommended .gitignore".
 
 ```
 

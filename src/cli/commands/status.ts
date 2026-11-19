@@ -336,12 +336,28 @@ export function registerStatusInitCommands(
       );
       const shouldRelinkProfile = resolveInitRelink(options, resolvedProfile, drift);
 
-      initWorkspace(root, effectiveOrigin ? { origin: effectiveOrigin } : undefined);
+      const gitignore = initWorkspace(
+        root,
+        effectiveOrigin ? { origin: effectiveOrigin } : undefined,
+      );
       const paths = getWorkspacePaths(root);
 
       console.log(`✅ Initialized Emit workspace at: ${root}`);
       console.log(`   Config: ${paths.configPath}`);
       console.log(`   Database: ${paths.dbPath}`);
+      /**
+       * v0.1.38 P3: the cache database is machine-local SQLite, and first-time users commit it because
+       * nothing told them not to. Report what this run did, and point at README §6 for the repository-level
+       * rules Emit deliberately does not own (whether `media/` is tracked is the user's call).
+       */
+      if (gitignore.gitignoreCreated) {
+        console.log(
+          '   Git:      .emit/.gitignore created (excludes the local SQLite cache)\n' +
+            '             If this workspace is a Git repo, see README §6 "Recommended .gitignore".',
+        );
+      } else {
+        console.log('   Git:      .emit/.gitignore already exists — left untouched');
+      }
 
       if (shouldLinkProfile && resolvedProfile) {
         setProfile(resolvedProfile.name, {

@@ -176,17 +176,19 @@ describe('v0.1.38 characterization: initWorkspace generated files', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('writes no .gitignore anywhere — the SQLite cache is left unignored', () => {
+  it('writes .emit/.gitignore and nothing else — the SQLite cache is ignored (v0.1.38 P3)', () => {
     initWorkspace(tempDir, { origin: 'https://aroooy.net' });
 
     const emitted = fs.readdirSync(path.join(tempDir, '.emit')).sort();
     expect(emitted).toMatchInlineSnapshot(`
       [
+        ".gitignore",
         "config.json",
       ]
     `);
-    // P3 will add `.emit/.gitignore`; these negative assertions are what make that change visible.
-    expect(fs.existsSync(path.join(tempDir, '.emit', '.gitignore'))).toBe(false);
+    // This snapshot was flipped deliberately in P3: pre-v0.1.38 `.emit/` held only `config.json`, which is
+    // how the cache database ended up committed. The repository-level file stays Emit's business — only the
+    // one inside `.emit/` is ever written (X-1).
     expect(fs.existsSync(path.join(tempDir, '.gitignore'))).toBe(false);
 
     // The config key set is pinned so a merge-on-reinit (P2) cannot silently drop keys.
@@ -204,6 +206,17 @@ describe('v0.1.38 characterization: initWorkspace generated files', () => {
         "postsSyncLimit",
       ]
     `);
+  });
+
+  it('reports a re-init as leaving an existing .gitignore untouched', () => {
+    const first = initWorkspace(tempDir, { origin: 'https://aroooy.net' });
+    expect(first.gitignoreCreated).toBe(true);
+
+    // A repair run (`emit init --profile`, P2) must not rewrite the file a user may have edited.
+    fs.appendFileSync(path.join(tempDir, '.emit', '.gitignore'), '# mine\n', 'utf8');
+    const second = initWorkspace(tempDir, { origin: 'https://other.example.com' });
+    expect(second.gitignoreCreated).toBe(false);
+    expect(fs.readFileSync(path.join(tempDir, '.emit', '.gitignore'), 'utf8')).toContain('# mine');
   });
 
   it('re-running init preserves unrelated keys instead of overwriting config wholesale (v0.1.38 P2 fix)', () => {

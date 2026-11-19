@@ -85,8 +85,14 @@ export const DEFAULT_CONFIG = {
  * `localMediaRefs` spelling that `persistLocalMediaRefs` wrote, and it must not rewrite
  * `createdWithVersion` — that field records which release first created the workspace, and doctor's version
  * check reads it. Only the keys named in `initialConfig` change.
+ *
+ * Returns whether `.emit/.gitignore` was newly created (v0.1.38 P3) so `emit init` can say what it did for
+ * Git hygiene without the CLI re-deriving the answer from the filesystem.
  */
-export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<EmitConfig>): void {
+export function initWorkspace(
+  workspaceRoot: string,
+  initialConfig?: Partial<EmitConfig>,
+): { gitignoreCreated: boolean } {
   const paths = getWorkspacePaths(workspaceRoot);
 
   if (!fs.existsSync(paths.emitDir)) {
@@ -119,6 +125,46 @@ export function initWorkspace(workspaceRoot: string, initialConfig?: Partial<Emi
   };
 
   fs.writeFileSync(paths.configPath, JSON.stringify(config, null, 2), 'utf8');
+
+  // v0.1.38 P3: ship the ignore rules for Emit's own directory. Never touches a file that already exists,
+  // and never writes outside `.emit/` — repository-level Git policy stays the user's.
+  const { created } = ensureEmitGitignore(paths.emitDir);
+  return { gitignoreCreated: created };
+}
+
+/**
+ * The `.gitignore` Emit ships inside its own `.emit/` directory (v0.1.38 P3).
+ *
+ * The cache database is machine-local SQLite: committing it bloats the repository and, once a workspace is
+ * used on two machines, produces a binary that merges badly and locks each clone to another host's state.
+ * `mcp_state.json` does not live under `.emit/` today (it is written to `~/.config/emit/`), but it is
+ * included so any future workspace-local persistence of the same kind is excluded by default.
+ */
+export const EMIT_GITIGNORE_TEMPLATE = [
+  '# Emit local cache database (machine-local SQLite — never commit)',
+  'cache.db',
+  'cache.db-wal',
+  'cache.db-shm',
+  'cache.db.bak-*',
+  'mcp_state.json',
+  '',
+].join('\n');
+
+/**
+ * Creates `.emit/.gitignore` with {@link EMIT_GITIGNORE_TEMPLATE}.
+ *
+ * An existing file is never touched — not rewritten, not appended to. A user who edited their own ignore
+ * rules (or who already excluded these paths) keeps exactly what they wrote, and Emit stays out of Git
+ * policy ownership: the repository-level `.gitignore` is deliberately never created or modified, because
+ * whether `media/` itself is tracked is the user's call (README §6).
+ */
+export function ensureEmitGitignore(emitDir: string): { created: boolean; path: string } {
+  const gitignorePath = path.join(emitDir, '.gitignore');
+  if (fs.existsSync(gitignorePath)) {
+    return { created: false, path: gitignorePath };
+  }
+  fs.writeFileSync(gitignorePath, EMIT_GITIGNORE_TEMPLATE, 'utf8');
+  return { created: true, path: gitignorePath };
 }
 
 /**
