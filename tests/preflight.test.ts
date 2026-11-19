@@ -79,7 +79,8 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
 
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.code === 'UNINTENDED_PUBLISH_GUARD')).toBe(true);
-    expect(res.errors[0].suggestion).toContain('allowPublish: true');
+    expect(res.errors[0].suggestion).toContain('--allow-publish');
+    expect(res.errors[0].suggestion).toContain('allowPublish: true in MCP');
   });
 
   it('G4: blocks unknown taxonomy categories or tags', () => {

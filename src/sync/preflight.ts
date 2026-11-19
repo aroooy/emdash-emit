@@ -396,7 +396,7 @@ export function runPreflightChecks(
       message:
         'Article status was changed from draft to published, but allowPublish: true was not provided.',
       suggestion:
-        'To publish the article live, re-run with allowPublish: true. Otherwise, keep status as draft.',
+        'To publish the article live, re-run with --allow-publish (or allowPublish: true in MCP). Otherwise, keep status as draft.',
     });
   }
 
