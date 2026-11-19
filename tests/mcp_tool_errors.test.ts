@@ -318,6 +318,55 @@ describe('MCP Tool Error Formatting', () => {
     expect(fs.readFileSync(profilesPath, 'utf8')).toContain('solo-site');
   });
 
+  it('reports which profile the working directory actually resolves to (T1-4)', async () => {
+    // Two sites: one registered to a real workspace, one not. `active` points at the unregistered one, so
+    // an agent reading only `activeProfile` would call profile_switch and end up writing to the wrong
+    // instance. The payload must name the directory winner instead.
+    const profilesPath = path.join(tempDir, 'profiles-multi.yaml');
+    const linkedWorkspace = path.join(tempDir, 'linked-ws');
+    fs.mkdirSync(linkedWorkspace);
+
+    const originalCwd = process.cwd();
+    process.chdir(linkedWorkspace);
+    try {
+      setProfile(
+        'linked-site',
+        { origin: 'https://linked.example.com', token: 'tok-linked', workspace: linkedWorkspace },
+        false,
+        profilesPath,
+      );
+      setProfile(
+        'fallback-site',
+        { origin: 'https://fallback.example.com', token: 'tok-fallback' },
+        true,
+        profilesPath,
+      );
+
+      const registered = handlersOf(
+        createMcpServer({ workspaceRoot: tempDir, cache, profilesPath }),
+      );
+      const listed = await registered['profile_list'].handler({});
+      expect(listed.isError).toBeUndefined();
+      const payload = JSON.parse(textOf(listed));
+
+      expect(payload.activeProfile).toBe('fallback-site');
+      expect(payload.resolvedByDirectory).toBe('linked-site');
+      const byName = new Map<string, { active: boolean; matchesCwd: boolean }>(
+        payload.profiles.map((p: { name: string; active: boolean; matchesCwd: boolean }) => [
+          p.name,
+          { active: p.active, matchesCwd: p.matchesCwd },
+        ]),
+      );
+      expect(byName.get('linked-site')).toEqual({ active: false, matchesCwd: true });
+      expect(byName.get('fallback-site')).toEqual({ active: true, matchesCwd: false });
+      // The path reported is always the forwarded one, never the machine-level default.
+      expect(payload._meta.profilesPath).toBe(profilesPath);
+      expect(payload._meta.resolvedByDirectory).toBe('linked-site');
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
   it('surfaces FrontmatterParseError as a structured MCP tool error on sync_push with invalid frontmatter', async () => {
     const invalidRel = 'posts/draft/20261108_01M6TESTPARSEERR000000000-Invalid.md';
     const invalidFull = path.join(tempDir, invalidRel);

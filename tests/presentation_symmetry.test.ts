@@ -206,4 +206,49 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     expect(mcpSource).toMatch(/formatTaxonomySyncFailure\s*\(/);
     expect(mcpSource).toMatch(/formatTaxonomySyncSuccess\s*\(/);
   });
+
+  it('profile resolution wording comes from one Layer 0 helper, not two literals (T5-1)', () => {
+    const cliSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/cli/commands/profile.ts'),
+      'utf-8',
+    );
+    const mcpSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/profile.ts'),
+      'utf-8',
+    );
+
+    // Both surfaces must route through the shared Layer 0 helper. MCP may not import a CLI module
+    // (AGENTS.md Axis 3), and a literal defined in both files would drift silently.
+    expect(cliSource).toMatch(/from\s+['"]\.\.\/\.\.\/utils\/profile-resolution(?:\.js)?['"]/);
+    expect(mcpSource).toMatch(/from\s+['"]\.\.\/\.\.\/utils\/profile-resolution(?:\.js)?['"]/);
+    expect(cliSource).toMatch(/formatResolutionRationale\s*\(/);
+    expect(cliSource).toMatch(/cwdMatchedProfileName\s*\(/);
+    expect(mcpSource).toMatch(/cwdMatchedProfileName\s*\(/);
+
+    // The rationale strings live in exactly one file. Comments that *describe* the old wording are
+    // stripped first, so this catches a redefined literal rather than prose explaining the change.
+    const helperSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/utils/profile-resolution.ts'),
+      'utf-8',
+    );
+    const stripComments = (src: string): string =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const cliCode = stripComments(cliSource);
+    const mcpCode = stripComments(mcpSource);
+    for (const phrase of [
+      'current directory match',
+      'origin match (.emit/config.json',
+      'only configured profile',
+      // The full marker, not the bare "active default" — `profile use` legitimately describes itself as
+      // setting the active default profile, and that is not a redefinition of the rationale wording.
+      '(active default — used only outside registered workspaces)',
+    ]) {
+      expect(helperSource, `helper must own: ${phrase}`).toContain(phrase);
+      expect(cliCode, `CLI must not redefine: ${phrase}`).not.toContain(phrase);
+      expect(mcpCode, `MCP must not redefine: ${phrase}`).not.toContain(phrase);
+    }
+
+    // MCP must never import a CLI command module.
+    expect(mcpSource).not.toMatch(/from\s+['"]\.\.\/\.\.\/cli\//);
+  });
 });

@@ -254,6 +254,7 @@ emit profile list
 1. **Directory-Driven Auto Detection (Recommended)**: When you `cd ~/blogs/personal` and run `emit pull`, `emit push`, or launch an AI agent, Emit detects your current folder and automatically uses the `personal` profile. When you `cd ~/blogs/work`, it seamlessly connects to `work`. Directory comparison is symlink-safe (`fs.realpathSync`), so a workspace reached through a symlinked path (or a macOS `/tmp`-style alias) still resolves to the right profile.
 2. **Explicit Profile Flag**: You can explicitly specify `--profile <name>` (or pass `profile: "<name>"` in MCP) from any directory to override automatic detection.
 3. **Ambiguity Safeguard**: If you run a command outside of any registered workspace and omit `--profile`, Emit aborts with an `AmbiguousProfileError` instead of guessing or silently pushing to the wrong site.
+4. **Visible Resolution Rationale**: `emit profile current` prints the deciding path (`Resolved by: ...`), and MCP tools report it as `_meta.resolvedBy`. The `active` profile set by `emit profile use` is only a fallback for commands run outside registered workspaces — inside a linked workspace, directory detection already picks the right site, so no manual switch is needed.
 
 ### 4. Authentication Resolution Order & Token Auto-Refresh
 
@@ -635,7 +636,7 @@ emit profile list
 # Add or update a profile
 emit profile add <name> --origin <url> [--token <pat>] [--workspace <path>]
 
-# Show currently resolved profile for this directory
+# Show currently resolved profile for this directory, including why it was chosen
 emit profile current
 
 # Remove a profile
@@ -644,6 +645,13 @@ emit profile remove <name>
 # (Optional) Set a fallback default profile for when operating outside any workspace
 emit profile use <name>
 ```
+
+`emit profile current` names the path that decided the result (`Resolved by: current directory match (...)`,
+`origin match`, `explicit --profile ...`, `only configured profile`, or `active default`), so you never have
+to guess whether a manual switch is required. In `emit profile list`, `(matches current directory)` marks the
+profile a command run here would actually use, while `(active default — used only outside registered
+workspaces)` marks the fallback set by `emit profile use`. A registered workspace directory always wins over
+the active default, so **no profile switch is needed when you are inside a linked workspace**.
 
 ---
 

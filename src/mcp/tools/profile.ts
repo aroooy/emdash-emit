@@ -22,7 +22,8 @@
 
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { loadProfilesFile, setActiveProfile } from '../../utils/profile.js';
+import { loadProfilesFile, setActiveProfile, findProfileByDirectory } from '../../utils/profile.js';
+import { cwdMatchedProfileName } from '../../utils/profile-resolution.js';
 import { formatToolError } from '../tool-errors.js';
 
 export interface ProfileToolOptions {
@@ -46,11 +47,24 @@ export function registerProfileTools(server: McpServer, options: ProfileToolOpti
       try {
         const data = loadProfilesFile(options.profilesPath);
         const currentActive = options.getActiveOverride() || data.active;
-        const profiles = Object.entries(data.profiles).map(([name, p]) => ({
+        /**
+         * v0.1.38 P1: report the profile a command run in this server's working directory would actually
+         * select, not only the `active` fallback. Without this an agent sees `activeProfile` and assumes
+         * it must call `profile_switch`, when directory resolution already routes it to the right site —
+         * and switching manually is how the wrong instance gets written to.
+         */
+        const names = Object.keys(data.profiles);
+        const matchedName = cwdMatchedProfileName(names, (name) => {
+          const workspace = data.profiles[name].workspace;
+          if (!workspace) return false;
+          return findProfileByDirectory(process.cwd(), options.profilesPath)?.name === name;
+        });
+        const profiles = names.map((name) => ({
           name,
-          origin: p.origin,
-          workspace: p.workspace,
+          origin: data.profiles[name].origin,
+          workspace: data.profiles[name].workspace,
           active: name === currentActive,
+          matchesCwd: name === matchedName,
         }));
 
         return {
@@ -60,9 +74,11 @@ export function registerProfileTools(server: McpServer, options: ProfileToolOpti
               text: JSON.stringify(
                 {
                   activeProfile: currentActive,
+                  resolvedByDirectory: matchedName,
                   profiles,
                   _meta: {
                     activeProfile: currentActive,
+                    resolvedByDirectory: matchedName,
                     profilesPath: options.profilesPath || '~/.config/emit/profiles.yaml',
                   },
                 },

@@ -28,7 +28,15 @@ import {
   setActiveProfile,
   removeProfile,
   resolveTargetProfile,
+  findProfileByDirectory,
 } from '../../utils/profile.js';
+import {
+  ACTIVE_DEFAULT_MARKER,
+  CWD_MATCH_MARKER,
+  cwdMatchedProfileName,
+  formatResolutionRationale,
+  toResolutionSource,
+} from '../../utils/profile-resolution.js';
 
 export function registerProfileCommands(program: Command): void {
   /**
@@ -60,12 +68,31 @@ export function registerProfileCommands(program: Command): void {
         );
         return;
       }
-      console.log('\nConfigured profiles:');
+      /**
+       * v0.1.38 P1: `(active)` used to be the only marker, which read as "this is what commands will
+       * use" — but a profile whose registered workspace contains the current directory silently wins
+       * over `data.active`. Label both honestly instead of changing resolution: the `active` field is
+       * still just the fallback, and saying so removes the incentive to run a needless `profile use`.
+       */
+      const cwd = process.cwd();
+      const matchedName = cwdMatchedProfileName(names, (name) => {
+        const workspace = data.profiles[name].workspace;
+        if (!workspace) return false;
+        return findProfileByDirectory(cwd)?.name === name;
+      });
+      console.log(
+        '\nConfigured profiles (a registered workspace matching the current directory always wins; "active" is only the fallback):',
+      );
       for (const name of names) {
         const p = data.profiles[name];
-        const isCurrent = name === data.active;
-        const marker = isCurrent ? ' (active)' : '';
-        console.log(`  * ${name}${marker}`);
+        let marker = '';
+        if (name === matchedName) {
+          marker = ` ${CWD_MATCH_MARKER}`;
+        } else if (name === data.active) {
+          marker = ` ${ACTIVE_DEFAULT_MARKER}`;
+        }
+        const bullet = name === matchedName || name === data.active ? '*' : '-';
+        console.log(`  ${bullet} ${name}${marker}`);
         console.log(`      origin:    ${p.origin}`);
         if (p.workspace) console.log(`      workspace: ${p.workspace}`);
         if (p.token) console.log(`      token:     [configured]`);
@@ -164,8 +191,23 @@ export function registerProfileCommands(program: Command): void {
         console.log('No profile resolved (relying on environment variables or defaults).');
         return;
       }
+      /**
+       * v0.1.38 P1: name the resolution path, not just the winner. Multi-site users otherwise assume a
+       * manual `profile use` is required when directory-based auto-resolution has already picked the
+       * right site — and the wrong assumption is what pushes to the wrong instance.
+       */
+      const cwd = process.cwd();
+      const cwdMatched = findProfileByDirectory(cwd)?.name === resolved.name;
+      const source = toResolutionSource(resolved, cwdMatched);
       console.log(`Active Profile: ${resolved.name}`);
       console.log(`  Origin:       ${resolved.config.origin}`);
       if (resolved.config.workspace) console.log(`  Workspace:    ${resolved.config.workspace}`);
+      console.log(
+        `  Resolved by:  ${formatResolutionRationale(source, {
+          profileName: resolved.name,
+          workspacePath: resolved.config.workspace,
+          cwd,
+        })}`,
+      );
     });
 }
