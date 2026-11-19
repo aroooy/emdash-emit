@@ -536,7 +536,7 @@ You can author articles completely offline using local images and let `emit push
    - Uploads the image via EmDash's 4-stage flow (`POST /_emdash/api/media/upload-url` with `sha1:<hex>` deduplication → `PUT` upload → `POST /_emdash/api/media/{id}/confirm`), cleaning up any orphan `pending` record if an upload fails midway.
    - Rewrites the Markdown line in place to the canonical root-relative `/_emdash/api/media/file/<storageKey>` URL.
    - Pushes the article to EmDash.
-   - Promotes the local file from `media/drafts/<filename>` to `media/<markdownRef>.<ext>` alongside a companion `media/<markdownRef>.yaml` metadata file (`id`, `storageKey`, `contentHash`, `status`). `markdownRef` is derived from the record's `storageKey` (basename, sanitized, extension removed), so the promoted file matches the body URL exactly and no date prefix or later renaming pass is needed. If two records sanitize to the same stem, the second deterministically takes a `<stem>--<mediaId>` suffix.
+   - Promotes the local file by moving it (not copying) from `media/drafts/<filename>` to `media/<markdownRef>.<ext>` alongside a companion `media/<markdownRef>.yaml` metadata file (`id`, `storageKey`, `contentHash`, `status`); the original file in `media/drafts/` is removed once promotion succeeds. `markdownRef` is derived from the record's `storageKey` (basename, sanitized, extension removed), so the promoted file matches the body URL exactly and no date prefix or later renaming pass is needed. If two records sanitize to the same stem, the second deterministically takes a `<stem>--<mediaId>` suffix.
 4. **Reuse Across Articles (no re-upload):** The same `media/drafts/<filename>` line can be used in several articles. After the first push promotes the asset, every later push resolves that reference through `media_state` / `media/*.yaml` and rewrites it to the already-confirmed `/_emdash/api/media/file/<storageKey>` URL instead of uploading again (reported as `[LOCAL_IMAGE_AUTO_UPLOAD] Reused N already-promoted media asset(s)`). A direct reference to the promoted path works as well. Emit verifies each reused record with `GET /_emdash/api/media/{id}`: if the record was deleted on the EmDash side the push aborts with `PROMOTED_MEDIA_NOT_FOUND_REMOTE` (run `emit pull-media` or re-stage the image in `media/drafts/`), and servers without that endpoint push successfully but warn with `[MEDIA_EXISTENCE_UNVERIFIED]`.
 
 #### Workflow B: Pre-Uploaded Media & Featured Hero Images
@@ -853,6 +853,9 @@ emit push [file] [options]
 - `-f, --force`: Bypasses non-critical safety guardrails.
 - `--local-media-refs` / `--no-local-media-refs`: Override the remembered workspace preference for how mirrored body images are spelled on disk (see [`emit pull`](#emit-pull)). Push always sends the canonical URL to remote; the flag only decides what stays in the local file, and passing it persists the choice to `.emit/config.json`.
 - `-p, --profile <name>`: Explicitly target a specific connection profile.
+
+> [!TIP]
+> **Offline draft images in `media/drafts/` are moved, not copied.** When an article referencing `media/drafts/<file>` is pushed, Emit uploads the asset, rewrites the reference, and moves the local file to `media/<markdownRef>.<ext>` alongside its companion `media/<markdownRef>.yaml`. The original file in `media/drafts/` is removed upon successful promotion to keep the staging directory clean.
 
 **Example:**
 
