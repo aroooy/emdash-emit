@@ -27,6 +27,7 @@ import {
   extractOpaqueBlockLines,
   isPlainImageBlock,
   isPlainTableBlock,
+  isTaskListItem,
   markdownToPortableText,
   portableTextToMarkdown,
   resetKeyCounter,
@@ -563,6 +564,158 @@ describe('Portable Text <-> Markdown Conversion', () => {
       expect(blocks[0]._type).toBe('table');
       // No block-level image was generated
       expect(blocks.some((b) => b._type === 'image')).toBe(false);
+    });
+  });
+
+  describe('Inline Formatting & Flanking Delimiters (v0.1.40 P1)', () => {
+    it('T1-1: *single asterisk italic* is parsed to span with em mark', () => {
+      const blocks = markdownToPortableText('*single asterisk italic*');
+      expect(blocks).toHaveLength(1);
+      const span = blocks[0].children?.[0];
+      expect(span?.text).toBe('single asterisk italic');
+      expect(span?.marks).toEqual(['em']);
+    });
+
+    it('T1-2: __double underscore bold__ is parsed to span with strong mark', () => {
+      const blocks = markdownToPortableText('__double underscore bold__');
+      expect(blocks).toHaveLength(1);
+      const span = blocks[0].children?.[0];
+      expect(span?.text).toBe('double underscore bold');
+      expect(span?.marks).toEqual(['strong']);
+    });
+
+    it('T1-3: intraword underscore (foo_bar_baz) is not italicized (CommonMark flanking delimiter)', () => {
+      const blocks = markdownToPortableText('foo_bar_baz qux');
+      expect(blocks).toHaveLength(1);
+      const children = blocks[0].children ?? [];
+      expect(children).toHaveLength(1);
+      expect(children[0].text).toBe('foo_bar_baz qux');
+      expect(children[0].marks).toEqual([]);
+    });
+
+    it('T1-4: intraword asterisk (foo*bar*baz) produces em for bar (CommonMark intraword asterisk)', () => {
+      const blocks = markdownToPortableText('foo*bar*baz');
+      expect(blocks).toHaveLength(1);
+      const children = blocks[0].children ?? [];
+      expect(children).toHaveLength(3);
+      expect(children[0].text).toBe('foo');
+      expect(children[0].marks).toEqual([]);
+      expect(children[1].text).toBe('bar');
+      expect(children[1].marks).toEqual(['em']);
+      expect(children[2].text).toBe('baz');
+      expect(children[2].marks).toEqual([]);
+    });
+
+    it('T1-5: nested emphasis demonstrates flat scanning boundary (_see `code` now_ degrades linearly)', () => {
+      // Flat regex scan parses linearly without an AST tree (documented limitation in §3.1 and §6)
+      const blocks = markdownToPortableText('_see `code` now_');
+      expect(blocks).toHaveLength(1);
+      const span = blocks[0].children?.[0];
+      // Code is swallowed into em text rather than creating a nested mark
+      expect(span?.text).toBe('see `code` now');
+      expect(span?.marks).toEqual(['em']);
+    });
+
+    it('T1-6: round-trip normalization (*italic* -> PT -> _italic_ -> PT produces identical AST)', () => {
+      const blocksFromAsterisk = markdownToPortableText('*italic text*');
+      const markdown = portableTextToMarkdown(blocksFromAsterisk).trim();
+      expect(markdown).toBe('_italic text_');
+      const blocksFromUnderscore = markdownToPortableText(markdown);
+      expect(blocksFromUnderscore[0].children?.[0].marks).toEqual(['em']);
+      expect(blocksFromUnderscore[0].children?.[0].text).toBe('italic text');
+    });
+  });
+
+  describe('Autolinks (v0.1.40 P2)', () => {
+    it('T2-1: converts <https://example.com> to link markDef + span', () => {
+      const blocks = markdownToPortableText('Visit <https://example.com/docs> today');
+      expect(blocks).toHaveLength(1);
+      const markDefs = blocks[0].markDefs ?? [];
+      expect(markDefs).toHaveLength(1);
+      expect(markDefs[0]._type).toBe('link');
+      expect(markDefs[0].href).toBe('https://example.com/docs');
+
+      const linkSpan = blocks[0].children?.find((c) => c.marks?.includes(markDefs[0]._key));
+      expect(linkSpan).toBeDefined();
+      expect(linkSpan?.text).toBe('https://example.com/docs');
+    });
+
+    it('T2-2: converts <mailto:user@example.com> to link markDef + span', () => {
+      const blocks = markdownToPortableText('Contact <mailto:support@example.com> for help');
+      expect(blocks).toHaveLength(1);
+      const markDefs = blocks[0].markDefs ?? [];
+      expect(markDefs).toHaveLength(1);
+      expect(markDefs[0]._type).toBe('link');
+      expect(markDefs[0].href).toBe('mailto:support@example.com');
+    });
+
+    it('T2-3: PT -> Markdown reverse conversion serializes autolinks to <url> single form', () => {
+      const blocks = markdownToPortableText('Link to <https://example.com/api>');
+      const md = portableTextToMarkdown(blocks).trim();
+      expect(md).toBe('Link to <https://example.com/api>');
+    });
+
+    it('T2-4: normal Markdown link with matching text/href also normalizes to <url>', () => {
+      const blocks = markdownToPortableText('Link to [https://example.com](https://example.com)');
+      const md = portableTextToMarkdown(blocks).trim();
+      expect(md).toBe('Link to <https://example.com>');
+    });
+
+    it('T2-5: normal Markdown link with distinct text preserves [text](url) format', () => {
+      const blocks = markdownToPortableText('Link to [Homepage](https://example.com)');
+      const md = portableTextToMarkdown(blocks).trim();
+      expect(md).toBe('Link to [Homepage](https://example.com)');
+    });
+  });
+
+  describe('Task List Safe Mapping (v0.1.40 P4)', () => {
+    it('T4-1: maintains - [ ] and - [x] as unordered list items without corruption', () => {
+      const input = [
+        '- [ ] Uncompleted task',
+        '- [x] Completed task',
+        '- [X] Uppercase completed task',
+      ].join('\n');
+
+      const blocks = markdownToPortableText(input);
+      expect(blocks).toHaveLength(3);
+      for (const block of blocks) {
+        expect(block.listItem).toBe('bullet');
+      }
+      expect(blocks[0].children?.[0].text).toBe('[ ] Uncompleted task');
+      expect(blocks[1].children?.[0].text).toBe('[x] Completed task');
+      expect(blocks[2].children?.[0].text).toBe('[X] Uppercase completed task');
+
+      const output = portableTextToMarkdown(blocks).trim();
+      expect(output).toBe(input);
+    });
+
+    it('T4-2: isTaskListItem correctly identifies checkboxes and extracts state and text', () => {
+      expect(isTaskListItem('[ ] todo item')).toEqual({ checked: false, text: 'todo item' });
+      expect(isTaskListItem('[x] done item')).toEqual({ checked: true, text: 'done item' });
+      expect(isTaskListItem('[X] done item')).toEqual({ checked: true, text: 'done item' });
+      expect(isTaskListItem('regular item')).toBeNull();
+      expect(isTaskListItem('[link](url)')).toBeNull();
+    });
+  });
+
+  describe('Unsupported Syntax Detection (v0.1.40 P5)', () => {
+    it('T5-1: detects Setext heading syntax (Title\\n------\\nBody)', () => {
+      const warnings = detectUnsupportedMarkdownSyntax('Title\n------\nBody');
+      expect(warnings.some((w) => w.includes('Setext headings'))).toBe(true);
+    });
+
+    it('T5-2: detects Setext heading without preceding blank line (Some text\\n---\\nmore)', () => {
+      const warnings = detectUnsupportedMarkdownSyntax('Some text\n---\nmore');
+      expect(warnings.some((w) => w.includes('Setext headings'))).toBe(true);
+    });
+
+    it('T5-3: does not warn on ATX headings, standalone hr, tables, or documented intentional limitations', () => {
+      expect(detectUnsupportedMarkdownSyntax('# Heading 1\n## Heading 2')).toEqual([]);
+      expect(detectUnsupportedMarkdownSyntax('Some text\n\n---\n\nMore text')).toEqual([]);
+      expect(detectUnsupportedMarkdownSyntax('| a | b |\n| --- | --- |\n| 1 | 2 |')).toEqual([]);
+      // Documented intentional limitations:
+      expect(detectUnsupportedMarkdownSyntax('| a |\n---\nx')).toEqual([]);
+      expect(detectUnsupportedMarkdownSyntax('- item\n---\nx')).toEqual([]);
     });
   });
 });

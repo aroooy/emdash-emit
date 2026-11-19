@@ -166,6 +166,21 @@ export function isPlainTableBlock(block: Record<string, unknown>): boolean {
   return true;
 }
 
+const TASK_LIST_ITEM_PATTERN = /^\[([ xX])\]\s+(.*)$/;
+
+/**
+ * Checks if a string starts with a task list item checkbox (`[ ] ` or `[x] `).
+ * Returns the checkbox state and remaining text if matched, or null otherwise.
+ */
+export function isTaskListItem(text: string): { checked: boolean; text: string } | null {
+  const match = text.match(TASK_LIST_ITEM_PATTERN);
+  if (!match) return null;
+  return {
+    checked: match[1]!.toLowerCase() === 'x',
+    text: match[2]!,
+  };
+}
+
 function renderTableCell(cell: Record<string, unknown>): string {
   let cellText = '';
   if (Array.isArray(cell.content)) {
@@ -307,7 +322,11 @@ function renderSpans(spans: PortableTextSpan[], markDefs: MarkDef[]): string {
       const def = markDefs.find((d) => d._key === mark);
       if (def) {
         if (def._type === 'link') {
-          text = `[${text}](${def.href ?? ''})`;
+          if (text === def.href && /^(?:https?|mailto):/i.test(text)) {
+            text = `<${text}>`;
+          } else {
+            text = `[${text}](${def.href ?? ''})`;
+          }
         }
       } else {
         switch (mark) {
@@ -345,7 +364,7 @@ const UNORDERED_LIST_PATTERN = /^(\s*)[-*+]\s+(.+)$/;
 const ORDERED_LIST_PATTERN = /^(\s*)\d+\.\s+(.+)$/;
 const IMAGE_PATTERN = /^!\[([^\]]*)\]\(([^)]+)\)$/;
 const INLINE_MARKDOWN_PATTERN =
-  /(\*\*(.+?)\*\*)|(_(.+?)_)|(`(.+?)`)|(\[(.+?)\]\((.+?)\))|(~~(.+?)~~)/g;
+  /(\*\*(?!\s|\*)(.+?)(?<!\s|\*)\*\*)|((?<![a-zA-Z0-9])__(?!\s|_)(.+?)(?<!\s|_)__(?![a-zA-Z0-9]))|(\*(?!\s|\*)(.+?)(?<!\s|\*)\*)|((?<![a-zA-Z0-9])_(?!\s|_)(.+?)(?<!\s|_)_(?![a-zA-Z0-9]))|(`(.+?)`)|(\[(.+?)\]\((.+?)\))|(<((?:https?|mailto):[^\s>]+)>)|(~~(.+?)~~)/g;
 
 /**
  * Convert Markdown to Portable Text blocks.
@@ -643,18 +662,27 @@ function parseInline(text: string): ParsedInline {
     if (match[2] != null) {
       spans.push({ _type: 'span', _key: generateKey(), text: match[2], marks: ['strong'] });
     } else if (match[4] != null) {
-      spans.push({ _type: 'span', _key: generateKey(), text: match[4], marks: ['em'] });
+      spans.push({ _type: 'span', _key: generateKey(), text: match[4], marks: ['strong'] });
     } else if (match[6] != null) {
-      spans.push({ _type: 'span', _key: generateKey(), text: match[6], marks: ['code'] });
-    } else if (match[8] != null && match[9] != null) {
+      spans.push({ _type: 'span', _key: generateKey(), text: match[6], marks: ['em'] });
+    } else if (match[8] != null) {
+      spans.push({ _type: 'span', _key: generateKey(), text: match[8], marks: ['em'] });
+    } else if (match[10] != null) {
+      spans.push({ _type: 'span', _key: generateKey(), text: match[10], marks: ['code'] });
+    } else if (match[12] != null && match[13] != null) {
       const key = generateKey();
-      markDefs.push({ _key: key, _type: 'link', href: match[9] });
-      spans.push({ _type: 'span', _key: generateKey(), text: match[8], marks: [key] });
-    } else if (match[11] != null) {
+      markDefs.push({ _key: key, _type: 'link', href: match[13] });
+      spans.push({ _type: 'span', _key: generateKey(), text: match[12], marks: [key] });
+    } else if (match[15] != null) {
+      const url = match[15];
+      const key = generateKey();
+      markDefs.push({ _key: key, _type: 'link', href: url });
+      spans.push({ _type: 'span', _key: generateKey(), text: url, marks: [key] });
+    } else if (match[17] != null) {
       spans.push({
         _type: 'span',
         _key: generateKey(),
-        text: match[11],
+        text: match[17],
         marks: ['strike-through'],
       });
     }
@@ -930,6 +958,13 @@ export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
   if (/^ {0,3}~~~/m.test(cleaned)) {
     warnings.push(
       'Tilde code fences (~~~) are not recognized as code blocks by the line-based parser and will degrade to plain text paragraphs; any image line inside them is converted into a real image block. Use backtick fences (```) for code examples.',
+    );
+  }
+
+  // Setext headings (Non-empty text line immediately followed by === or ---)
+  if (/(?:^[^\r\n#|\-][^\r\n]*)\r?\n {0,3}(?:={3,}|-{3,})\s*(?:\r?\n|$)/m.test(cleaned)) {
+    warnings.push(
+      'Setext headings (underlined with === or ---) are not supported by the line-based parser. Use ATX headings (# Heading) instead.',
     );
   }
 

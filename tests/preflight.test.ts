@@ -251,6 +251,17 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
     expect(res.cleanedBody.trim()).toBe('Actual body begins here.');
   });
 
+  it('G8: warns on unsupported syntax like raw HTML, tilde fences, and Setext headings', () => {
+    const setextParsed: ParsedMarkdown = {
+      ...validParsed,
+      body: 'Section Title\n-------------\nBody text.',
+    };
+
+    const res = runPreflightChecks(filePath, setextParsed);
+    expect(res.valid).toBe(true);
+    expect(res.warnings.some((w) => w.includes('Setext headings'))).toBe(true);
+  });
+
   it('G9: blocks push when an opaque block fence is modified or removed', () => {
     const baseMd = '<!--ec:block {"_type":"core:gallery","_key":"1"} -->\nSome text';
     const modifiedParsed: ParsedMarkdown = {
