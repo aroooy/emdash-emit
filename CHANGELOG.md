@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-11-19
+
+### Added
+
+- **Bidirectional GFM Table Support for EmDash 1.5 (`src/client/portable-text.ts`, v0.1.39 P5)**:
+  - Added native GFM pipe table parser in `markdownToPortableText`, converting Markdown tables into EmDash 1.5 Portable Text table AST (`_type: 'table'`, `hasHeaderRow: true`, `rows: [{ _type: 'tableRow', cells: [{ _type: 'tableCell', isHeader: boolean, textAlign: string, content: PortableTextSpan[], markDefs: MarkDef[] }] }]`).
+  - Supports column alignment (`:---`, `:---:`, `---:`) mapped to `textAlign`.
+  - Supports inline rich text formatting (bold, italic, inline code, links, strikethrough) within table cells.
+  - Symmetrical reverse conversion in `portableTextToMarkdown` with lossless round-trip fidelity.
+  - Symmetrical Tier-3 fallback (`isPlainTableBlock`): complex table features not expressible in GFM (such as `colspan`/`rowspan` > 1, custom column widths, multi-paragraph cell contents, or tables without header rows) safely fall back to opaque HTML comment fences (`<!--ec:block ... -->`), protected by Guard G9 (`MODIFIED_OPAQUE_BLOCK`).
+  - Removed outdated "Markdown tables are not supported" warning from `detectUnsupportedMarkdownSyntax` (Guard G8).
+- **Unreferenced Local Media Diagnostics (`src/sync/doctor.ts`, v0.1.39 P3)**:
+  - Added read-only diagnostic check `media_isolated` (Check 6b) in `runWorkspaceDoctor` that reports local companion-backed media files in `media/` not referenced by any article body or frontmatter `featuredImage`.
+  - Adheres strictly to epistemic integrity: reported with `status: 'ok'` so healthy workspaces do not flip to warnings, companion-less files are separated as `unattributable`, and no destructive deletion actions are suggested.
+- **Git-like Default for Conflicts (`src/cli/commands/conflicts.ts`, v0.1.39 P2)**:
+  - Executing bare `emit conflicts` without subcommands now defaults to `list`, matching Git ergonomics (`git status` style). Clean workspaces report `✅ No conflicts or rescue backups found`.
+
+### Changed
+
+- **G3 Publish Guard Suggestion Symmetry (`src/sync/preflight.ts`, v0.1.39 P1)**:
+  - Standardized G3 preflight suggestion text to `'To publish the article live, re-run with --allow-publish (or allowPublish: true in MCP). Otherwise, keep status as draft.'`, symmetrical across CLI and MCP.
+- **Clarified Offline Draft Media Promotion (`README.md`, MCP `sync_push`, v0.1.39 P4)**:
+  - Clarified documentation across README, MCP tool descriptions, and server prompts that uploaded offline draft images (`media/drafts/<file>`) are moved (not copied) into `media/<markdownRef>.<ext>` upon successful push.
+
 ## [0.1.38] - 2026-11-19
 
 ### Added
