@@ -31,6 +31,7 @@ import {
   stripCodeBlocks,
   verifyOpaqueBlocksUntampered,
   detectUnsupportedMarkdownSyntax,
+  detectCodeFenceIssues,
 } from '../client/portable-text.js';
 import {
   sanitizeTitleForFilename,
@@ -794,6 +795,17 @@ export function runPreflightChecks(
   // Unsupported Markdown syntax warning (tables, raw block HTML tags)
   const syntaxWarnings = detectUnsupportedMarkdownSyntax(cleanedBody);
   warnings.push(...syntaxWarnings);
+
+  // Unterminated code fence diagnostic (v0.1.41 P2)
+  const fenceIssues = detectCodeFenceIssues(cleanedBody);
+  for (const issue of fenceIssues) {
+    if (issue.kind === 'unterminated') {
+      const backtickCount = (issue.text.match(/^`+/) ?? ['```'])[0]!.length;
+      warnings.push(
+        `Unterminated code fence at line ${issue.line} (opened with ${backtickCount} backticks). Everything after it is stored as a single code block, so paragraphs and images below will disappear on EmDash. Close the fence with a run of at least ${backtickCount} backticks on its own line.`,
+      );
+    }
+  }
 
   return {
     valid: errors.length === 0,

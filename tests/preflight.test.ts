@@ -716,5 +716,52 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       expect(res.errors).toHaveLength(0);
       expect(res.draftImages).toHaveLength(0);
     });
+
+    it('T2-5: preflight reports unterminated code fence as warning without failing valid (v0.1.41 P2)', () => {
+      // Body has duplicate title that gets trimmed by G7, followed by unterminated code fence
+      const parsed: ParsedMarkdown = {
+        ...validParsed,
+        frontmatter: {
+          ...validParsed.frontmatter,
+          title: 'My Title',
+        },
+        body: ['# My Title', 'Intro line', '```typescript', 'const a = 1;'].join('\n'),
+      };
+
+      const res = runPreflightChecks(filePath, parsed);
+      // Valid remains true (warning only)
+      expect(res.valid).toBe(true);
+      expect(res.errors).toHaveLength(0);
+      expect(
+        res.warnings.some((w) => w.includes('Duplicate top-level heading matching title')),
+      ).toBe(true);
+      expect(
+        res.warnings.some((w) =>
+          w.includes(
+            'Unterminated code fence at line 2 (opened with 3 backticks). Everything after it is stored as a single code block, so paragraphs and images below will disappear on EmDash. Close the fence with a run of at least 3 backticks on its own line.',
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('T2-6: local image paths inside unterminated code fence are still ignored by G5/G11 (v0.1.41 P2)', () => {
+      const parsed: ParsedMarkdown = {
+        ...validParsed,
+        frontmatter: validParsed.frontmatter,
+        body: [
+          '# Heading',
+          '```',
+          '![Local](../../media/drafts/non-existent-img.jpg)',
+          'more code',
+        ].join('\n'),
+      };
+
+      const res = runPreflightChecks(filePath, parsed);
+      // Valid remains true; non-existent image inside fence is NOT flagged as error by G5
+      expect(res.valid).toBe(true);
+      expect(res.errors.some((e) => e.code === 'DRAFT_IMAGE_NOT_FOUND')).toBe(false);
+      // But unterminated fence warning IS emitted
+      expect(res.warnings.some((w) => w.includes('Unterminated code fence at line 2'))).toBe(true);
+    });
   });
 });

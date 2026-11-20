@@ -220,6 +220,9 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
   // Transition status to published / draft if requested
   let finalRev = newRev;
   let finalRawItem = params.updatedRawItem;
+  const hadRemoteDraft =
+    mode !== 'create' && Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'));
+
   if (mode === 'create') {
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
       const transitionRes = await transitionContentStatus(
@@ -236,7 +239,6 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     }
   } else {
     const previousStatus = syncState?.status || 'draft';
-    const hadRemoteDraft = Boolean(syncState?.remoteRev && syncState.remoteRev.includes('@draft:'));
 
     if (parsed.frontmatter.status === 'published' && options.allowPublish) {
       const transitionRes = await transitionContentStatus(
@@ -255,14 +257,6 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
           'Published article with uncommitted remote draft was published live to the web (--allow-publish).',
         );
       }
-    } else if (
-      parsed.frontmatter.status === 'published' &&
-      !options.allowPublish &&
-      hadRemoteDraft
-    ) {
-      warnings.push(
-        'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
-      );
     } else if (parsed.frontmatter.status === 'draft' && previousStatus === 'published') {
       const transitionRes = await transitionContentStatus(
         collection,
@@ -287,6 +281,17 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     status: parsed.frontmatter.status,
     remoteRev: comparisonRev,
   });
+
+  if (parsed.frontmatter.status === 'published' && !options.allowPublish && hasDraft) {
+    warnings.push(
+      'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
+    );
+    if (hadRemoteDraft) {
+      warnings.push(
+        'Existing uncommitted remote draft was overwritten by this push (previous draft revision replaced).',
+      );
+    }
+  }
 
   const serializedCanonical = serializeMarkdown(parsed.frontmatter, parsed.body, candidates, {
     hasDraftRevision: hasDraft,

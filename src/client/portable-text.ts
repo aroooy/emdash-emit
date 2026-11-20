@@ -993,6 +993,56 @@ export function classifyCodeFenceLines(body: string): CodeFenceState[] {
   return states;
 }
 
+export interface CodeFenceDiagnostic {
+  /** 1-based line number of the opening fence, counted from the body start */
+  line: number;
+  kind: 'unterminated';
+  /** The opening fence line as written (trimmed) */
+  text: string;
+}
+
+/**
+ * Detects unterminated backtick code fences in a Markdown body.
+ *
+ * Uses the exact same parsing rules as `classifyCodeFenceLines()` to track opening
+ * fences and verify if they are properly terminated before the end of the content.
+ * Fences closed by a run of backticks matching or exceeding the opening fence are considered
+ * properly closed, avoiding false positives on documentation blocks containing shorter fences.
+ */
+export function detectCodeFenceIssues(markdown: string): CodeFenceDiagnostic[] {
+  const lines = markdown.split('\n');
+  let openFence: { marker: FenceMarker; line: number; text: string } | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i]!;
+    const trimmed = rawLine.replace(/\r$/, '').trim();
+
+    if (openFence) {
+      if (closingFenceMatches(trimmed, openFence.marker)) {
+        openFence = null;
+      }
+      continue;
+    }
+
+    const marker = parseFenceMarker(trimmed);
+    if (marker) {
+      openFence = { marker, line: i + 1, text: trimmed };
+    }
+  }
+
+  if (openFence) {
+    return [
+      {
+        line: openFence.line,
+        kind: 'unterminated',
+        text: openFence.text,
+      },
+    ];
+  }
+
+  return [];
+}
+
 /**
  * Removes fenced code block content from a Markdown body so that regex-based guards
  * (image paths, unsupported syntax, draft images) never inspect quoted Markdown or HTML.

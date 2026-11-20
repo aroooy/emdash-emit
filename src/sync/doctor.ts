@@ -744,6 +744,7 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   }
   const localCompanions = new Map<string, LocalCompanionAsset>();
   const nonYamlMediaFiles = new Set<string>();
+  const localDraftFiles: string[] = [];
 
   if (fs.existsSync(mediaDir)) {
     const mediaFiles = fs.readdirSync(mediaDir);
@@ -807,8 +808,11 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
     const draftsDir = path.join(mediaDir, 'drafts');
     if (fs.existsSync(draftsDir)) {
       for (const df of fs.readdirSync(draftsDir)) {
-        knownLocalFiles.add(path.posix.join('media', 'drafts', df));
-        knownLocalFiles.add(path.posix.join('../../media', 'drafts', df));
+        if (!df.startsWith('.')) {
+          localDraftFiles.push(df);
+          knownLocalFiles.add(path.posix.join('media', 'drafts', df));
+          knownLocalFiles.add(path.posix.join('../../media', 'drafts', df));
+        }
       }
     }
   }
@@ -1128,17 +1132,45 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
     }
   }
 
-  if (isolatedMedia.length > 0) {
+  const unreferencedDraftFiles: string[] = [];
+  for (const df of localDraftFiles) {
+    const stem = df.replace(/\.[^.]+$/, '');
+    if (!referencedStems.has(stem)) {
+      unreferencedDraftFiles.push(path.posix.join('media', 'drafts', df));
+    }
+  }
+
+  if (isolatedMedia.length > 0 || unreferencedDraftFiles.length > 0) {
+    const messages: string[] = [];
+    if (isolatedMedia.length > 0) {
+      messages.push(
+        `${isolatedMedia.length} local media file(s) in media/ are not referenced by any article or featuredImage.`,
+      );
+    }
+    if (unreferencedDraftFiles.length > 0) {
+      messages.push(
+        `${unreferencedDraftFiles.length} staging draft file(s) in media/drafts/ are not referenced by any article or featuredImage.`,
+      );
+    }
+
     checks.push({
       id: 'media_isolated',
       name: 'Unreferenced Media',
       status: 'ok',
-      message: `${isolatedMedia.length} local media file(s) in media/ are not referenced by any article or featuredImage.`,
+      message: messages.join(' '),
       suggestion:
-        'These files exist in media/ with valid metadata but are not currently embedded in any article body or frontmatter featuredImage. Emit never removes unreferenced files automatically.',
+        'These files exist in media/ with valid metadata or in media/drafts/ for staging, but are not currently embedded in any article body or frontmatter featuredImage. Emit never removes unreferenced files automatically.',
       details: {
         unreferenced: isolatedMedia,
         ...(unattributableFiles.length > 0 ? { unattributable: unattributableFiles } : {}),
+        ...(unreferencedDraftFiles.length > 0
+          ? {
+              draftsStaging: {
+                count: unreferencedDraftFiles.length,
+                files: unreferencedDraftFiles,
+              },
+            }
+          : {}),
       },
     });
   }

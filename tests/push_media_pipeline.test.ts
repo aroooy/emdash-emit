@@ -1480,4 +1480,55 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
     const { localHash } = computeMediaHashes(TINY_PNG_BUFFER);
     expect(cache.getMediaStateByContentHash(localHash)?.status).toBe('uploaded');
   });
+
+  it('T3-5: push completion does NOT emit unreferenced media warnings for unreferenced mirrors in workspace (v0.1.41 P3)', async () => {
+    // Other companion-backed mirror in media/ unreferenced by this article
+    const otherMirrorKey = '01M7OTHERASSET000000000001.png';
+    fs.writeFileSync(path.join(tempDir, 'media', otherMirrorKey), TINY_PNG_BUFFER);
+    fs.writeFileSync(
+      path.join(tempDir, 'media', `${otherMirrorKey}.yaml`),
+      `id: 01M7OTHERREC00000000000001\nstorageKey: ${otherMirrorKey}\n`,
+      'utf8',
+    );
+
+    const relPath = seedDraftArticle('clean-push-no-warn', 'Simple body text without any media.\n');
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/lock')) {
+        return new Response(JSON.stringify({ status: 'acquired' }), { status: 200 });
+      }
+      if (url.includes('/terms/')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (method === 'PUT' && url.includes('/_emdash/api/content/posts/')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            version: 2,
+            _rev: 'rev-2',
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    const res = await pushArticle(relPath, {
+      ...baseOptions,
+      workspaceRoot: tempDir,
+      cache,
+      fetchFn,
+      localMediaRefs: true,
+    });
+
+    expect(res.success).toBe(true);
+    // T3-5 invariant: push report NEVER warns about unreferenced media in workspace (doctor's exclusive responsibility)
+    expect(
+      res.warnings.some(
+        (w) => w.toLowerCase().includes('unreferenced') || w.includes('参照が切れて'),
+      ),
+    ).toBe(false);
+  });
 });

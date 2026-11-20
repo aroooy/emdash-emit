@@ -68,7 +68,7 @@ export function formatMediaCoverageLine(res: {
   const unmirrored = res.referencedUnmirroredStorageKeys;
   if (unmirrored && unmirrored.length > 0) {
     parts.push(
-      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey (after the complete library walk above) before registering anything, because a blind INSERT can duplicate an existing record.`,
+      `⚠️ [UNREFERENCED_REMOTE_MEDIA] ${unmirrored.length} body storageKey(s) match no record in the complete remote library and no local mirror: ${unmirrored.join(', ')}. This is a lookup result, not proof that a record is absent — verify by storageKey (after the complete library walk above) before registering anything, because a blind INSERT can duplicate an existing record. (Note: this remote unreferenced check differs from doctor's media_isolated, which reports mirrored local files unreferenced by any article).`,
     );
   }
   return parts.length > 0 ? `\n${parts.join('\n')}` : '';

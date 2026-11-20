@@ -1419,5 +1419,47 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       expect(check?.suggestion).not.toContain('delete');
       expect(check?.suggestion).toContain('never removes unreferenced files automatically');
     });
+
+    it('T3-1: reports unreferenced staging files in media/drafts/ under draftsStaging details (v0.1.41 P3)', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      const draftsDir = path.join(mediaDir, 'drafts');
+      fs.mkdirSync(draftsDir, { recursive: true });
+
+      // Referenced draft image
+      fs.writeFileSync(path.join(draftsDir, 'used-draft.jpg'), 'jpg-data', 'utf8');
+      // Unreferenced draft image (orphan / leftover)
+      fs.writeFileSync(path.join(draftsDir, 'stray-draft.png'), 'png-data', 'utf8');
+
+      setupHealthyArticle({
+        body: 'Article referencing one draft image: ![Draft](../../media/drafts/used-draft.jpg)\n',
+      });
+
+      const report = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+
+      const check = report.checks.find((c) => c.id === 'media_isolated');
+      expect(check).toBeDefined();
+      expect(check?.status).toBe('ok');
+      expect(check?.message).toContain(
+        '1 staging draft file(s) in media/drafts/ are not referenced',
+      );
+
+      const details = check?.details as {
+        draftsStaging?: {
+          count: number;
+          files: string[];
+        };
+      };
+
+      expect(details.draftsStaging).toBeDefined();
+      expect(details.draftsStaging?.count).toBe(1);
+      expect(details.draftsStaging?.files).toEqual(['media/drafts/stray-draft.png']);
+
+      // Overall status remains healthy
+      expect(report.overallStatus).toBe('healthy');
+    });
   });
 });

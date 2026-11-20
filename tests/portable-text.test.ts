@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countPreservedOpaqueBlocks,
   detectUnsupportedMarkdownSyntax,
+  detectCodeFenceIssues,
   extractOpaqueBlockLines,
   isPlainBreakBlock,
   isPlainImageBlock,
@@ -861,6 +862,58 @@ describe('Portable Text <-> Markdown Conversion', () => {
       const blocks = markdownToPortableText(input);
       // The line '---' is not converted to break block; it remains a paragraph text line
       expect(blocks.some((b) => b._type === 'break')).toBe(false);
+    });
+  });
+
+  describe('Code Fence Diagnostics (v0.1.41 P2)', () => {
+    it('T2-1: detectCodeFenceIssues reports unterminated code fence with opening line number and text', () => {
+      const input = 'a\n```b\nc';
+      const issues = detectCodeFenceIssues(input);
+      expect(issues).toEqual([
+        {
+          line: 2,
+          kind: 'unterminated',
+          text: '```b',
+        },
+      ]);
+    });
+
+    it('T2-2: does NOT report closing line mismatches or info-strings as diagnostics when outer fence closes', () => {
+      // 4 backticks outer fence enclosing 3 backticks with info-string and plain 3 backticks
+      const input = ['````markdown', '```js', 'const x = 1;', '```', '````'].join('\n');
+      const issues = detectCodeFenceIssues(input);
+      expect(issues).toEqual([]);
+
+      // 4 backticks outer fence with 3 backticks shorter line inside
+      const shorterInside = ['````', '```', '````'].join('\n');
+      expect(detectCodeFenceIssues(shorterInside)).toEqual([]);
+    });
+
+    it('T2-3: valid code fences with info strings and proper closures report 0 diagnostics', () => {
+      const input = [
+        '# Header',
+        '',
+        '```ts',
+        'export const a = 1;',
+        '```',
+        '',
+        'Paragraph after code fence.',
+      ].join('\n');
+      expect(detectCodeFenceIssues(input)).toEqual([]);
+    });
+
+    it('T2-4: tilde fences are ignored by detectCodeFenceIssues and handled exclusively by detectUnsupportedMarkdownSyntax', () => {
+      const tildeInput = '~~~\ncode\n~~~';
+      // P2 ignores tildes
+      expect(detectCodeFenceIssues(tildeInput)).toEqual([]);
+
+      // G8 catches tilde fences
+      const g8Warnings = detectUnsupportedMarkdownSyntax(tildeInput);
+      expect(
+        g8Warnings.some((w) =>
+          w.includes('Tilde code fences (~~~) are not recognized as code blocks'),
+        ),
+      ).toBe(true);
     });
   });
 });
