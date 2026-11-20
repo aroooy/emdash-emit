@@ -5,9 +5,9 @@
 - **ステータス**: 起案（Pending Review — P1〜P3 はいずれも Ask First カテゴリ 1〜4 に該当しない通常改修。新規 npm パッケージ不使用、SQLite スキーマ / `.emit/config.json` キー変更なし、公開 facade（`pullBatch` / `pullSingleArticle` / `pushArticle` / `pushAll`）のシグネチャ・戻り値形状は不変。**P1 は warning 文案の追加のみで Guard レジストリ（G1〜G19）に変更なし**のため新規ガード番号の消費もゼロ）
 - **起点**: v0.1.40 リリース後の運用所感「①下書きとして push されたことが分かりにくい（`--allow-publish` を付けなかった結果が成功行にしか現れない）」「②コードフェンスを書き損じたときに、リモートへ飛んだあとで初めて崩れに気づく」「③本文から参照が切れたメディアや `media/drafts/` の残骸に気づけない」
 - **目的**:
-  1. **P1: 下書きステージング通知の完全化** — `emit push <file>`（`allowPublish` なし）で公開中記事を更新した場合、EmDash では live は変わらずドラフトとして保存される。しかし現状の通知は「リモートに未コミット・ドラフトが既にあった」ケース（`hadRemoteDraft`）に限定されており、**live のみで運用されていた記事を push した場合は「live が変わらない」という事実が一切通知されない**。通知条件を実測値（push 後の比較用 rev に `@draft:` が付くか）から導出し、commit / merge の両保存経路で対称にする。
-  2. **P2: コードフェンス書き損じの事前警告** — `classifyCodeFenceLines()`（`src/client/portable-text.ts:965`）は CommonMark 準拠で頑健だが、**未終端フェンス**と**情報文字を伴う閉じ行**を「エラー」としては一切報告しない。結果として本文後半が丸ごとコードブロック化して段落・画像が消失しても、push は成功する。パーサ挙動は変更せず、**診断（警告）のみ**を preflight に合流させる。
-  3. **P3: 未参照メディア／ステーション残骸の検知強化** — v0.1.39 P3 で `emit doctor` の `media_isolated`（Check 6b）は導入済みだが、①本文側から見て「参照しているのにミラーが無い」資産と②`media/drafts/` に残ったステーション画像の帰属が分かれておらず、**push 完了時にも pull 完了時にも指摘されない**。既存の照合機構（companion storageKey / `media_state` / `collectArticleStorageKeys`）を再利用して検知を追加し、**削除系は引き続きスコープ外**とする。
+  1. **P1: 下書きステージング通知の完全化** — `emit push <file>`（`allowPublish` なし）で公開中記事を更新した場合、EmDash では live は変わらずドラフトとして保存される。しかし現状の通知は「リモートに未コミット・ドラフトが既にあった」ケース（`hadRemoteDraft`）に限定されており、**live のみで運用されていた記事を push した場合は「live が変わらない」という事実が一切通知されない**。通知条件を実測値（push 後の比較用 rev に `@draft:` が付くか）から導出し、**リモートへ保存が完了した経路のみ**で対称に通知する。
+  2. **P2: コードフェンス書き損じの事前警告** — `classifyCodeFenceLines()`（`src/client/portable-text.ts:965`）は CommonMark 準拠で頑健だが、**未終端フェンス**を一切報告しない。結果として本文後半が丸ごとコードブロック化して段落・画像が消失しても、push は成功する。パーサ挙動は変更せず、**診断（警告）は真の未終端のみ**を preflight に合流させる。
+  3. **P3: 未参照メディア／ステーション残骸の検知強化** — v0.1.39 P3 で `emit doctor` の `media_isolated`（Check 6b）は導入済みだが、①本文側から見て「参照しているのにミラーが無い」資産と②`media/drafts/` に残ったステーション画像の帰属が分かれておらず、**pull 完了時にも doctor でも内訳が見えない**。既存の照合機構（companion storageKey / `media_state` / `referencedStems`）を再利用して **doctor の内訳表示のみ**を強化し、**削除系・push 時の指摘はスコープ外**とする。
 
 ---
 
@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | 1 | 下書き push であることが分かりにくい | `src/sync/push/commit.ts:258-265` の警告は `parsed.frontmatter.status === 'published' && !options.allowPublish && hadRemoteDraft` の条件下のみ。`hadRemoteDraft` は `syncState.remoteRev.includes('@draft:')`（`:239`）で、**live しか revision を持たない記事では false**。この場合 `commit.ts:241-252` の publish 遷移も走らず、`warnings` には何も入らない。CLI は `src/cli/commands/push.ts:51-55` で warnings を印刷するが、そもそも 0 件 | 妥当。事実の欠落ではなく**通知条件の狭さ**。実測で無通知を再現可能 | **P1 として採用**。push 後に確定する比較用 rev（`extractComparisonRev`、`src/client/api.ts:121`）の `@draft:` を根拠に警告し、`hadRemoteDraft` は「既存ドラフトの上書き」という追加情報に格下げ |
 | 2 | フェンス書き損じが検知されない | `classifyCodeFenceLines()` は開きフェンスを記録して閉じるが、本文終端まで閉じられなかった場合に**状態を残さない**（`:965-994`）。`stripCodeBlocks()`（`:1004`）は残りを全て sentinel に潰すため G5/G8/G11 はその領域を検査しない。`detectUnsupportedMarkdownSyntax()`（`:1027`）は tilde フェンスと raw HTML と Setext のみ警告し、**未終端バックティックは警告しない** | 妥当。パーサの解釈は CommonMark 準拠で正しいが、**作者の意図との不一致を誰も指摘しない** | **P2 として採用**。Layer 0 に純粋な検査関数を追加し、preflight の `warnings`（`src/sync/preflight.ts:372, 796`）へ合流。エラー化しない＝push は通る |
-| 3 | 未参照メディアに気づけない | `media_isolated`（`src/sync/doctor.ts:1105-1141`）は companion 付きミラーのみを対象に check を push し、companion 不在ファイルは `unattributable` として区別する。ただし **`status: 'ok'` のため overallStatus は `warnings` にならず**（`:1199`）、CLI も個別行を出すのみ。pull / push の完了レポートには未参照情報が一切無い。`media/drafts/` は `countMirroredMedia()`（`:123-136`）と `nonYamlMediaFiles`（`:786`）から明示的に除外され、**残骸の本数すら報告されない** | 妥当。検知は存在するが**可視性が弱い**。既存の語義（`pull-media --prune`＝リモート削除レコード由来の剪定、`pull_library.ts:215-240`／`[UNREFERENCED_REMOTE_MEDIA]`＝参照済み・未ミラー、同 `:242-270`）とは別概念であり、混同回避の文案が必要 | **P3 として採用（検知レポートのみ）**。doctor に `media/drafts/` 残骸の内訳を追加し、pull / push 完了レポートに既存 warning 配線で未参照・未ミラーを反映。**削除は行わない**（AGENTS.md「剪定権限はリモートレコードのみ」） |
+| 3 | 未参照メディアに気づけない | `media_isolated`（`src/sync/doctor.ts:1105-1141`）は companion 付きミラーのみを対象に check を push し、companion 不在ファイルは `unattributable` として区別する。ただし **`status: 'ok'` のため overallStatus は `warnings` にならず**（`:1199`）、CLI も個別行を出すのみ。pull 完了レポートは `[UNREFERENCED_REMOTE_MEDIA]`（参照済み・未ミラー）のみで、`media/drafts/` の内訳が無い。`media/drafts/` は `countMirroredMedia()`（`:123-136`）と `nonYamlMediaFiles`（`:786`）から明示的に除外され、**残骸の本数すら報告されない** | 妥当。検知は存在するが**可視性が弱い**。既存の語義（`pull-media --prune`＝リモート削除レコード由来の剪定、`pull_library.ts:215-240`／`[UNREFERENCED_REMOTE_MEDIA]`＝参照済み・未ミラー、同 `:242-270`）とは別概念であり、混同回避の文案が必要 | **P3 として採用（doctor の内訳表示のみ）**。doctor に `media/drafts/` 残骸の内訳を追加し、pull レポートの既存文案に語義注釈を添える。**削除は行わない**（AGENTS.md「剪定権限はリモートレコードのみ」）。**push 時の指摘は行わない**（§3.3 の方針 2 と §6 を参照） |
 
 ---
 
@@ -35,7 +35,7 @@
 | push 後の比較用 rev | `${version}@draft:${draftRevisionId}` / `${version}@live:${liveRevisionId}` / 生 token フォールバック | `extractComparisonRev()`、`src/client/api.ts:121-141` |
 | ドラフト注釈の単一情報源 | `syncState.status === 'published' && remoteRev.includes('@draft:')` | `hasUncommittedDraftRevision()`、`src/utils/draft-revision.ts:33-40` |
 | 未終端バックティックの分類結果 | 以降の全行が `insideCodeFence: true`（状態には未終端として記録されない） | `classifyCodeFenceLines('a\n```b\nc')` |
-| 情報文字付き閉じ行（`` ```js ``）の扱い | `closingFenceMatches()` が末尾 trim 一致を要求するため**閉じフェンスにならない**（`:943-947`） | `classifyCodeFenceLines('```a\nx\n```js')` |
+| 情報文字付き閉じ行（`` ```js ``）の扱い | `closingFenceMatches()` が末尾 trim 一致を要求するため**閉じフェンスにならない**（`:943-947`）。CommonMark 準拠で正当な挙動であり、本版では報告しない | `classifyCodeFenceLines('```a\nx\n```js')` |
 | G8 の警告内容 | raw HTML / tilde フェンス / Setext の 3 種のみ | `detectUnsupportedMarkdownSyntax()`、`src/client/portable-text.ts:1027-1067` |
 | preflight の警告配線 | `warnings: string[]` を返し `push/index.ts:138` で合流、CLI は `⚠️ Warnings (N)` / `👉`、MCP は `⚠️ Warnings:` | `src/sync/preflight.ts:92, 372, 796`／`src/cli/commands/push.ts:51-55`／`src/mcp/tools/sync-push.ts:158-161` |
 | 未参照メディア check の現状 | companion 付きのみ列挙、`status: 'ok'`、companion 不在は `unattributable` に分離 | `src/sync/doctor.ts:1105-1141` |
@@ -54,10 +54,10 @@
 | `src/client/portable-text.ts` | 1097 | **P2 の中心**。`classifyCodeFenceLines()`（`:965`）と同じフェンス規則を再利用した検査関数を追加。`detectUnsupportedMarkdownSyntax()`（`:1027`）とは分離した新関数で公開する |
 | `src/sync/preflight.ts` | 806 | **P2 の配線点**。`warnings`（`:372`）へ G8 合流点（`:794-796`）の隣で合流。Layer 1 なので Layer 2 を import しない |
 | `src/sync/doctor.ts` | 1209 | **P3 の中心**。Check 6（`runMediaIntegrityChecks`、`:723-1141`）に drafts 残骸の内訳を追加。check 登録は `checks.push()` を使い報告順序 `1 … 7` は変更しない |
-| `src/sync/media/pull_library.ts` | 284 | P3: pull 完了時の未ミラー指摘（既存 `referencedUnmirroredStorageKeys`、`:245-270` を消費するだけ） |
-| `src/presentation/article_report.ts` | 105 | P3: CLI / MCP 共通の文案。既存 `formatOrphanMediaWarning()`（`:37`）と `[UNREFERENCED_REMOTE_MEDIA]`（`:71`）を拡張 |
-| `src/sync/media/companions.ts` | 299 | P3: companion storageKey / filename インデックス供給元（`collectLocalMirrorIndex`、`:144`）。新規ロジックは置かない |
-| `src/utils/media-body-refs.ts` | 324 | P3: 本文参照の走査口（`scanArticleMediaReferences`、`:213`）。fence policy は `guard` / `diagnostic` の宣言済み分岐（`src/utils/media-refs.ts:46-51`）に従う |
+| `src/sync/media/pull_library.ts` | 284 | P3: pull 完了時の未ミラー指摘（既存 `referencedUnmirroredStorageKeys`、`:245-270` を消費するだけ。変更なし） |
+| `src/presentation/article_report.ts` | 105 | P3: CLI / MCP 共通の文案。既存 `[UNREFERENCED_REMOTE_MEDIA]`（`:71`）に語義注釈を添えるのみ |
+| `src/sync/media/companions.ts` | 299 | P3: companion storageKey インデックス（既存 read 経路のみ使用）。新規ロジックは置かない |
+| `src/utils/media-body-refs.ts` | 324 | P3: 本文参照の走査口（doctor が使用する既存 `scanArticleMediaReferences`、`:213`）。fence policy は `guard` / `diagnostic` の宣言済み分岐（`src/utils/media-refs.ts:46-51`）に従い、変更しない |
 | `src/sync/push/index.ts` | 506 | P1: warnings の合流点（`:138`）。パイプライン順序（preflight → post-preflight guards → transport → commit）は変更しない |
 
 ---
@@ -79,7 +79,8 @@
 #### P1 実装方針
 
 - **判定の単一情報源を push 後に置く**: `commitPostPush()` は既に `comparisonRev = extractComparisonRev(finalRawItem ?? …, finalRev)` を算出している（`:282-285`）。この値が `@draft:` を含むかを `hasUncommittedDraftRevision({ status: parsed.frontmatter.status, remoteRev: comparisonRev })`（`src/utils/draft-revision.ts:33`）で判定し、**Track 2 の実測値から**警告条件を組み立てる。これは pull full / pull fast-path / push merge_stage が既に使っている述語と同一であり、診断の単一情報源規律（AGENTS.md「Single Source of Truth (`hasUncommittedDraftRevision`)」）をそのまま踏む。
-- **4 本の保存経路すべてで対称に**: `commitPostPush()` は create（`push/index.ts:277`）と update（`:484`）の両終了で呼ばれ、**409 クリーンマージ後の PUT リトライも同じ `commitPostPush()` を通る**。一方 409 で競合マーカーを書いて停止する経路（`push/merge_stage.ts:328-341` の `handled: true` 戻り）は `commitPostPush()` を通らないため、その branch で同じ述語（`:254-257` で算出済みの `remoteComparisonRev` / `hasDraft`）を使い**同一文案を warnings に追加**する。これで「ドラフトとして staged された」事実が全保存経路で必ず伝わる。
+- **保存が完了した経路のみで通知する**: `commitPostPush()` は create（`push/index.ts:277`）と update（`:484`）の両終了で呼ばれ、**409 クリーンマージ後の PUT リトライも同じ `commitPostPush()` を通る**（`merge_stage.ts:342-350` は `handled: false` + `mergedParsed` を返し、`push/index.ts:388-391` 以降で本文を差し替えて再 PUT する）。したがって **`commitPostPush()` 内に条件を置けば、保存に成功した経路はすべてカバーされる**。
+  - 一方、409 で競合マーカーを書いて停止する経路（`merge_stage.ts:328-339` の `handled: true` 戻り）は `success: false, conflict: true` を返し、`push/index.ts:384-386` が即 return するため **PUT は再送されず、ローカル編集はリモートに一切反映されていない**。この branch に「Changes were staged as a draft on EmDash（live version unchanged）」を出すと**事実と正反対の通知**になるため、**警告を追加しない**。同 branch の `hasDraft`（`:254-258`）はあくまで**リモート側に未コミット・ドラフトが存在する**という事実であり、既存の競合文案（`:239-241`「Push aborted to prevent data loss.」等）が既に伝えている。ローカル編集の保存状況を上書きする情報は足さない。
 - **警告文案（CLI / MCP 同一文字列）**
   - `status: published` かつ `!allowPublish` かつ push 後 rev が `@draft:` を含む場合:
     `'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.'`（**既存文案をそのまま維持**。`tests/push_published_draft.test.ts:161, 408` が不変であることを確認する）
@@ -98,11 +99,11 @@
 
 ### 3.2 P2: コードフェンス書き損じの事前警告
 
-#### G-2: 未終端・ミスマッチ フェンスが無報告（実測根拠）
+#### G-2: 未終端フェンスが無報告（実測根拠）
 
 - `classifyCodeFenceLines()`（`:965-994`）は開き行で `openFence` を設定し、閉じ行で解除する。**本文終端まで閉じられなかった場合、その事実を返り値に残さない**。
-- `closingFenceMatches()`（`:943-947`）は「バックティックのランが開き長以上」かつ「残りが空」を要求する。したがって ```` ```js ```` は閉じ行にならず、ブロックは開いたまま残る（CommonMark 準拠で正しい挙動）。
-- `stripCodeBlocks()`（`:1004-1021`）はその領域を sentinel に潰すため、G5/G8/G11 はそこを検査しない。結果として**画像行も段落も消えたまま push が成功**する。
+- `closingFenceMatches()`（`:943-947`）は「バックティックのランが開き長以上」かつ「残りが空」を要求する。これは CommonMark 準拠で正しい。```` ```` ```` で囲んだ Markdown 解説記事の内側に `` ``` `` が現れても、**外側のフェンスが開いたままなので内側の行は単なるコードブロック内テキスト**であり、EmDash 側の実害は発生しない。
+- `stripCodeBlocks()`（`:1004-1021`）は未終端フェンス以降を sentinel に潰すため、G5/G8/G11 はそこを検査しない。結果として**画像行も段落も消えたまま push が成功**する。
 
 #### P2 実装方針
 
@@ -110,19 +111,18 @@
 
   ```ts
   export interface CodeFenceDiagnostic {
-    /** 1-based line number of the offending fence line, counted from the body start */
+    /** 1-based line number of the opening fence, counted from the body start */
     line: number;
-    kind: 'unterminated' | 'info-string-on-close' | 'shorter-close';
-    /** The offending line as written (trimmed) */
+    kind: 'unterminated';
+    /** The opening fence line as written (trimmed) */
     text: string;
   }
   export function detectCodeFenceIssues(markdown: string): CodeFenceDiagnostic[];
   ```
 
-  - 走査は `classifyCodeFenceLines()` が消費するのと同じフェンス規則（`parseFenceMarker()` のバックティックのみ、`:931-935`）を単一のループで再利用し、**開きフェンスの長さを保持したまま終端まで到達した場合**に `unterminated` を報告する。
-  - `info-string-on-close`: フェンス内で「バックティックのラン ≥ 開き長」かつ「その後ろに情報文字が続く」行を検出し、閉じとして認識されないことを報告する（```` ```js ```` の書き損じが最も多い）。
-  - `shorter-close`: バックティックのランが開き長より短いだけの行（4 つで開いて 3 つで閉じようとしたケース）を報告する。
-  - **tilde フェンスはここでは報告しない**（`detectUnsupportedMarkdownSyntax()` が既に警告している、`:1040-1046`）。二重警告を避けるため、フェンス種別の担当を `FENCE_POLICY` の宣言（`src/utils/media-refs.ts:46-51`）と同様に「バックティックは P2、tilde は G8」で固定する。
+  - 走査は `classifyCodeFenceLines()` が消費するのと同じフェンス規則（`parseFenceMarker()` のバックティックのみ、`:931-935`）を単一のループで再利用し、**開きフェンスの長さを保持したまま本文終端まで到達した場合**に限り `unterminated` を報告する（開き行の行番号とバックティック数を添える）。
+  - **報告するのは `unterminated` のみ**（実害のある唯一のケース＝以降が全部コードブロック化して消失する）。閉じ行に情報文字が付いているケース（```` ```js ````）や、閉じランが開き長より短いケース（4 つで開いて 3 つで閉じる）は報告しない。いずれも CommonMark では「ブロックが開いたまま＝内側はすべてコード内容」という正当な解釈に落ち、**EmDash の AST も同じ結果になるため実害が無い**。一方、Markdown の書き方を解説する技術記事では 4 連バックティックの内側に 3 連バックティックの例を書く運用が一般的で、これらの種別を報告すると**実害ゼロの表記が警告まみれ**になる（Emit は汎用 linter ではなく CMS 同期ツールである）。
+  - **tilde フェンスはここでは報告しない**（`detectUnsupportedMarkdownSyntax()` が既に警告している、`:1040-1046`）。二重警告を避けるため、フェンス種別の担当を `FENCE_POLICY` の宣言（`src/utils/media-refs.ts:46-51`）と同様に「バックティックの未終端は P2、tilde は G8」で固定する。
 - **preflight への合流**（`src/sync/preflight.ts`）: 既存の G8 合流点（`:794-796`）の直後に、G8 とは**別の警告文**として push する。文案は CLI / MCP 共通の 1 文字列:
   `'Unterminated code fence at line N (opened with M backticks). Everything after it is stored as a single code block, so paragraphs and images below will disappear on EmDash. Close the fence with a run of at least M backticks on its own line.'`
   - `errors` には入れない（**push は通す**）。preflight が警告とエラーを分離する規律に従い、既存の `warnings: string[]`（`:92`）だけを拡張する。
@@ -131,6 +131,7 @@
 
 #### P2 で触らないもの
 
+- **閉じ行の書き損じ（情報文字付き・ラン長不足）は報告しない**（上記の実測根拠と同一理由: CommonMark の正当解釈であり、EmDash の AST 上も実害が無い。誤警告が真の未終端を見えにくくする）。
 - パーサ（`markdownToPortableText()`）のフェンス解釈は一切変更しない。**警告のみ**で、自動修復は行わない。
 - `verifyOpaqueBlocksUntampered()` / G9 の不透明フェンス機構（`:1071-1097`）には触れない。
 
@@ -142,17 +143,16 @@
 - `media/drafts/` は `countMirroredMedia()`（`:123-136`）と `nonYamlMediaFiles`（`:786`）から明示除外され、既知ファイルとして `knownLocalFiles` に入るのみ（`:807-812`）。**残骸の本数も、どの記事からも参照されていない事実も報告されない**。
 - push 完了レポートは `[LOCAL_IMAGE_AUTO_UPLOAD] promoted to:` / `Reused N already-promoted media asset(s)`（`src/sync/push/media_stage.ts:334-342`）を出すだけで、「本文から参照が切れたため残っている」資産には触れない。pull も同じ。
 
-#### P3 実装方針（検知レポートのみ・削除なし）
+#### P3 実装方針（doctor の内訳表示のみ・削除なし・push 時指摘なし）
 
 1. **doctor Check 6 の拡張**（`runMediaIntegrityChecks`、`:723-1141`）
    - 既存の `referencedStorageKeys` / `referencedMediaIds` / `referencedStems`（`:850-905` で構築。`referencedStems` は本文参照と frontmatter `featuredImage` の両方から stem を集める、`:881, 893, 898`）をそのまま使用し、`media_isolated` の details に **`draftsStaging: { count, files }`** を追加する。
    - `files` は `media/drafts/` の実ファイル相対パスで、**stem が `referencedStems` に含まれないもののみ**を列挙する。一覧自体は既知ファイル収集部（`:807-812`）で取得済みなので、新規の disk 走査は不要。**ファイル名前置一致による帰属判定は一切追加しない**（companion の `filename:` を参照する場合があっても、それは「すでにプロモート済みの資産と対応付ける」ためだけで、「どの本文が参照しているか」の判定は常に stem 突合のみ）。
    - メッセージは情報提供に留め、削除を促す文案を入れない。既存 suggestion（`:1136-1138`「Emit never removes unreferenced files automatically.」）を維持・拡張する。
    - **ステータスは `ok` のまま**据える（健全なワークスペースが warnings に落ちないという v0.1.39 の決定を踏襲）。ただし `media/drafts/` に**参照ゼロのファイルが 1 つでもある場合**は、作者が気づけるよう既存 check の message 内に対象本数を明記する（check 自体は新設しない＝報告 id 順序 `1, 2, 2b, 2c, 3, 4, 4b, 4c, 4d, 5, 6, 7` を変更しない）。
-2. **pull / push 完了レポートへの反映**（Layer 3 文案は `src/presentation/article_report.ts` に集約）
-   - pull 側: `formatMediaCoverageLine()`（`article_report.ts:56-76`）が既に `referencedUnmirroredStorageKeys` を `[UNREFERENCED_REMOTE_MEDIA]` として出力しており、CLI（`src/cli/commands/pull.ts:663`）と MCP（`src/mcp/tools/sync-pull.ts:474`）の両方がこれを消費している。**pull 側の配線自体は新規追加しない**（上流 `pull_library.ts:245-270` が完全 walk 完了時のみ値を埋めるため、epistemic rule は既に担保されている）。本版がやるのは、文案に doctor の `media_isolated`（参照はあるが未ミラー）と `media_references`（参照済み・未ダウンロード）の**語義の区別を一文添える**だけである。
-   - push 側: `finalizePromotedDraftImages()` の既存 warnings に加え、**当該記事の本文に出現しない storageKey を companion が示すミラー**が存在する場合、削除を促さず「参照が切れています（Emit は自動削除しません）」の 1 行を追加する。判定には `collectLocalMirrorIndex()`（`src/sync/media/companions.ts:144`）と本文走査（`scanArticleMediaReferences()` の `guard` policy、`src/utils/media-body-refs.ts:213`）を使い、**companion 不在ファイルは対象にしない**（`mediaRecordIdForStem()` の原則）。文案は `article_report.ts` に置き、CLI / MCP が同じ文字列を消費する（`presentation_symmetry.test.ts` の規律）。
-   - **単一記事 push に限定する理由**: バッチ push や他記事のドラフト画像を無視して「孤立」と断定すると誤検知になるため、push 時の指摘は当該記事の参照集合に対してのみ行う。ワークスペース全体の棚卸しは doctor が担当する、と役割を固定する。
+2. **pull 完了レポートの語義注釈**（Layer 3 文案は `src/presentation/article_report.ts` に集約）
+   - `formatMediaCoverageLine()`（`article_report.ts:56-76`）が既に `referencedUnmirroredStorageKeys` を `[UNREFERENCED_REMOTE_MEDIA]` として出力しており、CLI（`src/cli/commands/pull.ts:663`）と MCP（`src/mcp/tools/sync-pull.ts:474`）の両方がこれを消費している。**pull 側の配線自体は新規追加しない**（上流 `pull_library.ts:245-270` が完全 walk 完了時のみ値を埋めるため、epistemic rule は既に担保されている）。本版がやるのは、文案に doctor の `media_isolated`（ミラーはあるが本文から参照されない）と `[UNREFERENCED_REMOTE_MEDIA]`（参照しているのに未ミラー）の**語義の区別を一文添える**だけである。
+   - **push 時は何も指摘しない**（確定方針）。(a) `media/` はブログ全体の共有ライブラリであり、単一記事の本文参照集合とワークスペース全体のミラーインデックス（`collectLocalMirrorIndex()`）を突き合わせると、他記事が参照している資産がすべて「参照切れ」として列挙される。(b) 記事を編集して不要画像を削除して push するのは正常な執筆行為であり、push のたびに警告を吐くのはノイズでしかない。(c) 計画書自身が掲げる「ワークスペース全体の棚卸しは doctor が担当する」という役割分担とも自己矛盾する。既存の `finalizePromotedDraftImages()`（`src/sync/push/media_stage.ts:252-`）が当該記事のドラフト画像について出す警告（再利用・未検証資産）のみを維持し、**追加の指摘は行わない**。
 3. **語義の混同回避（文案に明記）** — 次の 4 種を README のメディア運用セクション（`README.md:526-553`、Workflow A / B）と doctor の suggestion で明示的に区別する。`docs/media-id-spaces.md` は「本文キーが何も解決しない場合」の仕様であり、未参照棚卸しは扱わないため**変更しない**。
    - `pull-media --prune` = リモートで削除されたレコード由来の剪定（`pull_library.ts:215-240`）。README §Workflow B の「`--prune` は `media/drafts/` を安全に無視する」（`README.md:545`）という記述は変更しない。
    - `[UNREFERENCED_REMOTE_MEDIA]` = 参照されているのに未ミラー（完全 walk 完了時のみ報告）。
@@ -161,6 +161,7 @@
 
 #### P3 で触らないもの（スコープ外）
 
+- **push 完了時の「参照切れ」指摘は行わない**（上記 2 の確定方針）。未参照メディアの棚卸しは `emit doctor` の専任領域に固定する。
 - **削除系コマンド**（`media prune` 相当）は作らない。剪定権限はリモートレコードのみという原則と、companion 不在ファイルの帰属不能性による。
 - `media_state` のスキーマ変更は行わない（v5 で `storage_key` が primary key、`local_content_hash` / `remote_record_ref` 分離済み）。
 - `pull-media --prune` の挙動・active-id Seed 規律（リモート列挙のみ。`collectLocalMediaIds()` は復活させない）に変更なし。
@@ -177,29 +178,29 @@
 - **T1-5**: 新規記事 create + `allowPublish` で警告が追加されないこと（create 経路の否定例）。
 - **T1-6**: 警告条件とディスク注釈（`status: published # draft revision`）が一致すること。push 後のファイルに注釈があり、`emit status` が `hasUnpublishedDraft` を立てること（診断整合性）。
 - **T1-7**: `pushAll()` 経由でも per-article warnings が保持され、`PushAllResult` の形状が変わらないこと（facade 不変の回帰レール）。
-- **T1-8**: 409 で競合マーカーを書いて停止する経路（`push/merge_stage.ts:328-341`）でも同一文案が warnings に出ること。クリーンマージ後の PUT リトライは `commitPostPush()` を通るため T1-1 と同じ条件でカバーされることを併せて確認する。
+- **T1-8**: 409 で競合マーカーを書いて停止する経路（`merge_stage.ts:328-339`、`success: false, conflict: true`）で `'Changes were staged as a draft…'` が**出ない**こと（虚偽通知の否定例）。PUT が再送されていないことを fetch モックの呼び出し回数で併せて確認する。
+- **T1-9**: 409 クリーンマージ後の PUT リトライ経路（`handled: false` → `push/index.ts:484` の `commitPostPush()`）で T1-1 と同じ警告が出ること（成功経路の包含確認）。
 
 ### P2（`tests/portable-text.test.ts` + `tests/preflight.test.ts`）
 - **T2-1**: `detectCodeFenceIssues('a\n```b\nc')` が `unterminated` を 1 件、開き行の行番号付きで返すこと。
-- **T2-2**: `` ```a\nx\n```js `` で `info-string-on-close` が検知され、ブロックが閉じていないことが併記されること。
-- **T2-3**: 4 つのバックティックで開いて 3 つで閉じたケースが `shorter-close` になること。逆に長い閉じは正常終了として**何も報告しない**こと。
-- **T2-4**: 正しいフェンス（情報文字付き開き＋空行のみの閉じ）で誤検知しないこと。Markdown を document する記事（```` ```md ```` で `![alt](path)` を引用）が警告ゼロであること。
-- **T2-5**: tilde フェンスは P2 が報告せず、G8 の既存警告のみであること（二重警告の防止）。
-- **T2-6**: preflight 経由で未終端フェンスが `warnings` に入り `valid === true` のまま（**エラー化しない**）こと。行番号が G7 trim 後の本文基準であること。
-- **T2-7**: フェンス内の画像ローカルパスが G5/G11 で引き続き無視されること（`stripCodeBlocks()` の sentinel 規律の回帰）。
+- **T2-2**: 閉じ行の書き損じを**報告しない**こと（本版の意図的な限定）。`` ```a\nx\n```js ``（情報文字付き閉じ）、```` で開いて ``` で閉じたケース、いずれも `detectCodeFenceIssues()` の返り値は空になる。
+- **T2-3**: 正しいフェンス（情報文字付き開き＋空行のみの閉じ）で誤検知しないこと。Markdown を document する記事（```` ```md ```` で `![alt](path)` を引用）が警告ゼロであること。
+- **T2-4**: tilde フェンスは P2 が報告せず、G8 の既存警告のみであること（二重警告の防止）。
+- **T2-5**: preflight 経由で未終端フェンスが `warnings` に入り `valid === true` のまま（**エラー化しない**）こと。行番号が G7 trim 後の本文基準であること。
+- **T2-6**: フェンス内の画像ローカルパスが G5/G11 で引き続き無視されること（`stripCodeBlocks()` の sentinel 規律の回帰）。
 
 ### P3（`tests/doctor.test.ts` + `tests/media.test.ts`）
 - **T3-1**: `media/drafts/` に本文から参照されないファイルを置き、check の details に `draftsStaging.count` / `files` が入ること。参照済みドラフトは除外されること。
 - **T3-2**: companion 不在のミラーは `unattributable` のまま（既存 T3-3 を変更しない）。削除候補文案が出ないこと。
 - **T3-3**: `media_isolated` が `status: 'ok'` を維持し、overallStatus が `healthy` のままであること（健全ワークスペースを warnings に落とさない）。
 - **T3-4**: pull の完全 walk 完了時のみ `[UNREFERENCED_REMOTE_MEDIA]` 文案が出ることを固定。walk 未完（`complete === false`）では**何も断定しない**こと（epistemic rule）。
-- **T3-5**: push 時、当該記事の本文に出現しない companion 付きミラーに対してのみ「参照が切れています」1 行が出ること。他記事が参照している資産は指摘されないこと（誤検知防止の否定例）。
+- **T3-5**: push 完了レポートに「参照切れ」指摘が**出ない**こと（push 時の指摘を行わない方針の否定例）。既存の `[LOCAL_IMAGE_AUTO_UPLOAD]` / `[MEDIA_EXISTENCE_UNVERIFIED]` のみが出る。他記事の資産を列挙していないことも併せて確認する。
 - **T3-6**: `pull-media --prune` の既存挙動（リモート削除レコード由来のみ剪定、companion 不在は触らない、`legacy_*` は温存）に変更がないことを回帰テストで固定。
 
 ### 共通ゲート
 - `tests/layering.test.ts` Axis 0〜5: P2 追加関数は Layer 0（`src/client/portable-text.ts`）、P3 の照合は既存 Layer 0 / Layer 2 公開 API の範囲に置き、Layer 1（`src/sync/preflight.ts`）が Layer 2 を import しないことを維持。
 - `tests/guards.test.ts` Rule 1〜5: **新規エラーコードを一切追加しない**ため、ガード台帳は G1〜G19 のまま不変であること。
-- `tests/presentation_symmetry.test.ts`: P3 で追加する文案（push 時の参照切れ指摘、coverage 補足）が CLI と MCP で同一文字列であることを検証する。
+- `tests/presentation_symmetry.test.ts`: P3 で追加する pull coverage の語義注釈が CLI と MCP で同一文字列であることを検証する。
 - `npm run check`（format / typecheck / check:cycles / test）100% green。
 
 ---
@@ -221,6 +222,7 @@
 - **未参照メディアの自動削除・`media prune` コマンド**: 剪定権限はリモートレコードのみという原則、companion 不在ファイルの帰属不能性により作らない（v0.1.39 P3 の決定を踏襲）。
 - **コードフェンスの自動修復**（未終端フェンスへの閉じ行挿入等）: 作者の意図を推測して本文を書き換える行為であり、loss-free 原則に反する。警告のみ。
 - **tilde フェンス（`~~~`）のコードブロック化**: EmDash の line-based マッパーがバックティックのみを code block とみなす仕様は変更しない（AGENTS.md「only backtick fences are exempted」）。G8 警告のみ維持。
+- **push 完了時の未参照メディア指摘**: `media/` はブログ全体の共有ライブラリであり、単一記事の本文参照からワークスペース全体のミラーを差し引く設計は他記事の資産を大量に誤検知する。画像を削除して push するのは正常な執筆行為でもあり、push ごとに警告を吐くのはノイズである。**未参照メディアの棚卸しは `emit doctor` の専任領域**と固定する（§3.3 方針 2）。
 - **`media/drafts/` の git 自動除外**: 「ユーザー主権・フォルダ自由」思想により Emit は `.emit/` 以外に git 設定を書かない（README §6）。案内のみ。
 - **リモートライブラリ全体の未参照棚卸し（server 側）**: `GET /_emdash/api/media` の完全 walk を要する大規模操作であり、既存 `doctor --check-media-library` と `pull-media --all` の担当のままとする。
 
@@ -232,9 +234,9 @@
 |---|---|---|
 | R1 | P1 の警告が「live 公開した」ケースと混同され、誤解を生む | 文案を「staged as a draft（live version unchanged）」と「published live」で明確に分離。`allowPublish` 系の既存文案は変更しないことをテストで固定（T1-3） |
 | R2 | P1 の条件変更で既存のドラフト注釈（`status: published # draft revision`）と警告がズレる | 判定を `hasUncommittedDraftRevision()` の単一情報源に統一。ディスク注釈・`emit status`・push 警告の一致を T1-6 で固定 |
-| R3 | P2 の行番号が、G7 trim や lenient repair 後のファイルと食い違う | 検査を `cleanedBody` 基準に統一し、文案に行番号の基準を明記（T2-6） |
-| R4 | P2 がコード例を書く記事で誤警告する（Markdown を document する記事は実在する） | 「開き長以上・残り空行のみ」を閉じと認める規則を厳守した正例テスト（T2-4）。情報文字は**開き側では正常**、閉じ側に付いた場合のみ報告 |
-| R5 | P3 の未参照判定が他記事の参照を見ず誤検知する | push 時は当該記事のみ、ワークスペース全体は doctor が走査、と役割を固定（T3-5）。companion 不在ファイルは対象外 |
+| R3 | P2 の行番号が、G7 trim や lenient repair 後のファイルと食い違う | 検査を `cleanedBody` 基準に統一し、文案に行番号の基準を明記（T2-5） |
+| R4 | P2 がコード例を書く記事で誤警告する（Markdown を document する記事は実在する） | **報告種別を `unterminated` のみに限定**（閉じ行の書き損じは CommonMark 正当解釈で実害が無いため報告しない）。4 連バックティック内に 3 連バックティックを含む正例テストで誤警告ゼロを固定（T2-2, T2-3） |
+| R5 | P3 の未参照判定が他記事の参照を見ず誤検知する | **push 時は一切指摘せず、ワークスペース全体の棚卸しは doctor のみ**、と役割を固定（T3-5）。companion 不在ファイルは対象外 |
 | R6 | walk 未完のまま「未参照」「未ミラー」と断定する | `complete === false` / `walkComplete === false` では報告しない・断定しない。既存の `[WALK_INCOMPLETE]` 規律に従う（T3-4） |
 | R7 | 診断追加で doctor の check 順序がずれ、既存スナップショットテストが壊れる | 新規 id を追加せず Check 6 の details / message を拡張する。報告順序 `1 … 7` と `await` 位置を変更しない（`doctor.ts:1150-1160` のコメント規律を維持） |
 | R8 | P1・P2・P3 の警告が増えて agent のコンテキストを圧迫する | 同一記事内で重複する警告を 1 本に寄せる（T1-2）。文案は 1 行 + 具体的な対処（行番号 / ファイル名）に限定し、複数該当は件数集約する |
@@ -248,15 +250,15 @@
 - [ ] `/publish` を呼ばない不変条件と、`status: draft`・create 経路での無警告をテストで固定（P1/T1-3, T1-4, T1-5）
 - [ ] push 時警告とディスク注釈・`emit status` のドラフト表示が同一述語から導かれ、一致する（P1/T1-6）
 - [ ] `pushAll()` の戻り値形状が変わらず、per-article warnings が伝播する（P1/T1-7、facade 不変）
-- [ ] 409 で競合マーカーを書いて停止する経路でも同じ「ドラフト保存」警告が出る（P1/T1-8）
-- [ ] 未終端・情報文字付き閉じ・長さ不足の各フェンス書き損じが警告され、正しいフェンスで誤検知しない（P2/T2-1〜T2-4）
-- [ ] tilde フェンスは G8 のみが担当し、P2 は報告しない（二重警告なし）（P2/T2-5）
-- [ ] フェンス警告は `valid: true` のまま（push を妨げず）、行番号は post-preflight 本文基準（P2/T2-6）
-- [ ] パーサ挙動は一切変更されず、フェンス内の画像パスが引き続き G5/G11 で無視される（P2/T2-7）
+- [ ] 409 で競合マーカーを書いて停止する経路に「ドラフト保存」警告が出ない（虚偽通知なし）。クリーンマージ後の PUT リトライでは出る（P1/T1-8, T1-9）
+- [ ] 未終端フェンスのみが警告され、閉じ行の書き損じ（情報文字付き・ラン長不足）は報告しない。コード例を含む記事で誤検知ゼロ（P2/T2-1〜T2-3）
+- [ ] tilde フェンスは G8 のみが担当し、P2 は報告しない（二重警告なし）（P2/T2-4）
+- [ ] フェンス警告は `valid: true` のまま（push を妨げず）、行番号は post-preflight 本文基準（P2/T2-5）
+- [ ] パーサ挙動は一切変更されず、フェンス内の画像パスが引き続き G5/G11 で無視される（P2/T2-6）
 - [ ] doctor が `media/drafts/` の未参照残骸を本数とファイル名で報告し、`status: 'ok'` を維持する（P3/T3-1, T3-3）
 - [ ] companion 不在ファイルは `unattributable` のまま、削除候補にしない（P3/T3-2）
 - [ ] walk 未完のときは「未参照」「未ミラー」を断定しない（epistemic rule）（P3/T3-4）
-- [ ] push 時の参照切れ指摘は当該記事の参照集合に対してのみ行い、誤検知しない（P3/T3-5）
+- [ ] push 完了レポートに参照切れ指摘が出ず、棚卸しは doctor の専任であること（P3/T3-5）
 - [ ] `pull-media --prune` の語義と挙動が無変更であることを回帰テストで固定（P3/T3-6）
 - [ ] `tests/layering.test.ts`（Axis 0〜5）、`tests/guards.test.ts`（Rule 1〜5、ガード台帳 G1〜G19 不変）が 100% PASS
 - [ ] 静的品質ゲート `npm run check` が 100% green
