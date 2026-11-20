@@ -1045,12 +1045,17 @@ export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
   }
 
   // Setext headings (Non-empty prose line immediately followed by === or ---).
-  // The exclusion set must stay aligned with isProseParagraphLine(): only a genuine
-  // paragraph can start a Setext heading. ATX headings (#), blockquotes (>), list
-  // markers (-) and table pipes (|) are already resolved into their own blocks by the
-  // line-based parser (each followed by a real thematic break), so warning there would
-  // send users to "fix" content that is converted correctly. '=' is excluded because an
-  // '===' underline cannot be preceded by another Setext-style marker line.
+  // The exclusion set should track isProseParagraphLine() as closely as a single-char
+  // negated class can: only a genuine paragraph can start a Setext heading. ATX headings
+  // (#), blockquotes (>), '-' list markers and table pipes (|) are already resolved into
+  // their own blocks by the line-based parser (each followed by a real thematic break),
+  // so warning there would send users to "fix" content that is converted correctly. '='
+  // is excluded because an '===' underline cannot be preceded by another marker line.
+  // NOTE: this is NOT the same predicate as isProseParagraphLine(). '*' and '+' list
+  // markers and ordered lists still warn here, because excluding those characters would
+  // also swallow legitimate Setext headings such as '*emphasized text*\n---' or
+  // '2026 was great\n---'. That residual false positive is an accepted limitation —
+  // see docs/v0140-plan/README.md §3.5. Do not "fix" it by widening this class.
   if (/(?:^[^\r\n#|>\-=][^\r\n]*)\r?\n {0,3}(?:={3,}|-{3,})\s*(?:\r?\n|$)/m.test(cleaned)) {
     warnings.push(
       'Setext headings (underlined with === or ---) are not supported by the line-based parser. Use ATX headings (# Heading) instead.',

@@ -747,6 +747,30 @@ describe('Portable Text <-> Markdown Conversion', () => {
       const warnings = detectUnsupportedMarkdownSyntax('Title\n===\nBody');
       expect(warnings.some((w) => w.includes('Setext headings'))).toBe(true);
     });
+
+    it('T5-6: documents the accepted limitation for *, + and ordered list markers', () => {
+      // G8 inspects only the first character of a line, so it cannot classify block
+      // types the way isProseParagraphLine() does. These inputs therefore warn even
+      // though the parser resolves '---' into a correct thematic break. The warning is
+      // cosmetic (push still proceeds); the AST is verified correct below.
+      for (const input of ['* item\n---\nx', '+ item\n---\nx', '1. item\n---\nx']) {
+        expect(
+          detectUnsupportedMarkdownSyntax(input).some((w) => w.includes('Setext headings')),
+        ).toBe(true);
+        resetKeyCounter();
+        const blocks = markdownToPortableText(input);
+        expect(blocks.some((b) => b._type === 'break')).toBe(true);
+      }
+
+      // Guard rail: these legitimate Setext headings MUST keep being detected. Widening
+      // the negated class with '*', '+' or digits to silence the warnings above would
+      // silently break them, which is why that "fix" is prohibited (see plan §3.5).
+      for (const input of ['*emphasized text*\n---', '2026 was great\n---']) {
+        expect(
+          detectUnsupportedMarkdownSyntax(input).some((w) => w.includes('Setext headings')),
+        ).toBe(true);
+      }
+    });
   });
 
   describe('Thematic Break <-> EmDash Break Block (v0.1.40 P3)', () => {
