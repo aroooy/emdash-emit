@@ -1323,7 +1323,9 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       const check = report.checks.find((c) => c.id === 'media_isolated');
       expect(check).toBeDefined();
       expect(check?.status).toBe('ok');
-      expect(check?.message).toContain('1 local media file(s) in media/ are not referenced');
+      expect(check?.message).toContain(
+        '1 local media file(s) in media/ (isolated.png) are not referenced',
+      );
 
       const details = check?.details as {
         unreferenced: Array<{ filePath: string; storageKey?: string; id?: string }>;

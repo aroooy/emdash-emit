@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.41] - 2026-11-20
+
+### Added
+
+- **Unterminated Code Fence Diagnostics (`src/client/portable-text.ts`, `src/sync/preflight.ts`, v0.1.41 P2)**:
+  - Added pure Layer 0 diagnostic helper `detectCodeFenceIssues()` that detects backtick code fences left open until the end of the article body (`kind: 'unterminated'`).
+  - Integrated into Preflight Guards warnings: alerts authors when trailing headings, paragraphs, or images would disappear on EmDash due to an unclosed fence, without blocking the push (`valid: true`).
+  - Reporting line numbers track post-preflight body content (after Guard G7 title trim) for exact alignment with the author's editor.
+  - Excludes closing fence variations (info strings on close, shorter runs) from false-positive warnings, as CommonMark legitimately treats them as code content, preserving technical articles that document Markdown syntax.
+- **Unreferenced Staging Draft Media & Isolated Media Filename Visibility (`src/sync/doctor.ts`, v0.1.41 P3)**:
+  - Extended Check 6 (`media_isolated`) in `emit doctor` to inspect `media/drafts/` and report unreferenced draft image files under `details.draftsStaging: { count, files }`.
+  - Displays actual unreferenced file names in `check.message` for both `media/` mirrors and `media/drafts/` staging files (up to 3 files plus `and N more`), providing immediate human visibility in the CLI without breaking JSON details in MCP `sync_doctor`.
+  - Keeps check status as `ok` to ensure clean workspaces never degrade to `warnings`. Automatic deletion remains strictly prohibited.
+- **Epistemic Clarification for Remote Media Coverage (`src/presentation/article_report.ts`, v0.1.41 P3)**:
+  - Added distinction note to `[UNREFERENCED_REMOTE_MEDIA]` output clarifying that unreferenced remote keys (referenced by articles but absent from complete remote walk) are distinct from local unreferenced mirrors reported by `media_isolated`.
+
+### Fixed
+
+- **Published Article Draft Staging Notice Gap (`src/sync/push/commit.ts`, v0.1.41 P1)**:
+  - Fixed a gap where pushing updates to a live-only published article (`@live:...`) without `--allow-publish` failed to emit the draft staging warning because the check previously evaluated pre-push sync state (`hadRemoteDraft`).
+  - Evaluates post-push comparison revision (`Track 2`) via `hasUncommittedDraftRevision()` as the single source of truth: reliably emits `'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.'` across all successful push paths (clean push, create, and 409 clean 3-way merge PUT retry).
+  - Emits `'Existing uncommitted remote draft was overwritten by this push (previous draft revision replaced).'` when an existing uncommitted remote draft was overwritten.
+  - Ensures 409 conflict-marker abort paths (`handled: true`) emit no false staging warnings since local modifications were not transmitted.
+
 ## [0.1.40] - 2026-11-20
 
 ### Added

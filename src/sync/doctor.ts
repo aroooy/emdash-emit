@@ -1143,8 +1143,13 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   if (isolatedMedia.length > 0 || unreferencedDraftFiles.length > 0) {
     const messages: string[] = [];
     if (isolatedMedia.length > 0) {
+      const fileNames = isolatedMedia.map((m) => path.basename(m.filePath));
+      const fileListStr =
+        fileNames.length <= 3
+          ? fileNames.join(', ')
+          : `${fileNames.slice(0, 3).join(', ')} and ${fileNames.length - 3} more`;
       messages.push(
-        `${isolatedMedia.length} local media file(s) in media/ are not referenced by any article or featuredImage.`,
+        `${isolatedMedia.length} local media file(s) in media/ (${fileListStr}) are not referenced by any article or featuredImage.`,
       );
     }
     if (unreferencedDraftFiles.length > 0) {
