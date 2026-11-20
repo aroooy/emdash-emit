@@ -47,7 +47,6 @@
 | ファイル | 行数 | 本版での役割 |
 |---|---|---|
 | `src/client/portable-text.ts` | 968 | **中核**。行単位ブロックパースでの divider 救済、インライン正規表現拡張、autolink、`isPlainDividerBlock` |
-| `src/sync/guards.ts` | 378 | G8 の説明文・補助ロジックの整理 |
 | `src/sync/preflight.ts` | 806 | G8 による非対応構文検知（Setext 見出し検知の追加など） |
 | `tests/portable-text.test.ts` | 568 | T1〜T4 の単体テスト・ラウンドトリップ・Loss-Free AST 検証 |
 | `tests/preflight.test.ts` | 709 | T5 の preflight G8 警告テスト |
@@ -68,6 +67,8 @@
   `parseInline()` は単一正規表現スキャンであり AST 構文木を作らないため、**入れ子強調（e.g. `*a **b** c*`、`**[link](url)**`、`_see `code` now_`）はサポート対象外（正しくネストされず内側のコードが em に呑まれる等の劣化が生じるため、フラット走査の限界）** とする。DoD にこれを明記する。
 - **PT → Markdown シリアライズ方針と Source Fidelity（設計トレードオフ）**:
   - PT（`{ marks: ['em'] }`）を Markdown にシリアライズする際は、Emit 標準の `_italic_` および `**bold**` を出力する。
+  - **単語内強調（intraword emphasis）の逆変換対称性（Loss-Free AST 原則）**:
+    CommonMark の flanking 規則上、`_` は単語内では強調としてパースされない。そのため、`foo*bar*baz` を `_` で逆変換すると `foo_bar_baz` となり再パースで `em` mark が失われてしまう。これを防ぐため、`renderSpans` では前後が英数字 `[a-zA-Z0-9]` に隣接する単語内位置の `em` は `*`（`*bar*`）を出力し、それ以外（空白区切りなど）は標準の `_`（`_italic text_`）を出力することで、Loss-Free な完全ラウンドトリップと 3-way merge 時の差分誤検知防止を両立する。
   - **リスク評価の正確化**:
     - push 処理（`push/commit.ts`）はディスク上の生の Markdown（`parsed.body`）をそのまま書き戻すため、ローカルで書いた `*italic*` は push 契機では書き換わらない。
     - 記法の正規化（`*italic*` → `_italic_`）がディスクに現れるのは、リモートで更新された記事を `apiResponseToLocal()` 経由で再変換して書き戻す**フルプル経路のみ**である。
@@ -156,6 +157,7 @@
 - **T1-4**: 単語内アスタリスク（`foo*bar*baz`）は `bar` が `em` マークとなること。
 - **T1-5**: 入れ子強調（`*a **b** c*`）がフラット走査の制限事項として規定通り動作すること。
 - **T1-6**: `*italic*` を含む記事がフルプルで `_italic_` に正規化された際、`hasSpellingTransform` により `emit status` が `synced` を維持すること（Source Fidelity トレードオフの同期検証）。
+- **T1-7**: 単語内強調 `foo*bar*baz` が逆変換時に `*bar*` として対称的に出力され、完全なラウンドトリップ AST を維持すること（Loss-Free AST 原則）。
 
 ### P2
 - **T2-1**: `<https://example.com>` が `link` markDef + span に変換されること。

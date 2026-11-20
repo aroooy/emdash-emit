@@ -171,6 +171,9 @@ const TASK_LIST_ITEM_PATTERN = /^\[([ xX])\]\s+(.*)$/;
 /**
  * Checks if a string starts with a task list item checkbox (`[ ] ` or `[x] `).
  * Returns the checkbox state and remaining text if matched, or null otherwise.
+ *
+ * NOTE: Currently uninvoked in active parse pipeline (which preserves `- [ ]` as plain
+ * list text); reserved as a Layer 0 contract helper for future EmDash task-list schema integration (P4).
  */
 export function isTaskListItem(text: string): { checked: boolean; text: string } | null {
   const match = text.match(TASK_LIST_ITEM_PATTERN);
@@ -312,7 +315,8 @@ function renderStandardBlock(block: PortableTextBlock): string {
 function renderSpans(spans: PortableTextSpan[], markDefs: MarkDef[]): string {
   let result = '';
 
-  for (const span of spans) {
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
     if (span._type !== 'span') continue;
 
     let text = span.text ?? '';
@@ -333,9 +337,24 @@ function renderSpans(spans: PortableTextSpan[], markDefs: MarkDef[]): string {
           case 'strong':
             text = `**${text}**`;
             break;
-          case 'em':
-            text = `_${text}_`;
+          case 'em': {
+            // CommonMark flanking delimiter symmetry: `_` is intraword-disabled (flanked by [a-zA-Z0-9]),
+            // whereas `*` is intraword-enabled. If preceding character (from prior rendered output)
+            // or succeeding character (from subsequent spans) is alphanumeric, emit `*` to guarantee
+            // Loss-Free AST round-trip and prevent diff3 phantom conflicts during 3-way merge.
+            const prevChar = result.slice(-1);
+            let nextChar = '';
+            for (let j = i + 1; j < spans.length; j++) {
+              const nextSpanText = spans[j]?.text ?? '';
+              if (nextSpanText.length > 0) {
+                nextChar = nextSpanText[0]!;
+                break;
+              }
+            }
+            const isIntraword = /[a-zA-Z0-9]/.test(prevChar) || /[a-zA-Z0-9]/.test(nextChar);
+            text = isIntraword ? `*${text}*` : `_${text}_`;
             break;
+          }
           case 'code':
             text = `\`${text}\``;
             break;

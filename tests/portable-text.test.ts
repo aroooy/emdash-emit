@@ -624,6 +624,16 @@ describe('Portable Text <-> Markdown Conversion', () => {
       expect(blocksFromUnderscore[0].children?.[0].marks).toEqual(['em']);
       expect(blocksFromUnderscore[0].children?.[0].text).toBe('italic text');
     });
+
+    it('T1-7: intraword emphasis (foo*bar*baz) preserves AST symmetrically upon reverse conversion (Loss-Free)', () => {
+      const input = 'foo*bar*baz';
+      const pt1 = markdownToPortableText(input);
+      const outputMd = portableTextToMarkdown(pt1).trim();
+      expect(outputMd).toBe('foo*bar*baz');
+      const pt2 = markdownToPortableText(outputMd);
+      expect(pt2[0].children?.[1].text).toBe('bar');
+      expect(pt2[0].children?.[1].marks).toEqual(['em']);
+    });
   });
 
   describe('Autolinks (v0.1.40 P2)', () => {
