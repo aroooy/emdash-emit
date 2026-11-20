@@ -184,6 +184,28 @@ export function isTaskListItem(text: string): { checked: boolean; text: string }
   };
 }
 
+const KNOWN_PLAIN_BREAK_KEYS = new Set(['_type', '_key']);
+
+/**
+ * Reports whether a break block carries only plain properties expressible in standard Markdown (`---`).
+ * Returns false if the block carries custom metadata, layout, or extended styling properties,
+ * safely preserving it as an opaque comment fence (Tier 3) to prevent data loss.
+ */
+export function isPlainBreakBlock(block: Record<string, unknown>): boolean {
+  if (block._type !== 'break' && block._type !== 'divider' && block._type !== 'hr') {
+    return false;
+  }
+
+  // Check for extended properties beyond Tier 1 plain break keys
+  for (const [key, value] of Object.entries(block)) {
+    if (!KNOWN_PLAIN_BREAK_KEYS.has(key) && value !== undefined && value !== null && value !== '') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function renderTableCell(cell: Record<string, unknown>): string {
   let cellText = '';
   if (Array.isArray(cell.content)) {
@@ -275,6 +297,10 @@ export function portableTextToMarkdown(blocks: PortableTextBlock[]): string {
       if (i > 0) lines.push('');
       lines.push(renderTableBlock(block));
       prevWasList = false;
+    } else if (isPlainBreakBlock(block)) {
+      if (i > 0) lines.push('');
+      lines.push('---');
+      prevWasList = false;
     } else {
       // Tier 3: Unknown or extended block -> opaque fence
       if (i > 0) lines.push('');
@@ -344,6 +370,8 @@ function renderSpans(spans: PortableTextSpan[], markDefs: MarkDef[]): string {
             // Loss-Free AST round-trip and prevent diff3 phantom conflicts during 3-way merge.
             const prevChar = result.slice(-1);
             let nextChar = '';
+            // Note: subsequent spans with markDefs (e.g. link/code/strike) prepend non-alphanumeric
+            // syntax characters ([ ` ~ <), so inspecting nextSpanText[0] is structurally safe.
             for (let j = i + 1; j < spans.length; j++) {
               const nextSpanText = spans[j]?.text ?? '';
               if (nextSpanText.length > 0) {
@@ -382,8 +410,31 @@ const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/;
 const UNORDERED_LIST_PATTERN = /^(\s*)[-*+]\s+(.+)$/;
 const ORDERED_LIST_PATTERN = /^(\s*)\d+\.\s+(.+)$/;
 const IMAGE_PATTERN = /^!\[([^\]]*)\]\(([^)]+)\)$/;
+const THEMATIC_BREAK_PATTERN = /^ {0,3}(?:---|\*\*\*|___)\s*$/;
 const INLINE_MARKDOWN_PATTERN =
   /(\*\*(?!\s|\*)(.+?)(?<!\s|\*)\*\*)|((?<![a-zA-Z0-9])__(?!\s|_)(.+?)(?<!\s|_)__(?![a-zA-Z0-9]))|(\*(?!\s|\*)(.+?)(?<!\s|\*)\*)|((?<![a-zA-Z0-9])_(?!\s|_)(.+?)(?<!\s|_)_(?![a-zA-Z0-9]))|(`(.+?)`)|(\[(.+?)\]\((.+?)\))|(<((?:https?|mailto):[^\s>]+)>)|(~~(.+?)~~)/g;
+
+function isProseParagraphLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed === '') return false;
+  if (OPAQUE_FENCE_PATTERN.test(trimmed)) return false;
+  if (trimmed.startsWith('```')) return false;
+  if (HEADING_PATTERN.test(trimmed)) return false;
+  if (trimmed.startsWith('> ')) return false;
+  if (UNORDERED_LIST_PATTERN.test(trimmed)) return false;
+  if (ORDERED_LIST_PATTERN.test(trimmed)) return false;
+  if (IMAGE_PATTERN.test(trimmed)) return false;
+  if (trimmed.includes('|')) return false;
+  if (THEMATIC_BREAK_PATTERN.test(trimmed)) return false;
+  return true;
+}
+
+function isThematicBreak(lines: string[], i: number): boolean {
+  const line = lines[i];
+  if (!line || !THEMATIC_BREAK_PATTERN.test(line)) return false;
+  if (i > 0 && isProseParagraphLine(lines[i - 1])) return false;
+  return true;
+}
 
 /**
  * Convert Markdown to Portable Text blocks.
@@ -475,6 +526,19 @@ export function markdownToPortableText(markdown: string): PortableTextBlock[] {
         _key: generateKey(),
         alt: imgMatch[1],
         asset: { url: imgMatch[2] },
+      });
+      i++;
+      continue;
+    }
+
+    // Thematic break (--- / *** / ___)
+    // D2: Placed after image (:522), before table (:543), and before paragraph (:551).
+    // C2: Only standalone breaks (preceded by blank line, start of document, or block boundary)
+    // are converted to break blocks. Lines immediately preceded by text are considered Setext headings.
+    if (isThematicBreak(lines, i)) {
+      blocks.push({
+        _type: 'break',
+        _key: generateKey(),
       });
       i++;
       continue;

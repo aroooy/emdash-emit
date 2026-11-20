@@ -25,6 +25,7 @@ import {
   countPreservedOpaqueBlocks,
   detectUnsupportedMarkdownSyntax,
   extractOpaqueBlockLines,
+  isPlainBreakBlock,
   isPlainImageBlock,
   isPlainTableBlock,
   isTaskListItem,
@@ -726,6 +727,97 @@ describe('Portable Text <-> Markdown Conversion', () => {
       // Documented intentional limitations:
       expect(detectUnsupportedMarkdownSyntax('| a |\n---\nx')).toEqual([]);
       expect(detectUnsupportedMarkdownSyntax('- item\n---\nx')).toEqual([]);
+    });
+  });
+
+  describe('Thematic Break <-> EmDash Break Block (v0.1.40 P3)', () => {
+    it('T3-1: converts standalone ---, ***, ___ to break blocks (and ___ is not misidentified as em)', () => {
+      const input = [
+        'Paragraph 1',
+        '',
+        '---',
+        '',
+        'Paragraph 2',
+        '',
+        '***',
+        '',
+        'Paragraph 3',
+        '',
+        '___',
+        '',
+        'Paragraph 4',
+      ].join('\n');
+
+      const blocks = markdownToPortableText(input);
+      expect(blocks).toHaveLength(7);
+      expect(blocks[1]._type).toBe('break');
+      expect(blocks[3]._type).toBe('break');
+      expect(blocks[5]._type).toBe('break');
+      // Verify ___ is not misidentified as em mark
+      expect(
+        blocks.some((b) => b._type === 'block' && b.children?.[0]?.marks?.includes('em')),
+      ).toBe(false);
+    });
+
+    it('T3-2: --- inside code fence is preserved as code and not converted to break', () => {
+      const input = ['```markdown', '---', 'title: test', '---', '```'].join('\n');
+
+      const blocks = markdownToPortableText(input);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]._type).toBe('code');
+      expect(blocks[0].code).toContain('---');
+    });
+
+    it('T3-3: table delimiter row (| --- |) does not collide with thematic breaks', () => {
+      const input = ['| Name | Age |', '| --- | --- |', '| Alice | 30 |'].join('\n');
+
+      const blocks = markdownToPortableText(input);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]._type).toBe('table');
+      expect(blocks.some((b) => b._type === 'break')).toBe(false);
+    });
+
+    it('T3-4: lossless round-trip between canonical break block and markdown (---)', () => {
+      const input = 'First section\n\n---\n\nSecond section';
+      const blocks = markdownToPortableText(input);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[1]._type).toBe('break');
+
+      const output = portableTextToMarkdown(blocks).trim();
+      expect(output).toBe(input);
+
+      // Tolerance: legacy 'divider' and 'hr' also serialize cleanly to '---'
+      const legacyDivider: PortableTextBlock = { _type: 'divider', _key: 'd1' };
+      const legacyHr: PortableTextBlock = { _type: 'hr', _key: 'h1' };
+      expect(portableTextToMarkdown([legacyDivider]).trim()).toBe('---');
+      expect(portableTextToMarkdown([legacyHr]).trim()).toBe('---');
+    });
+
+    it('T3-5: extended break block with custom attributes falls back to Tier-3 opaque comment fence', () => {
+      const plainBreak: PortableTextBlock = { _type: 'break', _key: 'b1' };
+      expect(isPlainBreakBlock(plainBreak)).toBe(true);
+
+      const extendedBreak: PortableTextBlock = {
+        _type: 'break',
+        _key: 'b2',
+        style: 'dashed',
+        color: '#ff0000',
+      };
+      expect(isPlainBreakBlock(extendedBreak)).toBe(false);
+
+      const mdExtended = portableTextToMarkdown([extendedBreak]).trim();
+      expect(mdExtended).toBe(`<!--ec:block ${JSON.stringify(extendedBreak)} -->`);
+
+      // Round-trip preservation via opaque fence
+      const parsed = markdownToPortableText(mdExtended);
+      expect(parsed[0]).toEqual(extendedBreak);
+    });
+
+    it('T3-6: text immediately followed by --- without empty line is treated as Setext heading, not break', () => {
+      const input = 'Section Title\n---\nBody text';
+      const blocks = markdownToPortableText(input);
+      // The line '---' is not converted to break block; it remains a paragraph text line
+      expect(blocks.some((b) => b._type === 'break')).toBe(false);
     });
   });
 });
