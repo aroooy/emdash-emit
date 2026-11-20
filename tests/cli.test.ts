@@ -106,6 +106,7 @@ describe('Emit CLI (Commander)', () => {
     expect(allOpt?.description).toContain('maintenance only');
     expect(optionNames).toContain('--limit');
     expect(optionNames).toContain('--prune');
+    expect(optionNames).toContain('--no-prune');
     expect(optionNames).toContain('--metadata-only');
     expect(optionNames).toContain('--profile');
   });

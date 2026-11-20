@@ -29,6 +29,12 @@ import { MEDIA_FILE_ROUTE_PREFIX } from '../../utils/media-refs.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
 import type { EmDashMediaItem, LocalMediaMirrorCandidate, LocalMirrorIndex } from './types.js';
 
+function parseCompanionDate(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  return null;
+}
+
 export function buildMediaMetaDoc(
   item: EmDashMediaItem,
   origin: string,
@@ -82,8 +88,7 @@ export function buildMediaMetaDoc(
     status:
       item.status ?? (typeof existingMeta?.status === 'string' ? existingMeta.status : 'ready'),
     url: rootRelativeUrl,
-    createdAt:
-      item.createdAt || (typeof existingMeta?.createdAt === 'string' ? existingMeta.createdAt : ''),
+    createdAt: item.createdAt || parseCompanionDate(existingMeta?.createdAt) || '',
   };
 }
 
@@ -201,10 +206,7 @@ export function collectLocalMirrorIndex(
         alt = typeof loadedDoc.alt === 'string' && loadedDoc.alt ? loadedDoc.alt : null;
         caption =
           typeof loadedDoc.caption === 'string' && loadedDoc.caption ? loadedDoc.caption : null;
-        createdAt =
-          typeof loadedDoc.createdAt === 'string' && loadedDoc.createdAt
-            ? loadedDoc.createdAt
-            : null;
+        createdAt = parseCompanionDate(loadedDoc.createdAt);
       } else if (fs.existsSync(mediaDir)) {
         // Fallback: search for any companion that confirms this storageKey or mediaId
         for (const f of fs.readdirSync(mediaDir)) {
@@ -228,10 +230,7 @@ export function collectLocalMirrorIndex(
                 typeof candidate.caption === 'string' && candidate.caption
                   ? candidate.caption
                   : null;
-              createdAt =
-                typeof candidate.createdAt === 'string' && candidate.createdAt
-                  ? candidate.createdAt
-                  : null;
+              createdAt = parseCompanionDate(candidate.createdAt);
               break;
             }
           } catch {}
@@ -301,7 +300,7 @@ export function collectLocalMirrorIndex(
         filename: typeof doc.filename === 'string' && doc.filename ? doc.filename : null,
         alt: typeof doc.alt === 'string' && doc.alt ? doc.alt : null,
         caption: typeof doc.caption === 'string' && doc.caption ? doc.caption : null,
-        createdAt: typeof doc.createdAt === 'string' && doc.createdAt ? doc.createdAt : null,
+        createdAt: parseCompanionDate(doc.createdAt),
       });
     }
   }

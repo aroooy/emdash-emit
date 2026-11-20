@@ -10,6 +10,7 @@ import {
   collectRemoteStorageKeys,
   mediaRecordIdForStem,
   pullMedia,
+  searchLocalMirrorMedia,
   searchRemoteMedia,
   type EmDashMediaItem,
 } from '../src/sync/media/index.js';
@@ -1034,5 +1035,236 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
     expect(searchResult.hits.map((h) => h.storageKey)).toEqual(
       Array.from(collectResult.storageKeys),
     );
+  });
+
+  describe('Date-Range and Offline Media Search (v0.1.42 P1 & P2)', () => {
+    it('T1-1: browse recent media without query returns all items within limit', async () => {
+      const items: EmDashMediaItem[] = [
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP1'),
+          filename: 'recent-1.jpg',
+          mimeType: 'image/jpeg',
+          size: 100,
+          storageKey: asStorageKey('recent-1.jpg'),
+          createdAt: '2026-11-20T10:00:00.000Z',
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP2'),
+          filename: 'recent-2.jpg',
+          mimeType: 'image/jpeg',
+          size: 200,
+          storageKey: asStorageKey('recent-2.jpg'),
+          createdAt: '2026-11-19T10:00:00.000Z',
+        },
+      ];
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { items, nextCursor: null } }),
+      });
+
+      const result = await searchRemoteMedia({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(2);
+      expect(result.hits[0].filename).toBe('recent-1.jpg');
+      expect(result.hits[1].filename).toBe('recent-2.jpg');
+      expect(result.walkComplete).toBe(true);
+    });
+
+    it('T1-2 & T1-3: filters items within date range, including same-day since/until boundary', async () => {
+      const items: EmDashMediaItem[] = [
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP1'),
+          filename: 'today.jpg',
+          mimeType: 'image/jpeg',
+          size: 100,
+          storageKey: asStorageKey('today.jpg'),
+          createdAt: '2026-11-20T12:00:00.000Z',
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP2'),
+          filename: 'yesterday.jpg',
+          mimeType: 'image/jpeg',
+          size: 200,
+          storageKey: asStorageKey('yesterday.jpg'),
+          createdAt: '2026-11-19T12:00:00.000Z',
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP3'),
+          filename: 'older.jpg',
+          mimeType: 'image/jpeg',
+          size: 300,
+          storageKey: asStorageKey('older.jpg'),
+          createdAt: '2026-11-18T12:00:00.000Z',
+        },
+      ];
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { items, nextCursor: null } }),
+      });
+
+      // Same-day boundary: since 2026-11-19, until 2026-11-19
+      const result = await searchRemoteMedia({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        since: '2026-11-19',
+        until: '2026-11-19',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0].filename).toBe('yesterday.jpg');
+    });
+
+    it('T1-4: stops walk on reaching since boundary (early-exit) with walkComplete: true', async () => {
+      const page1: EmDashMediaItem[] = [
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP1'),
+          filename: 'nov21.jpg',
+          mimeType: 'image/jpeg',
+          size: 100,
+          storageKey: asStorageKey('nov21.jpg'),
+          createdAt: '2026-11-21T10:00:00.000Z',
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP2'),
+          filename: 'nov19.jpg',
+          mimeType: 'image/jpeg',
+          size: 200,
+          storageKey: asStorageKey('nov19.jpg'),
+          createdAt: '2026-11-19T10:00:00.000Z',
+        },
+      ];
+
+      const mockFetch = vi.fn().mockImplementation((url: string) => {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { items: page1, nextCursor: 'has-more-pages' },
+          }),
+        });
+      });
+
+      const result = await searchRemoteMedia({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        since: '2026-11-20',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      // Encountered nov19 (older than since 2026-11-20 local midnight) -> stopped early
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0].filename).toBe('nov21.jpg');
+      expect(result.walkComplete).toBe(true);
+    });
+
+    it('T1-6: rejects invalid date boundary with MEDIA_SEARCH_QUERY_REQUIRED', async () => {
+      await expect(
+        searchRemoteMedia({
+          workspaceRoot: tempDir,
+          origin: mockOrigin,
+          token: mockToken,
+          since: 'invalid-date-format',
+        }),
+      ).rejects.toMatchObject({
+        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+        status: 400,
+      });
+    });
+
+    it('T2-1 & T2-2: searchLocalMirrorMedia searches local mirrors without network requests', () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      fs.writeFileSync(path.join(mediaDir, 'logo.png'), 'png bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, 'logo.yaml'),
+        [
+          'id: 01M67P08DXFTYDPFRTJCC4XMP1',
+          'storageKey: uploads/logo.png',
+          'filename: company-logo.png',
+          'alt: Company Logo',
+          'createdAt: 2026-11-20T10:00:00.000Z',
+          '',
+        ].join('\n'),
+      );
+
+      fs.writeFileSync(path.join(mediaDir, 'banner.webp'), 'webp bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, 'banner.yaml'),
+        [
+          'id: 01M67P08DXFTYDPFRTJCC4XMP2',
+          'storageKey: uploads/banner.webp',
+          'filename: hero-banner.webp',
+          'alt: Hero Banner',
+          'createdAt: 2026-11-15T10:00:00.000Z',
+          '',
+        ].join('\n'),
+      );
+
+      cache.saveMediaState({
+        localHash: 'hash-logo',
+        mediaId: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP1'),
+        storageKey: asStorageKey('uploads/logo.png'),
+        url: '/_emdash/api/media/file/uploads/logo.png',
+        workspacePath: 'media/logo.png',
+        markdownRef: 'media/logo',
+        status: 'ready',
+      });
+      cache.saveMediaState({
+        localHash: 'hash-banner',
+        mediaId: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMP2'),
+        storageKey: asStorageKey('uploads/banner.webp'),
+        url: '/_emdash/api/media/file/uploads/banner.webp',
+        workspacePath: 'media/banner.webp',
+        markdownRef: 'media/banner',
+        status: 'ready',
+      });
+
+      const mirrorIndex = collectLocalMirrorIndex(tempDir, cache);
+
+      // Search with keyword
+      const resKeyword = searchLocalMirrorMedia({
+        query: 'logo',
+        mirrorIndex,
+      });
+      expect(resKeyword.hits).toHaveLength(1);
+      expect(resKeyword.hits[0].filename).toBe('company-logo.png');
+
+      // Search with date range
+      const resDate = searchLocalMirrorMedia({
+        since: '2026-11-18',
+        mirrorIndex,
+      });
+      expect(resDate.hits).toHaveLength(1);
+      expect(resDate.hits[0].filename).toBe('company-logo.png');
+
+      // Search with same-day boundary
+      const resSameDay = searchLocalMirrorMedia({
+        since: '2026-11-15',
+        until: '2026-11-15',
+        mirrorIndex,
+      });
+      expect(resSameDay.hits).toHaveLength(1);
+      expect(resSameDay.hits[0].filename).toBe('hero-banner.webp');
+
+      // Browse all without query
+      const resAll = searchLocalMirrorMedia({
+        mirrorIndex,
+      });
+      expect(resAll.hits).toHaveLength(2);
+    });
   });
 });

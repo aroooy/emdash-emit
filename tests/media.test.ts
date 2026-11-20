@@ -2163,5 +2163,94 @@ locale: ja
       expect(res.deleted).toBe(0);
       expect(fs.existsSync(path.join(mediaDir, 'hero-photo.jpg'))).toBe(true);
     });
+
+    it('protects an asset referenced by a rescue copy in posts/conflicts/ from pruning', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      const conflictsDir = path.join(tempDir, 'posts', 'conflicts');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      fs.mkdirSync(conflictsDir, { recursive: true });
+
+      const conflictKey = '01MJZZCNFLCT99999999999999';
+      fs.writeFileSync(path.join(mediaDir, `${conflictKey}.jpg`), 'conflict bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, `${conflictKey}.yaml`),
+        ['id: 01MJZZDRECRD88888888888888', `storageKey: ${conflictKey}.jpg`, ''].join('\n'),
+      );
+
+      fs.writeFileSync(
+        path.join(conflictsDir, `20261115_${OLD_ARTICLE}.local-conflict.md`),
+        [
+          '---',
+          `id: ${OLD_ARTICLE}`,
+          'title: Quarantined',
+          '---',
+          '',
+          `![quarantine](/_emdash/api/media/file/${conflictKey}.jpg)`,
+          '',
+        ].join('\n'),
+      );
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        prune: true,
+        downloadFiles: false,
+        fetchFn: emptyListFetch() as unknown as typeof fetch,
+      });
+
+      expect(res.deleted).toBe(0);
+      expect(fs.existsSync(path.join(mediaDir, `${conflictKey}.jpg`))).toBe(true);
+    });
+
+    it('prunes unreferenced stale records by default on complete walk when prune is not specified', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      const staleKey = '01MJZZSTALEY99999999999999';
+      fs.writeFileSync(path.join(mediaDir, `${staleKey}.jpg`), 'stale bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, `${staleKey}.yaml`),
+        ['id: 01MJZZSTALEREC999999999999', `storageKey: ${staleKey}.jpg`, ''].join('\n'),
+      );
+
+      // Complete walk with 0 items (emptyListFetch): stale record is provably absent on remote.
+      // Calling pullMedia without prune option should prune by default on complete walk.
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        downloadFiles: false,
+        fetchFn: emptyListFetch() as unknown as typeof fetch,
+      });
+
+      expect(res.deleted).toBe(2);
+      expect(fs.existsSync(path.join(mediaDir, `${staleKey}.jpg`))).toBe(false);
+      expect(fs.existsSync(path.join(mediaDir, `${staleKey}.yaml`))).toBe(false);
+    });
+
+    it('suppresses pruning on complete walk when prune: false (--no-prune) is passed', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      const staleKey = '01MJZZSTALEY99999999999999';
+      fs.writeFileSync(path.join(mediaDir, `${staleKey}.jpg`), 'stale bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, `${staleKey}.yaml`),
+        ['id: 01MJZZSTALEREC999999999999', `storageKey: ${staleKey}.jpg`, ''].join('\n'),
+      );
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        prune: false,
+        downloadFiles: false,
+        fetchFn: emptyListFetch() as unknown as typeof fetch,
+      });
+
+      expect(res.deleted).toBe(0);
+      expect(fs.existsSync(path.join(mediaDir, `${staleKey}.jpg`))).toBe(true);
+    });
   });
 });

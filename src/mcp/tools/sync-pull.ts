@@ -373,6 +373,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           'Maintenance/backup only (⚠️ NOT for routine use). Pull ALL media binaries from remote (can download thousands of files). Routine workflows do not need this because sync_pull mirrors referenced assets automatically. Reserve strictly for complete offline backups or migration diagnostics (defaults to false).',
         ),
       downloadFiles: z.boolean().optional().describe('Download binary files (defaults to true)'),
+      noPrune: z
+        .boolean()
+        .optional()
+        .describe('Do not prune local media when library walk is complete'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) =>
@@ -423,7 +427,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
                 res.verifiedStorageKeys && res.verifiedStorageKeys.length > 0
                   ? 'confirmed by local mirror metadata already in media/'
                   : 'not found within the bounded library walk'
-              }. Run "emit pull-media --all" (or a larger --limit) for a complete library pass.${metaSuffix}`,
+              }. Run "emit pull-media --all" (or configure a larger "mediaSyncLimit" in .emit/config.json) for a complete library pass.${metaSuffix}`,
               ctx.meta,
             );
           }
@@ -443,6 +447,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           collection: args.collection || ctx.config.defaultCollection,
           limit: resolveMediaSyncLimit(ctx.config, { mediaSyncLimit: args.limit }),
           all: args.all,
+          prune: args.all ? true : !args.noPrune,
           downloadFiles: args.downloadFiles,
           cache: ctx.cache,
         });

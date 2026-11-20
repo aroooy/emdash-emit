@@ -557,8 +557,12 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Fetch ALL media files from remote (maintenance only — routine workflows do not need this)',
     )
     .option(
+      '--no-prune',
+      'Do not prune local media outside the sync window when library walk is complete',
+    )
+    .option(
       '--prune',
-      'Prune local media whose companion .yaml names a deleted remote record (files without a companion are left untouched)',
+      'Prune local media whose companion .yaml names a deleted remote record (enabled by default when walk is complete)',
     )
     .option('--metadata-only', 'Do not download binary files, only metadata YAML')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
@@ -571,6 +575,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       }
 
       const ctx = resolveContext(options.profile);
+      if (options.limit !== undefined) {
+        console.warn(
+          '⚠️ [DEPRECATED] --limit is deprecated. Configure "mediaSyncLimit" in .emit/config.json instead.',
+        );
+      }
       const limit = options.all
         ? undefined
         : options.limit
@@ -615,7 +624,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
                 ? 'confirmed by local mirror metadata already in media/'
                 : 'not found within the bounded library walk';
             console.log(
-              `ℹ️ Targeted storageKey(s) not downloaded: ${keys.join(', ')} (${reason}). Run "emit pull-media --all" (or a larger --limit) for a complete library pass.`,
+              `ℹ️ Targeted storageKey(s) not downloaded: ${keys.join(', ')} (${reason}). Run "emit pull-media --all" (or configure a larger "mediaSyncLimit" in .emit/config.json) for a complete library pass.`,
             );
             return;
           }
@@ -655,7 +664,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           refreshToken: ctx.auth.refreshToken,
           limit,
           all: options.all,
-          prune: options.prune,
+          prune: options.all ? true : options.noPrune ? false : true,
           downloadFiles: !options.metadataOnly,
           cache: ctx.cache,
         });

@@ -70,17 +70,6 @@ export function registerMediaSearchCommand(
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (query: string | undefined, options) => {
       try {
-        const dateArgsPresent = Boolean(options.since || options.until);
-        if (!query && !dateArgsPresent && !options.offline) {
-          console.error(
-            '❌ media-search needs a query, or a date range (--since / --until), or --offline.',
-          );
-          console.error(
-            '   e.g. "emit media-search --since yesterday" lists what was added recently.',
-          );
-          process.exit(1);
-        }
-
         const limit = options.limit ? parseInt(options.limit, 10) : undefined;
         const maxScan = options.maxScan !== undefined ? parseInt(options.maxScan, 10) : undefined;
 

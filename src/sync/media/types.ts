@@ -310,19 +310,29 @@ export function searchLocalMirrorMedia(options: {
 }): MediaSearchResult {
   let sinceBoundary: number | null = null;
   let untilBoundary: number | null = null;
-  for (const raw of [options.since, options.until]) {
-    if (raw === undefined || !raw.trim()) continue;
-    const parsed = parseSearchDateBoundary(raw);
+  if (options.since !== undefined && options.since.trim()) {
+    const parsed = parseSearchDateBoundary(options.since);
     if (!parsed?.since) {
       throw new ApiError({
-        message: `Invalid date boundary: "${raw}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        message: `Invalid date boundary: "${options.since}". Use "today", "yesterday", or YYYY-MM-DD.`,
         code: 'MEDIA_SEARCH_QUERY_REQUIRED',
         status: 400,
         suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
       });
     }
-    if (raw === options.since) sinceBoundary = parsed.since;
-    else untilBoundary = parsed.since + DAY_MS;
+    sinceBoundary = parsed.since;
+  }
+  if (options.until !== undefined && options.until.trim()) {
+    const parsed = parseSearchDateBoundary(options.until);
+    if (!parsed?.since) {
+      throw new ApiError({
+        message: `Invalid date boundary: "${options.until}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+        status: 400,
+        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
+      });
+    }
+    untilBoundary = parsed.since + DAY_MS;
   }
 
   const trimmed = options.query?.trim();

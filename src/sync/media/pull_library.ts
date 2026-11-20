@@ -223,7 +223,7 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   //      what the local-first principle forbids.
   let deletedCount = 0;
   let pruneSkippedReason: 'incomplete_walk' | undefined = undefined;
-  const pruneRequested = Boolean(options.prune || options.all);
+  const pruneRequested = options.all ? true : options.prune !== false;
   if (pruneRequested && !remoteIndex.complete) {
     pruneSkippedReason = 'incomplete_walk';
   }
