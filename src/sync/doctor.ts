@@ -1148,8 +1148,13 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
       );
     }
     if (unreferencedDraftFiles.length > 0) {
+      const fileNames = unreferencedDraftFiles.map((f) => path.basename(f));
+      const fileListStr =
+        fileNames.length <= 3
+          ? fileNames.join(', ')
+          : `${fileNames.slice(0, 3).join(', ')} and ${fileNames.length - 3} more`;
       messages.push(
-        `${unreferencedDraftFiles.length} staging draft file(s) in media/drafts/ are not referenced by any article or featuredImage.`,
+        `${unreferencedDraftFiles.length} staging draft file(s) in media/drafts/ (${fileListStr}) are not referenced by any article or featuredImage.`,
       );
     }
 

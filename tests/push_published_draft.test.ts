@@ -7,6 +7,7 @@ import { pushArticle } from '../src/sync/push/index.js';
 import { createBaseSnapshot } from '../src/db/baseline.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
+import { getWorkspaceStatus } from '../src/sync/status.js';
 
 describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () => {
   let tempDir: string;
@@ -160,9 +161,24 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
     expect(result.warnings).toContain(
       'Changes were staged as a draft on EmDash (live version unchanged). Use --allow-publish to publish live.',
     );
+    // T1-2: Warning emitted because previous draft was overwritten (exactly once)
+    expect(result.warnings).toContain(
+      'Existing uncommitted remote draft was overwritten by this push (previous draft revision replaced).',
+    );
+    expect(
+      result.warnings.filter((w) =>
+        w.includes('Existing uncommitted remote draft was overwritten'),
+      ),
+    ).toHaveLength(1);
+
     // Invariant: Disk file retains draft revision comment because remote still has an uncommitted draft
     const diskAfter = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(diskAfter).toContain('status: published # draft revision');
+
+    // T1-6: Workspace status reflects unpublished draft
+    const wsStatus = getWorkspaceStatus(tempDir, cache, 'posts');
+    const trackedItem = wsStatus.items.find((t) => t.id === articleId);
+    expect(trackedItem?.hasUnpublishedDraft).toBe(true);
   });
 
   it('calls status transition /publish endpoint when allowPublish is true', async () => {

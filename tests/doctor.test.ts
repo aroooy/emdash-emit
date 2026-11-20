@@ -1444,7 +1444,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       expect(check).toBeDefined();
       expect(check?.status).toBe('ok');
       expect(check?.message).toContain(
-        '1 staging draft file(s) in media/drafts/ are not referenced',
+        '1 staging draft file(s) in media/drafts/ (stray-draft.png) are not referenced',
       );
 
       const details = check?.details as {
