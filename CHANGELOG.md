@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.42] - 2026-11-21
+
+### Added
+
+- **Date-Range & Recency Media Search (`src/cli/commands/media.ts`, `src/mcp/tools/sync-media-search.ts`, `src/utils/search-date.ts`, v0.1.42 P1)**:
+  - `emit media-search` now takes an **optional** query: run it bare to browse the newest assets in the remote library, or narrow the window with `--since <date>` / `--until <date>` accepting `today`, `yesterday`, or `YYYY-MM-DD` (local time). MCP `sync_media_search` gains matching `since` / `until` arguments.
+  - The list API is newest-first, so a bounded `--since` boundary stops the walk early and still reports `walkComplete: true` — a date-bounded browse never pays for scanning the whole library, and the completeness claim stays honest.
+  - Since/until boundaries are parsed **independently**, so a same-day range (`--since 2026-11-21 --until 2026-11-21`) keeps that day's assets instead of silently resolving to an empty window. An unparseable boundary fails fast with `MEDIA_SEARCH_QUERY_REQUIRED` rather than returning zero hits.
+- **Offline Media Search (`--offline` / `offline: true`, v0.1.42 P2)**:
+  - Searches only this workspace's media mirrors (`media/` binaries plus their companion YAML and the `media_state` index) with **zero network requests**, so an agent can answer "do we already have this asset?" without touching the origin.
+  - Epistemic framing is enforced in output: the header states the result covers local files only, an empty offline result prints an explicit notice, and nothing in the offline path may assert that an asset is absent remotely.
+
+### Changed
+
+- **Media Library Pruning Is Now Default-ON (v0.1.42 P4)**:
+  - `emit pull-media` (and MCP `sync_pull_media`) now prune local mirrors whose companion `.yaml` names a media record that no longer exists on remote, **without requiring `--prune`**. Pass `--no-prune` (or `noPrune: true`) to suppress the pass.
+  - Pruning stays gated on epistemic completeness: it runs only when the library walk was complete (`remoteIndex.complete`). A walk cut off at `mediaSyncLimit` skips pruning entirely and reports `[PRUNE_SKIPPED]` with the reason, so a partial view can never delete an asset that merely sits outside the window.
+  - Reference protection (`src/sync/media/prune_protect.ts`) additionally shields any mirror still named by an article body, a frontmatter `featuredImage`, or a rescue copy under `<collection>/conflicts/`, even when its record is gone from remote.
+
+### Fixed
+
+- **Same-Day Date Boundary Collapse (`src/sync/media/remote_index.ts`)**: `since` and `until` were resolved through a shared branch, so an equal pair produced a null boundary and the browse returned nothing. Each side is now parsed on its own, and the same-day window resolves inclusively.
+- **Empty-Query Search Rejected (`src/cli/commands/media.ts`)**: the guard that demanded a query blocked the recency browse; it now only fires when no search criterion at all (query, date range, or offline mode) was supplied.
+- **Companion `createdAt` Parsed as a `Date` Object (`src/sync/media/companions.ts`)**: `js-yaml` returns a native `Date` for unquoted ISO scalars, which failed the string type guard and dropped companion dates from search and prune-protection matching. `parseCompanionDate()` now normalizes both `Date` objects and strings.
+
 ## [0.1.41] - 2026-11-20
 
 ### Added

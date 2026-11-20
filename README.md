@@ -542,7 +542,7 @@ You can author articles completely offline using local images and let `emit push
 #### Workflow B: Pre-Uploaded Media & Featured Hero Images
 
 1. **Upload via Admin / EmDash MCP**: Upload images via the **EmDash Admin Web Dashboard** (`/admin/media`) or via the official EmDash MCP tool (`media_upload`) — bulk media library management is intentionally the official tooling's domain (see [Division of Labor](#6-division-of-labor-with-the-official-emdash-mcp)).
-2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`. Note that `emit pull-media --prune` safely ignores `media/drafts/`.
+2. **Sync Media Locally (optional)**: Run `emit pull-media` in your workspace to download images and companion `.yaml` metadata files into `media/`. Note that pruning (default-ON once the library walk is complete) safely ignores `media/drafts/`; pass `--no-prune` to suppress the pass entirely.
 3. **Embed in Articles**:
    - For featured hero images: set `featuredImage: "01M67P0MBMJQQXH2K95HHCYRYB"` (26-character canonical media record `id`) or `null` in frontmatter.
    - For body images: use `![Alt text](/_emdash/api/media/file/<storageKey>)`.
@@ -769,7 +769,7 @@ emit pull [id] [options]
 - `--force`: Force overwrite local files and bypass differential hash checking.
 - `--concurrency <n>`: Parallel processing task limit (default: `8`).
 - `--posts-only`: Skip automatic remote taxonomy sync. Pulls articles only (local taxonomy candidates hint is still displayed from cached definitions).
-- `--media`: Bounded media-library pass: pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `100`). Note that referenced media in pulled articles is mirrored on-demand by default (local-first media pipeline) without requiring this flag. Use `emit pull-media` for `--limit`, `--all`, and `--prune` control.
+- `--media`: Bounded media-library pass: pull media assets and companion metadata into `media/` (bounded by `mediaSyncLimit`, default `100`). Note that referenced media in pulled articles is mirrored on-demand by default (local-first media pipeline) without requiring this flag. Use `emit pull-media` for `--limit`, `--all`, and `--no-prune` control.
 - `--metadata-only`: With `--media`: download only metadata YAML, skip binary file downloads.
 - `--local-media-refs`: Write mirrored body images as article-relative `../../media/<storageKey>` references instead of the canonical `/_emdash/api/media/file/<storageKey>` URL, so Markdown preview and local tooling resolve them offline from the article's own directory. The choice is **remembered in `.emit/config.json`** and is **default-ON**, so every later pull, push, and diff keeps the same spelling without repeating the flag.
 - `--no-local-media-refs`: Clear a previously remembered preference and store canonical EmDash URLs on disk again.
@@ -1030,14 +1030,14 @@ Available Tags:
 Downloads media assets and their companion metadata YAML files into `media/`. Supports pulling all media, a limited batch, or targeted media referenced by a specific article.
 
 ```bash
-emit pull-media [-a, --article <id-or-path>] [--storage-key <key>] [-l, --limit <n>] [--all] [--prune] [--metadata-only]
+emit pull-media [-a, --article <id-or-path>] [--storage-key <key>] [-l, --limit <n>] [--all] [--no-prune] [--metadata-only]
 ```
 
 - `-a, --article <id-or-path>`: Pulls only media assets referenced by the specified article (featured image and body images), saving bandwidth and disk space. The summary separates what Emit actually mirrored from what it merely verified, and states plainly that a migrated body's ULIDs are `storageKey`s rather than record ids — so an id lookup resolving nothing is reported as expected, never as `failed`.
 - `--storage-key <key>`: Mirror a specific storageKey directly (can be specified multiple times; mutually exclusive with `--article` and `--all`).
-- `-l, --limit <n>`: Maximum number of media items to fetch (default: `300`).
+- `-l, --limit <n>`: **Deprecated** — emits `[DEPRECATED]` and still works. Configure `"mediaSyncLimit"` in `.emit/config.json` instead (default `100`, matching one API page).
 - `--all`: Fetch all media items without limit, walking the remote library cursor-by-cursor until it is exhausted. **Maintenance / Backup Only**: Routine workflows do not need this because `emit pull` automatically mirrors referenced media on-demand. Fetching the full library can download thousands of images and consume substantial bandwidth and disk space.
-- `--prune`: Remove local media files whose companion `.yaml` names a media record that no longer exists on remote. Ownership is read from the companion, never guessed from a filename, so a file with no companion is left untouched. Residue written by older Emit versions is never pruned and must be deleted manually.
+- `--no-prune`: Suppress pruning. Pruning is **enabled by default** and removes local media files whose companion `.yaml` names a media record that no longer exists on remote, but only when the library walk was complete — a walk stopped at `mediaSyncLimit` skips pruning and reports `[PRUNE_SKIPPED]` with the reason, so an asset that merely sits outside the window is never deleted. Mirrors still referenced by an article body, a frontmatter `featuredImage`, or a rescue copy under `<collection>/conflicts/` are also protected. Ownership is read from the companion, never guessed from a filename, so a file with no companion is left untouched. Residue written by older Emit versions is never pruned and must be deleted manually.
 - `--metadata-only`: Download metadata YAML files only, skipping large binary downloads.
 
 > **Two ID spaces, one lookup path:** Body URLs carry the R2 `storageKey`, while `GET /_emdash/api/media/{id}` searches the D1 primary key, so an existing record can 404 when queried with a body URL's ULID. The list operation is the only endpoint that reports each record's own `storageKey`, and it exposes no storageKey filter (`q` matches filenames only) — which is why `emit doctor --check-media-library` (or `emit pull-media --all` for maintenance backup) is how Emit reaches migrated assets, not a targeted lookup.
@@ -1050,20 +1050,22 @@ emit pull-media [-a, --article <id-or-path>] [--storage-key <key>] [-l, --limit 
 
 ### `emit media-search`
 
-Search the remote EmDash media library by keyword across filename, alt text, caption, and storageKey, displaying whether each hit is already mirrored locally:
+Search the remote EmDash media library by keyword across filename, alt text, caption, and storageKey, displaying whether each hit is already mirrored locally. The query is **optional**: run `emit media-search` bare to browse the newest assets.
 
 ```bash
-emit media-search <query> [-l, --limit <n>] [--max-scan <n>] [--mirrored-only] [--suggest-keywords] [-p, --profile <name>]
+emit media-search [query] [-l, --limit <n>] [--max-scan <n>] [--mirrored-only] [--offline] [--since <date>] [--until <date>] [--suggest-keywords] [-p, --profile <name>]
 ```
 
 Options:
 - `-l, --limit <n>`: Maximum hits to return (default: 20, max: 50).
 - `--max-scan <n>`: Maximum remote records to read before stopping (default: 500; `0` = walk entire library).
 - `--mirrored-only`: Show only assets already mirrored in this workspace.
+- `--offline`: Search **only** this workspace's media mirrors (companion YAML + `media_state`) with zero network requests. Results cover local files only and never prove an asset is absent remotely.
+- `--since <date>` / `--until <date>`: Restrict to assets created on or after / on or before the given date, accepting `today`, `yesterday`, or `YYYY-MM-DD` (local time). A same-day pair (`--since` equal to `--until`) keeps that day's assets. Because the library list is newest-first, a `--since` boundary stops the walk early and still reports `walkComplete: true`.
 - `--suggest-keywords`: Append top local tag slugs as search hints.
 - `-p, --profile <name>`: Explicitly select a connection profile.
 
-Absence is only proven when `walkComplete: true` (a complete walk). When stopped early, `[WALK_INCOMPLETE]` indicates that an asset may still exist in the unread portion of the library.
+Absence is only proven when `walkComplete: true` (a complete walk). When stopped early, `[WALK_INCOMPLETE]` indicates that an asset may still exist in the unread portion of the library. MCP `sync_media_search` accepts the same `query` / `since` / `until` / `offline` arguments.
 
 ---
 
