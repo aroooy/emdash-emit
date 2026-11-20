@@ -72,7 +72,9 @@ export const DEFAULT_CONFIG = {
   defaultCollection: 'posts',
   defaultLocale: 'ja',
   postsSyncLimit: 30,
-  mediaSyncLimit: 300,
+  // v0.1.42: the walk bound matches one API page (EmDash caps `limit` at 100), so a routine pull costs a
+  // single round-trip instead of three. A workspace with a larger library raises this in `.emit/config.json`.
+  mediaSyncLimit: 100,
   concurrency: 8,
   localMediaRefs: true,
 } as const satisfies EmitConfig;

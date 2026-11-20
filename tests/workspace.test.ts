@@ -85,7 +85,7 @@ describe('Workspace Utils', () => {
     initWorkspace(tempDir);
     const defaultLoaded = loadConfig(tempDir);
     expect(defaultLoaded.postsSyncLimit).toBe(30);
-    expect(defaultLoaded.mediaSyncLimit).toBe(300);
+    expect(defaultLoaded.mediaSyncLimit).toBe(100);
 
     // 2. Custom configuration overrides
     const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-custom-test-'));

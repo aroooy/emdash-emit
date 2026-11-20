@@ -27,4 +27,5 @@ export * from './body_scan.js';
 export * from './mirror_item.js';
 export * from './pull_article.js';
 export * from './pull_library.js';
+export * from './prune_protect.js';
 export * from './remote_index.js';

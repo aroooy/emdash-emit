@@ -38,6 +38,7 @@ import { pullMedia } from '../../sync/media/index.js';
 import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,
+  formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 import {
@@ -56,7 +57,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
   // sync_pull: Pull remote article(s) and taxonomies
   server.tool(
     'sync_pull',
-    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true for an additional bounded media-library pass (mediaSyncLimit, default 300) — referenced images in pulled articles are already mirrored on-demand without it. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools. Note: Articles may contain <!--ec:block ... --> comment fences preserving custom blocks or styled images (alignment, displayWidth). Keep these comment lines intact when editing. To add new images, always use standard Markdown syntax (![alt](../../media/drafts/...)).',
+    'Pull remote articles and taxonomies from EmDash into local Markdown files (posts/published/ and posts/draft/) and YAML taxonomy definitions (categories/ and tags/). Batch mode automatically syncs categories and tags alongside articles and returns available taxonomy hints (also shown with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true for an additional bounded media-library pass (mediaSyncLimit, default 100) — referenced images in pulled articles are already mirrored on-demand without it. Supports pulling a single article by id/filePath. After pulling, ALWAYS read and edit the local Markdown files directly with standard file tools. Note: Articles may contain <!--ec:block ... --> comment fences preserving custom blocks or styled images (alignment, displayWidth). Keep these comment lines intact when editing. To add new images, always use standard Markdown syntax (![alt](../../media/drafts/...)).',
     {
       collection: z.string().optional().describe('Collection name to pull (defaults to "posts")'),
       id: z.string().optional().describe('Specific article ID to pull'),
@@ -100,7 +101,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe(
-          'Also pull media assets and companion metadata into media/ (bounded by mediaSyncLimit, default 300; referenced media in pulled articles is mirrored on-demand automatically without this flag).',
+          'Also pull media assets and companion metadata into media/ (bounded by mediaSyncLimit, default 100; referenced media in pulled articles is mirrored on-demand automatically without this flag).',
         ),
       metadataOnly: z
         .boolean()
@@ -363,7 +364,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .number()
         .optional()
         .describe(
-          'Maximum number of media items to pull (defaults to 300; bounded batch, routine workflows mirror referenced assets on-demand automatically)',
+          'Maximum number of media items to pull (defaults to 100; bounded batch, routine workflows mirror referenced assets on-demand automatically)',
         ),
       all: z
         .boolean()
@@ -470,8 +471,14 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         }
 
         const deletedMsg = res.deleted ? `, ${res.deleted} pruned` : '';
+        let pruneNotice = '';
+        // A bounded walk proves nothing about records past its window, so pruning silently declined. Say so
+        // explicitly — silence would read as "nothing to prune", which is the claim this run cannot make.
+        if (res.pruneSkippedReason === 'incomplete_walk') {
+          pruneNotice = `\n\n${formatPruneSkippedNotice(args.limit)}`;
+        }
         return formatToolTextWithMeta(
-          `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}`,
+          `✅ Successfully pulled media: ${res.total} items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}${pruneNotice}`,
           ctx.meta,
         );
       }),

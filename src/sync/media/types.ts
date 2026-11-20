@@ -20,8 +20,16 @@
  * SOFTWARE.
  */
 
+import path from 'node:path';
+import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import type { StorageKey } from '../../utils/media-id.js';
+import { parseSearchDateBoundary } from '../../utils/search-date.js';
+
+/** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Default hits returned when the caller names no limit — mirrors the remote walk's default. */
+const LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT = 20;
 
 export const MEDIA_BINARY_EXTENSIONS = [
   '.jpg',
@@ -34,6 +42,9 @@ export const MEDIA_BINARY_EXTENSIONS = [
 ] as const;
 
 export const MEDIA_LIST_PAGE_SIZE = 100;
+
+/** Hit cap for a media search, shared by the remote walk and the offline mirror scan. */
+export const MEDIA_SEARCH_MAX_LIMIT = 50;
 
 export interface EmDashMediaItem {
   id: string;
@@ -120,6 +131,12 @@ export interface PullMediaOptions {
   /** Mirror exactly these storageKeys, resolved from the library walk. */
   storageKeys?: StorageKey[];
   downloadFiles?: boolean;
+  /**
+   * Delete local mirrors whose companion names a record the complete remote walk did not report. Since
+   * v0.1.42 the library-walk paths pass `true` by default, and pruning additionally requires the walk to
+   * have reached the end of the library (`remoteIndex.complete`) plus an article-reference protection pass
+   * — so a bounded walk never deletes anything it cannot prove is gone.
+   */
   prune?: boolean;
   fetchFn?: typeof fetch;
   /**
@@ -173,6 +190,13 @@ export interface PullMediaResult {
    * library walk also did not report. Populated only for `--all` pulls, where the walk is exhaustive.
    */
   referencedUnmirroredStorageKeys?: string[];
+  /**
+   * Set when pruning was requested but the library walk stopped before the end of the remote library: a
+   * bounded walk cannot tell "deleted remotely" from "sits at item 101", so deleting anything would violate
+   * the epistemic rule and nothing is deleted. Presentation (CLI/MCP) renders the explanation — Layer 2
+   * never logs it, per the non-CLI logging invariant.
+   */
+  pruneSkippedReason?: 'incomplete_walk';
 }
 
 /**
@@ -264,8 +288,122 @@ export interface MediaSearchResult {
   totalCount: number | null;
   /** True when hits were cut at `limit`. */
   truncated: boolean;
-  /** Query as normalized for matching (lowercased), echoed so agents can audit. */
+  /** Query as normalized for matching (lowercased), echoed so agents can audit. Empty for a recency browse. */
   normalizedQuery: string;
+}
+
+/**
+ * Offline search over the mirrors this workspace already holds.
+ *
+ * Built entirely from a `LocalMirrorIndex` — `media_state` plus `media/*.yaml` companions, collected by
+ * `collectLocalMirrorIndex` in `companions.ts` — so it issues zero HTTP requests and works on a plane. That
+ * scope is also its limit, and the result says so: an asset that exists only remotely is absent here without
+ * being absent in the CMS, which is why callers must frame the output as local-only (Layer 3 renders the
+ * header) rather than let an agent read it as the library's truth.
+ */
+export function searchLocalMirrorMedia(options: {
+  query?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  mirrorIndex: LocalMirrorIndex;
+}): MediaSearchResult {
+  let sinceBoundary: number | null = null;
+  let untilBoundary: number | null = null;
+  for (const raw of [options.since, options.until]) {
+    if (raw === undefined || !raw.trim()) continue;
+    const parsed = parseSearchDateBoundary(raw);
+    if (!parsed?.since) {
+      throw new ApiError({
+        message: `Invalid date boundary: "${raw}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+        status: 400,
+        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
+      });
+    }
+    if (raw === options.since) sinceBoundary = parsed.since;
+    else untilBoundary = parsed.since + DAY_MS;
+  }
+
+  const trimmed = options.query?.trim();
+  if (trimmed !== undefined && !trimmed && sinceBoundary === null && untilBoundary === null) {
+    throw new ApiError({
+      message: 'A non-empty search query is required.',
+      code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+      status: 400,
+      suggestion: 'Provide a search keyword (filename, alt text, caption, or storageKey).',
+    });
+  }
+  const normalizedQuery = trimmed ? trimmed.toLowerCase() : '';
+
+  const rawLimit = options.limit ?? LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT;
+  const limit = Math.max(1, Math.min(rawLimit, MEDIA_SEARCH_MAX_LIMIT));
+
+  const index = options.mirrorIndex;
+  const hits: MediaSearchHit[] = [];
+  let matchCount = 0;
+
+  for (const entry of index.values()) {
+    // Mirrors carry no reliable creation stamp unless the companion recorded one; an unknown stamp cannot be
+    // placed inside a requested range, so a date-narrowed search skips it rather than guessing.
+    if (sinceBoundary !== null || untilBoundary !== null) {
+      if (!entry.createdAt) continue;
+      const instant = Date.parse(entry.createdAt);
+      if (!Number.isFinite(instant)) continue;
+      if (sinceBoundary !== null && instant < sinceBoundary) continue;
+      if (untilBoundary !== null && instant >= untilBoundary) continue;
+    }
+
+    const stem = entry.localPath ? path.basename(entry.localPath).replace(/\.[^.]+$/, '') : '';
+    const matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'> = [];
+    if (!normalizedQuery) {
+      matchedOn.push('mirrorStem');
+    }
+    if (entry.filename && entry.filename.toLowerCase().includes(normalizedQuery)) {
+      matchedOn.push('filename');
+    }
+    if (entry.alt && entry.alt.toLowerCase().includes(normalizedQuery)) {
+      matchedOn.push('alt');
+    }
+    if (entry.caption && entry.caption.toLowerCase().includes(normalizedQuery)) {
+      matchedOn.push('caption');
+    }
+    if (entry.storageKey.toLowerCase().includes(normalizedQuery)) {
+      matchedOn.push('storageKey');
+    }
+    if (stem && stem.toLowerCase().includes(normalizedQuery) && !matchedOn.includes('storageKey')) {
+      matchedOn.push('mirrorStem');
+    }
+    if (matchedOn.length === 0) continue;
+
+    matchCount++;
+    if (hits.length >= limit) continue;
+
+    hits.push({
+      mediaId: entry.mediaId,
+      storageKey: entry.storageKey,
+      filename: entry.filename,
+      mimeType: null,
+      size: null,
+      alt: entry.alt,
+      caption: entry.caption,
+      createdAt: entry.createdAt ?? undefined,
+      mirrored: true,
+      localPath: entry.localPath,
+      matchedOn,
+    });
+  }
+
+  // Every mirrored asset was examined, so coverage of the local set is complete. What is NOT complete is
+  // knowledge of the remote library, and `source: 'local_mirrors'` on the consumer side is what says so.
+  return {
+    hits,
+    scannedCount: index.size,
+    walkComplete: true,
+    totalCount: index.size,
+    truncated: matchCount > hits.length,
+    normalizedQuery,
+  };
 }
 
 export interface LocalMirrorEntry {
@@ -277,6 +415,8 @@ export interface LocalMirrorEntry {
   filename: string | null;
   alt: string | null;
   caption: string | null;
+  /** Creation instant as recorded in the companion YAML, when present. Null means unknown, not old. */
+  createdAt: string | null;
 }
 
 /** storageKey -> mirror entry. Built from confirmed metadata sources only. */

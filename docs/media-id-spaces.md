@@ -71,7 +71,7 @@ Emit follows this rule in its own wording: unresolved body keys are reported as 
 
 - the **body**, which yields only storageKeys;
 - the **featured image**, which migrated rows often leave empty (`featured_image.id: ""`), so nothing usable comes from it;
-- the **media list** (`GET /_emdash/api/media?limit=…&cursor=…`), which is paginated newest-first and bounded by `mediaSyncLimit` (default 300). Older migrated assets fall outside that window, so their records are simply never seen locally.
+- the **media list** (`GET /_emdash/api/media?limit=…&cursor=…`), which is paginated newest-first and bounded by `mediaSyncLimit` (default 100). Older migrated assets fall outside that window, so their records are simply never seen locally.
 
 The combination — body keys from the deep past, a newest-first window, and empty featured images — is what makes an old asset look unresolved even when its record and object are both intact. `emit doctor` counts these as "referenced media file(s) missing from disk", which means *no local mirror*, not *broken remote image*: the same URL served by the live site returns HTTP 200 because R2 still holds the object.
 
@@ -83,7 +83,7 @@ Resolution order, confirmed sources only:
 2. Confirmed local mirror metadata (`media/*.yaml`, indexed by its record id and by its storageKey — read from `storageKey:` when present, otherwise recovered from the companion's canonical `url:`, because most migrated companions carry only the URL) → also `verifiedStorageKeys`.
 3. Nothing matched → the key stays in **`orphanStorageKeys`** and is surfaced as `[UNRESOLVED_MEDIA_ASSET]`. Emit downloads nothing and invents nothing.
 
-Every walk that feeds this resolution — the on-demand pull walk, `emit pull-media --article`, and `emit pull-media --storage-key` — stops at `mediaSyncLimit` records (default 300), so a key reported as unresolved may simply sit outside the window rather than be absent. Only an explicit full-library pass (`--all`, or `--check-media-library`) is unbounded. A targeted pull that downloads nothing while also finding no orphan says so explicitly (`ℹ️ Targeted storageKey(s) not downloaded`, naming whether local mirror metadata confirmed the key or the bounded walk never reached it) instead of printing a success line.
+Every walk that feeds this resolution — the on-demand pull walk, `emit pull-media --article`, and `emit pull-media --storage-key` — stops at `mediaSyncLimit` records (default 100), so a key reported as unresolved may simply sit outside the window rather than be absent. Only an explicit full-library pass (`--all`, or `--check-media-library`) is unbounded. A targeted pull that downloads nothing while also finding no orphan says so explicitly (`ℹ️ Targeted storageKey(s) not downloaded`, naming whether local mirror metadata confirmed the key or the bounded walk never reached it) instead of printing a success line.
 
 Related invariants:
 

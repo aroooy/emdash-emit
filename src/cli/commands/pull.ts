@@ -49,6 +49,7 @@ import { reportActionFailure } from '../report-failure.js';
 import {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
+  formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 import {
@@ -64,6 +65,7 @@ import {
 export {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
+  formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
 
@@ -544,7 +546,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       '-c, --collection <collection>',
       'Collection name when using --article (defaults to "posts")',
     )
-    .option('-l, --limit <number>', 'Maximum media items to fetch (default: 300 or config)')
+    .option('-l, --limit <number>', 'Maximum media items to fetch (default: 100 or config)')
     .option(
       '--storage-key <key>',
       'Target specific storageKey to mirror (can be specified multiple times)',
@@ -662,6 +664,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
         console.log(
           `✅ Media sync complete: ${res.total} total items (${res.downloaded} downloaded, ${res.skipped} skipped/up-to-date${deletedMsg}).${formatMediaCoverageLine(res)}`,
         );
+        // A bounded walk proves nothing about records past its window, so pruning silently declined. Say so
+        // explicitly — silence would read as "nothing to prune", which is the claim this run cannot make.
+        if (res.pruneSkippedReason === 'incomplete_walk') {
+          console.log(formatPruneSkippedNotice(limit));
+        }
       } catch (error) {
         reportActionFailure(error);
       }

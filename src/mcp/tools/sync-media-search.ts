@@ -22,8 +22,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media/index.js';
+import {
+  collectLocalMirrorIndex,
+  searchLocalMirrorMedia,
+  searchRemoteMedia,
+} from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
+import { buildOfflineSearchFraming } from '../../presentation/article_report.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
@@ -33,12 +38,15 @@ export function registerSyncMediaSearchTool(
 ): void {
   server.tool(
     'sync_media_search',
-    'Search the remote EmDash media library by keyword (filename, alt text, caption, storageKey, or local mirror stem) and report whether Emit already mirrors each hit. Returns up to 20 items plus walk coverage fields to conserve LLM context. Use "mirroredOnly:true" when only locally available assets matter. Absence is only proven when walkComplete is true — never conclude an asset does not exist from a truncated walk, and never propose inserting a media record.',
+    'Search the remote EmDash media library by keyword (filename, alt text, caption, storageKey, or local mirror stem) and report whether Emit already mirrors each hit. Omit "query" to browse the newest assets, optionally narrowed with since/until ("today", "yesterday", YYYY-MM-DD). Set "offline:true" to search only this workspace media mirrors with zero network requests — that result covers local files ONLY and never proves an asset is absent remotely. Returns up to 20 items plus walk coverage fields to conserve LLM context. Use "mirroredOnly:true" when only locally available assets matter. Absence is only proven when walkComplete is true — never conclude an asset does not exist from a truncated walk, and never propose inserting a media record.',
     {
       query: z
         .string()
         .min(1)
-        .describe('Literal keyword (case-insensitive substring). Regex is not supported.'),
+        .optional()
+        .describe(
+          'Literal keyword (case-insensitive substring). Regex is not supported. Omit to browse by recency.',
+        ),
       limit: z.number().optional().describe('Max hits to return (default 20, capped at 50)'),
       maxScan: z
         .number()
@@ -48,6 +56,22 @@ export function registerSyncMediaSearchTool(
         .boolean()
         .optional()
         .describe('Restrict output to assets already mirrored locally'),
+      offline: z
+        .boolean()
+        .optional()
+        .describe(
+          'Search only local media mirrors (media_state + media/*.yaml) with zero HTTP requests. Results describe the workspace, not the remote library.',
+        ),
+      since: z
+        .string()
+        .optional()
+        .describe(
+          'Only assets created on or after this date: "today", "yesterday", or YYYY-MM-DD (local time)',
+        ),
+      until: z
+        .string()
+        .optional()
+        .describe('Only assets created on or before this date (same formats as since)'),
       suggestKeywords: z
         .boolean()
         .optional()
@@ -57,17 +81,27 @@ export function registerSyncMediaSearchTool(
     async (args) =>
       withResolvedContext(resolveContext, args, async (ctx) => {
         const mirrorIndex = collectLocalMirrorIndex(ctx.root, ctx.cache);
-        const result = await searchRemoteMedia({
-          workspaceRoot: ctx.root,
-          origin: ctx.origin,
-          token: ctx.auth.token,
-          refreshToken: ctx.auth.refreshToken,
-          query: args.query,
-          limit: args.limit,
-          maxScan: args.maxScan,
-          mirroredOnly: Boolean(args.mirroredOnly),
-          mirrorIndex,
-        });
+        const result = args.offline
+          ? searchLocalMirrorMedia({
+              query: args.query,
+              since: args.since,
+              until: args.until,
+              limit: args.limit,
+              mirrorIndex,
+            })
+          : await searchRemoteMedia({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+              query: args.query,
+              since: args.since,
+              until: args.until,
+              limit: args.limit,
+              maxScan: args.maxScan,
+              mirroredOnly: Boolean(args.mirroredOnly),
+              mirrorIndex,
+            });
 
         let note: string | undefined = undefined;
         if (!result.walkComplete) {
@@ -87,13 +121,18 @@ export function registerSyncMediaSearchTool(
         }
 
         const payload: Record<string, unknown> = {
-          query: args.query,
+          query: args.query ?? null,
           scannedCount: result.scannedCount,
           walkComplete: result.walkComplete,
           totalCount: result.totalCount,
           truncated: result.truncated,
           hits: result.hits,
         };
+        if (args.since) payload.since = args.since;
+        if (args.until) payload.until = args.until;
+        // Offline framing must be machine-readable too: an agent deciding whether to re-upload an asset
+        // reads this payload, so a local-only list must never look like the library's truth.
+        if (args.offline) Object.assign(payload, buildOfflineSearchFraming());
         if (note) payload.note = note;
         if (tagHints) payload.tagHints = tagHints;
 

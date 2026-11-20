@@ -315,7 +315,7 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
     expect(result.hits[0].matchedOn).toContain('alt');
   });
 
-  // T1-8: 空 / 空白のみの query は拒否
+  // T1-8: 空 / 空白のみの query は拒否（日付範囲も offline も無い場合は検索条件がゼロになる）
   it('T1-8: rejects empty query with MEDIA_SEARCH_QUERY_REQUIRED', async () => {
     await expect(
       searchRemoteMedia({

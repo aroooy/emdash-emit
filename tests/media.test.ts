@@ -2003,4 +2003,165 @@ locale: ja
       });
     });
   });
+
+  // v0.1.42 P4 — pruning safety gates ---------------------------------------------------------------
+
+  describe('pullMedia prune safety gates (v0.1.42)', () => {
+    const emptyListFetch = () =>
+      vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes('/api/media?')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ success: true, data: { items: [] } }),
+          });
+        }
+        return Promise.resolve({ ok: true, arrayBuffer: async () => new Uint8Array().buffer });
+      });
+
+    // A bounded walk proves nothing about records past its window, so it must delete nothing and say why.
+    // The existing `prune: true` tests all reach the end of the listing (complete walks); this is the
+    // negative half of that rule.
+    it('skips pruning entirely when the library walk stopped at the limit, and reports the reason', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const staleCompanion = path.join(mediaDir, '20261031_01M67P08DXFTYDPFRTJCC4XMPB-stale.yaml');
+      fs.writeFileSync(staleCompanion, 'id: 01M67P08DXFTYDPFRTJCC4XMPB\n');
+
+      // Two records on the first page with a nextCursor, and limit 2: the walk never reaches the end.
+      const items = [
+        {
+          id: '01MJZZDRECRD99999999999999',
+          filename: 'a.jpg',
+          mimeType: 'image/jpeg',
+          size: 3,
+          storageKey: '01MJZZDDSKKEY9999999999999.jpg',
+          url: '/_emdash/api/media/file/01MJZZDDSKKEY9999999999999.jpg',
+          createdAt: '2026-11-10T00:00:00.000Z',
+        },
+        {
+          id: '01MJZZDRECRD9999999999999A',
+          filename: 'b.jpg',
+          mimeType: 'image/jpeg',
+          size: 3,
+          storageKey: '01MJZZDDSKKEY999999999999AA.jpg',
+          url: '/_emdash/api/media/file/01MJZZDDSKKEY999999999999AA.jpg',
+          createdAt: '2026-11-09T00:00:00.000Z',
+        },
+      ];
+      const mockFetch = vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes('/api/media?')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ success: true, data: { items, nextCursor: 'more' } }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+        });
+      });
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        limit: 2,
+        prune: true,
+        downloadFiles: false,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(res.deleted).toBe(0);
+      expect(res.pruneSkippedReason).toBe('incomplete_walk');
+      expect(fs.existsSync(staleCompanion)).toBe(true);
+    });
+
+    it('protects a mirrored asset an article body still references from pruning', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      const postsDir = path.join(tempDir, 'posts', 'draft');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      fs.mkdirSync(postsDir, { recursive: true });
+
+      // The mirror is attributed to its record through the companion YAML (the only safe channel), and the
+      // complete walk below never reports that record — normally a deletion trigger.
+      const referencedKey = '01MJZZKCAKNAY9999999999999';
+      fs.writeFileSync(path.join(mediaDir, `${referencedKey}.jpg`), 'bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, `${referencedKey}.yaml`),
+        ['id: 01MJZZDRECRD99999999999999', `storageKey: ${referencedKey}.jpg`, ''].join('\n'),
+      );
+
+      fs.writeFileSync(
+        path.join(postsDir, `20261112_${OLD_ARTICLE}-writing.md`),
+        [
+          '---',
+          `id: ${OLD_ARTICLE}`,
+          'title: Writing',
+          '---',
+          '',
+          `![sunset](/_emdash/api/media/file/${referencedKey}.jpg)`,
+          '',
+        ].join('\n'),
+      );
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        prune: true,
+        downloadFiles: false,
+        fetchFn: emptyListFetch() as unknown as typeof fetch,
+      });
+
+      // Complete walk (0 records) proves the record is gone, but a writing article still names the asset —
+      // reference protection outranks pruning authority.
+      expect(res.pruneSkippedReason).toBeUndefined();
+      expect(res.deleted).toBe(0);
+      expect(fs.existsSync(path.join(mediaDir, `${referencedKey}.jpg`))).toBe(true);
+    });
+
+    it('protects a mirror whose record id is named by an article featuredImage', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      const postsDir = path.join(tempDir, 'posts', 'published');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      fs.mkdirSync(postsDir, { recursive: true });
+
+      // The body carries no storageKey for this asset; only the frontmatter featuredImage names the record.
+      // Must be a valid Crockford ULID (no I/O/L/U) — `extractMediaUlid` rejects anything else.
+      const heroId = '01MJZZHERDXYY999999999999A';
+      fs.writeFileSync(path.join(mediaDir, 'hero-photo.jpg'), 'bytes');
+      // The companion names the record it backs — that `id:` is the only channel pruning may trust.
+      fs.writeFileSync(
+        path.join(mediaDir, 'hero-photo.yaml'),
+        [`id: ${heroId}`, 'url: /_emdash/api/media/file/whatever.jpg', ''].join('\n'),
+      );
+
+      fs.writeFileSync(
+        path.join(postsDir, `20261112_${OLD_ARTICLE}-hero.md`),
+        [
+          '---',
+          `id: ${OLD_ARTICLE}`,
+          'slug: hero-post',
+          'title: Hero',
+          `featuredImage: '${heroId}'`,
+          '---',
+          '',
+          'body',
+          '',
+        ].join('\n'),
+      );
+
+      const res = await pullMedia({
+        workspaceRoot: tempDir,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        prune: true,
+        downloadFiles: false,
+        fetchFn: emptyListFetch() as unknown as typeof fetch,
+      });
+
+      expect(res.deleted).toBe(0);
+      expect(fs.existsSync(path.join(mediaDir, 'hero-photo.jpg'))).toBe(true);
+    });
+  });
 });

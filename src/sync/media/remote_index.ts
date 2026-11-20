@@ -26,8 +26,12 @@ import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { mediaListEndpoint } from '../../client/endpoints.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
+import { parseSearchDateBoundary } from '../../utils/search-date.js';
+/** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 import {
   MEDIA_LIST_PAGE_SIZE,
+  MEDIA_SEARCH_MAX_LIMIT,
   type EmDashMediaItem,
   type LocalMirrorIndex,
   type MediaSearchHit,
@@ -36,7 +40,6 @@ import {
 } from './types.js';
 
 export const MEDIA_SEARCH_DEFAULT_LIMIT = 20;
-export const MEDIA_SEARCH_MAX_LIMIT = 50;
 /** Default scan ceiling. `maxScan: 0` means unlimited (a complete walk). */
 export const MEDIA_SEARCH_DEFAULT_MAX_SCAN = 500;
 
@@ -45,8 +48,24 @@ export interface SearchRemoteMediaOptions {
   origin: string;
   token: string;
   refreshToken?: string;
-  /** Literal, case-insensitive substring match. Regex is never compiled from user input. */
-  query: string;
+  /**
+   * Literal, case-insensitive substring match. Regex is never compiled from user input.
+   *
+   * Optional since v0.1.42: with no query the walk becomes a recency browse — the newest `limit` records of
+   * whatever window was read. That is deliberately bounded (a hit cap plus a scan ceiling), so it stays the
+   * writing-loop view and never turns into the fleet-scale full listing that belongs to Admin/the official
+   * EmDash MCP.
+   */
+  query?: string;
+  /**
+   * Inclusive lower date boundary: `today`, `yesterday`, or `YYYY-MM-DD`. Because the list endpoint orders
+   * records newest-first (ULID `id` DESC), reaching a record older than this boundary proves the rest of the
+   * library is out of range too, so the walk stops there and still reports `walkComplete: true` — complete
+   * for the requested date range.
+   */
+  since?: string;
+  /** Upper date boundary in the same spellings. Not an early-exit signal: newer records may follow. */
+  until?: string;
   /** Max hits to return (default 20, clamped to 50). */
   limit?: number;
   /** Max records to read before stopping the walk (default 500; 0 = unlimited). */
@@ -177,18 +196,40 @@ export async function collectRemoteStorageKeys(options: {
 
 /**
  * Searches the remote EmDash media library by keyword across filename, alt text, caption,
- * storageKey, and mirrorStem.
+ * storageKey, and mirrorStem, optionally narrowed to a creation-date range.
  *
  * Adheres strictly to the 3 principles:
  * 1. Does not send `q` to the server; walks and filters client-side.
  * 2. Matches are literal substring comparisons (case-insensitive, no regex).
- * 3. Epistemic completeness: Reports scannedCount and walkComplete.
+ * 3. Epistemic completeness: Reports scannedCount and walkComplete. A walk cut off by `maxScan` reports
+ *    false — absence is not proven. A walk stopped because it reached the `since` boundary reports true:
+ *    the list endpoint returns records newest-first, so every remaining record is provably out of range.
  */
 export async function searchRemoteMedia(
   options: SearchRemoteMediaOptions,
 ): Promise<MediaSearchResult> {
   const trimmed = options.query?.trim();
-  if (!trimmed) {
+
+  let sinceBoundary: number | null = null;
+  let untilBoundary: number | null = null;
+  for (const raw of [options.since, options.until]) {
+    if (raw === undefined || !raw.trim()) continue;
+    const parsed = parseSearchDateBoundary(raw);
+    if (!parsed?.since) {
+      throw new ApiError({
+        message: `Invalid date boundary: "${raw}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+        status: 400,
+        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
+      });
+    }
+    if (raw === options.since) sinceBoundary = parsed.since;
+    else untilBoundary = parsed.since + DAY_MS;
+  }
+
+  // A whitespace-only query is a caller mistake, not a recency browse: reject it while no other narrowing
+  // criterion exists, so `query: "   "` never turns into an accidental full-library dump.
+  if (trimmed !== undefined && !trimmed && sinceBoundary === null && untilBoundary === null) {
     throw new ApiError({
       message: 'A non-empty search query is required.',
       code: 'MEDIA_SEARCH_QUERY_REQUIRED',
@@ -196,7 +237,8 @@ export async function searchRemoteMedia(
       suggestion: 'Provide a search keyword (filename, alt text, caption, or storageKey).',
     });
   }
-  const normalizedQuery = trimmed.toLowerCase();
+
+  const normalizedQuery = trimmed ? trimmed.toLowerCase() : '';
 
   const rawLimit = options.limit ?? MEDIA_SEARCH_DEFAULT_LIMIT;
   const limit = Math.max(1, Math.min(rawLimit, MEDIA_SEARCH_MAX_LIMIT));
@@ -216,6 +258,17 @@ export async function searchRemoteMedia(
   let walkComplete = false;
   let matchCount = 0;
 
+  /** True when a record's creation instant falls inside the requested date range. */
+  const inDateRange = (createdAt?: string): boolean => {
+    if (sinceBoundary === null && untilBoundary === null) return true;
+    if (!createdAt) return false;
+    const instant = Date.parse(createdAt);
+    if (!Number.isFinite(instant)) return false;
+    if (sinceBoundary !== null && instant < sinceBoundary) return false;
+    if (untilBoundary !== null && instant >= untilBoundary) return false;
+    return true;
+  };
+
   for (;;) {
     const remaining = maxScan - scanned;
     if (remaining <= 0) {
@@ -234,6 +287,8 @@ export async function searchRemoteMedia(
       totalCount = page.totalCount;
     }
 
+    let reachedSinceBoundary = false;
+
     for (const item of page.rawItems) {
       scanned++;
       const storageKey = item.storageKey || null;
@@ -245,10 +300,30 @@ export async function searchRemoteMedia(
         continue;
       }
 
+      // The listing is ordered newest-first, so the first record older than `since` ends the range: every
+      // record still to come is provably older. Stopping here is a complete walk of the requested range,
+      // which is why it must not degrade into the `[WALK_INCOMPLETE]` warning a maxScan cutoff earns.
+      if (sinceBoundary !== null && item.createdAt) {
+        const instant = Date.parse(item.createdAt);
+        if (Number.isFinite(instant) && instant < sinceBoundary) {
+          reachedSinceBoundary = true;
+          break;
+        }
+      }
+
+      if (!inDateRange(item.createdAt)) {
+        continue;
+      }
+
       const effectiveAlt = item.alt || mirrorEntry?.alt || null;
       const effectiveCaption = item.caption || mirrorEntry?.caption || null;
 
       const matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'> = [];
+      // With no query the walk is a recency browse: every in-range record is a hit, attributed to the
+      // filename it is listed under.
+      if (!normalizedQuery) {
+        matchedOn.push('filename');
+      }
       if (item.filename && item.filename.toLowerCase().includes(normalizedQuery)) {
         matchedOn.push('filename');
       }
@@ -298,6 +373,11 @@ export async function searchRemoteMedia(
           });
         }
       }
+    }
+
+    if (reachedSinceBoundary) {
+      walkComplete = true;
+      break;
     }
 
     if (page.rawItems.length === 0 || !page.nextCursor) {

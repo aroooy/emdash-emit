@@ -88,7 +88,12 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'QuarantinedPathRequiredError',
   ]),
   doctor: new Set(['runWorkspaceDoctor']),
-  media: new Set(['pullMedia', 'collectLocalMirrorIndex', 'searchRemoteMedia']),
+  media: new Set([
+    'pullMedia',
+    'collectLocalMirrorIndex',
+    'searchRemoteMedia',
+    'searchLocalMirrorMedia',
+  ]),
 };
 
 interface ImportStatement {

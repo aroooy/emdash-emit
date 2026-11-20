@@ -75,6 +75,56 @@ export function formatMediaCoverageLine(res: {
 }
 
 /**
+ * Explains why automatic pruning deleted nothing because the library walk stopped early.
+ *
+ * Pruning authority is remote records only, and a bounded walk holds no authority over what sits past its
+ * window: an unmirrored-looking file may simply be record 101 of a 400-record library. Deleting on that
+ * knowledge would break the epistemic rule, so the safe answer is to say so and name the command that does
+ * know. Shared by CLI and MCP so neither consumer invents its own wording for the same safety decision.
+ */
+export function formatPruneSkippedNotice(limit: number | null | undefined): string {
+  const window = typeof limit === 'number' && limit > 0 ? ` (${limit})` : '';
+  return (
+    `ℹ️ Pruning skipped: the media walk stopped at the limit${window} and did not reach the end of the ` +
+    `remote library, so deleted records cannot be proven. Run "emit pull-media --all" to prune safely, or ` +
+    `raise "mediaSyncLimit" in .emit/config.json.`
+  );
+}
+
+/**
+ * Frames an offline media search as what it is: a view of this workspace's mirrors and nothing else.
+ *
+ * The failure mode this guards against is inference — an agent that reads a local-only list as the library's
+ * truth concludes an absent asset does not exist remotely and re-uploads a duplicate on returning online. So
+ * the framing is loud, appears first, and repeats on the empty result.
+ */
+export function formatOfflineSearchHeader(scannedCount: number): string {
+  return (
+    `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
+    `Searched ${scannedCount} mirrored asset(s) in this workspace.\n` +
+    `Remote EmDash library was NOT queried.`
+  );
+}
+
+/** The absence-protection line an offline search must print when it finds nothing. */
+export const OFFLINE_SEARCH_EMPTY_NOTICE =
+  'No matching media found in local workspace. (Remote EmDash library was NOT checked. The asset may exist remotely.)';
+
+/** The machine-readable counterpart of that framing for MCP JSON payloads. */
+export function buildOfflineSearchFraming(): {
+  source: 'local_mirrors';
+  remoteQueried: false;
+  warning: string;
+} {
+  return {
+    source: 'local_mirrors',
+    remoteQueried: false,
+    warning:
+      'Remote CMS was NOT checked. Absence from this list does NOT prove the asset does not exist remotely.',
+  };
+}
+
+/**
  * Options for rendering article diff summary reports.
  */
 export interface ArticleDiffReportOptions {

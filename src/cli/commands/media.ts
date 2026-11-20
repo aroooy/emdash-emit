@@ -21,8 +21,16 @@
  */
 
 import type { Command } from 'commander';
-import { collectLocalMirrorIndex, searchRemoteMedia } from '../../sync/media/index.js';
+import {
+  collectLocalMirrorIndex,
+  searchLocalMirrorMedia,
+  searchRemoteMedia,
+} from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
+import {
+  formatOfflineSearchHeader,
+  OFFLINE_SEARCH_EMPTY_NOTICE,
+} from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
 
@@ -39,9 +47,9 @@ export function registerMediaSearchCommand(
   resolveContext: CliContextResolver,
 ): void {
   program
-    .command('media-search <query>')
+    .command('media-search [query]')
     .description(
-      'Search the remote EmDash media library by keyword (filename, alt, caption, storageKey)',
+      'Search the remote EmDash media library by keyword (filename, alt, caption, storageKey); omit the query to browse by recency',
     )
     .option('-l, --limit <number>', 'Max hits (default 20, max 50)')
     .option(
@@ -49,37 +57,81 @@ export function registerMediaSearchCommand(
       'Records to read before stopping (default 500; 0 = whole library)',
     )
     .option('--mirrored-only', 'Only assets Emit already mirrors')
+    .option(
+      '--offline',
+      'Search only this workspace media mirrors — no network requests. Results cover local files only.',
+    )
+    .option(
+      '--since <date>',
+      'Only assets created on or after this date: today, yesterday, or YYYY-MM-DD (local time)',
+    )
+    .option('--until <date>', 'Only assets created on or before this date (same formats)')
     .option('--suggest-keywords', 'Append the top local tag slugs as search hints')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (query: string, options) => {
+    .action(async (query: string | undefined, options) => {
       try {
-        const ctx = resolveContext(options.profile);
+        const dateArgsPresent = Boolean(options.since || options.until);
+        if (!query && !dateArgsPresent && !options.offline) {
+          console.error(
+            '❌ media-search needs a query, or a date range (--since / --until), or --offline.',
+          );
+          console.error(
+            '   e.g. "emit media-search --since yesterday" lists what was added recently.',
+          );
+          process.exit(1);
+        }
 
         const limit = options.limit ? parseInt(options.limit, 10) : undefined;
         const maxScan = options.maxScan !== undefined ? parseInt(options.maxScan, 10) : undefined;
 
+        // The mirror index is needed by both paths, and in offline mode it is the only source of truth.
+        const ctx = resolveContext(options.profile);
         const mirrorIndex = collectLocalMirrorIndex(ctx.root, ctx.cache);
 
-        const result = await searchRemoteMedia({
-          workspaceRoot: ctx.root,
-          origin: ctx.origin,
-          token: ctx.auth.token,
-          refreshToken: ctx.auth.refreshToken,
-          query,
-          limit,
-          maxScan,
-          mirroredOnly: Boolean(options.mirroredOnly),
-          mirrorIndex,
-        });
+        const result = options.offline
+          ? searchLocalMirrorMedia({
+              query,
+              since: options.since,
+              until: options.until,
+              limit,
+              mirrorIndex,
+            })
+          : await searchRemoteMedia({
+              workspaceRoot: ctx.root,
+              origin: ctx.origin,
+              token: ctx.auth.token,
+              refreshToken: ctx.auth.refreshToken,
+              query,
+              since: options.since,
+              until: options.until,
+              limit,
+              maxScan,
+              mirroredOnly: Boolean(options.mirroredOnly),
+              mirrorIndex,
+            });
 
-        const totalLabel =
-          result.totalCount !== null ? `${result.totalCount} records` : 'an unknown-size library';
-        console.log(
-          `Media search: "${query}" (scanned ${result.scannedCount} of ${totalLabel})${result.truncated ? ' [truncated at limit]' : ''}`,
-        );
+        const rangeLabel = [
+          options.since ? `since ${options.since}` : '',
+          options.until ? `until ${options.until}` : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const subject = query ? `"${query}"` : rangeLabel || 'recency browse';
+
+        if (options.offline) {
+          console.log(formatOfflineSearchHeader(result.scannedCount));
+        } else {
+          const totalLabel =
+            result.totalCount !== null ? `${result.totalCount} records` : 'an unknown-size library';
+          console.log(
+            `Media search: ${subject} (scanned ${result.scannedCount} of ${totalLabel})${result.truncated ? ' [truncated at limit]' : ''}`,
+          );
+        }
 
         if (result.hits.length === 0) {
-          if (result.walkComplete) {
+          if (options.offline) {
+            console.log(`\n${OFFLINE_SEARCH_EMPTY_NOTICE}`);
+          } else if (result.walkComplete) {
             console.log(
               `\nNo match found in the remote media library (${result.scannedCount} records scanned).`,
             );
@@ -106,14 +158,14 @@ export function registerMediaSearchCommand(
           });
         }
 
-        if (!result.walkComplete) {
+        if (!result.walkComplete && !options.offline) {
           console.log(
             `\n⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at --max-scan; absence is not proven.`,
           );
           console.log(`   Narrow the query or raise --max-scan (0 walks the whole library).`);
         }
 
-        if (result.hits.length > 0) {
+        if (result.hits.length > 0 && !options.offline) {
           console.log(
             `\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it`,
           );

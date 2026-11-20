@@ -164,6 +164,7 @@ export function collectLocalMirrorIndex(
       let filename: string | null = null;
       let alt: string | null = null;
       let caption: string | null = null;
+      let createdAt: string | null = null;
 
       const yamlPath = path.join(mediaDir, `${stem}.yaml`);
       let loadedDoc: Record<string, unknown> | null = null;
@@ -200,6 +201,10 @@ export function collectLocalMirrorIndex(
         alt = typeof loadedDoc.alt === 'string' && loadedDoc.alt ? loadedDoc.alt : null;
         caption =
           typeof loadedDoc.caption === 'string' && loadedDoc.caption ? loadedDoc.caption : null;
+        createdAt =
+          typeof loadedDoc.createdAt === 'string' && loadedDoc.createdAt
+            ? loadedDoc.createdAt
+            : null;
       } else if (fs.existsSync(mediaDir)) {
         // Fallback: search for any companion that confirms this storageKey or mediaId
         for (const f of fs.readdirSync(mediaDir)) {
@@ -222,6 +227,10 @@ export function collectLocalMirrorIndex(
               caption =
                 typeof candidate.caption === 'string' && candidate.caption
                   ? candidate.caption
+                  : null;
+              createdAt =
+                typeof candidate.createdAt === 'string' && candidate.createdAt
+                  ? candidate.createdAt
                   : null;
               break;
             }
@@ -249,6 +258,7 @@ export function collectLocalMirrorIndex(
         filename,
         alt,
         caption,
+        createdAt,
       });
     }
     return index;
@@ -291,6 +301,7 @@ export function collectLocalMirrorIndex(
         filename: typeof doc.filename === 'string' && doc.filename ? doc.filename : null,
         alt: typeof doc.alt === 'string' && doc.alt ? doc.alt : null,
         caption: typeof doc.caption === 'string' && doc.caption ? doc.caption : null,
+        createdAt: typeof doc.createdAt === 'string' && doc.createdAt ? doc.createdAt : null,
       });
     }
   }

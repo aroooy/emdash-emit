@@ -28,6 +28,7 @@ import { collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
 import { mediaMirrorNames, mediaRecordIdForStem } from './naming_mirror.js';
+import { collectPruneProtectionSets } from './prune_protect.js';
 import { mirrorReferencedAssetsFromIndex, pullArticleMedia } from './pull_article.js';
 import {
   collectRemoteStorageKeys,
@@ -212,9 +213,25 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
     cursor = page.nextCursor;
   }
 
-  // Pruning logic for media: if --prune or --all is enabled, delete local media not present on remote
+  // Pruning logic for media: delete local mirrors whose companion names a record this walk proved absent.
+  // Two gates guard every unlink (v0.1.42):
+  //   1. Completeness — the walk must have reached the end of the library. A bounded walk cannot tell a
+  //      remotely deleted record from one sitting just past the window, so it proves nothing and deletes
+  //      nothing; the caller is told via `pruneSkippedReason` instead (rendered in Layer 3).
+  //   2. Reference protection — an asset some workspace article still points at is never deleted, even when
+  //      the walk window never reached its record. Deleting a writing asset over a knowledge gap is exactly
+  //      what the local-first principle forbids.
   let deletedCount = 0;
-  if ((options.prune || options.all) && fs.existsSync(mediaDir)) {
+  let pruneSkippedReason: 'incomplete_walk' | undefined = undefined;
+  const pruneRequested = Boolean(options.prune || options.all);
+  if (pruneRequested && !remoteIndex.complete) {
+    pruneSkippedReason = 'incomplete_walk';
+  }
+  if (pruneRequested && remoteIndex.complete && fs.existsSync(mediaDir)) {
+    const protection = collectPruneProtectionSets(
+      options.workspaceRoot,
+      options.collection || 'posts',
+    );
     const files = fs.readdirSync(mediaDir);
     for (const file of files) {
       // Leftover `legacy_*` mirrors from the removed file-route fallback are never matched by the
@@ -227,8 +244,21 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       if (activeMediaBaseNames.has(stem) || activeMediaBaseNames.has(stem.replace(/^\d{8}_/, ''))) {
         continue;
       }
+      // Stem-space protection: the body URL carries an R2 storageKey, so it is normalized to a mirror stem
+      // before comparison. A collision-suffixed mirror (`<stem>--<mediaId>`) falls through here and is
+      // rescued by the companion-id comparison below.
+      if (
+        protection.protectedStems.has(stem) ||
+        protection.protectedStems.has(stem.replace(/^\d{8}_/, ''))
+      ) {
+        continue;
+      }
       const companionId = mediaRecordIdForStem(mediaDir, stem);
-      if (companionId && !activeMediaIds.has(companionId)) {
+      if (!companionId) continue;
+      // Id-space protection: `featuredImage` and body ULIDs name the D1 record, which is what the
+      // companion's `id:` carries — the two spaces are compared only through these two channels.
+      if (protection.protectedRecordIds.has(companionId)) continue;
+      if (!activeMediaIds.has(companionId)) {
         try {
           fs.unlinkSync(path.join(mediaDir, file));
           deletedCount++;
@@ -280,5 +310,6 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
       ? (remoteIndex.totalCount ?? remoteIndex.scannedCount)
       : remoteIndex.totalCount,
     referencedUnmirroredStorageKeys,
+    pruneSkippedReason,
   };
 }
