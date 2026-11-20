@@ -1044,8 +1044,14 @@ export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
     );
   }
 
-  // Setext headings (Non-empty text line immediately followed by === or ---)
-  if (/(?:^[^\r\n#|\-][^\r\n]*)\r?\n {0,3}(?:={3,}|-{3,})\s*(?:\r?\n|$)/m.test(cleaned)) {
+  // Setext headings (Non-empty prose line immediately followed by === or ---).
+  // The exclusion set must stay aligned with isProseParagraphLine(): only a genuine
+  // paragraph can start a Setext heading. ATX headings (#), blockquotes (>), list
+  // markers (-) and table pipes (|) are already resolved into their own blocks by the
+  // line-based parser (each followed by a real thematic break), so warning there would
+  // send users to "fix" content that is converted correctly. '=' is excluded because an
+  // '===' underline cannot be preceded by another Setext-style marker line.
+  if (/(?:^[^\r\n#|>\-=][^\r\n]*)\r?\n {0,3}(?:={3,}|-{3,})\s*(?:\r?\n|$)/m.test(cleaned)) {
     warnings.push(
       'Setext headings (underlined with === or ---) are not supported by the line-based parser. Use ATX headings (# Heading) instead.',
     );

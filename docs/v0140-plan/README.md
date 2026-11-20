@@ -104,6 +104,13 @@
   - Emit の仕様裁定として、**「直前が非空行のテキストである `---`」は水平線（divider）には変換しない**。
   - 水平線（divider）として扱うのは、**「前後に空行がある（またはブロック境界・本文先頭/末尾にある）単独行 `---` / `***` / `___`」のみ**とする。
   - 直前テキスト付き `---` は P3 の対象外となり、P5 の G8 警告（Setext 見出し警告）を発火させる（※副作用として、ユーザーが手動で `# 見出し` に直すまでは `<p>Text</p><p>---</p>` として保存され続けることを受容する）。
+- **G8 Setext 警告とパーサの判定整合（診断一貫性）**：
+  - `isThematicBreak()` は `isProseParagraphLine()` を用いて、直前が ATX 見出し（`#`）・blockquote（`>`）・リスト（`-`）・テーブル（`|`）である場合は**水平線として正しく解決**する。
+  - したがって P5 の Setext 検知正規表現の除外集合も `isProseParagraphLine()` と同一基準でなければならない。除外が不十分な場合、**正しく変換済みのコンテンツに対して「ATX 見出しに直せ」という誤警告**を発火し、診断の一貫性（diagnostic alignment invariant）に反する。
+  - 実測で判明した gap: `> quote\n---\nx` は break に解決されるにもかかわらず G8 が警告していた。除外集合へ `>` と `=` を追加して解消（T5-4, T5-5 で固定）。
+- **逆変換は `---` の単一形式へ正規化する（Source Fidelity トレードオフ）**：
+  - `***` / `___` で書かれた水平線も、PT → Markdown 逆変換では常に `---` として出力される。
+  - 再パースで同一 AST になるため**同期整合性（`synced`）は保たれる**が、記法ゆれは復元されない。これは P1 の `*italic*` → `_italic_` と同一性質の非可逆性であり、R4 の対象として扱う。
 - **Loss-Free AST 原則の維持（`isPlainDividerBlock`）**:
   - `portableTextToMarkdown` に `isPlainDividerBlock(block)` 述語関数を新設する：
     ```ts
@@ -214,7 +221,7 @@
 | R1 | `*` と `**`、`_` と `__` の正規表現競合によるパース破綻 | 長い記号（`**`, `__`）を手前で評価し、CommonMark の flanking delimiter 規則を適用 |
 | R2 | `---`（水平線）が frontmatter やテーブル区切りと誤判定される | 行単位ループ内で位置を制御（image 直後・table 直前）し、前後空行のステート判定を徹底 |
 | R3 | EmDash の Web フロント側で `_type: 'divider'` のコンポーネントが無く描画が無視される | Ask First 前提としてテーマ側のレンダラー対応を確認の上でマッピングを確定 |
-| R4 | **フルプル時のソース表現の非可逆性（Source Fidelity）** | `*italic*` がリモート更新後のフルプルで `_italic_` に正規化されるが、`hasSpellingTransform` と `retrackLocalHashOnly()` により同期整合性（`synced`）は維持されることをテストで固定 |
+| R4 | **フルプル時のソース表現の非可逆性（Source Fidelity）** | `*italic*` がリモート更新後のフルプルで `_italic_` に正規化されるが、`hasSpellingTransform` と `retrackLocalHashOnly()` により同期整合性（`synced`）は維持されることをテストで固定。同様に `***` / `___` の水平線も逆変換で `---` へ正規化される（記法ゆれは非復元、AST は同一） |
 | R5 | カスタムプロパティ付き divider ブロックの属性消失 | `isPlainDividerBlock` 属性検査を実装し、余剰プロパティがある場合は Tier-3 フェンスへ退避 |
 
 ---
@@ -229,6 +236,7 @@
 - [x] 前後が空行の `---` / `***` / `___` が `{ _type: 'break' }` ブロックへ変換され、`___` が em に誤認されない（P3/T3-1）
 - [x] `isPlainBreakBlock` により余剰プロパティ付き break が Tier-3 フェンスへフォールバックする（P3/T3-5）
 - [x] 直前にテキスト行がある `text\n---` は break に変換されず、Setext 見出しとして G8 警告を発火する（P3/P5/T5-2, T3-6）
+- [x] G8 の Setext 検知が `isProseParagraphLine()` と同一基準で判定し、break へ正しく解決される行（blockquote・ATX 見出し直後）で誤警告しない（P5/T5-4）
 - [x] テーブル区切り行やコードブロック内の `---` と水平線が誤衝突しない（P3/T3-2, T3-3）
 - [x] `tests/layering.test.ts`（Axis 0〜5）、`tests/guards.test.ts`（Rule 1〜5）が 100% PASS
 - [x] 静的品質ゲート `npm run check` が 100% green

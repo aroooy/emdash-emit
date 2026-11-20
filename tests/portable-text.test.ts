@@ -728,6 +728,25 @@ describe('Portable Text <-> Markdown Conversion', () => {
       expect(detectUnsupportedMarkdownSyntax('| a |\n---\nx')).toEqual([]);
       expect(detectUnsupportedMarkdownSyntax('- item\n---\nx')).toEqual([]);
     });
+
+    it('T5-4: does not warn when the parser already resolves the underline into a thematic break', () => {
+      // These lines are preceded by a non-paragraph block, so CommonMark treats the
+      // '---' as a thematic break (which markdownToPortableText converts correctly).
+      // Warning here would be a false positive: it tells users to "fix" valid content.
+      for (const input of ['> quote\n---\nx', '# H\n---\nbody']) {
+        expect(detectUnsupportedMarkdownSyntax(input)).toEqual([]);
+      }
+
+      // Cross-check that the parser really does produce a break block for them.
+      resetKeyCounter();
+      const blocks = markdownToPortableText('> quote\n---\nx');
+      expect(blocks.some((b) => b._type === 'break')).toBe(true);
+    });
+
+    it('T5-5: warns on Setext h1 underline (===) as well as h2 (---)', () => {
+      const warnings = detectUnsupportedMarkdownSyntax('Title\n===\nBody');
+      expect(warnings.some((w) => w.includes('Setext headings'))).toBe(true);
+    });
   });
 
   describe('Thematic Break <-> EmDash Break Block (v0.1.40 P3)', () => {
