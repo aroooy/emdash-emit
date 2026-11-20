@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.40] - 2026-11-20
+
+### Added
+
+- **Thematic Break (`---` / `***` / `___`) Bidirectional Conversion (`src/client/portable-text.ts`, v0.1.40 P3)**:
+  - Standalone thematic break lines — surrounded by blank lines, or at a block boundary / document start / end — now convert to EmDash's canonical `{ _type: 'break' }` block (confirmed against production EmDash) instead of being stored as a three-character paragraph (`<p>---</p>`).
+  - Reverse conversion emits the canonical `---` spelling for plain break blocks, and also serializes legacy `_type: 'divider'` / `_type: 'hr'` blocks to `---` for compatibility.
+  - Symmetrical Tier-3 fallback (`isPlainBreakBlock`, Layer 0): a break block carrying extended properties (e.g. `style`, `color`) is preserved verbatim as an opaque comment fence (`<!--ec:block ... -->`) and round-trips exactly, so custom divider metadata can never be silently dropped.
+  - Parsing order is fixed deliberately: the thematic-break check runs after code fences and image blocks, before table detection and before paragraph parsing. That ordering prevents `---` from being consumed as a table delimiter row and eliminates the pre-existing bug where `___` was misread as an emphasis mark.
+- **Inline Formatting Variants & CommonMark Flanking Compliance (`src/client/portable-text.ts`, v0.1.40 P1)**:
+  - `*italic*` and `__bold__` are now recognized as `em` / `strong`, absorbing the notation variance EmDash's server already accepts.
+  - Follows CommonMark §6.4/§6.5 flanking delimiter rules asymmetrically, as the spec requires: `_` / `__` cannot open or close emphasis inside a word (fixing the long-standing bug where `foo_bar_baz` italicized `bar`), while `*` / `**` may.
+  - Reverse conversion is symmetrical with that asymmetry: an `em` span adjacent to alphanumeric characters renders as `*…*` rather than `_…_`, so intraword emphasis such as `foo*bar*baz` survives a full pull cycle and cannot produce phantom diff3 conflicts during 3-way merge.
+- **Autolink Support (`src/client/portable-text.ts`, v0.1.40 P2)**: `<https://example.com>` and `<mailto:user@example.com>` now parse into a `link` markDef plus span instead of degrading to plain text. Reverse conversion normalizes any link whose display text equals its `href` to the single autolink form, guaranteeing identical AST on re-parse.
+- **Task List Safety Mapping (`src/client/portable-text.ts:isTaskListItem`, v0.1.40 P4)**: `- [ ] ` / `- [x] ` checkbox syntax is preserved intact through round trips without corrupting list structure. The exported Layer 0 contract helper `isTaskListItem()` is reserved for a future EmDash task-list schema and is intentionally not wired into the current parse pipeline.
+- **Setext Heading Diagnostics (Guard G8, v0.1.40 P5)**: `Title\n---` and `Some text\n---\nmore` now raise a warning recommending an ATX heading (`# Heading`), instead of silently storing the underline as a paragraph.
+
+### Fixed
+
+- **Intraword Emphasis Loss (`src/client/portable-text.ts:renderSpans`, v0.1.40 P1)**: parsing `foo*bar*baz` produced an `em` span, but reverse conversion rendered `_`, which the flanking rule then refused to re-parse — dropping the mark and re-spelling an unedited line. This violated the loss-free AST principle and could surface as a divergence on an untouched line in `push/merge_stage.ts`. Reverse conversion now selects the delimiter from the surrounding characters.
+- **False-Positive Setext Warning (Guard G8, v0.1.40 P5)**: a blockquote immediately followed by `---` was correctly resolved into a thematic break, yet G8 still warned that the document used an unsupported Setext heading — telling users to rewrite content that already converts correctly. The exclusion set gained `>` and `=` so it tracks the parser's own prose-line rule as closely as a single-character class can.
+
+### Known Limitations
+
+- **Residual G8 Setext false positives (accepted)**: Guard G8 inspects only the first character of a line, while the parser classifies block types, so the two predicates are not identical. `* item\n---\nx`, `+ item\n---\nx` and `1. item\n---\nx` still warn even though the AST is produced correctly; the warning is cosmetic and never blocks a push. Widening the negated character class is deliberately prohibited: excluding `*` or digits would also swallow legitimate Setext headings such as `*emphasized text*\n---` and `2026 was great\n---`. Achieving full agreement would require duplicating a CommonMark block parser, contrary to this release's principle of a lightweight preflight with no external parser. Pinned by `T5-6`, which fails if the class is widened.
+- **Source fidelity normalization**: reverse conversion normalizes notation without changing meaning — `*italic*` becomes `_italic_` (except in intraword positions), and `***` / `___` become `---`. This appears on disk only through the full-pull path (`apiResponseToLocal`); push writes the raw Markdown from disk. `hasSpellingTransform` and `retrackLocalHashOnly()` keep re-tracking the hash, so `emit status` still reports `synced` — the author's original notation choice is not preserved, but sync integrity is.
+- **Nested emphasis remains out of scope**: `parseInline()` performs a flat regex scan without building an AST tree, so constructs like `*a **b** c*` degrade linearly rather than nesting correctly (documented and pinned by `T1-5`).
+
 ## [0.1.39] - 2026-11-19
 
 ### Added
