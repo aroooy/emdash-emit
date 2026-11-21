@@ -1,0 +1,292 @@
+# v0.1.44 計画書: 検索走査の早期終了（メディア）と taxonomy フィルタ N+1 解消（ローカル・ベースライン fast-path）・オフライン誘導
+
+- **対象バージョン**: `v0.1.44`
+- **作成日**: 2026-11-21
+- **ステータス**: **実装着手可（Approved）** — 全項目が既存コードの実測に基づく局所改善であり、Phase 0 の追加実測ゲートは不要。
+- **起点**:
+  1. v0.1.43 にて記事多次元検索（`emit article-search` / `sync_article_search`）が導入され、FTS 経路・走査フォールバック・オフライン走査・認識論的保護が確立された。
+  2. しかしメディア検索（`src/sync/media/remote_index.ts:searchRemoteMedia()`）には **`limit` 到達時の早期終了が存在しない**。ヒットが揃った後も `maxScan`（既定 500）まで走査を続け、結果として正当に打ち切った走査に `[WALK_INCOMPLETE]`（不在未証明）警告が付く。ユーザーとエージェントの両方に「もっと探さなければならない」という誤った圧力をかける。
+  3. 記事検索の taxonomy フィルタ（`--tag` / `--category`）は、リスト API に taxonomy が乗らないため **記事あたり 2 GET**（`GET /content/{collection}/{id}/terms/{taxonomy}`）を発行する。既定 `maxScan = 50` でも最大 100 GET であり、Emit が既にキャッシュしているベースライン（`base_snapshots.frontmatter_yaml`）を使わない限り N+1 が構造的に解消しない。
+  4. taxonomy 検索で 0 件・または走査上限に達した場合、CLI/MCP は `[WALK_INCOMPLETE]` を出すだけで、「ローカルに同期済みの記事だけを対象にした即座の再検索（`--offline`）」へ誘導していない。エージェントは同じリモート検索を `--max-scan` を上げて反復しがちで、コストだけが増える。
+- **目的**:
+  1. **P1: メディア検索の hit-limit 早期終了** — `searchRemoteMedia()` に `hitLimitReached` を導入し、`limit` 到達で走査を即時打ち切る。打ち切りは `truncated: true` で表現し、`walkComplete` は「範囲の全走査が完了した」意味のまま保つ（認識論的規則は変更しない）。
+  2. **P2: taxonomy フィルタのローカル・ベースライン fast-path** — 検索対象記事が `sync_state.remote_rev` と一致する未編集の同期済み記事である場合、リモート terms GET を発行せず `base_snapshots.frontmatter_yaml`（Layer A canonical slug）から判定する。追加 GET は **rev 不一致・未同期・pending フラグ有りの記事のみ**。
+  3. **P3: オフライン再検索への誘導（UX hint）** — リモート taxonomy / scan 検索が 0 件、または走査上限に達したとき、Layer 3 共通フォーマッタで `💡 Hint: ... --offline` を出力する。CLI と MCP で文言を統一する。
+  4. **P4: 認識論的規則の厳守** — どの変更でも「不在を断定しない」原則を維持する。早期終了した走査は `walkComplete: false`（メディア）または同等の `truncated` 表現となり、不在証明として扱われない。
+
+---
+
+## 1. 課題認識とアプローチの要約
+
+| #   | 課題                                       | 現状の実測事実                                                                                                                                                                                           | 判定                                                               | 本版でのアプローチ                                                                        |
+| --- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| 1   | メディア検索がヒット確定後も走り続ける     | `searchRemoteMedia()` のループ終了条件は `maxScan` 到達・`since` 境界到達・最終ページの 3 つのみ。`limit` 到達での break が無い（`remote_index.ts:280-395`）。既定 `MEDIA_SEARCH_DEFAULT_MAX_SCAN = 500` | 妥当。無駄な HTTP と遅延、および警告の誤発火                       | **P1**。`hitLimitReached` を追加し `limit` 到達で即時 break。`truncated` で打ち切りを表現 |
+| 2   | 正当に打ち切った走査が `[WALK_INCOMPLETE]` | `walkComplete` は自然終了（最終ページ）または `since` 境界到達でのみ true。limit 到達時も false のまま警告が出る                                                                                         | 妥当。警告の意味と実態がズレ、エージェントが無意味に再試行する     | **P1**。警告は「上限で打ち切った」場合のみ。文言は変更せず発火条件を正す                  |
+| 3   | taxonomy フィルタが記事あたり 2 GET        | `executeScanSearch()` が `fetchAssignedTerms()` を category/tag で各 1 回（`remote.ts:430,451`）。既定 `ARTICLE_SEARCH_TAXONOMY_MAX_SCAN = 50` → 最大 100 GET                                            | 妥当。同期済み記事の内容は既にキャッシュしているのに読み捨てている | **P2**。rev 一致の同期済み記事はベースラインから 0-GET 判定                               |
+| 4   | 0 件時にオフライン再検索へ誘導しない       | `formatArticleSearchEmptyNotice()` は「No match in the first N article(s).」のみ。`--offline` を知らないエージェントが `--max-scan` を上げて反復する                                                     | 妥当。次の一手が示されないのはエージェントワークフローの欠落       | **P3**。0 件・上限到達時に `💡 Hint: ... --offline` を CLI/MCP 共通で出力                 |
+
+---
+
+## 2. 現状の実測スナップショット（v0.1.43 コード）
+
+### 2.1 実測値一覧
+
+| 項目                            | 実測値 / 現在の実装                                                                                                                                                                                             | 位置                                                                                                                            |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| メディア検索の既定値            | `MEDIA_SEARCH_DEFAULT_LIMIT = 20`、`MEDIA_SEARCH_DEFAULT_MAX_SCAN = 500`、`MEDIA_SEARCH_MAX_LIMIT = 50`、`MEDIA_LIST_PAGE_SIZE = 100`                                                                           | `src/sync/media/remote_index.ts:40,42`、`src/sync/media/types.ts:42,45`                                                         |
+| メディア検索のループ終了条件    | (a) `remaining <= 0`（maxScan）→ break、(b) `reachedSinceBoundary` → `walkComplete = true` + break、(c) `rawItems.length === 0 \|\| !nextCursor` → `walkComplete = true`。**limit 到達での break は存在しない** | `src/sync/media/remote_index.ts:281-284, 385-394`                                                                               |
+| ヒット積上げ                    | `if (hits.length < limit) hits.push(...)`。超過分は `matchCount` のみを増やし捨てている（＝走査は続く）                                                                                                         | `src/sync/media/remote_index.ts:368-381`                                                                                        |
+| 打ち切り表現                    | `const truncated = matchCount > hits.length;`                                                                                                                                                                   | `src/sync/media/remote_index.ts:398`                                                                                            |
+| `[WALK_INCOMPLETE]` 発火        | `!result.walkComplete` のみで発火。CLI と MCP で文言は共通                                                                                                                                                      | `src/cli/commands/media.ts:150-155`、`src/mcp/tools/sync-media-search.ts:107-109`                                               |
+| 記事検索の taxonomy 検証        | `hits.length < limit` のときだけ category / tag を各 1 GET。`taxonomyFetchCount` を加算                                                                                                                         | `src/sync/article_search/remote.ts:422-468`                                                                                     |
+| 記事検索の taxonomy 既定走査    | `hasTaxonomyFilter ? ARTICLE_SEARCH_TAXONOMY_MAX_SCAN(50) : ARTICLE_SEARCH_DEFAULT_MAX_SCAN(300)`                                                                                                               | `src/sync/article_search/types.ts:27-28`、`remote.ts:273-283`                                                                   |
+| 記事検索の limit 到達打ち切り   | **既に実装済み**。`hitLimitReached` で break し、`walkComplete = allSeriesComplete && !hitLimitReached`                                                                                                         | `src/sync/article_search/remote.ts:497-513`                                                                                     |
+| リモート terms エンドポイント   | `GET /_emdash/api/content/{collection}/{id}/terms/{taxonomy}`。リスト API には taxonomy が乗らない（v0.1.43 Phase 0 M3 実測済み）                                                                               | `src/client/endpoints.ts:48`、`src/sync/terms.ts:46`                                                                            |
+| terms 取得の失敗表現            | HTTP 失敗・parse 失敗は `null` を返し「不明」と「無し（[]）」を区別する                                                                                                                                         | `src/sync/terms.ts:44,68,79-85`                                                                                                 |
+| キャッシュ済みリモート taxonomy | `sync_state.remote_taxonomy_hash = computeTaxonomyHash(categories, tags)`。pull / push commit / merge の全経路で更新済み                                                                                        | `src/db/cache.ts:72,287,331`、`src/sync/pull/index.ts:477`、`src/sync/pull/fast_path.ts:283,458`、`src/sync/push/commit.ts:375` |
+| ベースライン frontmatter        | `base_snapshots.frontmatter_yaml` は **JSON エンコードされた Frontmatter**（名前に反する）。taxonomy は Layer A（canonical percent-encoded slug または ULID）で保存                                             | `src/db/baseline.ts:45,56`、AGENTS.md §5                                                                                        |
+| rev 比較ヘルパー                | `isSameRev(trackedRev, remoteRev)` と `extractComparisonRev(rawItem)`。composite key（`{version}@draft:{ulid}` / `@live:`）対応                                                                                 | `src/client/api.ts:121,151`                                                                                                     |
+| リストアイテムの rev 候補       | `item._rev \|\| item.rev \|\| item.version \|\| rawObj._rev`（fast_path と pull で同一パターン）                                                                                                                | `src/sync/pull/fast_path.ts:77`、`src/sync/pull/index.ts:228`                                                                   |
+| taxonomy 正規化ヘルパー         | `canonicalizeTaxonomiesForBaseline(taxonomies, maps)` — ULID は verbatim、slug/name は canonical slug へ解決。`loadLocalTaxonomyMaps()` が `slugToId` / `idToSlug` を供給                                       | `src/sync/taxonomies.ts:370,756`                                                                                                |
+| フィルタ alias 解決             | `taxonomyTermFilterAliases(filter, definitions)` と `taxonomyTermMatchesFilter(term, aliases)`（decoded / encoded 両 spelling 対応）                                                                            | `src/utils/taxonomy-term-match.ts:49,86`                                                                                        |
+| オフライン検索の不在保護        | `OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE` と `buildOfflineArticleSearchFraming()` が Layer 3 に集約済み                                                                                                             | `src/presentation/article_report.ts:191,200`                                                                                    |
+| 0 件時のリモート検索文言        | walkComplete 時は「No match found in the remote article library (N articles scanned).」、それ以外は「No match in the first N article(s).」。**オフライン誘導なし**                                              | `src/presentation/article_report.ts:283-294`                                                                                    |
+
+---
+
+---
+
+## 3. 詳細設計仕様
+
+### 3.1 P1: メディア検索の hit-limit 早期終了（`src/sync/media/remote_index.ts`）
+
+#### 現状の問題
+
+`searchRemoteMedia()` の二重ループには `limit` 到達で抜ける経路が無い。20 件見つかった後も 500 件まで走査し、ページ取得を継続する。結果:
+
+- 無駄な HTTP（最大 5 ページ）とレイテンシ。
+- `walkComplete` が false のままなので `[WALK_INCOMPLETE] ... absence is not proven.` 警告が付く。**「十分に見つかった」ケースに「不在が証明できない」という警告が付く**のは、警告の意図（探索不足のエピステミック宣言）と実態の不一致。
+
+#### 設計
+
+記事検索側（`src/sync/article_search/remote.ts:497-513`）で既に実装済みの `hitLimitReached` と同一の語彙をメディア側に導入する。**対称性のため命名も semantics も揃える**。
+
+```ts
+// remote_index.ts — searchRemoteMedia() 内に追加
+let hitLimitReached = false;
+
+for (;;) {
+  const remaining = maxScan - scanned;
+  if (remaining <= 0 || hitLimitReached) break;
+  ...
+  for (const item of page.rawItems) {
+    scanned++;
+    // ...既存の since 境界判定 / inDateRange / matchedOn 判定...
+    if (matchedOn.length > 0) {
+      matchCount++;
+      hits.push({ ... });   // ← `hits.length < limit` ガードは撤去し、push 後に判定する
+      if (hits.length >= limit) {
+        hitLimitReached = true;
+        break;              // ← 内層 break: このページ残りは評価しない
+      }
+    }
+  }
+
+  if (reachedSinceBoundary) { walkComplete = true; break; }
+  if (hitLimitReached) break;   // ← walkComplete は据え置き（false）
+  if (page.rawItems.length === 0 || !page.nextCursor) { walkComplete = true; break; }
+  cursor = page.nextCursor;
+}
+
+const truncated = hitLimitReached || matchCount > hits.length;
+```
+
+#### 認識論的規則（変更しない・守らせる）
+
+- `hitLimitReached` で抜けた走査は **`walkComplete: false` のまま**。後続レコードが範囲内かどうかは不明なので、不在を断定してはならない。`truncated: true` が「上限で切った」ことを明示する。
+- したがって `[WALK_INCOMPLETE]` 警告は**引き続き発火する**。これは正しい。ただし警告文言は「見つかった件数」と「打ち切り理由」を区別できる方が有用なので、下記の補足行だけを追加する（既存 2 行の文言は変更しない）。
+- **`--limit` / `--max-scan` の撤廃はしない**。両者は別軸（返却件数 vs 読む件数）であり、AGENTS.md の認識論的規則（「window 外は不在ではない」）を支える制御可能なノブである。
+
+#### 警告文言の補足（Layer 3）
+
+`src/cli/commands/media.ts:150-155` と `src/mcp/tools/sync-media-search.ts:107-109` で、既存の 2 行はそのまま維持し、`result.truncated && result.hits.length >= limit` のときだけ次の 1 行を追加する:
+
+```text
+   Hit limit reached at <n>; raise --limit to see more matches from the same walk.
+```
+
+MCP 側の `note` 文字列にも同じ趣旨の句を追加し、CLI/MCP で文言を揃える（プレゼンテーション対称性）。**新しいエラーコードは追加しない**（表示のみ）。
+
+---
+
+### 3.2 P2: taxonomy フィルタのローカル・ベースライン fast-path（`src/sync/article_search/remote.ts`）
+
+#### 原則
+
+Emit は pull / push の全経路で「最後に同期したリモート taxonomy」を `sync_state.remote_taxonomy_hash` と `base_snapshots.frontmatter_yaml`（Layer A canonical slug）に保存している。リスト API が返す rev 情報がキャッシュの `remote_rev` と一致する限り、**その記事の remote taxonomy は変わっていない**と推定できる。よって GET を発行せずに判定できる。
+
+これは pull の 0-GET fast-path（`src/sync/pull/fast_path.ts:79-82`）が同じ前提で成立しているのと同じ論理であり、検索側にも同条件で適用する。
+
+#### 判定ルール（`executeScanSearch()` の taxonomy チェック部を置換）
+
+各候補記事について、次の**全条件を満たした場合のみ**ベースラインから 0-GET 判定する:
+
+1. `options.cache` が渡されている（キャッシュ無し構成では fast-path を使わない）。
+2. `syncState = options.cache.getSyncState(itemId)` が存在する。
+3. **rev 一致**: `isSameRev(syncState.remoteRev, extractComparisonRev(rawItem))`。不一致ならリモートで編集されており、キャッシュは失効 → 通常 GET へフォールバック。
+4. **pending フラグ無し**: `syncState.taxonomyApplyPending !== 1` かつ `syncState.taxonomyConflictPending !== 1`。どちらかが立っている状態は「ローカルとリモートの taxonomy が既知の形で食い違っている」ことを意味するため、キャッシュを真実として扱わない。
+5. **ベースライン読取成功**: `readBaselineFrontmatter(options.cache.getBaseSnapshot(itemId))` が非 null を返し、`taxonomies` に object が入っている。
+
+上記 1 つでも満たさなければ、**既存の `fetchAssignedTerms()` 経路へそのままフォールバック**する（挙動の後退ゼロ）。
+
+#### 判定の仕方（Layer A で比較する）
+
+```ts
+const fm = readBaselineFrontmatter(options.cache.getBaseSnapshot(itemId));
+const maps = loadLocalTaxonomyMaps(options.workspaceRoot); // ループ前に 1 回だけ解決して使い回す
+const canonical = canonicalizeTaxonomiesForBaseline(
+  { categories: fm?.taxonomies?.categories ?? [], tags: fm?.taxonomies?.tags ?? [] },
+  maps,
+);
+// canonical.categories / canonical.tags（Layer A）へ taxonomyTermMatchesFilter を適用する
+```
+
+- `canonicalizeTaxonomiesForBaseline()`（`src/sync/taxonomies.ts:756`）で Layer A に正規化してから比較する。ディスク上の decoded spelling をそのまま compare すると、encoded remote slug と不一致を起こす（v0.1.43 の taxonomy match バグ修正 `b2cefbe` と同じ根因）。
+- 既存の alias 一致関数 `taxonomyTermMatchesFilter(term, filterAliases)` を**そのまま適用**する。alias 集合は既に decoded / encoded 両 spelling を含んでいる（`taxonomyTermFilterAliases()`）ため、Layer A 語彙でも正しくヒットする。
+- ULID term は verbatim 保持されるので、slug 衝突の loser term も失われない（AGENTS.md §Two-Layer の loser 保護と同じ性質を維持）。
+- `loadLocalTaxonomyMaps()` は記事ごとではなく**スキャン開始時に 1 回**解決する（ディスク I/O の往復を防ぐ）。
+
+#### HTTP コスト宣言（更新後）
+
+| 情形                                     | 追加 GET                                                   |
+| ---------------------------------------- | ---------------------------------------------------------- |
+| 同期済み・rev 一致・pending なしの記事   | **0**                                                      |
+| rev 不一致 / 未同期 / pending 立ち上がり | 従来どおり category + tag = 2                              |
+| terms GET が失敗（`null` を返す）        | 従来どおり「不明」として non-match。fast-path は発火しない |
+
+`taxonomyFetchCount` は**実際に発行した GET の数**を計上し続ける（キャッシュヒットは計上しない）。ヘッダー表示 `[taxonomies fetched: N GET(s)]` は「リモートへ問い合わせた回数」の意味のまま変わらない。
+
+#### 新增フィールド（Layer 2 → Layer 3）
+
+`ArticleSearchResult` に `taxonomyCacheHitCount: number` を追加する（0-GET で判定できた記事数）。CLI ヘッダーに `[taxonomies cached: N]`、MCP payload に `taxonomyCacheHitCount` を出し、「なぜ GET が少ないのか」をユーザーとエージェントが判断できるようにする。レイヤリング allowlist（`tests/layering.test.ts` の `article_search`）には**新規シンボルを追加しない**（`ArticleSearchResult` は既に許可済みで、フィールド追加は型内部なので gate 対象外）。
+
+#### レイヤリング
+
+- `remote.ts`（Layer 2）からの追加 import:
+  - `../../client/api.js` の `isSameRev` / `extractComparisonRev` — Layer 0。同ファイルは既に `unwrapEnvelope` を import 済みで、新規 edge は増えない。
+  - `../../db/baseline.js` の `readBaselineFrontmatter`（および `CacheDatabase.getBaseSnapshot()` メソッド）— Layer 0。Axis 0 に反しない。
+  - `../taxonomies.js` の `loadLocalTaxonomyMaps` / `canonicalizeTaxonomiesForBaseline` — **Layer 1**。Layer 2 → Layer 1 は許可済み。同ファイルは既に `../terms.js`（Layer 1）を import しており、同じ性質の edge が増えるだけ。
+- **sibling Layer 2 結合は増やさない**（`ALLOWED_LAYER_2_SIBLING_IMPORTS` のスナップショットは無変更）。
+
+---
+
+### 3.3 P3: オフライン再検索への誘導（`src/presentation/article_report.ts`）
+
+#### 発火条件
+
+リモート（`offline !== true`）の記事検索で、次のいずれか:
+
+- (a) `hits.length === 0`
+- (b) `truncated === true`（limit 到達）**または** `walkComplete === false`（maxScan 到達）
+
+#### 新しい共通フォーマッタ
+
+```ts
+/**
+ * Formats the offline re-search hint for a remote article search that found nothing
+ * or stopped before the end of the library. Returns null when no hint applies.
+ */
+export function formatArticleSearchOfflineHint(
+  result: ArticleSearchResult,
+  options?: { offline?: boolean; tag?: string; category?: string; workspaceRoot?: string },
+): string | null;
+```
+
+- `options.offline === true` のときは **常に null** を返す（オフライン検索で「オフラインを試せ」と言うのは無意味）。
+- 出力文言（CLI・MCP 共通）:
+
+```text
+💡 Hint: workspace-synced articles can be searched instantly with --offline
+   (local Markdown bodies, zero HTTP). For taxonomy filters, verify terms first: emit pull-taxonomies
+```
+
+- MCP 版は同じ趣旨を `note` に追記し、payload には `hint: { offlineSearch: true, reason: 'no-hits' | 'walk-truncated' }` を入れる（エージェントが機械的に判断できる形）。**`note` は 1 つに結合**し、フィールドを増やさない。
+- taxonomy フィルタ指定時（`tag` / `category`）は、`getLocalTaxonomiesSummary(workspaceRoot)` が非空のときだけ末尾の語彙検証句を残す。定義が空ならその句を落とす（不在を断定しない）。
+
+#### 配置
+
+- CLI: `src/cli/commands/article-search.ts` の 0 件通知および `[WALK_INCOMPLETE]` 通知の**直後**に呼ぶ。
+- MCP: `src/mcp/tools/sync-article-search.ts` の `note` 構築部で既存 note に追記する。
+- **Layer 3 内部の共有は `src/presentation/` 経由のみ**（Axis 3: MCP は `src/cli/commands/` を import しない）。よって関数は必ず `article_report.ts` に置く。
+
+---
+
+## 4. アーキテクチャ配置とレイヤリング制約（Axis 0〜5）
+
+- **Layer 2（変更）**: `src/sync/media/remote_index.ts`、`src/sync/article_search/remote.ts`、`src/sync/article_search/types.ts`。
+- **Layer 3（変更）**: `src/presentation/article_report.ts`、`src/cli/commands/article-search.ts`、`src/mcp/tools/sync-article-search.ts`、`src/cli/commands/media.ts`、`src/mcp/tools/sync-media-search.ts`。
+- **Layer 0 / Layer 1（変更なし）**: `isSameRev` / `extractComparisonRev` / `readBaselineFrontmatter` / `canonicalizeTaxonomiesForBaseline` / `loadLocalTaxonomyMaps` / `taxonomyTermMatchesFilter` はすべて既存シンボルを再利用する。**新規ヘルパーを作らない**（重複実装が Layering 違反の温床になる）。
+- **Axis 0**: Layer 0 は変更しない。
+- **Axis 1**: Layer 1 モジュールは Layer 2 を import しない — 変更なしで成立。
+- **Axis 2**: Layer 3 が import する Layer 2 シンボルは既存 allowlist（`searchRemoteArticles`, `searchLocalArticles`, `ArticleSearchResult`, `ArticleSearchHit`, `ArticleSearchOptions`, `searchRemoteMedia`, `searchLocalMirrorMedia`, `collectLocalMirrorIndex`）の範囲内。allowlist の変更は不要。
+- **Axis 3**: MCP は CLI を import しない。hint フォーマッタは presentation に置く。
+- **Axis 4**: Layer 0/1/2 は Layer 3 を import しない。
+- **Axis 5**: 非 CLI モジュールに `console.log` / `console.debug` を追加しない（警告・ヒントはすべて戻り値として Layer 3 に返す）。
+
+---
+
+## 5. Ask First ポリシーの自己申告
+
+- **カテゴリ 1（public facade / orchestrator API の破壊的変更）**: **非該当**。`pullBatch`, `pullSingleArticle`, `pushArticle`, `pushAll` のシグネチャ・戻り値は変更しない。`ArticleSearchResult` への `taxonomyCacheHitCount` 追加は**追加のみ**の後方互換拡張であり、検索系は public façade（`src/index.ts`）未公開。
+- **カテゴリ 2（永続化スキーマ / 設定キー）**: **非該当**。`cache.db` のテーブル・カラム・インデックス変更なし、`.emit/config.json` の新キーなし。既存の `remote_taxonomy_hash` と `base_snapshots.frontmatter_yaml` を**読むだけ**。
+- **カテゴリ 3（npm パッケージ追加）**: **非該当**。
+- **カテゴリ 4（核心原則の変更 / docs 削除）**: **非該当**。認識論的保護（不在を断定しない）・Two-Layer 表現・レイヤリング不変条件をすべて維持する。`--limit` / `--max-scan` の撤廃もしない。
+
+---
+
+## 6. テストマトリクス（Test Matrix）
+
+| ID      | テスト分類         | 検証内容                                                                                                                                                                 |
+| ------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **M-1** | メディア早期終了   | `limit: 2` で 3 件以上のヒットがある走査が、limit 到達ページ内で停止し後続ページを fetch しないこと（モック fetch の呼出し回数で検証）                                   |
+| **M-2** | メディア認識論     | hit-limit で打ち切った結果は `walkComplete: false` かつ `truncated: true`。`[WALK_INCOMPLETE]` 警告が残り、不在を断定しない                                              |
+| **M-3** | メディア境界区別   | `since` 境界到達で打ち切った走査は従来どおり `walkComplete: true`（hit-limit と混同しないこと）                                                                          |
+| **M-4** | メディア補足行     | hit-limit 到達時のみ「Hit limit reached at N; raise --limit ...」が CLI/MCP 双方に出ること。未到達時に出ないこと                                                         |
+| **T-1** | taxonomy fast-path | `sync_state.remote_rev` が list item の comparison rev と一致し pending フラグが無い同期済み記事に対し、terms GET が **0 回**で判定成立すること                          |
+| **T-2** | taxonomy fast-path | rev が不一致（リモート編集済み）の記事は terms GET を発行し、`taxonomyFetchCount` に計上されること                                                                       |
+| **T-3** | taxonomy fast-path | `taxonomyApplyPending === 1` または `taxonomyConflictPending === 1` の記事はキャッシュを使わず GET 経路になること                                                        |
+| **T-4** | taxonomy fast-path | `base_snapshots` 欠損・frontmatter parse 失敗の記事は GET へフォールバックし、例外にならないこと                                                                         |
+| **T-5** | Two-Layer 一致     | ベースラインが encoded canonical slug（`%e3%83%bc...`）、フィルタが decoded（`ローカルガイド`）でも fast-path 判定がヒットすること                                       |
+| **T-6** | ULID loser 保護    | slug 衝突の loser term を ULID で保存したベースラインが、fast-path 判定で winner term に化けないこと                                                                     |
+| **T-7** | taxonomy 報告      | `taxonomyCacheHitCount` が 0-GET 判定件数と一致し、`taxonomyFetchCount` は実 GET 数のみ計上すること（両者の和 ≤ 検証記事数 × 2）                                         |
+| **H-1** | offline hint       | リモート検索 0 件時に `💡 Hint: ... --offline` が出るとき、オフライン検索では同じ hint が出ないこと                                                                      |
+| **H-2** | offline hint       | `truncated` または `walkComplete: false` のとき hit が有っても hint が出ること（上限到達ケース）                                                                         |
+| **H-3** | 対称性             | CLI と MCP で hint の意味が一致すること（MCP は `note` に結合され、`hint.offlineSearch === true` を持つ）                                                                |
+| **H-4** | 語彙ヒント         | ローカルに taxonomy 定義が無いとき、hint から語彙検証句が落ち、不在断定の文言にならないこと                                                                              |
+| **Q-1** | 品質ゲート         | `npm run check`（format:check / typecheck / check:cycles / test）が 100% グリーン。`tests/layering.test.ts` Axis 0〜5 と `tests/guards.test.ts` Rule 1〜5 が無変更でパス |
+| **Q-2** | ログ分離           | 変更した Layer 2 モジュールに `console.log` / `console.debug` が無いこと（Axis 5）                                                                                       |
+
+---
+
+## 7. Definition of Done (DoD)
+
+1. [ ] `searchRemoteMedia()` に `hitLimitReached` による hit-limit 早期終了が入り、`truncated` が打ち切りを表現している。
+2. [ ] メディア検索の `[WALK_INCOMPLETE]` 警告が残り、追加の hit-limit 補足行が CLI / MCP 双方に出る。
+3. [ ] `executeScanSearch()` の taxonomy 検証に rev-check fast-path が入り、条件を満たす記事は 0-GET で判定される。
+4. [ ] fast-path の全条件（cache 有無 / rev 一致 / pending フラグ / ベースライン読取）と GET フォールバックが単体テストで網羅されている（T-1〜T-6）。
+5. [ ] `taxonomyCacheHitCount` が結果に含まれ、CLI ヘッダーと MCP payload の両方に表示される。
+6. [ ] `formatArticleSearchOfflineHint()` が `src/presentation/article_report.ts` に追加され、CLI と MCP が同一の関数を使う（文言分岐なし）。
+7. [ ] `tests/layering.test.ts` の allowlist / sibling スナップショットが**無変更**でグリーン（新規 Layer 2 結合を追加していない証拠）。
+8. [ ] `docs/media-id-spaces.md` および `AGENTS.md` の記述と矛盾しない（メディア ID 空間・Two-Layer 表現を尊重している）。
+9. [ ] `README.md` の `emit media-search` / `emit article-search` セクションに、hit-limit の挙動と `--offline` 誘導が反映されている。
+10. [ ] `npm run check` が 100% グリーンで、追加したエラーコードはゼロ（表示のみ変更）。
+
+---
+
+## 8. 実装順序（推奨）
+
+1. **P1**（メディア早期終了）— 単独でリリース可能・影響範囲が最小。M-1〜M-4 を先に緑にする。
+2. **P3**（offline hint）— P1 の補足行と同じ PR にまとめるとプレゼンテーション対称性テストを一度で済ませられる。H-1〜H-4。
+3. **P2**（taxonomy fast-path）— 最も検証コストが高いので最後。T-1〜T-7 を先に書き、RED から入る。
+
+各 PR で `npm run check` をグリーンに保ち、DoD の該当項目のみチェックする。
