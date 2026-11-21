@@ -40,7 +40,11 @@ import { collectRemoteStorageKeys } from './media/index.js';
 import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
 import { detectWorkspaceLinkDrift } from '../utils/profile.js';
 import { workspaceLinkDriftLines } from '../utils/profile-resolution.js';
-import { VALID_MEDIA_FILE_KEY, FENCE_POLICY, isCodeFenceDelimiter } from '../utils/media-refs.js';
+import {
+  VALID_MEDIA_FILE_KEY,
+  FENCE_POLICY,
+  scanClassifiedMediaReferences,
+} from '../utils/media-refs.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
 
@@ -131,127 +135,26 @@ function countMirroredMedia(mediaDir: string): number {
   return count;
 }
 
-/** Any storageKey-style ULID appearing inside a media file URL. */
-const MEDIA_ULID_IN_URL = /[0-9A-HJ-NP-Z]{26}/g;
-
-/** True when the captured image markup sits inside an inline code span on the same line. */
-function isInlineCodeSpan(line: string, matchText: string, matchIndex: number): boolean {
-  if (line.includes('`' + matchText)) return true;
-  const first = line.indexOf('`');
-  return first !== -1 && first < matchIndex && matchIndex < line.lastIndexOf('`');
-}
-
-/**
- * Classify a captured media URL. Anything that cannot name a real asset (template placeholders, or
- * a key polluted by leaked markup) is reported separately so it never counts as missing media.
- */
-function classifyMediaUrl(url: string): 'valid' | 'placeholder' | 'invalid' {
-  if (url.includes('<') || url.includes('>') || url.includes('${')) return 'placeholder';
-  const keyMatch = url.match(/(?:^|\/)media\/file\/([^?#]*)/);
-  if (!keyMatch) return 'valid'; // a plain local path: resolved by filesystem checks instead
-  if (VALID_MEDIA_FILE_KEY.test(keyMatch[1])) return 'valid';
-  // A ULID is present but the captured key is polluted by leaked markup, as in the real legacy
-  // body line `![alt](/_emdash/api/media/file/<ULID>.jpg" control=true)`. The asset itself still
-  // resolves through the ULID, so only the surrounding capture is treated as residue.
-  return MEDIA_ULID_IN_URL.test(keyMatch[1]) ? 'valid' : 'invalid';
-}
-
 /**
  * Scans article markdown to separate standard body image references from
  * informational references (code blocks, inline code, HTML comments, opaque custom-block fences,
  * or placeholder URLs) and from structurally invalid captures.
  */
 export function scanArticleMediaDetailed(bodyMarkdown: string): ScannedMediaReferences {
-  const normalRefs = new Set<string>();
-  const informationalRefs = new Set<string>();
-  const invalidRefs = new Set<string>();
+  const normalRefs: string[] = [];
+  const informationalRefs: string[] = [];
+  const invalidRefs: string[] = [];
 
-  const lines = bodyMarkdown.split('\n');
-  let inFence = false;
-  let fenceDelimiter = '';
-  // EmDash serializes unknown Portable Text blocks as single-line opaque fences
-  // (`<!--ec:block {...} -->`). Their embedded JSON may contain media URLs that belong to the
-  // remote block, not to editable markdown, so they must never be reported as missing.
-  let inOpaqueFence = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^<!--ec:block\s/.test(trimmed)) {
-      inOpaqueFence = !/^.*-->$/.test(trimmed);
-      continue;
-    }
-    if (inOpaqueFence) continue;
-
-    // Note: Doctor treats both backticks and tildes (~~~) as fences for diagnostic
-    // reporting to avoid false warnings on code examples, whereas push guards (G5/G11)
-    // strictly exempt only backtick fences per AGENTS.md.
-    const delim = isCodeFenceDelimiter(trimmed, FENCE_POLICY.diagnostic);
-    if (delim) {
-      if (!inFence) {
-        inFence = true;
-        fenceDelimiter = delim;
-        continue;
-      } else if (trimmed.startsWith(fenceDelimiter)) {
-        inFence = false;
-        continue;
-      }
-    }
-
-    // Markdown image syntax: ![alt](url)
-    const mdRegex = /!\[.*?\]\(([^)\s]+)(?:\s+["'].*?["'])?\)/g;
-    let match: RegExpExecArray | null;
-    while ((match = mdRegex.exec(line)) !== null) {
-      const url = match[1].trim();
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        const kind = classifyMediaUrl(url);
-        if (kind === 'invalid') {
-          invalidRefs.add(url);
-        } else if (
-          inFence ||
-          isInlineCodeSpan(line, match[0], match.index) ||
-          kind === 'placeholder'
-        ) {
-          informationalRefs.add(url);
-        } else {
-          normalRefs.add(url);
-        }
-      }
-    }
-
-    // HTML img tags: <img src="...">
-    const htmlRegex = /<img[^>]+src=["']([^"']+)["']/gi;
-    while ((match = htmlRegex.exec(line)) !== null) {
-      const url = match[1].trim();
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        const kind = classifyMediaUrl(url);
-        if (kind === 'invalid') {
-          invalidRefs.add(url);
-        } else if (inFence || kind === 'placeholder' || line.includes('<!--')) {
-          informationalRefs.add(url);
-        } else {
-          normalRefs.add(url);
-        }
-      }
-    }
-
-    // Legacy WordPress-derived custom container lines that survived the migration, e.g.
-    // `[dimage url="/_emdash/api/media/file/<ULID>.jpg" control=true]`. The URL is quoted inside
-    // the line, so the regexes above cannot capture it; a trailing attribute or bracket marks the
-    // capture as markup residue rather than a real asset reference.
-    const legacyContainerRegex = /\[([a-z]+)\s+url=["']?([^"'\s\]]+)["']?[^\]]*\]/gi;
-    while ((match = legacyContainerRegex.exec(line)) !== null) {
-      const url = match[2].trim();
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        informationalRefs.add(url);
-      }
-    }
+  for (const entry of scanClassifiedMediaReferences(bodyMarkdown, {
+    fencePolicy: FENCE_POLICY.diagnostic,
+    includeInformational: true,
+  })) {
+    if (entry.kind === 'normal') normalRefs.push(entry.url);
+    else if (entry.kind === 'informational') informationalRefs.push(entry.url);
+    else invalidRefs.push(entry.url);
   }
 
-  return {
-    normalRefs: Array.from(normalRefs).sort(),
-    informationalRefs: Array.from(informationalRefs).sort(),
-    invalidRefs: Array.from(invalidRefs).sort(),
-  };
+  return { normalRefs, informationalRefs, invalidRefs };
 }
 
 /**

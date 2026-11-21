@@ -76,12 +76,9 @@ export function collectArticleStorageKeys(content: string): OrphanMediaDescripto
     }
   };
 
-  // scanArticleMediaReferences covers markdown images and HTML img tags anywhere in the body,
+  // Scanning `content` directly covers markdown images and HTML img tags anywhere in the body,
   // including inside opaque fences and legacy container lines where doctor stays quiet by design.
-  const scannedRefs = scanArticleMediaReferences(content).join('\n');
-  harvest(scannedRefs, keyPattern);
   harvest(content, keyPattern);
-  harvest(scannedRefs, localRefPattern);
   harvest(content, localRefPattern);
 
   const descriptors: OrphanMediaDescriptor[] = [];

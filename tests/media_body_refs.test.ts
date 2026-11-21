@@ -32,6 +32,7 @@ import {
   scanArticleMediaReferences,
 } from '../src/utils/media-body-refs.js';
 import { FENCE_POLICY } from '../src/utils/media-refs.js';
+import { collectArticleStorageKeys } from '../src/sync/media/index.js';
 
 const STORAGE_KEY = '01M67P0JW605ZJ5GV4YXB7W400.jpg';
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
@@ -264,5 +265,24 @@ describe('scanArticleMediaReferences (Layer 0 workspace contract)', () => {
     expect(scanArticleMediaReferences(body)).toEqual(['media/tilde.png']);
     // Diagnostic policy treats both fence kinds as code, so nothing is reported.
     expect(scanArticleMediaReferences(body, FENCE_POLICY.diagnostic)).toEqual([]);
+  });
+});
+
+describe('collectArticleStorageKeys (v0.1.45 P5 harvest equivalence)', () => {
+  it('M-1 & M-2: collects storageKeys from both standard body, opaque fences, and code fences', () => {
+    const keyBody = '01M67P07X2VPW0MYRRRGMA6T5A.jpg';
+    const keyOpaque = '01M67P07X2VPW0MYRRRGMA6T5B.png';
+    const keyCodeFence = '01M67P07X2VPW0MYRRRGMA6T5C.webp';
+    const content = [
+      `![Body](https://example.com/_emdash/api/media/file/${keyBody})`,
+      `<!--ec:block {"url":"/_emdash/api/media/file/${keyOpaque}"} -->`,
+      '```md',
+      `![Fenced](../../media/${keyCodeFence})`,
+      '```',
+    ].join('\n');
+
+    const descriptors = collectArticleStorageKeys(content);
+    const keys = descriptors.map((d) => d.storageKey);
+    expect(keys).toEqual([keyBody, keyOpaque, keyCodeFence]);
   });
 });

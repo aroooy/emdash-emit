@@ -26,6 +26,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { searchLocalArticles, searchRemoteArticles } from '../src/sync/article_search/index.js';
+import { readTaxonomiesFromBaseline } from '../src/sync/article_search/remote.js';
 import {
   formatArticleSearchEmptyNotice,
   formatArticleSearchHeader,
@@ -2002,6 +2003,262 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
           cache: wsCache,
         });
         expect(searchRes.hits).toHaveLength(0);
+      } finally {
+        wsCache.close();
+      }
+    });
+  });
+
+  describe('v0.1.45 P6: readTaxonomiesFromBaseline() precondition unit tests', () => {
+    const itemId = '01M77VFT000000000000000950';
+    const rev = '1@live:01M77VFT0000000000000000L1';
+    const b64Rev1 = Buffer.from('1:2026-11-20T00:00:00.000Z').toString('base64');
+    const remoteItem = {
+      id: itemId,
+      _rev: b64Rev1,
+      liveRevisionId: '01M77VFT0000000000000000L1',
+    };
+
+    const tempDirs: string[] = [];
+    afterEach(() => {
+      for (const dir of tempDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      tempDirs.length = 0;
+    });
+
+    function setupSyncedWorkspace() {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-baseline-tax-'));
+      tempDirs.push(wsDir);
+      initWorkspace(wsDir, { origin: mockOrigin });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      const relPath = `posts/published/20261121_${itemId}-tax-test.md`;
+      fs.mkdirSync(path.join(wsDir, 'posts', 'published'), { recursive: true });
+
+      const fm = makeTestFrontmatter({
+        id: itemId,
+        slug: 'tax-test',
+        title: 'Tax Test',
+        status: 'published',
+        taxonomies: { categories: ['tech'], tags: ['vitest'] },
+      });
+      const content = serializeMarkdown(fm, 'Body text\n');
+      fs.writeFileSync(path.join(wsDir, relPath), content, 'utf8');
+      const hash = calculateHash(content);
+
+      wsCache.saveBaseSnapshot(
+        createBaseSnapshot({
+          id: itemId,
+          rev,
+          bodyMarkdown: 'Body text\n',
+          frontmatter: fm,
+          hash,
+        }),
+      );
+      wsCache.saveSyncState({
+        id: itemId,
+        localFilePath: relPath,
+        localHash: hash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'tax-test',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      return { wsDir, wsCache, relPath, fm, hash };
+    }
+
+    it('T-1: returns no-cache when cache is missing or item is untracked', () => {
+      const { wsDir, wsCache } = setupSyncedWorkspace();
+      try {
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: undefined,
+            itemId,
+            item: remoteItem,
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'no-cache' });
+
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: wsCache,
+            itemId: '01M77VFT000000000000000999',
+            item: remoteItem,
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'no-cache' });
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-2: returns pending-flag when any of the 4 pending flags is set', () => {
+      const { wsDir, wsCache, relPath, hash } = setupSyncedWorkspace();
+      try {
+        for (const flag of [
+          { deletePending: 1 },
+          { bodyConflictPending: 1 },
+          { taxonomyApplyPending: 1 },
+          { taxonomyConflictPending: 1 },
+        ]) {
+          wsCache.saveSyncState({
+            id: itemId,
+            localFilePath: relPath,
+            localHash: hash,
+            remoteRev: rev,
+            status: 'published',
+            slug: 'tax-test',
+            lastSyncedAt: Date.now(),
+            deletePending: 0,
+            bodyConflictPending: 0,
+            taxonomyApplyPending: 0,
+            taxonomyConflictPending: 0,
+            ...flag,
+          });
+          expect(
+            readTaxonomiesFromBaseline({
+              cache: wsCache,
+              itemId,
+              item: remoteItem,
+              workspaceRoot: wsDir,
+            }),
+          ).toEqual({ terms: null, reason: 'pending-flag' });
+        }
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-3: returns rev-mismatch when remote revision differs', () => {
+      const { wsDir, wsCache } = setupSyncedWorkspace();
+      try {
+        const b64Rev2 = Buffer.from('2:2026-11-21T00:00:00.000Z').toString('base64');
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: wsCache,
+            itemId,
+            item: { id: itemId, _rev: b64Rev2, liveRevisionId: '01M77VFT0000000000000000L2' },
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'rev-mismatch' });
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-4: returns disk-modified when local file has unpushed edits', () => {
+      const { wsDir, wsCache, relPath } = setupSyncedWorkspace();
+      try {
+        fs.writeFileSync(path.join(wsDir, relPath), 'Modified local content', 'utf8');
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: wsCache,
+            itemId,
+            item: remoteItem,
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'disk-modified' });
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-5: returns no-snapshot when base_snapshot is absent', () => {
+      const { wsDir, wsCache } = setupSyncedWorkspace();
+      try {
+        wsCache.deleteBaseSnapshot(itemId);
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: wsCache,
+            itemId,
+            item: remoteItem,
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'no-snapshot' });
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-6: returns no-recorded-taxonomies for legacy snapshot lacking taxonomies', () => {
+      const { wsDir, wsCache, fm, hash } = setupSyncedWorkspace();
+      try {
+        const legacyFm = { ...fm } as Record<string, unknown>;
+        delete legacyFm.taxonomies;
+        wsCache.saveBaseSnapshot({
+          id: itemId,
+          rev,
+          bodyMarkdown: 'Body text\n',
+          frontmatterYaml: JSON.stringify(legacyFm),
+          hash,
+          savedAt: Date.now(),
+        });
+        expect(
+          readTaxonomiesFromBaseline({
+            cache: wsCache,
+            itemId,
+            item: remoteItem,
+            workspaceRoot: wsDir,
+          }),
+        ).toEqual({ terms: null, reason: 'no-recorded-taxonomies' });
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('T-7 & T-8: returns cache-hit with terms and never mutates sync_state.local_hash on spelling-only mismatch', () => {
+      const { wsDir, wsCache, relPath, fm } = setupSyncedWorkspace();
+      try {
+        // Seed media mirror so localization spelling differs from canonical
+        const storageKeyStem = '01M67P2N0A44G4KHK6QZZGMRW7';
+        const storageKey = `${storageKeyStem}.webp`;
+        fs.mkdirSync(path.join(wsDir, 'media'), { recursive: true });
+        fs.writeFileSync(path.join(wsDir, 'media', storageKey), 'webp');
+        fs.writeFileSync(
+          path.join(wsDir, 'media', `${storageKeyStem}.yaml`),
+          `id: "01M67PG2WTXPEJVMS4W5N3FC48"\nfilename: "${storageKey}"\nstorageKey: "${storageKey}"\nmimeType: "image/webp"\n`,
+        );
+
+        const canonicalBody = `Body\n\n![Img](/_emdash/api/media/file/${storageKey})\n`;
+        const localBody = `Body\n\n![Img](../../media/${storageKey})\n`;
+        const canonicalHash = calculateHash(serializeMarkdown(fm, canonicalBody));
+        fs.writeFileSync(path.join(wsDir, relPath), serializeMarkdown(fm, localBody), 'utf8');
+
+        wsCache.saveBaseSnapshot(
+          createBaseSnapshot({
+            id: itemId,
+            rev,
+            bodyMarkdown: canonicalBody,
+            frontmatter: fm,
+            hash: canonicalHash,
+          }),
+        );
+        wsCache.saveSyncState({
+          id: itemId,
+          localFilePath: relPath,
+          localHash: canonicalHash,
+          remoteRev: rev,
+          status: 'published',
+          slug: 'tax-test',
+          lastSyncedAt: Date.now(),
+          taxonomyApplyPending: 0,
+          taxonomyConflictPending: 0,
+        });
+
+        const res = readTaxonomiesFromBaseline({
+          cache: wsCache,
+          itemId,
+          item: remoteItem,
+          workspaceRoot: wsDir,
+        });
+        expect(res).toEqual({
+          terms: { categories: ['tech'], tags: ['vitest'] },
+          reason: 'cache-hit',
+        });
+        expect(wsCache.getSyncState(itemId)!.localHash).toBe(canonicalHash);
       } finally {
         wsCache.close();
       }

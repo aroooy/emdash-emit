@@ -77,23 +77,68 @@ export interface ParsedMediaRefMatch {
   line: number;
 }
 
+/** Any storageKey-style ULID appearing inside a media file URL. */
+const MEDIA_ULID_IN_URL = /[0-9A-HJ-NP-Z]{26}/g;
+
+/** True when the captured image markup sits inside an inline code span on the same line. */
+export function isInlineCodeSpan(line: string, matchText: string, matchIndex: number): boolean {
+  if (line.includes('`' + matchText)) return true;
+  const first = line.indexOf('`');
+  return first !== -1 && first < matchIndex && matchIndex < line.lastIndexOf('`');
+}
+
 /**
- * Unified scanner for Markdown images (![alt](url)) and HTML <img> tags in content.
- * Filters out references located inside code fences (according to fencePolicy)
- * or inside opaque block fences (<!--ec:block ... -->).
+ * Classifies a captured media URL. Anything that cannot name a real asset (template placeholders, or
+ * a key polluted by leaked markup) is reported separately so it never counts as missing media.
  */
-export function scanRawMediaReferences(
+export function classifyMediaUrl(url: string): 'valid' | 'placeholder' | 'invalid' {
+  if (url.includes('<') || url.includes('>') || url.includes('${')) return 'placeholder';
+  const keyMatch = url.match(/(?:^|\/)media\/file\/([^?#]*)/);
+  if (!keyMatch) return 'valid'; // a plain local path: resolved by filesystem checks instead
+  if (VALID_MEDIA_FILE_KEY.test(keyMatch[1])) return 'valid';
+  // A ULID is present but the captured key is polluted by leaked markup, as in the real legacy
+  // body line `![alt](/_emdash/api/media/file/<ULID>.jpg" control=true)`. The asset itself still
+  // resolves through the ULID, so only the surrounding capture is treated as residue.
+  return MEDIA_ULID_IN_URL.test(keyMatch[1]) ? 'valid' : 'invalid';
+}
+
+export interface ClassifiedMediaRef {
+  url: string;
+  kind: 'normal' | 'informational' | 'invalid';
+}
+
+/**
+ * Unified scanner for Markdown images, HTML <img> tags, and optional legacy/informational
+ * containers with classification. Filters out opaque block fences (`<!--ec:block ... -->`).
+ */
+export function scanClassifiedMediaReferences(
   bodyMarkdown: string,
-  fencePolicy: FencePolicyType = FENCE_POLICY.guard,
-): string[] {
-  const references = new Set<string>();
+  options?: {
+    fencePolicy?: FencePolicyType;
+    includeInformational?: boolean;
+    classify?: (url: string) => 'valid' | 'placeholder' | 'invalid';
+  },
+): ClassifiedMediaRef[] {
+  const fencePolicy = options?.fencePolicy ?? FENCE_POLICY.guard;
+  const includeInformational = options?.includeInformational ?? false;
+  const classify = options?.classify ?? classifyMediaUrl;
+
+  const seen = new Map<string, 'normal' | 'informational' | 'invalid'>();
+  const record = (url: string, kind: 'normal' | 'informational' | 'invalid'): void => {
+    const existing = seen.get(url);
+    if (!existing || kind === 'normal') {
+      seen.set(url, kind);
+    }
+  };
+
   const lines = bodyMarkdown.split('\n');
   let inFence = false;
   let fenceDelimiter = '';
   let inOpaqueFence = false;
 
   for (const rawLine of lines) {
-    const trimmed = rawLine.replace(/\r$/, '').trim();
+    const line = rawLine.replace(/\r$/, '');
+    const trimmed = line.trim();
 
     // Check opaque fences (<!--ec:block ... -->)
     if (/^<!--ec:block\s/.test(trimmed)) {
@@ -119,27 +164,81 @@ export function scanRawMediaReferences(
         continue;
       }
     }
-    if (inFence) continue;
+    if (inFence && !includeInformational) continue;
 
     // 1. Markdown image syntax: ![alt](url)
     const mdRegex = /!\[.*?\]\(([^)\s]+)(?:\s+["'].*?["'])?\)/g;
     let match: RegExpExecArray | null;
-    while ((match = mdRegex.exec(trimmed)) !== null) {
+    while ((match = mdRegex.exec(line)) !== null) {
       const url = match[1].trim();
       if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        references.add(url);
+        if (!includeInformational) {
+          record(url, 'normal');
+        } else {
+          const urlKind = classify(url);
+          if (urlKind === 'invalid') {
+            record(url, 'invalid');
+          } else if (
+            inFence ||
+            isInlineCodeSpan(line, match[0], match.index) ||
+            urlKind === 'placeholder'
+          ) {
+            record(url, 'informational');
+          } else {
+            record(url, 'normal');
+          }
+        }
       }
     }
 
     // 2. HTML <img> tags: <img src="...">
     const htmlRegex = /<img[^>]+src=["']([^"']+)["']/gi;
-    while ((match = htmlRegex.exec(trimmed)) !== null) {
+    while ((match = htmlRegex.exec(line)) !== null) {
       const url = match[1].trim();
       if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
-        references.add(url);
+        if (!includeInformational) {
+          record(url, 'normal');
+        } else {
+          const urlKind = classify(url);
+          if (urlKind === 'invalid') {
+            record(url, 'invalid');
+          } else if (inFence || urlKind === 'placeholder' || line.includes('<!--')) {
+            record(url, 'informational');
+          } else {
+            record(url, 'normal');
+          }
+        }
+      }
+    }
+
+    // 3. Legacy WordPress-derived custom container lines (e.g. `[dimage url="..." control=true]`)
+    if (includeInformational) {
+      const legacyContainerRegex = /\[([a-z]+)\s+url=["']?([^"'\s\]]+)["']?[^\]]*\]/gi;
+      while ((match = legacyContainerRegex.exec(line)) !== null) {
+        const url = match[2].trim();
+        if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+          record(url, 'informational');
+        }
       }
     }
   }
 
-  return Array.from(references).sort();
+  return Array.from(seen.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([url, kind]) => ({ url, kind }));
+}
+
+/**
+ * Unified scanner for Markdown images (![alt](url)) and HTML <img> tags in content.
+ * Filters out references located inside code fences (according to fencePolicy)
+ * or inside opaque block fences (<!--ec:block ... -->).
+ */
+export function scanRawMediaReferences(
+  bodyMarkdown: string,
+  fencePolicy: FencePolicyType = FENCE_POLICY.guard,
+): string[] {
+  return scanClassifiedMediaReferences(bodyMarkdown, {
+    fencePolicy,
+    includeInformational: false,
+  }).map((entry) => entry.url);
 }

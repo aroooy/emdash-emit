@@ -26,6 +26,7 @@ import { createAuthedFetch } from '../../client/http.js';
 import { articleContentEndpoint, searchEndpoint } from '../../client/endpoints.js';
 import { unwrapEnvelope, isSameRev, extractComparisonRev, extractRev } from '../../client/api.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
+import type { CacheDatabase } from '../../db/cache.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import {
   taxonomyTermFilterAliases,
@@ -238,6 +239,111 @@ interface ExecuteScanParams {
   fallbackReason?: string;
 }
 
+export interface BaselineTaxonomyRead {
+  /** null = fast-path not satisfied -> caller falls back to remote terms GET */
+  terms: { categories: string[]; tags: string[] } | null;
+  reason:
+    | 'cache-hit'
+    | 'no-cache'
+    | 'pending-flag'
+    | 'rev-mismatch'
+    | 'disk-modified'
+    | 'no-snapshot'
+    | 'no-recorded-taxonomies';
+}
+
+/**
+ * Evaluates the five baseline fast-path preconditions for taxonomy filtering in scan search.
+ * Returns the recorded raw terms on `'cache-hit'` (0-GET), or `terms: null` with a named
+ * fallback reason when remote terms GET is required.
+ */
+export function readTaxonomiesFromBaseline(params: {
+  cache: CacheDatabase | undefined;
+  itemId: string;
+  item: Record<string, unknown>;
+  workspaceRoot: string;
+}): BaselineTaxonomyRead {
+  const { cache, itemId, item, workspaceRoot } = params;
+  if (!cache) {
+    return { terms: null, reason: 'no-cache' };
+  }
+
+  const syncState = cache.getSyncState(itemId);
+  if (!syncState) {
+    return { terms: null, reason: 'no-cache' };
+  }
+
+  if (
+    syncState.deletePending === 1 ||
+    syncState.bodyConflictPending === 1 ||
+    syncState.taxonomyApplyPending === 1 ||
+    syncState.taxonomyConflictPending === 1
+  ) {
+    return { terms: null, reason: 'pending-flag' };
+  }
+
+  const rawRevCandidate = String(item._rev || item.rev || item.version || '');
+  const remoteRev = extractRev(item, rawRevCandidate || '1');
+  const comparisonRev = extractComparisonRev(item, remoteRev);
+  if (!comparisonRev || !isSameRev(syncState.remoteRev, comparisonRev)) {
+    return { terms: null, reason: 'rev-mismatch' };
+  }
+
+  const fullPath = syncState.localFilePath
+    ? path.join(workspaceRoot, syncState.localFilePath)
+    : null;
+  let isDiskUnmodified = false;
+  if (fullPath && fs.existsSync(fullPath)) {
+    try {
+      const diskContent = fs.readFileSync(fullPath, 'utf8');
+      isDiskUnmodified = isLocalFileUnmodified({
+        workspaceRoot,
+        cache,
+        id: itemId,
+        relPath: syncState.localFilePath,
+        localContent: diskContent,
+        syncState,
+        // Article search is a read-only inspection command: it must never heal
+        // `sync_state.local_hash` as a side effect. The healing edge belongs to
+        // status / diff / doctor / delete only. It therefore verifies disk parity
+        // with healOnSpellingMatch: false, allowing fast-path evaluation without mutating the cache.
+        healOnSpellingMatch: false,
+      });
+    } catch {
+      isDiskUnmodified = false;
+    }
+  }
+
+  if (!isDiskUnmodified) {
+    return { terms: null, reason: 'disk-modified' };
+  }
+
+  const baseSnapshot = cache.getBaseSnapshot(itemId);
+  if (!baseSnapshot) {
+    return { terms: null, reason: 'no-snapshot' };
+  }
+
+  const fm = readBaselineFrontmatter(baseSnapshot);
+  const hasRecordedTaxonomies =
+    fm &&
+    fm.taxonomies &&
+    typeof fm.taxonomies === 'object' &&
+    (Array.isArray(fm.taxonomies.categories) || Array.isArray(fm.taxonomies.tags));
+  if (!hasRecordedTaxonomies) {
+    return { terms: null, reason: 'no-recorded-taxonomies' };
+  }
+
+  return {
+    terms: {
+      categories: Array.isArray(fm.taxonomies.categories)
+        ? fm.taxonomies.categories.map(String)
+        : [],
+      tags: Array.isArray(fm.taxonomies.tags) ? fm.taxonomies.tags.map(String) : [],
+    },
+    reason: 'cache-hit',
+  };
+}
+
 async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSearchResult> {
   const {
     options,
@@ -411,100 +517,38 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
             let matchesCategory = !normalizedCategory;
             let matchesTag = !normalizedTag;
 
-            // Fast-path: if article has up-to-date baseline snapshot with matching rev, no pending changes,
-            // and the local disk file is clean (not modified), avoiding masking unpushed local edits
-            if (options.cache) {
-              const syncState = options.cache.getSyncState(itemId);
-              if (
-                syncState &&
-                syncState.deletePending !== 1 &&
-                syncState.bodyConflictPending !== 1 &&
-                syncState.taxonomyApplyPending !== 1 &&
-                syncState.taxonomyConflictPending !== 1
-              ) {
-                const rawRevCandidate = String(item._rev || item.rev || item.version || '');
-                const remoteRev = extractRev(item, rawRevCandidate || '1');
-                const comparisonRev = extractComparisonRev(item, remoteRev);
-                if (comparisonRev && isSameRev(syncState.remoteRev, comparisonRev)) {
-                  const fullPath = syncState.localFilePath
-                    ? path.join(options.workspaceRoot, syncState.localFilePath)
-                    : null;
-                  let isDiskUnmodified = false;
-                  if (fullPath && fs.existsSync(fullPath)) {
-                    try {
-                      const diskContent = fs.readFileSync(fullPath, 'utf8');
-                      isDiskUnmodified = isLocalFileUnmodified({
-                        workspaceRoot: options.workspaceRoot,
-                        cache: options.cache,
-                        id: itemId,
-                        relPath: syncState.localFilePath,
-                        localContent: diskContent,
-                        syncState,
-                        // Article search is a read-only inspection command: it must never heal
-                        // `sync_state.local_hash` as a side effect. The healing edge belongs to
-                        // status / diff / doctor / delete only. It therefore verifies disk parity
-                        // with healOnSpellingMatch: false, allowing fast-path evaluation without mutating the cache.
-                        healOnSpellingMatch: false,
-                      });
-                    } catch {
-                      isDiskUnmodified = false;
-                    }
-                  }
+            // Fast-path: read recorded taxonomies from baseline when all preconditions hold
+            const baselineTax = readTaxonomiesFromBaseline({
+              cache: options.cache,
+              itemId,
+              item,
+              workspaceRoot: options.workspaceRoot,
+            });
+            if (baselineTax.terms) {
+              usedFastPath = true;
+              taxonomyCacheHitCount++;
 
-                  if (isDiskUnmodified) {
-                    const baseSnapshot = options.cache.getBaseSnapshot(itemId);
-                    if (baseSnapshot) {
-                      const fm = readBaselineFrontmatter(baseSnapshot);
-                      const hasRecordedTaxonomies =
-                        fm &&
-                        fm.taxonomies &&
-                        typeof fm.taxonomies === 'object' &&
-                        (Array.isArray(fm.taxonomies.categories) ||
-                          Array.isArray(fm.taxonomies.tags));
-                      if (hasRecordedTaxonomies) {
-                        usedFastPath = true;
-                        taxonomyCacheHitCount++;
+              const canonical = localTaxonomyMaps
+                ? canonicalizeTaxonomiesForBaseline(baselineTax.terms, localTaxonomyMaps)
+                : baselineTax.terms;
 
-                        const rawCategories = Array.isArray(fm.taxonomies.categories)
-                          ? fm.taxonomies.categories.map(String)
-                          : [];
-                        const rawTags = Array.isArray(fm.taxonomies.tags)
-                          ? fm.taxonomies.tags.map(String)
-                          : [];
+              if (normalizedCategory) {
+                const cats = canonical.categories || [];
+                if (
+                  cats.some((c) =>
+                    taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
+                  )
+                ) {
+                  matchesCategory = true;
+                  matchedOn.push('category');
+                }
+              }
 
-                        const canonical = localTaxonomyMaps
-                          ? canonicalizeTaxonomiesForBaseline(
-                              { categories: rawCategories, tags: rawTags },
-                              localTaxonomyMaps,
-                            )
-                          : { categories: rawCategories, tags: rawTags };
-
-                        if (normalizedCategory) {
-                          const cats = canonical.categories || [];
-                          if (
-                            cats.some((c) =>
-                              taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
-                            )
-                          ) {
-                            matchesCategory = true;
-                            matchedOn.push('category');
-                          }
-                        }
-
-                        if (normalizedTag) {
-                          const tgs = canonical.tags || [];
-                          if (
-                            tgs.some((t) =>
-                              taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases),
-                            )
-                          ) {
-                            matchesTag = true;
-                            matchedOn.push('tag');
-                          }
-                        }
-                      }
-                    }
-                  }
+              if (normalizedTag) {
+                const tgs = canonical.tags || [];
+                if (tgs.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))) {
+                  matchesTag = true;
+                  matchedOn.push('tag');
                 }
               }
             }
