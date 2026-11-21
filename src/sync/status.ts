@@ -25,8 +25,8 @@ import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
 import {
   formatFrontmatterParseError,
-  lenientRepairMarkdownFrontmatter,
   parseMarkdown,
+  parseMarkdownLenient,
 } from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
 import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
@@ -222,7 +222,7 @@ export function getWorkspaceStatus(
         const errorMsg = formatFrontmatterParseError(err);
         // Match `emit doctor`: distinguish files that a syntax-only lenient repair can recover from
         // files with unrecoverable frontmatter, so status and doctor never disagree.
-        const healable = lenientRepairMarkdownFrontmatter(content) !== null;
+        const healable = parseMarkdownLenient(content) !== null;
 
         items.push({
           id: fallbackId,

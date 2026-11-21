@@ -27,7 +27,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { readBaselineFrontmatter } from '../db/baseline.js';
 import type { EmitConfig } from '../utils/config.js';
 import { getPackageVersion } from '../utils/version.js';
-import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
+import { parseMarkdown, parseMarkdownLenient } from '../utils/frontmatter.js';
 import { storageKeyToMarkdownRef } from '../utils/naming.js';
 import { listConflicts } from './conflicts.js';
 import { getWorkspaceStatus } from './status.js';
@@ -494,10 +494,9 @@ function runContentIntegrityChecks(
         try {
           parseMarkdown(content);
         } catch {
-          // Attempt lenient parse
-          const healed = lenientRepairMarkdownFrontmatter(content);
-          if (healed) {
-            parseMarkdown(healed);
+          // Attempt lenient parse via single canonical entry point
+          const parsed = parseMarkdownLenient(content, fullPath);
+          if (parsed) {
             healableFiles.push(path.join(collection, status, file));
           } else {
             throw new Error('Unrecoverable parse error');

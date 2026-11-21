@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
-import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../utils/frontmatter.js';
+import { parseMarkdown, parseMarkdownLenient } from '../utils/frontmatter.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { computeContextDiff } from './diff.js';
 import { calculateHash } from './workspace/index.js';
@@ -202,26 +202,15 @@ export function listConflicts(workspaceRoot: string, collection = 'posts'): Conf
 
     try {
       const content = fs.readFileSync(fullPath, 'utf8');
-      const parsed = parseMarkdown(content);
-      id = parsed.frontmatter.id;
-      slug = parsed.frontmatter.slug;
-      title = parsed.frontmatter.title;
-      status = parsed.frontmatter.status;
-    } catch {
-      // Lenient fallback
-      try {
-        const content = fs.readFileSync(fullPath, 'utf8');
-        const healed = lenientRepairMarkdownFrontmatter(content);
-        if (healed) {
-          const parsed = parseMarkdown(healed);
-          id = parsed.frontmatter.id;
-          slug = parsed.frontmatter.slug;
-          title = parsed.frontmatter.title;
-          status = parsed.frontmatter.status;
-        }
-      } catch {
-        // Unparseable frontmatter
+      const parsed = parseMarkdownLenient(content, fullPath);
+      if (parsed) {
+        id = parsed.frontmatter.id;
+        slug = parsed.frontmatter.slug;
+        title = parsed.frontmatter.title;
+        status = parsed.frontmatter.status;
       }
+    } catch {
+      // Unparseable or unreadable file
     }
 
     const baseName = extractBaseArticleName(fileName);
@@ -437,24 +426,11 @@ export function resolveConflict(options: {
   let slug = 'restored';
   let status: 'draft' | 'published' = 'draft';
 
-  try {
-    const parsed = parseMarkdown(conflictContent);
-    id = parsed.frontmatter.id;
-    slug = parsed.frontmatter.slug;
-    status = parsed.frontmatter.status;
-  } catch {
-    // If invalid, try lenient
-    try {
-      const healed = lenientRepairMarkdownFrontmatter(conflictContent);
-      if (healed) {
-        const parsed = parseMarkdown(healed);
-        id = parsed.frontmatter.id;
-        slug = parsed.frontmatter.slug;
-        status = parsed.frontmatter.status;
-      }
-    } catch {
-      // Keep defaults
-    }
+  const parsedConflict = parseMarkdownLenient(conflictContent);
+  if (parsedConflict) {
+    id = parsedConflict.frontmatter.id;
+    slug = parsedConflict.frontmatter.slug;
+    status = parsedConflict.frontmatter.status;
   }
 
   const baseName = extractBaseArticleName(fileName);

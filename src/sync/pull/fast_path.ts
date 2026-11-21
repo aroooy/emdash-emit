@@ -335,7 +335,8 @@ export async function tryFastPathOrHeal(
           };
         } catch {
           // Branch 2: Broken YAML on hash-matched untouched file.
-          // Heal syntax via lenient repair, then serialize cleanly to decoded representation with zero network fetches.
+          // Write path intentionally keeps the two-step lenientRepairMarkdownFrontmatter + parseMarkdown
+          // instead of parseMarkdownLenient because it needs the raw repaired string bytes for disk/hash checks.
           const repaired = lenientRepairMarkdownFrontmatter(currentDiskContent);
           if (repaired !== null) {
             const parsedRepaired = parseMarkdown(repaired);

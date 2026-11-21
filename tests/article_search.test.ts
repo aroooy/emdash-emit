@@ -40,7 +40,8 @@ import { createMcpServer } from '../src/mcp/server.js';
 import { initWorkspace } from '../src/utils/config.js';
 import { setProfile } from '../src/utils/profile.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
-import { serializeMarkdown } from '../src/utils/frontmatter.js';
+import { getWorkspaceStatus } from '../src/sync/status.js';
+import { parseMarkdownLenient, serializeMarkdown } from '../src/utils/frontmatter.js';
 import type { Frontmatter } from '../src/utils/frontmatter.js';
 
 function makeTestFrontmatter(
@@ -206,7 +207,7 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
     // Write a local file
     fs.writeFileSync(
       path.join(tempDir, 'posts', 'published', '20261120_01M77VFT000000000000000003-local.md'),
-      `---\nid: 01M77VFT000000000000000003\ntitle: Local File\nstatus: published\n---\nLocal body`,
+      `---\nid: 01M77VFT000000000000000003\nslug: local-file\ntitle: Local File\nstatus: published\n---\nLocal body`,
     );
 
     const mockFetch = vi.fn();
@@ -795,7 +796,7 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
   it('T4-1 & T4-2 & T4-3: offline search searches markdown bodies, renders header and absence notice', () => {
     fs.writeFileSync(
       path.join(tempDir, 'posts', 'published', '20261120_01M77VFT000000000000000091-sunset.md'),
-      `---\nid: 01M77VFT000000000000000091\ntitle: Sunset View\nstatus: published\n---\nMagnificent golden hour in Kyoto.`,
+      `---\nid: 01M77VFT000000000000000091\nslug: sunset-view\ntitle: Sunset View\nstatus: published\n---\nMagnificent golden hour in Kyoto.`,
     );
 
     // 1. Matches body text offline
@@ -832,7 +833,7 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
   it('T4-4: excludes posts/conflicts/ by default; includes and flags quarantined with includeConflicts', () => {
     fs.writeFileSync(
       path.join(tempDir, 'posts', 'conflicts', '20261120_01M77VFT000000000000000099-conflict.md'),
-      `---\nid: 01M77VFT000000000000000099\ntitle: Quarantined Conflict\nstatus: draft\n---\nQuarantined text`,
+      `---\nid: 01M77VFT000000000000000099\nslug: quarantined-conflict\ntitle: Quarantined Conflict\nstatus: draft\n---\nQuarantined text`,
     );
 
     // Default: excluded
@@ -1915,6 +1916,95 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
         workspaceRoot: tempDir,
       });
       expect(hintWithDefs).toContain('emit pull-taxonomies');
+    });
+  });
+
+  describe('v0.1.45 P4: parseMarkdownLenient() & Diagnostic Alignment', () => {
+    const tempDirs: string[] = [];
+    afterEach(() => {
+      for (const dir of tempDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      tempDirs.length = 0;
+    });
+
+    it('F-1 & F-2: leniently repairs unquoted percent-encoded taxonomies so offline search hits and aligns with status', () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-lenient-search-'));
+      tempDirs.push(wsDir);
+      initWorkspace(wsDir, { origin: 'https://emdash.test' });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+
+      try {
+        const draftDir = path.join(wsDir, 'posts', 'draft');
+        fs.mkdirSync(draftDir, { recursive: true });
+        const articleUlid = '01M77VFT000000000000000901';
+        const unquotedBrokenContent = [
+          '---',
+          `id: ${articleUlid}`,
+          'slug: broken-percent-slug',
+          'title: Broken Percent Article',
+          'status: draft',
+          'taxonomies:',
+          '  tags:',
+          '    - %e3%82%ab%e3%83%a1%e3%83%a9',
+          '---',
+          '',
+          'Findable body keyword: supercalifragilistic.',
+        ].join('\n');
+
+        const filePath = path.join(draftDir, `20261121_${articleUlid}-broken-percent-slug.md`);
+        fs.writeFileSync(filePath, unquotedBrokenContent, 'utf8');
+
+        // F-1: parseMarkdownLenient returns non-null and offline search hits the article
+        const parsed = parseMarkdownLenient(unquotedBrokenContent, filePath);
+        expect(parsed).not.toBeNull();
+        expect(parsed!.frontmatter.taxonomies.tags).toEqual(['%e3%82%ab%e3%83%a1%e3%83%a9']);
+
+        const searchRes = searchLocalArticles({
+          workspaceRoot: wsDir,
+          origin: mockOrigin,
+          query: 'supercalifragilistic',
+          cache: wsCache,
+        });
+        expect(searchRes.hits).toHaveLength(1);
+        expect(searchRes.hits[0].id).toBe(articleUlid);
+
+        // F-2: getWorkspaceStatus agrees the file is invalid and healable: true
+        const statusRes = getWorkspaceStatus(wsDir, wsCache);
+        const item = statusRes.items.find((i) => i.id === articleUlid);
+        expect(item).toBeDefined();
+        expect(item!.syncStatus).toBe('invalid');
+        expect(item!.healable).toBe(true);
+      } finally {
+        wsCache.close();
+      }
+    });
+
+    it('F-3: returns null for completely invalid YAML and search skips it gracefully', () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-lenient-invalid-'));
+      tempDirs.push(wsDir);
+      initWorkspace(wsDir, { origin: 'https://emdash.test' });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+
+      try {
+        const draftDir = path.join(wsDir, 'posts', 'draft');
+        fs.mkdirSync(draftDir, { recursive: true });
+        const brokenContent = '---\nid: [unclosed\n---\n\nUnsearchable body keyword: xyzzy.';
+        const filePath = path.join(draftDir, '20261121_01M77VFT000000000000000902-broken.md');
+        fs.writeFileSync(filePath, brokenContent, 'utf8');
+
+        expect(parseMarkdownLenient(brokenContent, filePath)).toBeNull();
+
+        const searchRes = searchLocalArticles({
+          workspaceRoot: wsDir,
+          origin: mockOrigin,
+          query: 'xyzzy',
+          cache: wsCache,
+        });
+        expect(searchRes.hits).toHaveLength(0);
+      } finally {
+        wsCache.close();
+      }
     });
   });
 });

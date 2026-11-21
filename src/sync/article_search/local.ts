@@ -22,9 +22,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import matter from 'gray-matter';
 import { readTaxonomyDir } from '../taxonomies.js';
-import { parseMarkdown } from '../../utils/frontmatter.js';
+import { parseMarkdownLenient } from '../../utils/frontmatter.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import {
   taxonomyTermFilterAliases,
@@ -146,21 +145,12 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
         continue;
       }
 
-      let fm: Record<string, unknown> = {};
-      let bodyText = '';
-      try {
-        const parsed = parseMarkdown(content);
-        fm = (parsed.frontmatter || {}) as Record<string, unknown>;
-        bodyText = parsed.body;
-      } catch {
-        try {
-          const raw = matter(content);
-          fm = (raw.data || {}) as Record<string, unknown>;
-          bodyText = raw.content;
-        } catch {
-          continue;
-        }
+      const parsed = parseMarkdownLenient(content, fullPath);
+      if (!parsed) {
+        continue;
       }
+      const fm = (parsed.frontmatter || {}) as unknown as Record<string, unknown>;
+      const bodyText = parsed.body;
 
       const articleId = String(fm.id || '').trim();
       const articleSlug = String(fm.slug || '').trim();

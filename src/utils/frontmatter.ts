@@ -155,6 +155,27 @@ export function parseMarkdown(content: string, filePath?: string): ParsedMarkdow
 }
 
 /**
+ * Parses content with the canonical two-stage route: strict schema parse, then lenient
+ * frontmatter repair, then strict re-parse. Returns null only when nothing can be salvaged.
+ * This is the single entry point every read-only inspector (status / doctor / conflicts /
+ * delete / search / media scan) must use so an invalid file is classified identically by
+ * every diagnostic — AGENTS.md §5 diagnostic alignment invariant.
+ */
+export function parseMarkdownLenient(content: string, filePath?: string): ParsedMarkdown | null {
+  try {
+    return parseMarkdown(content, filePath);
+  } catch {
+    const healed = lenientRepairMarkdownFrontmatter(content);
+    if (!healed) return null;
+    try {
+      return parseMarkdown(healed, filePath);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
  * Formats a parseMarkdown error (js-yaml YAMLException or ZodError) into a concise 1-line summary.
  * Prevents ZodError's multi-line JSON array `.message` from truncating to `"["`.
  */

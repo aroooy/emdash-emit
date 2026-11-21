@@ -22,7 +22,7 @@
 
 import yaml from 'js-yaml';
 import { extractMediaUlid } from '../../client/mapper.js';
-import { parseMarkdown, lenientRepairMarkdownFrontmatter } from '../../utils/frontmatter.js';
+import { parseMarkdownLenient } from '../../utils/frontmatter.js';
 import { scanArticleMediaReferences } from '../../utils/media-body-refs.js';
 import { toStorageKey } from '../../utils/media-id.js';
 import type { OrphanMediaDescriptor } from './types.js';
@@ -113,21 +113,10 @@ export function collectArticleReferencedMediaIds(content: string): string[] {
   }
 
   if (!frontmatter) {
-    try {
-      const parsed = parseMarkdown(content);
+    const parsed = parseMarkdownLenient(content);
+    if (parsed) {
       frontmatter = parsed.frontmatter as unknown as Record<string, unknown>;
       body = parsed.body;
-    } catch {
-      try {
-        const healed = lenientRepairMarkdownFrontmatter(content);
-        if (healed) {
-          const parsed = parseMarkdown(healed);
-          frontmatter = parsed.frontmatter as unknown as Record<string, unknown>;
-          body = parsed.body;
-        }
-      } catch {
-        // Fallback: search raw content
-      }
     }
   }
 
