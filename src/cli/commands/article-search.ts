@@ -26,6 +26,7 @@ import {
   formatArticleSearchEmptyNotice,
   formatArticleSearchHeader,
   formatArticleSearchHit,
+  formatArticleSearchOfflineHint,
   formatArticleSearchWalkIncompleteNotice,
 } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
@@ -117,6 +118,16 @@ export function registerArticleSearchCommand(
         const incompleteNotice = formatArticleSearchWalkIncompleteNotice(result);
         if (incompleteNotice && !options.offline) {
           console.log(`\n${incompleteNotice}`);
+        }
+
+        const offlineHint = formatArticleSearchOfflineHint(result, {
+          offline: options.offline,
+          tag: options.tag,
+          category: options.category,
+          workspaceRoot: ctx.root,
+        });
+        if (offlineHint) {
+          console.log(`\n${offlineHint}`);
         }
       } catch (err) {
         reportActionFailure(err);

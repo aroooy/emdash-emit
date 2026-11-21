@@ -61,6 +61,41 @@ describe('Revision comparison & formatting (v0.1.22 Layer 0)', () => {
 
       expect(extractComparisonRev(listItem)).toBe('3@draft:01M7C7GRKQK8N2KTAJNXXMVPG3');
     });
+
+    it('recovers version from _rev colon-delimited or Base64 token when item.version is absent', () => {
+      // 1. colon-delimited token
+      const itemWithColonRev = {
+        id: '01M7BZH06K515A5NQWZ36QK7NQ',
+        _rev: '4:2026-11-20T10:00:00.000Z',
+        liveRevisionId: '01M6LIVE000000000000000000',
+      };
+      expect(extractComparisonRev(itemWithColonRev)).toBe('4@live:01M6LIVE000000000000000000');
+
+      // 2. Base64 encoded token
+      const b64Rev = Buffer.from('5:2026-11-20T11:00:00.000Z').toString('base64');
+      const itemWithB64Rev = {
+        id: '01M7BZH06K515A5NQWZ36QK7NQ',
+        _rev: b64Rev,
+        draftRevisionId: '01M7C7GRKQK8N2KTAJNXXMVPG3',
+      };
+      expect(extractComparisonRev(itemWithB64Rev)).toBe('5@draft:01M7C7GRKQK8N2KTAJNXXMVPG3');
+    });
+
+    it('does not misidentify non-version tokens, ULIDs, or random strings as version numbers', () => {
+      const ulidItem = {
+        id: '01M7BZH06K515A5NQWZ36QK7NQ',
+        _rev: '01M7BZH06K515A5NQWZ36QK7NQ',
+        liveRevisionId: '01M6LIVE000000000000000000',
+      };
+      expect(extractComparisonRev(ulidItem)).toBe('1@live:01M6LIVE000000000000000000');
+
+      const randomStrItem = {
+        id: '01M7BZH06K515A5NQWZ36QK7NQ',
+        _rev: 'abc',
+        liveRevisionId: '01M6LIVE000000000000000000',
+      };
+      expect(extractComparisonRev(randomStrItem)).toBe('1@live:01M6LIVE000000000000000000');
+    });
   });
 
   describe('isSameRev', () => {

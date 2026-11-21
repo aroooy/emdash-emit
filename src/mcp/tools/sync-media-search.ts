@@ -31,6 +31,7 @@ import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
 import { buildOfflineSearchFraming } from '../../presentation/article_report.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
+import { formatMediaSearchHitLimitNotice } from '../../presentation/media_report.js';
 
 export function registerSyncMediaSearchTool(
   server: McpServer,
@@ -105,7 +106,11 @@ export function registerSyncMediaSearchTool(
 
         let note: string | undefined = undefined;
         if (!result.walkComplete) {
-          note = `[WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at maxScan; absence is not proven. Narrow the query or raise maxScan (0 walks the whole library).`;
+          const hitLimitNotice =
+            result.truncated && result.hits.length >= (args.limit ?? 20)
+              ? ` ${formatMediaSearchHitLimitNotice(result.hits.length, { isMcp: true })}`
+              : '';
+          note = `[WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at maxScan; absence is not proven.${hitLimitNotice} Narrow the query or raise maxScan (0 walks the whole library).`;
         }
 
         let tagHints: string[] | undefined = undefined;

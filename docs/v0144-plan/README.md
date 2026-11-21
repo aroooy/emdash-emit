@@ -259,6 +259,8 @@ export function formatArticleSearchOfflineHint(
 | **T-5** | Two-Layer 一致     | ベースラインが encoded canonical slug（`%e3%83%bc...`）、フィルタが decoded（`ローカルガイド`）でも fast-path 判定がヒットすること                                       |
 | **T-6** | ULID loser 保護    | slug 衝突の loser term を ULID で保存したベースラインが、fast-path 判定で winner term に化けないこと                                                                     |
 | **T-7** | taxonomy 報告      | `taxonomyCacheHitCount` が 0-GET 判定件数と一致し、`taxonomyFetchCount` は実 GET 数のみ計上すること（両者の和 ≤ 検証記事数 × 2）                                         |
+| **T-8** | 未 push 編集検知   | ローカルファイルに未 push 編集がある記事は fast-path を使わず GET へフォールバックし、最新リモートの term で判定されること                                                |
+| **T-9** | read-only 不変条件 | local media ref 等の spelling-only 差分記事は fast-path 判定されるが、検索の副作用で `sync_state.local_hash` が heal されないこと（読み取り専用の維持）                 |
 | **H-1** | offline hint       | リモート検索 0 件時に `💡 Hint: ... --offline` が出るとき、オフライン検索では同じ hint が出ないこと                                                                      |
 | **H-2** | offline hint       | `truncated` または `walkComplete: false` のとき hit が有っても hint が出ること（上限到達ケース）                                                                         |
 | **H-3** | 対称性             | CLI と MCP で hint の意味が一致すること（MCP は `note` に結合され、`hint.offlineSearch === true` を持つ）                                                                |
@@ -270,16 +272,16 @@ export function formatArticleSearchOfflineHint(
 
 ## 7. Definition of Done (DoD)
 
-1. [ ] `searchRemoteMedia()` に `hitLimitReached` による hit-limit 早期終了が入り、`truncated` が打ち切りを表現している。
-2. [ ] メディア検索の `[WALK_INCOMPLETE]` 警告が残り、追加の hit-limit 補足行が CLI / MCP 双方に出る。
-3. [ ] `executeScanSearch()` の taxonomy 検証に rev-check fast-path が入り、条件を満たす記事は 0-GET で判定される。
-4. [ ] fast-path の全条件（cache 有無 / rev 一致 / pending フラグ / ベースライン読取）と GET フォールバックが単体テストで網羅されている（T-1〜T-6）。
-5. [ ] `taxonomyCacheHitCount` が結果に含まれ、CLI ヘッダーと MCP payload の両方に表示される。
-6. [ ] `formatArticleSearchOfflineHint()` が `src/presentation/article_report.ts` に追加され、CLI と MCP が同一の関数を使う（文言分岐なし）。
-7. [ ] `tests/layering.test.ts` の allowlist / sibling スナップショットが**無変更**でグリーン（新規 Layer 2 結合を追加していない証拠）。
-8. [ ] `docs/media-id-spaces.md` および `AGENTS.md` の記述と矛盾しない（メディア ID 空間・Two-Layer 表現を尊重している）。
-9. [ ] `README.md` の `emit media-search` / `emit article-search` セクションに、hit-limit の挙動と `--offline` 誘導が反映されている。
-10. [ ] `npm run check` が 100% グリーンで、追加したエラーコードはゼロ（表示のみ変更）。
+1. [x] `searchRemoteMedia()` に `hitLimitReached` による hit-limit 早期終了が入り、`truncated` が打ち切りを表現している。
+2. [x] メディア検索の `[WALK_INCOMPLETE]` 警告が残り、追加の hit-limit 補足行が Layer 3 共通フォーマッタ（`formatMediaSearchHitLimitNotice`）経由で CLI / MCP 双方に出る。
+3. [x] `executeScanSearch()` の taxonomy 検証に rev-check fast-path が入り、未編集同期済み記事（`isLocalFileUnmodified`）は 0-GET で判定される。
+4. [x] fast-path の全条件（cache 有無 / rev 一致 / pending 4 フラグ / ディスク未編集 / ベースライン読取）と GET フォールバックが単体テストで網羅されている（T-1〜T-9）。
+5. [x] `taxonomyCacheHitCount` が結果に含まれ、CLI ヘッダーと MCP payload の両方に表示される。
+6. [x] `formatArticleSearchOfflineHint()` が `src/presentation/article_report.ts` に追加され、CLI と MCP が同一の関数を使う（文言分岐なし）。
+7. [x] `tests/layering.test.ts` の allowlist / sibling スナップショットが**無変更**でグリーン（新規 Layer 2 結合を追加していない証拠）。
+8. [x] `docs/media-id-spaces.md` および `AGENTS.md` の記述と矛盾しない（メディア ID 空間・Two-Layer 表現を尊重している）。
+9. [x] `README.md` の `emit media-search` / `emit article-search` セクションに、hit-limit の挙動と `--offline` 誘導が反映されている。
+10. [x] `npm run check` が 100% グリーンで、追加したエラーコードはゼロ（表示のみ変更）。
 
 ---
 

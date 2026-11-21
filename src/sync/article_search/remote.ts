@@ -20,10 +20,13 @@
  * SOFTWARE.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { articleContentEndpoint, searchEndpoint } from '../../client/endpoints.js';
-import { unwrapEnvelope } from '../../client/api.js';
+import { unwrapEnvelope, isSameRev, extractComparisonRev, extractRev } from '../../client/api.js';
+import { readBaselineFrontmatter } from '../../db/baseline.js';
 import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
 import {
   taxonomyTermFilterAliases,
@@ -31,6 +34,8 @@ import {
 } from '../../utils/taxonomy-term-match.js';
 import { findLocalFilesByUlid } from '../workspace/index.js';
 import { fetchAssignedTerms } from '../terms.js';
+import { loadLocalTaxonomyMaps, canonicalizeTaxonomiesForBaseline } from '../taxonomies.js';
+import { isLocalFileUnmodified } from '../baseline-reconstruction.js';
 import {
   inArticleDateRange,
   matchesArticleKeyword,
@@ -204,6 +209,7 @@ export async function searchRemoteArticles(
           truncated,
           normalizedQuery,
           taxonomyFetchCount: 0,
+          taxonomyCacheHitCount: 0,
         };
       }
 
@@ -307,8 +313,11 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
   const hits: ArticleSearchHit[] = [];
   let scannedCount = 0;
   let taxonomyFetchCount = 0;
+  let taxonomyCacheHitCount = 0;
   let allSeriesComplete = true;
   let hitLimitReached = false;
+
+  const localTaxonomyMaps = hasTaxonomyFilter ? loadLocalTaxonomyMaps(options.workspaceRoot) : null;
 
   const isCreatedAtSort = options.dateField === 'createdAt' || !options.dateField;
 
@@ -423,46 +432,147 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
         if (hasTaxonomyFilter) {
           // Bounded by limit: only fetch terms if hits haven't reached limit
           if (hits.length < limit) {
+            let usedFastPath = false;
             let matchesCategory = !normalizedCategory;
             let matchesTag = !normalizedTag;
 
-            if (normalizedCategory && options.token) {
-              taxonomyFetchCount++;
-              const catTerms = await fetchAssignedTerms({
-                origin: options.origin,
-                token: options.token,
-                collection,
-                id: itemId,
-                taxonomy: 'category',
-                fetchFn,
-              });
+            // Fast-path: if article has up-to-date baseline snapshot with matching rev, no pending changes,
+            // and the local disk file is clean (not modified), avoiding masking unpushed local edits
+            if (options.cache) {
+              const syncState = options.cache.getSyncState(itemId);
               if (
-                catTerms &&
-                catTerms.some((c) =>
-                  taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
-                )
+                syncState &&
+                syncState.deletePending !== 1 &&
+                syncState.bodyConflictPending !== 1 &&
+                syncState.taxonomyApplyPending !== 1 &&
+                syncState.taxonomyConflictPending !== 1
               ) {
-                matchesCategory = true;
-                matchedOn.push('category');
+                const rawRevCandidate = String(item._rev || item.rev || item.version || '');
+                const remoteRev = extractRev(item, rawRevCandidate || '1');
+                const comparisonRev = extractComparisonRev(item, remoteRev);
+                if (comparisonRev && isSameRev(syncState.remoteRev, comparisonRev)) {
+                  const fullPath = syncState.localFilePath
+                    ? path.join(options.workspaceRoot, syncState.localFilePath)
+                    : null;
+                  let isDiskUnmodified = false;
+                  if (fullPath && fs.existsSync(fullPath)) {
+                    try {
+                      const diskContent = fs.readFileSync(fullPath, 'utf8');
+                      isDiskUnmodified = isLocalFileUnmodified({
+                        workspaceRoot: options.workspaceRoot,
+                        cache: options.cache,
+                        id: itemId,
+                        relPath: syncState.localFilePath,
+                        localContent: diskContent,
+                        syncState,
+                        // Article search is a read-only inspection command: it must never heal
+                        // `sync_state.local_hash` as a side effect. The healing edge belongs to
+                        // status / diff / doctor / delete only. It therefore verifies disk parity
+                        // with healOnSpellingMatch: false, allowing fast-path evaluation without mutating the cache.
+                        healOnSpellingMatch: false,
+                      });
+                    } catch {
+                      isDiskUnmodified = false;
+                    }
+                  }
+
+                  if (isDiskUnmodified) {
+                    const baseSnapshot = options.cache.getBaseSnapshot(itemId);
+                    if (baseSnapshot) {
+                      const fm = readBaselineFrontmatter(baseSnapshot);
+                      const hasRecordedTaxonomies =
+                        fm &&
+                        fm.taxonomies &&
+                        typeof fm.taxonomies === 'object' &&
+                        (Array.isArray(fm.taxonomies.categories) ||
+                          Array.isArray(fm.taxonomies.tags));
+                      if (hasRecordedTaxonomies) {
+                        usedFastPath = true;
+                        taxonomyCacheHitCount++;
+
+                        const rawCategories = Array.isArray(fm.taxonomies.categories)
+                          ? fm.taxonomies.categories.map(String)
+                          : [];
+                        const rawTags = Array.isArray(fm.taxonomies.tags)
+                          ? fm.taxonomies.tags.map(String)
+                          : [];
+
+                        const canonical = localTaxonomyMaps
+                          ? canonicalizeTaxonomiesForBaseline(
+                              { categories: rawCategories, tags: rawTags },
+                              localTaxonomyMaps,
+                            )
+                          : { categories: rawCategories, tags: rawTags };
+
+                        if (normalizedCategory) {
+                          const cats = canonical.categories || [];
+                          if (
+                            cats.some((c) =>
+                              taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
+                            )
+                          ) {
+                            matchesCategory = true;
+                            matchedOn.push('category');
+                          }
+                        }
+
+                        if (normalizedTag) {
+                          const tgs = canonical.tags || [];
+                          if (
+                            tgs.some((t) =>
+                              taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases),
+                            )
+                          ) {
+                            matchesTag = true;
+                            matchedOn.push('tag');
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
 
-            if (normalizedTag && options.token) {
-              taxonomyFetchCount++;
-              const tagTerms = await fetchAssignedTerms({
-                origin: options.origin,
-                token: options.token,
-                collection,
-                id: itemId,
-                taxonomy: 'tag',
-                fetchFn,
-              });
-              if (
-                tagTerms &&
-                tagTerms.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))
-              ) {
-                matchesTag = true;
-                matchedOn.push('tag');
+            if (!usedFastPath) {
+              if (normalizedCategory && options.token) {
+                taxonomyFetchCount++;
+                const catTerms = await fetchAssignedTerms({
+                  origin: options.origin,
+                  token: options.token,
+                  collection,
+                  id: itemId,
+                  taxonomy: 'category',
+                  fetchFn,
+                });
+                if (
+                  catTerms &&
+                  catTerms.some((c) =>
+                    taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
+                  )
+                ) {
+                  matchesCategory = true;
+                  matchedOn.push('category');
+                }
+              }
+
+              if (normalizedTag && options.token) {
+                taxonomyFetchCount++;
+                const tagTerms = await fetchAssignedTerms({
+                  origin: options.origin,
+                  token: options.token,
+                  collection,
+                  id: itemId,
+                  taxonomy: 'tag',
+                  fetchFn,
+                });
+                if (
+                  tagTerms &&
+                  tagTerms.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))
+                ) {
+                  matchesTag = true;
+                  matchedOn.push('tag');
+                }
               }
             }
 
@@ -521,6 +631,7 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
     truncated,
     normalizedQuery,
     taxonomyFetchCount,
+    taxonomyCacheHitCount,
     fallbackReason,
   };
 }

@@ -27,6 +27,7 @@ import {
   searchRemoteMedia,
 } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
+import { formatMediaSearchHitLimitNotice } from '../../presentation/media_report.js';
 import {
   formatOfflineSearchHeader,
   OFFLINE_SEARCH_EMPTY_NOTICE,
@@ -151,6 +152,9 @@ export function registerMediaSearchCommand(
           console.log(
             `\n⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at --max-scan; absence is not proven.`,
           );
+          if (result.truncated && result.hits.length >= (limit || 20)) {
+            console.log(`   ${formatMediaSearchHitLimitNotice(result.hits.length)}`);
+          }
           console.log(`   Narrow the query or raise --max-scan (0 walks the whole library).`);
         }
 

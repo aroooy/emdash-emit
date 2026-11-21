@@ -5,6 +5,10 @@ import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheDatabase } from '../src/db/cache.js';
 import { asMediaRecordId, asStorageKey } from '../src/utils/media-id.js';
+import { createMcpServer } from '../src/mcp/server.js';
+import { initWorkspace } from '../src/utils/config.js';
+import { setProfile } from '../src/utils/profile.js';
+import { formatMediaSearchHitLimitNotice } from '../src/presentation/media_report.js';
 import {
   collectLocalMirrorIndex,
   collectRemoteStorageKeys,
@@ -1265,6 +1269,172 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
         mirrorIndex,
       });
       expect(resAll.hits).toHaveLength(2);
+    });
+  });
+
+  describe('v0.1.44 P1: Media Search Hit-Limit Early-Exit', () => {
+    // M-1 & M-2: limit: 2 with 3+ hits stops in current page, does not fetch next page, walkComplete: false, truncated: true
+    it('M-1 & M-2: breaks immediately when limit is reached without fetching subsequent pages', async () => {
+      const page1Items = [
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMA1'),
+          filename: 'photo1.jpg',
+          storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMA1.jpg'),
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMA2'),
+          filename: 'photo2.jpg',
+          storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMA2.jpg'),
+        },
+        {
+          id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMA3'),
+          filename: 'photo3.jpg',
+          storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMA3.jpg'),
+        },
+      ];
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('cursor=page2')) {
+          throw new Error('Subsequent page should NOT have been fetched when limit is reached');
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: page1Items,
+              nextCursor: 'page2',
+              totalCount: 100,
+            },
+          }),
+        };
+      });
+
+      const result = await searchRemoteMedia({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        limit: 2,
+        maxScan: 100,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(2);
+      expect(result.walkComplete).toBe(false);
+      expect(result.truncated).toBe(true);
+      expect(result.scannedCount).toBe(2);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    // M-3: since boundary stop reports walkComplete: true
+    it('M-3: since boundary stop reports walkComplete: true (not confused with hit-limit)', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMB1'),
+                filename: 'recent.jpg',
+                createdAt: '2026-11-20T10:00:00Z',
+                storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMB1.jpg'),
+              },
+              {
+                id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMB2'),
+                filename: 'old.jpg',
+                createdAt: '2026-11-01T10:00:00Z',
+                storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMB2.jpg'),
+              },
+            ],
+            nextCursor: 'next-page',
+          },
+        }),
+      });
+
+      const result = await searchRemoteMedia({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        since: '2026-11-15',
+        limit: 10,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.walkComplete).toBe(true);
+      expect(result.truncated).toBe(false);
+    });
+
+    // M-4: hit limit notice uses raise limit on MCP (not CLI flag --limit)
+    it('M-4: hit limit notice in MCP note uses raise limit without CLI flag prefix', async () => {
+      const customProfiles = path.join(tempDir, 'profiles.yaml');
+      initWorkspace(tempDir, { origin: mockOrigin });
+      setProfile(
+        'default',
+        { origin: mockOrigin, token: mockToken, workspace: tempDir },
+        true,
+        customProfiles,
+      );
+
+      const server = createMcpServer({
+        workspaceRoot: tempDir,
+        cache,
+        profilesPath: customProfiles,
+      });
+      const registered = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              handler: (
+                args: Record<string, unknown>,
+              ) => Promise<{ content: Array<{ text: string }> }>;
+            }
+          >;
+        }
+      )._registeredTools;
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMB1'),
+                filename: 'photo1.jpg',
+                storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMB1.jpg'),
+              },
+              {
+                id: asMediaRecordId('01M67P08DXFTYDPFRTJCC4XMB2'),
+                filename: 'photo2.jpg',
+                storageKey: asStorageKey('01M67P08DXFTYDPFRTJCC4XMB2.jpg'),
+              },
+            ],
+            nextCursor: 'next-page',
+          },
+        }),
+      } as Response);
+
+      const res = await registered['sync_media_search'].handler({ limit: 2 });
+      const payload = JSON.parse(res.content[0].text);
+      expect(payload.hits).toHaveLength(2);
+      expect(payload.truncated).toBe(true);
+      expect(payload.walkComplete).toBe(false);
+      expect(payload.note).toContain('Hit limit reached at 2; raise limit to see more matches');
+      expect(payload.note).not.toContain('raise --limit');
+
+      // Verify presentation helper parity between CLI and MCP
+      const cliNotice = formatMediaSearchHitLimitNotice(2);
+      expect(cliNotice).toBe(
+        'Hit limit reached at 2; raise --limit to see more matches from the same walk.',
+      );
+      const mcpNotice = formatMediaSearchHitLimitNotice(2, { isMcp: true });
+      expect(mcpNotice).toBe(
+        'Hit limit reached at 2; raise limit to see more matches from the same walk.',
+      );
+      expect(payload.note).toContain(mcpNotice);
     });
   });
 });

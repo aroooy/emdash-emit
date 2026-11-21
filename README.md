@@ -1067,7 +1067,7 @@ Options:
 - `--suggest-keywords`: Append top local tag slugs as search hints.
 - `-p, --profile <name>`: Explicitly select a connection profile.
 
-Absence is only proven when `walkComplete: true` (a complete walk). When stopped early, `[WALK_INCOMPLETE]` indicates that an asset may still exist in the unread portion of the library. MCP `sync_media_search` accepts the same `query` / `since` / `until` / `offline` arguments.
+Absence is only proven when `walkComplete: true` (a complete walk). When stopped early, `[WALK_INCOMPLETE]` indicates that an asset may still exist in the unread portion of the library. If the hit limit (`-l, --limit`) is reached before exhausting the scan range, the walk stops immediately to prevent unneeded network requests, and a supplementary notice (`Hit limit reached at <n>; raise --limit to see more matches from the same walk.`) is displayed. MCP `sync_media_search` accepts the same `query` / `since` / `until` / `offline` arguments.
 
 ---
 
@@ -1089,8 +1089,8 @@ Options:
 - `--since <date>` / `--until <date>`: Restrict to articles on or after / on or before the given date, accepting `today`, `yesterday`, or `YYYY-MM-DD` (local time). A same-day pair (`--since` equal to `--until`) includes that day's articles.
 - `--date-field <field>`: Date field for comparison (`publishedAt`, `updatedAt`, or `createdAt`). Defaults to `publishedAt` for published articles and `createdAt` for drafts. When using `createdAt` (the default sort order), a `--since` boundary stops the walk early and reports `walkComplete: true`.
 - `--offline`: Search **only** local Markdown files in `posts/` with zero network requests. Results cover workspace files only and include Markdown body text.
-- `-l, --limit <n>`: Maximum hits to return (default: 20, max: 50).
-- `--max-scan <n>`: Maximum articles to read before stopping (default: 300, 50 with taxonomy filters; `0` = entire library).
+- `-l, --limit <n>`: Maximum hits to return (default: 20, max: 50). Stops the walk immediately when hit limit is reached.
+- `--max-scan <n>`: Maximum articles to read before stopping (default: 300, 50 with taxonomy filters; `0` = entire library). When filtering by taxonomy (`--tag` or `--category`), clean synced articles matching the remote revision are verified with 0-GET directly against local baseline snapshots, displaying `[taxonomies cached: <n>]` in the header.
 - `--include-conflicts`: Include quarantined rescue copies from `posts/conflicts/` in results (flagged with `[quarantined — never push]`).
 - `-p, --profile <name>`: Explicitly select a connection profile.
 
@@ -1101,7 +1101,7 @@ Options:
 | `emit status --search <term>` | Local SQLite cache metadata (`title`, `slug`, `id`, `filePath`) | Inspect local synchronization state and modified files in the active workspace. |
 | `emit article-search [query]` | Remote EmDash library (FTS / bounded walk) OR local Markdown bodies (`--offline`) | Locate and target past articles (even those outside the default 30-post sync window) by keyword, taxonomy, or date range before pulling with `emit pull <id>`. |
 
-Absence is only proven when `walkComplete: true`. When stopped early, `[WALK_INCOMPLETE]` indicates that an article may still exist in the unread portion of the remote library. When hits are not yet present in the local workspace, Emit guides the user or agent with `--> To edit or pull locally: emit pull <id>`.
+Absence is only proven when `walkComplete: true`. When stopped early, `[WALK_INCOMPLETE]` indicates that an article may still exist in the unread portion of the remote library. When a remote search yields 0 hits or is truncated by max-scan, Emit provides a hint (`💡 Hint: workspace-synced articles can be searched instantly with --offline ...`) to guide users and agents to immediate local body search. When hits are not yet present in the local workspace, Emit guides the user or agent with `--> To edit or pull locally: emit pull <id>`.
 
 
 ---

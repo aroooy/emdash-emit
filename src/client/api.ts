@@ -125,7 +125,21 @@ export function extractComparisonRev(raw: unknown, fallback = '1'): string {
 
   const root = raw as Record<string, unknown>;
   const item = unwrapItem<Record<string, unknown>>(raw);
-  const version = String(item.version || root.version || '1');
+  const rawRevCandidate = String(
+    item._rev || root._rev || item.rev || root.rev || item.version || root.version || '',
+  );
+  const normalizedCandidate = rawRevCandidate ? normalizeRev(rawRevCandidate) : '';
+  const candidateVersion = /^\d+$/.test(normalizedCandidate) ? normalizedCandidate : '';
+  const normalizedFallback = fallback ? normalizeRev(fallback) : '';
+  const fallbackVersion = /^\d+$/.test(normalizedFallback) ? normalizedFallback : '1';
+
+  const resolvedVersion =
+    (item.version !== undefined && item.version !== null ? String(item.version) : '') ||
+    (root.version !== undefined && root.version !== null ? String(root.version) : '') ||
+    candidateVersion ||
+    fallbackVersion ||
+    '1';
+  const version = String(resolvedVersion);
   const draftRevisionId = item.draftRevisionId || root.draftRevisionId;
   const liveRevisionId = item.liveRevisionId || root.liveRevisionId;
 
@@ -229,23 +243,22 @@ export function normalizeRev(rev: unknown): string {
   }
 
   // Check if string contains colon directly (e.g. "1:2026-10-31...")
-  const colonMatch = s.match(/^(\d+):/);
+  const colonMatch = s.match(/^(\d+):(?:\d{4}-\d{2}-\d{2})/);
   if (colonMatch) {
     return colonMatch[1];
   }
 
   // Check if Base64 encoded (e.g. "MToyMDI2...")
-  try {
-    const decoded = Buffer.from(s, 'base64').toString('utf8');
-    const decodedColon = decoded.match(/^(\d+):/);
-    if (decodedColon) {
-      return decodedColon[1];
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length >= 8) {
+    try {
+      const decoded = Buffer.from(s, 'base64').toString('utf8');
+      const decodedColon = decoded.match(/^(\d+):(?:\d{4}-\d{2}-\d{2})/);
+      if (decodedColon) {
+        return decodedColon[1];
+      }
+    } catch {
+      // Ignore decode failure
     }
-    if (/^\d+$/.test(decoded)) {
-      return decoded;
-    }
-  } catch {
-    // Ignore decode failure
   }
 
   return s;

@@ -23,7 +23,10 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { searchRemoteArticles } from '../../sync/article_search/index.js';
-import { buildOfflineArticleSearchFraming } from '../../presentation/article_report.js';
+import {
+  buildOfflineArticleSearchFraming,
+  formatArticleSearchOfflineHint,
+} from '../../presentation/article_report.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
@@ -118,6 +121,16 @@ export function registerSyncArticleSearchTool(
           note = `[WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at maxScan; absence is not proven. Narrow the query or raise maxScan (0 walks the whole library).`;
         }
 
+        const offlineHint = formatArticleSearchOfflineHint(result, {
+          offline: args.offline,
+          tag: args.tag,
+          category: args.category,
+          workspaceRoot: ctx.root,
+        });
+        if (offlineHint) {
+          note = note ? `${note} ${offlineHint}` : offlineHint;
+        }
+
         const payload: Record<string, unknown> = {
           query: args.query ?? null,
           searchMode: result.searchMode,
@@ -128,6 +141,8 @@ export function registerSyncArticleSearchTool(
           hits: result.hits,
         };
         if (result.taxonomyFetchCount > 0) payload.taxonomyFetchCount = result.taxonomyFetchCount;
+        if (result.taxonomyCacheHitCount > 0)
+          payload.taxonomyCacheHitCount = result.taxonomyCacheHitCount;
         if (result.fallbackReason) payload.fallbackReason = result.fallbackReason;
         if (args.since) payload.since = args.since;
         if (args.until) payload.until = args.until;
@@ -135,6 +150,12 @@ export function registerSyncArticleSearchTool(
         if (args.category) payload.category = args.category;
         if (args.status) payload.status = args.status;
         if (args.offline) Object.assign(payload, buildOfflineArticleSearchFraming());
+        if (offlineHint) {
+          payload.hint = {
+            offlineSearch: true,
+            reason: result.hits.length === 0 ? 'no-hits' : 'walk-truncated',
+          };
+        }
         if (note) payload.note = note;
 
         return formatToolSuccess(payload, ctx.meta);

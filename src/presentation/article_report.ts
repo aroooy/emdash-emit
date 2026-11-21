@@ -22,6 +22,7 @@
 
 import type { PrunedTaxonomiesDetail } from '../utils/taxonomy-key.js';
 import type { ArticleSearchHit, ArticleSearchResult } from '../sync/article_search/index.js';
+import { getLocalTaxonomiesSummary } from '../sync/taxonomies.js';
 
 /**
  * Presentation layer: unified report formatting helpers for CLI and MCP consumers.
@@ -246,9 +247,11 @@ export function formatArticleSearchHeader(
     result.taxonomyFetchCount > 0
       ? ` [taxonomies fetched: ${result.taxonomyFetchCount} GET(s)]`
       : '';
+  const taxCacheLabel =
+    result.taxonomyCacheHitCount > 0 ? ` [taxonomies cached: ${result.taxonomyCacheHitCount}]` : '';
   const truncLabel = result.truncated ? ' [truncated at limit]' : '';
 
-  return `Article search: ${subject} (${modeLabel}, scanned ${result.scannedCount} article(s))${taxLabel}${truncLabel}`;
+  return `Article search: ${subject} (${modeLabel}, scanned ${result.scannedCount} article(s))${taxLabel}${taxCacheLabel}${truncLabel}`;
 }
 
 /**
@@ -303,5 +306,37 @@ export function formatArticleSearchWalkIncompleteNotice(
   return (
     `⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at --max-scan; absence is not proven.\n` +
     `   Narrow the query or raise --max-scan (0 walks the whole library).`
+  );
+}
+
+/**
+ * Formats the offline re-search hint for a remote article search that found nothing
+ * or stopped before the end of the library. Returns null when no hint applies.
+ */
+export function formatArticleSearchOfflineHint(
+  result: ArticleSearchResult,
+  options?: { offline?: boolean; tag?: string; category?: string; workspaceRoot?: string },
+): string | null {
+  if (options?.offline) return null;
+
+  const applies = result.hits.length === 0 || result.truncated || !result.walkComplete;
+  if (!applies) return null;
+
+  const hasTaxonomyFilter = Boolean(options?.tag || options?.category);
+  let taxonomyClause = '';
+  if (hasTaxonomyFilter && options?.workspaceRoot) {
+    try {
+      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
+      if (summary.categories.length > 0 || summary.tags.length > 0) {
+        taxonomyClause = ' For taxonomy filters, verify terms first: emit pull-taxonomies';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    `💡 Hint: workspace-synced articles can be searched instantly with --offline\n` +
+    `   (local Markdown bodies, zero HTTP).${taxonomyClause}`
   );
 }

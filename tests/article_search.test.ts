@@ -30,10 +30,31 @@ import {
   formatArticleSearchEmptyNotice,
   formatArticleSearchHeader,
   formatArticleSearchHit,
+  formatArticleSearchOfflineHint,
   formatArticleSearchWalkIncompleteNotice,
   OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE,
 } from '../src/presentation/article_report.js';
+import { createBaseSnapshot } from '../src/db/baseline.js';
 import { ApiError } from '../src/client/error.js';
+import { createMcpServer } from '../src/mcp/server.js';
+import { initWorkspace } from '../src/utils/config.js';
+import { setProfile } from '../src/utils/profile.js';
+import { calculateHash } from '../src/sync/workspace/index.js';
+import { serializeMarkdown } from '../src/utils/frontmatter.js';
+import type { Frontmatter } from '../src/utils/frontmatter.js';
+
+function makeTestFrontmatter(
+  overrides: Partial<Frontmatter> & { id: string; title: string; slug: string },
+): Frontmatter {
+  return {
+    collection: 'posts',
+    status: 'published',
+    locale: 'ja',
+    bylines: [],
+    taxonomies: {},
+    ...overrides,
+  };
+}
 
 describe('Article Search & Targeting Engine (v0.1.43)', () => {
   let tempDir: string;
@@ -507,6 +528,7 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
       truncated: true,
       normalizedQuery: '',
       taxonomyFetchCount: 0,
+      taxonomyCacheHitCount: 0,
     };
 
     const notice = formatArticleSearchWalkIncompleteNotice(incompleteRes);
@@ -854,5 +876,1045 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
       expect(apiErr.code).toBe('DATE_BOUNDARY_INVALID');
       expect(apiErr.suggestion).toContain('today / yesterday');
     }
+  });
+
+  describe('v0.1.44 P2: Taxonomy Fast-Path via Baseline Snapshots', () => {
+    const articleId = '01M77VFT000000000000000101';
+    const rev = '4@live:01M77VFT000000000000000101';
+    const b64Rev4 = Buffer.from('4:2026-11-20T10:00:00.000Z').toString('base64');
+
+    // T-1: rev matches, no pending flags -> 0 terms GETs, fast-path hits
+    it('T-1: evaluates taxonomies from baseline snapshot with 0 terms GETs when rev matches and no pending changes', async () => {
+      const diskPath = path.join(
+        tempDir,
+        'posts',
+        'published',
+        `20261120_${articleId}-fast-path.md`,
+      );
+      const diskContent = `---\nid: ${articleId}\ntitle: Fast Path Article\nslug: fast-path-article\nstatus: published\nlocale: ja\ncollection: posts\ntaxonomies:\n  categories:\n    - photography\n  tags:\n    - nature\n---\nBody content`;
+      fs.writeFileSync(diskPath, diskContent, 'utf8');
+      const diskHash = calculateHash(diskContent);
+
+      const base = createBaseSnapshot({
+        id: articleId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: articleId,
+          title: 'Fast Path Article',
+          slug: 'fast-path-article',
+          taxonomies: {
+            categories: ['photography'],
+            tags: ['nature'],
+          },
+        }),
+        hash: diskHash,
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-fast-path.md`,
+        localHash: diskHash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'fast-path-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/')) {
+          throw new Error(`terms endpoint should NOT be called on fast-path: ${url}`);
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Fast Path Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    version: 4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        category: 'photography',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0].id).toBe(articleId);
+      expect(result.taxonomyFetchCount).toBe(0);
+      expect(result.taxonomyCacheHitCount).toBe(1);
+
+      // Verify fast-path still succeeds when item.version is absent from list item (reconstructed from _rev)
+      const mockFetchNoVersion = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/')) {
+          throw new Error(`terms endpoint should NOT be called on fast-path: ${url}`);
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Fast Path Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const resultNoVersion = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetchNoVersion as unknown as typeof fetch,
+      });
+      expect(resultNoVersion.hits).toHaveLength(1);
+      expect(resultNoVersion.taxonomyFetchCount).toBe(0);
+      expect(resultNoVersion.taxonomyCacheHitCount).toBe(1);
+    });
+
+    // T-2: rev mismatch triggers fallback to terms GET
+    it('T-2: issues terms GET when rev does not match cached rev (remote edited)', async () => {
+      const base = createBaseSnapshot({
+        id: articleId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: articleId,
+          title: 'Fast Path Article',
+          slug: 'fast-path-article',
+          taxonomies: { tags: ['old-tag'] },
+        }),
+        hash: 'hash-101',
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-fast-path.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'fast-path-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'nature' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Fast Path Article',
+                    status: 'published',
+                    _rev: '2', // Rev 2 differs from cached rev 1!
+                    liveRevisionId: '01M77VFT000000000000000999',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(1);
+      expect(result.taxonomyCacheHitCount).toBe(0);
+    });
+
+    // T-3: taxonomyApplyPending, taxonomyConflictPending, or deletePending bypasses fast-path
+    it('T-3: bypasses fast-path and issues terms GET when pending flags are set', async () => {
+      const base = createBaseSnapshot({
+        id: articleId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: articleId,
+          title: 'Pending Article',
+          slug: 'pending-article',
+          taxonomies: { tags: ['nature'] },
+        }),
+        hash: 'hash-101',
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-fast-path.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'pending-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 1, // Pending flag set!
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'nature' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Pending Article',
+                    status: 'published',
+                    _rev: '1',
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(1);
+      expect(result.taxonomyCacheHitCount).toBe(0);
+
+      // Verify deletePending: 1 also bypasses fast-path
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-fast-path.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'pending-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+        deletePending: 1, // deletePending flag set!
+      });
+
+      const resultDeletePending = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      expect(resultDeletePending.hits).toHaveLength(1);
+      expect(resultDeletePending.taxonomyFetchCount).toBe(1);
+      expect(resultDeletePending.taxonomyCacheHitCount).toBe(0);
+
+      // Verify bodyConflictPending: 1 also bypasses fast-path
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-fast-path.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'pending-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+        bodyConflictPending: 1, // bodyConflictPending flag set!
+      });
+
+      const resultBodyConflictPending = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      expect(resultBodyConflictPending.hits).toHaveLength(1);
+      expect(resultBodyConflictPending.taxonomyFetchCount).toBe(1);
+      expect(resultBodyConflictPending.taxonomyCacheHitCount).toBe(0);
+    });
+
+    // T-4: corrupt baseline frontmatter falls back to GET gracefully
+    it('T-4: falls back to terms GET when baseline frontmatter is corrupt', async () => {
+      // Direct insert corrupt baseline JSON
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-corrupt.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'corrupt-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+      cache.saveBaseSnapshot({
+        id: articleId,
+        rev,
+        bodyMarkdown: '',
+        frontmatterYaml: 'not a valid json {{{{',
+        hash: 'hash-101',
+        savedAt: Date.now(),
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'nature' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Corrupt Article',
+                    status: 'published',
+                    _rev: '1',
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(1);
+      expect(result.taxonomyCacheHitCount).toBe(0);
+    });
+
+    // T-4b: legacy baseline frontmatter with no categories/tags recorded falls back to GET
+    it('T-4b: falls back to terms GET when baseline frontmatter has no recorded categories or tags', async () => {
+      const baseLegacy = createBaseSnapshot({
+        id: articleId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: articleId,
+          title: 'Legacy Article',
+          slug: 'legacy-article',
+          taxonomies: {}, // Empty / unrecorded taxonomies
+        }),
+        hash: 'hash-101',
+      });
+      cache.saveBaseSnapshot(baseLegacy);
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: `posts/published/20261120_${articleId}-legacy.md`,
+        localHash: 'hash-101',
+        remoteRev: rev,
+        status: 'published',
+        slug: 'legacy-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'nature' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Legacy Article',
+                    status: 'published',
+                    _rev: '1',
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(1);
+      expect(result.taxonomyCacheHitCount).toBe(0);
+    });
+
+    // T-5: matches encoded canonical slug from baseline against decoded filter
+    it('T-5: matches encoded canonical slug in baseline against decoded filter', async () => {
+      const guideId = '01M77VFT000000000000000105';
+      const encodedSlug = '%e3%83%ad%e3%83%bc%e3%82%ab%e3%83%ab%e3%82%ac%e3%82%a4%e3%83%89';
+      const decodedFilter = 'ローカルガイド';
+
+      // Create local tag definition
+      fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, 'tags', '01M77VFT0000000000000000T1-guide.yaml'),
+        `id: 01M77VFT0000000000000000T1\nslug: ${decodedFilter}\ncanonicalSlug: ${encodedSlug}\nname: ${decodedFilter}\n`,
+      );
+
+      const guidePath = path.join(tempDir, 'posts', 'published', `20261120_${guideId}-guide.md`);
+      const guideContent = `---\nid: ${guideId}\ntitle: Guide Article\nslug: guide-article\nstatus: published\nlocale: ja\ncollection: posts\ntaxonomies:\n  tags:\n    - ${encodedSlug}\n---\nBody content`;
+      fs.writeFileSync(guidePath, guideContent, 'utf8');
+      const guideHash = calculateHash(guideContent);
+
+      const base = createBaseSnapshot({
+        id: guideId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: guideId,
+          title: 'Guide Article',
+          slug: 'guide-article',
+          taxonomies: { tags: [encodedSlug] },
+        }),
+        hash: guideHash,
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: guideId,
+        localFilePath: `posts/published/20261120_${guideId}-guide.md`,
+        localHash: guideHash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'guide-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/')) {
+          throw new Error(`Should not call terms on fast-path: ${url}`);
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: guideId,
+                    title: 'Guide Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: decodedFilter,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyCacheHitCount).toBe(1);
+      expect(result.taxonomyFetchCount).toBe(0);
+    });
+
+    // T-6: ULID loser term in baseline is preserved verbatim
+    it('T-6: preserves ULID loser terms in baseline and matches verbatim', async () => {
+      const loserUlid = '01M77VFT000000000000000L01';
+      const loserArticleId = '01M77VFT000000000000000106';
+
+      const loserPath = path.join(
+        tempDir,
+        'posts',
+        'published',
+        `20261120_${loserArticleId}-loser.md`,
+      );
+      const loserContent = `---\nid: ${loserArticleId}\ntitle: Loser Article\nslug: loser-article\nstatus: published\nlocale: ja\ncollection: posts\ntaxonomies:\n  tags:\n    - ${loserUlid}\n---\nBody content`;
+      fs.writeFileSync(loserPath, loserContent, 'utf8');
+      const loserHash = calculateHash(loserContent);
+
+      const base = createBaseSnapshot({
+        id: loserArticleId,
+        rev,
+        bodyMarkdown: 'Body content',
+        frontmatter: makeTestFrontmatter({
+          id: loserArticleId,
+          title: 'Loser Article',
+          slug: 'loser-article',
+          taxonomies: { tags: [loserUlid] },
+        }),
+        hash: loserHash,
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: loserArticleId,
+        localFilePath: `posts/published/20261120_${loserArticleId}-loser.md`,
+        localHash: loserHash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'loser-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: loserArticleId,
+                    title: 'Loser Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: loserUlid,
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyCacheHitCount).toBe(1);
+    });
+
+    // T-7: taxonomy reporting in header and counts
+    it('T-7: header displays cached taxonomy count when taxonomyCacheHitCount > 0', () => {
+      const resultWithCache = {
+        hits: [],
+        searchMode: 'scan' as const,
+        scannedCount: 10,
+        totalCount: null,
+        walkComplete: true,
+        truncated: false,
+        normalizedQuery: '',
+        taxonomyFetchCount: 2,
+        taxonomyCacheHitCount: 8,
+      };
+
+      const header = formatArticleSearchHeader(resultWithCache, { tag: 'nature' });
+      expect(header).toContain('[taxonomies fetched: 2 GET(s)]');
+      expect(header).toContain('[taxonomies cached: 8]');
+    });
+
+    // T-8: unpushed local edits on disk bypass fast-path and issue terms GET
+    it('T-8: unpushed local edits on disk bypass fast-path and issue terms GET', async () => {
+      const editArticleId = '01M77VFT000000000000000108';
+      const filePath = path.join(
+        tempDir,
+        'posts',
+        'published',
+        `20261120_${editArticleId}-modified.md`,
+      );
+      // Clean content initially recorded
+      const cleanContent = `---\nid: ${editArticleId}\ntitle: Modified Article\nslug: modified-article\nstatus: published\nlocale: ja\ncollection: posts\ntaxonomies:\n  tags:\n    - old-tag\n---\nOriginal body`;
+      const cleanHash = calculateHash(cleanContent);
+
+      const base = createBaseSnapshot({
+        id: editArticleId,
+        rev,
+        bodyMarkdown: 'Original body',
+        frontmatter: makeTestFrontmatter({
+          id: editArticleId,
+          title: 'Modified Article',
+          slug: 'modified-article',
+          taxonomies: { tags: ['old-tag'] },
+        }),
+        hash: cleanHash,
+      });
+      cache.saveBaseSnapshot(base);
+      cache.saveSyncState({
+        id: editArticleId,
+        localFilePath: `posts/published/20261120_${editArticleId}-modified.md`,
+        localHash: cleanHash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'modified-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      // User modified the file locally on disk adding camera tag (unpushed edit!)
+      const modifiedContent = `---\nid: ${editArticleId}\ntitle: Modified Article\nslug: modified-article\nstatus: published\nlocale: ja\ncollection: posts\ntaxonomies:\n  tags:\n    - old-tag\n    - camera\n---\nModified body`;
+      fs.writeFileSync(filePath, modifiedContent, 'utf8');
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'camera' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: editArticleId,
+                    title: 'Modified Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'camera',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      // Because local file is modified on disk, fast-path is bypassed and remote terms GET is issued
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(1);
+      expect(result.taxonomyCacheHitCount).toBe(0);
+    });
+
+    // T-9: spelling-only mismatch evaluates fast-path without healing sync_state.local_hash
+    it('T-9: article search never heals sync_state.local_hash on a spelling-only mismatch', async () => {
+      const storageKeyStem = '01M67P2N0A44G4KHK6QZZGMRW7';
+      const storageKey = `${storageKeyStem}.webp`;
+      const canonicalUrl = `/_emdash/api/media/file/${storageKey}`;
+      const localRef = `../../media/${storageKey}`;
+
+      // Seed a confirmed local mirror so the localization transform is eligible to fire.
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      fs.writeFileSync(path.join(mediaDir, storageKey), 'fake-webp-bytes');
+      fs.writeFileSync(
+        path.join(mediaDir, `${storageKeyStem}.yaml`),
+        [
+          `id: "01M67PG2WTXPEJVMS4W5N3FC48"`,
+          `filename: "${storageKey}"`,
+          `storageKey: "${storageKey}"`,
+          'mimeType: "image/webp"',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const diskRelPath = `posts/published/20261120_${articleId}-localized-ref.md`;
+      const fullPath = path.join(tempDir, diskRelPath);
+      const frontmatter = makeTestFrontmatter({
+        id: articleId,
+        title: 'Localized Ref Article',
+        slug: 'localized-ref-article',
+        taxonomies: { categories: ['photography'], tags: ['nature'] },
+      });
+      const canonicalBody = `Body content\n\n![Sample Image](${canonicalUrl})\n`;
+      const localizedBody = `Body content\n\n![Sample Image](${localRef})\n`;
+
+      // Disk carries the article-relative local spelling; baseline and sync_state carry canonical bytes.
+      fs.writeFileSync(fullPath, serializeMarkdown(frontmatter, localizedBody), 'utf8');
+      const staleCanonicalHash = calculateHash(serializeMarkdown(frontmatter, canonicalBody));
+      const diskHash = calculateHash(serializeMarkdown(frontmatter, localizedBody));
+
+      cache.saveBaseSnapshot(
+        createBaseSnapshot({
+          id: articleId,
+          rev,
+          bodyMarkdown: canonicalBody,
+          frontmatter,
+          hash: staleCanonicalHash,
+        }),
+      );
+      cache.saveSyncState({
+        id: articleId,
+        localFilePath: diskRelPath,
+        localHash: staleCanonicalHash,
+        remoteRev: rev,
+        status: 'published',
+        slug: 'localized-ref-article',
+        lastSyncedAt: Date.now(),
+        taxonomyApplyPending: 0,
+        taxonomyConflictPending: 0,
+      });
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/terms/tag')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { terms: [{ slug: 'nature' }] } }),
+          };
+        }
+        if (url.includes('/_emdash/api/content/posts')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                items: [
+                  {
+                    id: articleId,
+                    title: 'Localized Ref Article',
+                    status: 'published',
+                    _rev: b64Rev4,
+                    liveRevisionId: '01M77VFT000000000000000101',
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      });
+
+      const result = await searchRemoteArticles({
+        workspaceRoot: tempDir,
+        origin: mockOrigin,
+        token: mockToken,
+        status: 'published',
+        tag: 'nature',
+        cache,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      // Sanity check: the mismatch really is spelling-only (disk bytes differ from the recorded hash).
+      expect(diskHash).not.toBe(staleCanonicalHash);
+
+      // Spelling-only mismatch is recognized as unmodified, evaluating taxonomies from baseline (0-GET fast-path).
+      expect(result.hits).toHaveLength(1);
+      expect(result.taxonomyFetchCount).toBe(0);
+      expect(result.taxonomyCacheHitCount).toBe(1);
+
+      // Article search is read-only: it must not re-track sync_state.local_hash as a side effect.
+      expect(cache.getSyncState(articleId)!.localHash).toBe(staleCanonicalHash);
+    });
+  });
+
+  describe('v0.1.44 P3: Offline Search Hint for AI Agents', () => {
+    // H-1: formatArticleSearchOfflineHint returns hint on 0 hits for remote search, null for offline
+    it('H-1: returns hint on remote search 0 hits and null on offline search', () => {
+      const emptyResult = {
+        hits: [],
+        searchMode: 'scan' as const,
+        scannedCount: 30,
+        totalCount: null,
+        walkComplete: true,
+        truncated: false,
+        normalizedQuery: 'nature',
+        taxonomyFetchCount: 0,
+        taxonomyCacheHitCount: 0,
+      };
+
+      const remoteHint = formatArticleSearchOfflineHint(emptyResult, { offline: false });
+      expect(remoteHint).toContain(
+        '💡 Hint: workspace-synced articles can be searched instantly with --offline',
+      );
+
+      const offlineHint = formatArticleSearchOfflineHint(emptyResult, { offline: true });
+      expect(offlineHint).toBeNull();
+    });
+
+    // H-2: returns hint when truncated or walkComplete is false even with hits
+    it('H-2: returns hint on truncated or incomplete walk even when hits > 0', () => {
+      const truncatedResult = {
+        hits: [
+          {
+            id: '01M77VFT000000000000000201',
+            slug: 'hit-1',
+            title: 'Hit 1',
+            isLocal: false,
+            localPath: null,
+            matchedOn: ['title' as const],
+          },
+        ],
+        searchMode: 'scan' as const,
+        scannedCount: 50,
+        totalCount: null,
+        walkComplete: false,
+        truncated: true,
+        normalizedQuery: 'hit',
+        taxonomyFetchCount: 0,
+        taxonomyCacheHitCount: 0,
+      };
+
+      const hint = formatArticleSearchOfflineHint(truncatedResult, { offline: false });
+      expect(hint).toContain(
+        '💡 Hint: workspace-synced articles can be searched instantly with --offline',
+      );
+    });
+
+    // H-3: MCP sync_article_search attaches hint.offlineSearch and merges note on 0-hits or truncated walks
+    it('H-3: MCP sync_article_search attaches hint.offlineSearch and merges note on 0-hits or truncated walks', async () => {
+      const customProfiles = path.join(tempDir, 'profiles.yaml');
+      initWorkspace(tempDir, { origin: mockOrigin });
+      setProfile(
+        'default',
+        { origin: mockOrigin, token: mockToken, workspace: tempDir },
+        true,
+        customProfiles,
+      );
+
+      const server = createMcpServer({
+        workspaceRoot: tempDir,
+        cache,
+        profilesPath: customProfiles,
+      });
+      const registered = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              handler: (
+                args: Record<string, unknown>,
+              ) => Promise<{ content: Array<{ text: string }> }>;
+            }
+          >;
+        }
+      )._registeredTools;
+
+      // 1. Mock fetch for 0-hits search
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: { items: [], nextCursor: null },
+        }),
+      } as Response);
+
+      const res0 = await registered['sync_article_search'].handler({ status: 'published' });
+      const payload0 = JSON.parse(res0.content[0].text);
+      expect(payload0.hits).toHaveLength(0);
+      expect(payload0.hint).toEqual({ offlineSearch: true, reason: 'no-hits' });
+      expect(payload0.note).toContain(
+        '💡 Hint: workspace-synced articles can be searched instantly with --offline',
+      );
+
+      // 2. Mock fetch for truncated walk (maxScan=1, 1 hit returned, nextCursor present -> walkComplete=false)
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            items: [
+              {
+                id: '01M77VFT000000000000000301',
+                title: 'Article 1',
+                slug: 'article-1',
+                status: 'published',
+                _rev: '1',
+              },
+            ],
+            nextCursor: 'next-page-cursor',
+          },
+        }),
+      } as Response);
+
+      const resTruncated = await registered['sync_article_search'].handler({
+        status: 'published',
+        maxScan: 1,
+      });
+      const payloadTruncated = JSON.parse(resTruncated.content[0].text);
+      expect(payloadTruncated.hits).toHaveLength(1);
+      expect(payloadTruncated.walkComplete).toBe(false);
+      expect(payloadTruncated.hint).toEqual({ offlineSearch: true, reason: 'walk-truncated' });
+      expect(payloadTruncated.note).toContain('[WALK_INCOMPLETE]');
+      expect(payloadTruncated.note).toContain(
+        '💡 Hint: workspace-synced articles can be searched instantly with --offline',
+      );
+    });
+
+    // H-4: includes taxonomy verification clause only when local taxonomy definitions exist
+    it('H-4: omits taxonomy verification clause when local taxonomy definitions are empty', () => {
+      const emptyResult = {
+        hits: [],
+        searchMode: 'scan' as const,
+        scannedCount: 10,
+        totalCount: null,
+        walkComplete: true,
+        truncated: false,
+        normalizedQuery: '',
+        taxonomyFetchCount: 0,
+        taxonomyCacheHitCount: 0,
+      };
+
+      // Empty workspaceRoot with no categories or tags
+      const hintNoDefs = formatArticleSearchOfflineHint(emptyResult, {
+        offline: false,
+        tag: 'nature',
+        workspaceRoot: tempDir,
+      });
+      expect(hintNoDefs).not.toContain('emit pull-taxonomies');
+
+      // Add a tag to workspaceRoot
+      fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, 'tags', '01M77VFT0000000000000000T2-tech.yaml'),
+        'id: 01M77VFT0000000000000000T2\nslug: tech\nname: Tech\n',
+      );
+
+      const hintWithDefs = formatArticleSearchOfflineHint(emptyResult, {
+        offline: false,
+        tag: 'nature',
+        workspaceRoot: tempDir,
+      });
+      expect(hintWithDefs).toContain('emit pull-taxonomies');
+    });
   });
 });

@@ -52,6 +52,7 @@ export interface ArticleSearchResult {
   truncated: boolean;
   normalizedQuery: string;
   taxonomyFetchCount: number;
+  taxonomyCacheHitCount: number;
   fallbackReason?: string;
 }
 

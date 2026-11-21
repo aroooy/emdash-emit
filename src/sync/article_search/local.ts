@@ -303,5 +303,6 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     truncated,
     normalizedQuery,
     taxonomyFetchCount: 0,
+    taxonomyCacheHitCount: 0,
   };
 }

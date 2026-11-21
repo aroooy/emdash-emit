@@ -265,6 +265,7 @@ export async function searchRemoteMedia(
   let totalCount: number | null = null;
   let walkComplete = false;
   let matchCount = 0;
+  let hitLimitReached = false;
 
   /** True when a record's creation instant falls inside the requested date range. */
   const inDateRange = (createdAt?: string): boolean => {
@@ -279,7 +280,7 @@ export async function searchRemoteMedia(
 
   for (;;) {
     const remaining = maxScan - scanned;
-    if (remaining <= 0) {
+    if (remaining <= 0 || hitLimitReached) {
       break;
     }
     const currentBatch = Math.min(remaining, batchSize);
@@ -365,26 +366,32 @@ export async function searchRemoteMedia(
 
       if (matchedOn.length > 0) {
         matchCount++;
-        if (hits.length < limit) {
-          hits.push({
-            mediaId: item.id.toUpperCase(),
-            storageKey,
-            filename: item.filename || null,
-            mimeType: item.mimeType || null,
-            size: typeof item.size === 'number' ? item.size : null,
-            alt: effectiveAlt,
-            caption: effectiveCaption,
-            createdAt: item.createdAt,
-            mirrored,
-            localPath: mirrorEntry?.localPath ?? null,
-            matchedOn,
-          });
+        hits.push({
+          mediaId: item.id.toUpperCase(),
+          storageKey,
+          filename: item.filename || null,
+          mimeType: item.mimeType || null,
+          size: typeof item.size === 'number' ? item.size : null,
+          alt: effectiveAlt,
+          caption: effectiveCaption,
+          createdAt: item.createdAt,
+          mirrored,
+          localPath: mirrorEntry?.localPath ?? null,
+          matchedOn,
+        });
+        if (hits.length >= limit) {
+          hitLimitReached = true;
+          break;
         }
       }
     }
 
     if (reachedSinceBoundary) {
       walkComplete = true;
+      break;
+    }
+
+    if (hitLimitReached) {
       break;
     }
 
@@ -395,7 +402,7 @@ export async function searchRemoteMedia(
     cursor = page.nextCursor;
   }
 
-  const truncated = matchCount > hits.length;
+  const truncated = hitLimitReached || matchCount > hits.length;
 
   return {
     hits,
