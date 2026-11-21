@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.43] - 2026-11-21
+
+### Added
+
+- **Multidimensional Past Article Search & Targeting (`emit article-search` / MCP `sync_article_search`, v0.1.43 P1–P4)**:
+  - Discover articles outside the default 30-post sync window by keyword, date range (`--since` / `--until` accepting `today`, `yesterday`, or `YYYY-MM-DD`), status, slug, category, or tag, then target the canonical ULID with `emit pull <id>`. The query is optional — run it bare to browse recent articles by recency.
+  - Two routes behind one decision rule: the official `GET /_emdash/api/search` FTS endpoint (Primary) when only a query and/or status is supplied, and a bounded client-side list walk (Scan) whenever taxonomy or date filters are involved, because search returns neither taxonomy nor dates. Date filtering needs **zero extra GETs** — the list API already carries `createdAt` / `updatedAt` / `publishedAt` per item.
+  - Early-exit on the scan route: the list API is `createdAt` descending, so a `--since` boundary stops the walk and still reports `walkComplete: true`. A short query (under three Unicode characters) that FTS cannot match falls back to the scan route so absence is never misread.
+  - Local tracking state (`synced` / `modified` / untracked) is shown per hit, with `--> To edit or pull locally: emit pull <id>` guidance for remote-only hits. Epistemic rule: absence is only proven when `walkComplete: true`; an unfinished walk prints `[WALK_INCOMPLETE]` and may never assert the article does not exist.
+  - Full offline search (`--offline` / `offline: true`) scans workspace Markdown bodies with zero network requests, covering local files only — absence in an offline result never proves remote absence.
+
+### Fixed
+
+- **Taxonomy Filters Never Matched Non-ASCII Terms in Article Search (`src/utils/taxonomy-term-match.ts`, `src/sync/article_search/local.ts`, `src/sync/article_search/remote.ts`)**:
+  - A workspace stores taxonomy terms as decoded slugs (`カメラレビュー`) while remote assigned terms come back as canonical percent-encoded slugs (`%e3%82%ab...`). Comparing one raw string against the other silently yielded zero matches for every non-ASCII `--tag` / `--category` filter, in both the local and remote search paths.
+  - New pure Layer 0 helper `taxonomyTermFilterAliases()` expands a user-supplied filter into every spelling it may legitimately match (raw, decoded, canonical slug, and human-readable name) through the local definitions, and `taxonomyTermMatchesFilter()` compares through those spellings while preserving substring behavior for partial filters. Without local definitions, both raw and decoded forms of the filter are still tried, so ASCII terms and already-decoded frontmatter keep working.
+  - Local search also read taxonomy terms from the top-level `fm.categories` / `fm.tags` keys, which the canonical schema never emits — terms live under the frontmatter's `taxonomies:` map. Filters silently matched nothing; both paths now read `fm.taxonomies.categories` / `fm.taxonomies.tags`.
+  - Both search paths now share one taxonomy-definition reader: `readTaxonomyAliases()` in `src/sync/article_search/local.ts` delegates to `readTaxonomyDir()` (Layer 1), the repository's single source of truth, replacing duplicated ad-hoc YAML parsing.
+
 ## [0.1.42] - 2026-11-21
 
 ### Added
