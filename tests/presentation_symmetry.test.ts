@@ -251,4 +251,54 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     // MCP must never import a CLI command module.
     expect(mcpSource).not.toMatch(/from\s+['"]\.\.\/\.\.\/cli\//);
   });
+
+  it('S-1: formatMediaSearchWalkIncompleteNotice differs between CLI and MCP only in flag syntax', async () => {
+    const { formatMediaSearchWalkIncompleteNotice } =
+      await import('../src/presentation/media_report.js');
+    const incompleteResult = {
+      hits: [],
+      scannedCount: 42,
+      walkComplete: false,
+      totalCount: null,
+      truncated: false,
+    };
+
+    const cliNotice = formatMediaSearchWalkIncompleteNotice(incompleteResult, {
+      isMcp: false,
+      limit: 20,
+    });
+    const mcpNotice = formatMediaSearchWalkIncompleteNotice(incompleteResult, {
+      isMcp: true,
+      limit: 20,
+    });
+
+    expect(cliNotice).not.toBeNull();
+    expect(mcpNotice).not.toBeNull();
+
+    // Normalize CLI visual prefix/whitespace and flag syntax
+    const normalizedCli = cliNotice!
+      .replace(/^⚠️\s+/, '')
+      .replace(/\n\s+/g, ' ')
+      .replace(/--max-scan/g, 'maxScan');
+    expect(normalizedCli).toBe(mcpNotice);
+  });
+
+  it('S-2: CLI and MCP media search modules import walk incomplete formatter from presentation/media_report.js', () => {
+    const cliSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/cli/commands/media.ts'),
+      'utf-8',
+    );
+    const mcpSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-media-search.ts'),
+      'utf-8',
+    );
+
+    expect(cliSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/media_report(?:\.js)?['"]/);
+    expect(cliSource).toContain('formatMediaSearchWalkIncompleteNotice');
+    expect(cliSource).toMatch(/formatMediaSearchWalkIncompleteNotice\s*\(/);
+
+    expect(mcpSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/media_report(?:\.js)?['"]/);
+    expect(mcpSource).toContain('formatMediaSearchWalkIncompleteNotice');
+    expect(mcpSource).toMatch(/formatMediaSearchWalkIncompleteNotice\s*\(/);
+  });
 });

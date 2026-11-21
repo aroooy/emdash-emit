@@ -27,21 +27,16 @@ import {
   searchRemoteMedia,
 } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
-import { formatMediaSearchHitLimitNotice } from '../../presentation/media_report.js';
 import {
-  formatOfflineSearchHeader,
-  OFFLINE_SEARCH_EMPTY_NOTICE,
-} from '../../presentation/article_report.js';
+  formatMediaSearchEmptyNotice,
+  formatMediaSearchHeader,
+  formatMediaSearchHit,
+  formatMediaSearchUsageHint,
+  formatMediaSearchWalkIncompleteNotice,
+  formatTagSearchHints,
+} from '../../presentation/media_report.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
-
-function formatSize(bytes: number | null): string {
-  if (bytes === null || bytes === undefined) return '';
-  if (bytes >= 1024 * 1024) {
-    return `${Math.round(bytes / (1024 * 1024))} MB`;
-  }
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
 
 export function registerMediaSearchCommand(
   program: Command,
@@ -108,72 +103,51 @@ export function registerMediaSearchCommand(
           .join(' ');
         const subject = query ? `"${query}"` : rangeLabel || 'recency browse';
 
-        if (options.offline) {
-          console.log(formatOfflineSearchHeader(result.scannedCount));
-        } else {
-          const totalLabel =
-            result.totalCount !== null ? `${result.totalCount} records` : 'an unknown-size library';
-          console.log(
-            `Media search: ${subject} (scanned ${result.scannedCount} of ${totalLabel})${result.truncated ? ' [truncated at limit]' : ''}`,
-          );
-        }
+        console.log(
+          formatMediaSearchHeader(result, { subject, offline: Boolean(options.offline) }),
+        );
 
-        if (result.hits.length === 0) {
-          if (options.offline) {
-            console.log(`\n${OFFLINE_SEARCH_EMPTY_NOTICE}`);
-          } else if (result.walkComplete) {
-            console.log(
-              `\nNo match found in the remote media library (${result.scannedCount} records scanned).`,
-            );
-          } else {
-            console.log(`\nNo match in the first ${result.scannedCount} record(s).`);
-          }
+        const emptyNotice = formatMediaSearchEmptyNotice(result, {
+          offline: Boolean(options.offline),
+        });
+        if (emptyNotice) {
+          console.log(`\n${emptyNotice}`);
         } else {
           result.hits.forEach((hit, i) => {
-            const num = `${i + 1}.`.padEnd(4, ' ');
-            const statusBadge = hit.mirrored ? '[mirrored]' : '[not mirrored]';
-            console.log(
-              `  ${num}${hit.mediaId}  storageKey ${hit.storageKey || '(none)'}  ${statusBadge}`,
-            );
-
-            const parts: string[] = [];
-            if (hit.localPath) parts.push(hit.localPath);
-            if (hit.alt) parts.push(`alt: ${hit.alt}`);
-            if (hit.caption) parts.push(`caption: ${hit.caption}`);
-            if (hit.mimeType) parts.push(hit.mimeType);
-            const sizeStr = formatSize(hit.size);
-            if (sizeStr) parts.push(sizeStr);
-
-            console.log(`     ${parts.join('   ')}`);
+            for (const line of formatMediaSearchHit(hit, i)) {
+              console.log(line);
+            }
           });
         }
 
-        if (!result.walkComplete && !options.offline) {
-          console.log(
-            `\n⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at --max-scan; absence is not proven.`,
-          );
-          if (result.truncated && result.hits.length >= (limit || 20)) {
-            console.log(`   ${formatMediaSearchHitLimitNotice(result.hits.length)}`);
+        if (!options.offline) {
+          const walkNotice = formatMediaSearchWalkIncompleteNotice(result, {
+            isMcp: false,
+            limit,
+          });
+          if (walkNotice) {
+            const lines = walkNotice.split('\n');
+            console.log(`\n${lines[0]}`);
+            for (const line of lines.slice(1)) {
+              console.log(line);
+            }
           }
-          console.log(`   Narrow the query or raise --max-scan (0 walks the whole library).`);
         }
 
         if (result.hits.length > 0 && !options.offline) {
-          console.log(
-            `\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it`,
-          );
-          console.log(
-            `   automatically. For an offline copy first: emit pull-media --storage-key <storageKey>.`,
-          );
-          console.log(`   Fleet-scale listing stays on the official EmDash MCP / Admin Dashboard.`);
+          const usageLines = formatMediaSearchUsageHint().split('\n');
+          console.log(`\n${usageLines[0]}`);
+          for (const line of usageLines.slice(1)) {
+            console.log(line);
+          }
         }
 
         if (options.suggestKeywords) {
           try {
             const tax = getLocalTaxonomiesSummary(ctx.root);
-            if (tax.tags.length > 0) {
-              const topTags = tax.tags.slice(0, 10).map((t) => `#${t.slug}`);
-              console.log(`\nTag search hints: ${topTags.join(', ')}`);
+            const tagHint = formatTagSearchHints(tax.tags);
+            if (tagHint) {
+              console.log(`\n${tagHint}`);
             }
           } catch {
             // Taxonomy reading failure is non-fatal for search

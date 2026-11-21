@@ -20,14 +20,8 @@
  * SOFTWARE.
  */
 
-import path from 'node:path';
-import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import type { StorageKey } from '../../utils/media-id.js';
-import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
-
-/** Default hits returned when the caller names no limit — mirrors the remote walk's default. */
-const LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT = 20;
 
 export const MEDIA_BINARY_EXTENSIONS = [
   '.jpg',
@@ -288,108 +282,6 @@ export interface MediaSearchResult {
   truncated: boolean;
   /** Query as normalized for matching (lowercased), echoed so agents can audit. Empty for a recency browse. */
   normalizedQuery: string;
-}
-
-/**
- * Offline search over the mirrors this workspace already holds.
- *
- * Built entirely from a `LocalMirrorIndex` — `media_state` plus `media/*.yaml` companions, collected by
- * `collectLocalMirrorIndex` in `companions.ts` — so it issues zero HTTP requests and works on a plane. That
- * scope is also its limit, and the result says so: an asset that exists only remotely is absent here without
- * being absent in the CMS, which is why callers must frame the output as local-only (Layer 3 renders the
- * header) rather than let an agent read it as the library's truth.
- */
-export function searchLocalMirrorMedia(options: {
-  query?: string;
-  since?: string;
-  until?: string;
-  limit?: number;
-  mirrorIndex: LocalMirrorIndex;
-}): MediaSearchResult {
-  const { sinceBoundary, untilBoundary } = resolveSearchDateBoundaries({
-    since: options.since,
-    until: options.until,
-  });
-
-  const trimmed = options.query?.trim();
-  if (trimmed !== undefined && !trimmed && sinceBoundary === null && untilBoundary === null) {
-    throw new ApiError({
-      message: 'A non-empty search query is required.',
-      code: 'MEDIA_SEARCH_QUERY_REQUIRED',
-      status: 400,
-      suggestion: 'Provide a search keyword (filename, alt text, caption, or storageKey).',
-    });
-  }
-  const normalizedQuery = trimmed ? trimmed.toLowerCase() : '';
-
-  const rawLimit = options.limit ?? LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT;
-  const limit = Math.max(1, Math.min(rawLimit, MEDIA_SEARCH_MAX_LIMIT));
-
-  const index = options.mirrorIndex;
-  const hits: MediaSearchHit[] = [];
-  let matchCount = 0;
-
-  for (const entry of index.values()) {
-    // Mirrors carry no reliable creation stamp unless the companion recorded one; an unknown stamp cannot be
-    // placed inside a requested range, so a date-narrowed search skips it rather than guessing.
-    if (sinceBoundary !== null || untilBoundary !== null) {
-      if (!entry.createdAt) continue;
-      const instant = Date.parse(entry.createdAt);
-      if (!Number.isFinite(instant)) continue;
-      if (sinceBoundary !== null && instant < sinceBoundary) continue;
-      if (untilBoundary !== null && instant >= untilBoundary) continue;
-    }
-
-    const stem = entry.localPath ? path.basename(entry.localPath).replace(/\.[^.]+$/, '') : '';
-    const matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'> = [];
-    if (!normalizedQuery) {
-      matchedOn.push('mirrorStem');
-    }
-    if (entry.filename && entry.filename.toLowerCase().includes(normalizedQuery)) {
-      matchedOn.push('filename');
-    }
-    if (entry.alt && entry.alt.toLowerCase().includes(normalizedQuery)) {
-      matchedOn.push('alt');
-    }
-    if (entry.caption && entry.caption.toLowerCase().includes(normalizedQuery)) {
-      matchedOn.push('caption');
-    }
-    if (entry.storageKey.toLowerCase().includes(normalizedQuery)) {
-      matchedOn.push('storageKey');
-    }
-    if (stem && stem.toLowerCase().includes(normalizedQuery) && !matchedOn.includes('storageKey')) {
-      matchedOn.push('mirrorStem');
-    }
-    if (matchedOn.length === 0) continue;
-
-    matchCount++;
-    if (hits.length >= limit) continue;
-
-    hits.push({
-      mediaId: entry.mediaId,
-      storageKey: entry.storageKey,
-      filename: entry.filename,
-      mimeType: null,
-      size: null,
-      alt: entry.alt,
-      caption: entry.caption,
-      createdAt: entry.createdAt ?? undefined,
-      mirrored: true,
-      localPath: entry.localPath,
-      matchedOn,
-    });
-  }
-
-  // Every mirrored asset was examined, so coverage of the local set is complete. What is NOT complete is
-  // knowledge of the remote library, and `source: 'local_mirrors'` on the consumer side is what says so.
-  return {
-    hits,
-    scannedCount: index.size,
-    walkComplete: true,
-    totalCount: index.size,
-    truncated: matchCount > hits.length,
-    normalizedQuery,
-  };
 }
 
 export interface LocalMirrorEntry {
