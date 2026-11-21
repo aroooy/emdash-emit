@@ -1174,18 +1174,39 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       expect(result.walkComplete).toBe(true);
     });
 
-    it('T1-6: rejects invalid date boundary with MEDIA_SEARCH_QUERY_REQUIRED', async () => {
+    it('T1-6 & D-1: rejects invalid date boundary with DATE_BOUNDARY_INVALID', async () => {
       await expect(
         searchRemoteMedia({
           workspaceRoot: tempDir,
           origin: mockOrigin,
           token: mockToken,
-          since: 'invalid-date-format',
+          since: 'last-week',
         }),
       ).rejects.toMatchObject({
-        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
+        code: 'DATE_BOUNDARY_INVALID',
         status: 400,
+        suggestion: expect.stringContaining('2026-11-01'),
       });
+    });
+
+    it('D-2: searchLocalMirrorMedia rejects rolled-over invalid date boundary with DATE_BOUNDARY_INVALID', () => {
+      const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+      try {
+        const index = collectLocalMirrorIndex(tempDir, cache);
+        expect(() =>
+          searchLocalMirrorMedia({
+            until: '2026-02-31',
+            mirrorIndex: index,
+          }),
+        ).toThrowError(/Invalid date boundary: "2026-02-31"/);
+        try {
+          searchLocalMirrorMedia({ until: '2026-02-31', mirrorIndex: index });
+        } catch (err: unknown) {
+          expect(err).toMatchObject({ code: 'DATE_BOUNDARY_INVALID', status: 400 });
+        }
+      } finally {
+        cache.close();
+      }
     });
 
     it('T2-1 & T2-2: searchLocalMirrorMedia searches local mirrors without network requests', () => {

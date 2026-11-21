@@ -24,7 +24,7 @@ import path from 'node:path';
 import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import type { StorageKey } from '../../utils/media-id.js';
-import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
+import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 
 /** Default hits returned when the caller names no limit — mirrors the remote walk's default. */
 const LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT = 20;
@@ -306,32 +306,10 @@ export function searchLocalMirrorMedia(options: {
   limit?: number;
   mirrorIndex: LocalMirrorIndex;
 }): MediaSearchResult {
-  let sinceBoundary: number | null = null;
-  let untilBoundary: number | null = null;
-  if (options.since !== undefined && options.since.trim()) {
-    const parsed = parseSearchDateBoundary(options.since);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.since}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    sinceBoundary = parsed.since;
-  }
-  if (options.until !== undefined && options.until.trim()) {
-    const parsed = parseSearchDateBoundary(options.until);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.until}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    untilBoundary = parsed.since + DAY_MS;
-  }
+  const { sinceBoundary, untilBoundary } = resolveSearchDateBoundaries({
+    since: options.since,
+    until: options.until,
+  });
 
   const trimmed = options.query?.trim();
   if (trimmed !== undefined && !trimmed && sinceBoundary === null && untilBoundary === null) {

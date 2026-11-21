@@ -20,6 +20,8 @@
  * SOFTWARE.
  */
 
+import { ApiError } from '../client/error.js';
+
 /**
  * Parses a media-search date boundary into an absolute instant.
  *
@@ -70,6 +72,47 @@ export function parseSearchDateBoundary(
 
 /** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
 export const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolves both `since` / `until` boundaries into absolute instants and raises a typed
+ * `ApiError` (`DATE_BOUNDARY_INVALID`) on failure, collapsing the duplicated throw blocks
+ * across article and media search into one Layer 0 boundary resolver.
+ */
+export function resolveSearchDateBoundaries(options: { since?: string; until?: string }): {
+  sinceBoundary: number | null;
+  untilBoundary: number | null;
+} {
+  let sinceBoundary: number | null = null;
+  let untilBoundary: number | null = null;
+
+  if (options.since !== undefined && options.since.trim()) {
+    const parsed = parseSearchDateBoundary(options.since);
+    if (!parsed?.since) {
+      throw new ApiError({
+        message: `Invalid date boundary: "${options.since}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        code: 'DATE_BOUNDARY_INVALID',
+        status: 400,
+        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
+      });
+    }
+    sinceBoundary = parsed.since;
+  }
+
+  if (options.until !== undefined && options.until.trim()) {
+    const parsed = parseSearchDateBoundary(options.until);
+    if (!parsed?.since) {
+      throw new ApiError({
+        message: `Invalid date boundary: "${options.until}". Use "today", "yesterday", or YYYY-MM-DD.`,
+        code: 'DATE_BOUNDARY_INVALID',
+        status: 400,
+        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
+      });
+    }
+    untilBoundary = parsed.since + DAY_MS;
+  }
+
+  return { sinceBoundary, untilBoundary };
+}
 
 /** Local midnight of the day `date` falls in — the anchor every boundary is measured from. */
 function startOfLocalDay(date: Date): Date {

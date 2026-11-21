@@ -22,12 +22,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { articleContentEndpoint, searchEndpoint } from '../../client/endpoints.js';
 import { unwrapEnvelope, isSameRev, extractComparisonRev, extractRev } from '../../client/api.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
-import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
+import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import {
   taxonomyTermFilterAliases,
   taxonomyTermMatchesFilter,
@@ -87,34 +86,10 @@ export async function searchRemoteArticles(
   const collection = options.collection || 'posts';
   const fetchFn = createAuthedFetch(options);
 
-  let sinceBoundary: number | null = null;
-  let untilBoundary: number | null = null;
-
-  if (options.since !== undefined && options.since.trim()) {
-    const parsed = parseSearchDateBoundary(options.since);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.since}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'DATE_BOUNDARY_INVALID',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    sinceBoundary = parsed.since;
-  }
-
-  if (options.until !== undefined && options.until.trim()) {
-    const parsed = parseSearchDateBoundary(options.until);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.until}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'DATE_BOUNDARY_INVALID',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    untilBoundary = parsed.since + DAY_MS;
-  }
+  const { sinceBoundary, untilBoundary } = resolveSearchDateBoundaries({
+    since: options.since,
+    until: options.until,
+  });
 
   const trimmedQuery = options.query?.trim();
   const normalizedQuery = trimmedQuery ? trimmedQuery.toLowerCase() : '';

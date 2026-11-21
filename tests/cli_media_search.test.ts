@@ -417,4 +417,125 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
       cache.close();
     }
   });
+
+  // P0 Characterization Snapshots for CLI media-search output (byte-for-byte safety for P3)
+  describe('P0 Characterization Snapshots: emit media-search output', () => {
+    it('P0-1: remote hit output snapshot', async () => {
+      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: '01M67P08DXFTYDPFRTJCC4XMP8',
+                filename: 'sunset.jpg',
+                mimeType: 'image/jpeg',
+                size: 102400,
+                alt: '夕焼け空',
+                caption: 'Sea view',
+                storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+              },
+            ],
+            nextCursor: null,
+            totalCount: 1,
+          },
+        }),
+      } as Response);
+
+      const prog = createProgram();
+      await prog.parseAsync(['node', 'emit', 'media-search', '夕焼け']);
+
+      expect(stdoutLogs).toEqual([
+        'Media search: "夕焼け" (scanned 1 of 1 records)',
+        '  1.  01M67P08DXFTYDPFRTJCC4XMP8  storageKey 01M67P07X2VPW0MYRRRGMA6T5A.jpg  [not mirrored]',
+        '     alt: 夕焼け空   caption: Sea view   image/jpeg   100 KB',
+        '\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it',
+        '   automatically. For an offline copy first: emit pull-media --storage-key <storageKey>.',
+        '   Fleet-scale listing stays on the official EmDash MCP / Admin Dashboard.',
+      ]);
+    });
+
+    it('P0-2: remote empty result (walkComplete: true) snapshot', async () => {
+      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [],
+            nextCursor: null,
+            totalCount: 42,
+          },
+        }),
+      } as Response);
+
+      const prog = createProgram();
+      await prog.parseAsync(['node', 'emit', 'media-search', 'nonexistent']);
+
+      expect(stdoutLogs).toEqual([
+        'Media search: "nonexistent" (scanned 0 of 42 records)',
+        '\nNo match found in the remote media library (0 records scanned).',
+      ]);
+    });
+
+    it('P0-3: remote walk-incomplete (max-scan + hit-limit) snapshot', async () => {
+      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              {
+                id: '01M6ITEM000000000000000001',
+                filename: 'beach.png',
+                mimeType: 'image/png',
+                size: 2000,
+                storageKey: 'beach.png',
+              },
+              {
+                id: '01M6ITEM000000000000000002',
+                filename: 'beach2.png',
+                mimeType: 'image/png',
+                size: 3000,
+                storageKey: 'beach2.png',
+              },
+            ],
+            nextCursor: 'cursor-has-more',
+          },
+        }),
+      } as Response);
+
+      const prog = createProgram();
+      await prog.parseAsync(['node', 'emit', 'media-search', 'beach', '--limit', '1']);
+
+      expect(stdoutLogs).toEqual([
+        'Media search: "beach" (scanned 1 of an unknown-size library) [truncated at limit]',
+        '  1.  01M6ITEM000000000000000001  storageKey beach.png  [not mirrored]',
+        '     image/png   2 KB',
+        '\n⚠️ [WALK_INCOMPLETE] read 1 record(s) and stopped at --max-scan; absence is not proven.',
+        '   Hit limit reached at 1; raise --limit to see more matches from the same walk.',
+        '   Narrow the query or raise --max-scan (0 walks the whole library).',
+        '\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it',
+        '   automatically. For an offline copy first: emit pull-media --storage-key <storageKey>.',
+        '   Fleet-scale listing stays on the official EmDash MCP / Admin Dashboard.',
+      ]);
+    });
+
+    it('P0-4: offline search empty snapshot', async () => {
+      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+      const prog = createProgram();
+      await prog.parseAsync(['node', 'emit', 'media-search', 'offline-missing', '--offline']);
+
+      expect(stdoutLogs).toEqual([
+        '[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\nSearched 0 mirrored asset(s) in this workspace.\nRemote EmDash library was NOT queried.',
+        '\nNo matching media found in local workspace. (Remote EmDash library was NOT checked. The asset may exist remotely.)',
+      ]);
+    });
+  });
 });

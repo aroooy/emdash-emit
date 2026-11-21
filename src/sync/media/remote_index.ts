@@ -26,7 +26,7 @@ import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { mediaListEndpoint } from '../../client/endpoints.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
-import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
+import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
   MEDIA_SEARCH_MAX_LIMIT,
@@ -208,32 +208,10 @@ export async function searchRemoteMedia(
 ): Promise<MediaSearchResult> {
   const trimmed = options.query?.trim();
 
-  let sinceBoundary: number | null = null;
-  let untilBoundary: number | null = null;
-  if (options.since !== undefined && options.since.trim()) {
-    const parsed = parseSearchDateBoundary(options.since);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.since}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    sinceBoundary = parsed.since;
-  }
-  if (options.until !== undefined && options.until.trim()) {
-    const parsed = parseSearchDateBoundary(options.until);
-    if (!parsed?.since) {
-      throw new ApiError({
-        message: `Invalid date boundary: "${options.until}". Use "today", "yesterday", or YYYY-MM-DD.`,
-        code: 'MEDIA_SEARCH_QUERY_REQUIRED',
-        status: 400,
-        suggestion: 'Pass a calendar date such as 2026-11-01, or the keyword today / yesterday.',
-      });
-    }
-    untilBoundary = parsed.since + DAY_MS;
-  }
+  const { sinceBoundary, untilBoundary } = resolveSearchDateBoundaries({
+    since: options.since,
+    until: options.until,
+  });
 
   // A whitespace-only query is a caller mistake, not a recency browse: reject it while no other narrowing
   // criterion exists, so `query: "   "` never turns into an accidental full-library dump.
