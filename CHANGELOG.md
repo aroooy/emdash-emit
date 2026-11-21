@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Extracted `readTaxonomiesFromBaseline()` from `executeScanSearch()` with explicit `BaselineTaxonomyRead` reason codes for discrete precondition unit testing.
 - **Shared Search Limit Constants & Workspace Article Iterator (`src/utils/search-options.ts`, `src/sync/workspace/articles.ts`, v0.1.45 P7–P8)**:
   - Centralized `SEARCH_DEFAULT_LIMIT`, `SEARCH_MAX_LIMIT`, and `clampSearchLimit()` in `src/utils/search-options.ts` while preserving existing `maxScan` defaults and public re-exports.
-  - Added `iterWorkspaceArticles()` in `src/sync/workspace/articles.ts` (documented in `AGENTS.md` Workspace Contracts) to replace 6 duplicated directory traversal loops across `status`, `doctor`, `conflicts`, `pull_library`, `article_search/local`, and `media/prune_protect`.
+  - Added `iterWorkspaceArticles()` in `src/sync/workspace/articles.ts` (documented in `AGENTS.md` Workspace Contracts) to replace 6 duplicated directory traversal loops across `status`, `doctor`, `conflicts`, `pull_library`, `article_search/local`, and `media/prune_protect`. `status` / `doctor` preserve `excludeDeletedBackups: false` for backwards compatibility, while `pull_library` census now excludes `.deleted.md` rescue backups by default.
 
 ## [0.1.44] - 2026-11-21
 

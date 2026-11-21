@@ -30,6 +30,7 @@ import {
   requireWorkspaceRoot,
 } from '../src/utils/workspace.js';
 import { DEFAULT_ORIGIN, initWorkspace, loadConfig } from '../src/utils/config.js';
+import { iterWorkspaceArticles } from '../src/sync/workspace/index.js';
 
 describe('Workspace Utils', () => {
   let tempDir: string;
@@ -124,5 +125,54 @@ describe('Workspace Utils', () => {
       if (original === undefined) delete process.env.EMDASH_ORIGIN;
       else process.env.EMDASH_ORIGIN = original;
     }
+  });
+
+  describe('iterWorkspaceArticles (v0.1.45 P8 workspace contract)', () => {
+    function seedWorkspaceFiles(root: string): void {
+      initWorkspace(root);
+      for (const dir of ['draft', 'published', 'conflicts']) {
+        fs.mkdirSync(path.join(root, 'posts', dir), { recursive: true });
+      }
+      fs.writeFileSync(path.join(root, 'posts', 'draft', 'a-draft.md'), 'draft');
+      fs.writeFileSync(path.join(root, 'posts', 'draft', 'b-draft.deleted.md'), 'deleted');
+      fs.writeFileSync(path.join(root, 'posts', 'published', 'c-pub.md'), 'pub');
+      fs.writeFileSync(path.join(root, 'posts', 'conflicts', 'd-conf.md'), 'conf');
+      fs.writeFileSync(path.join(root, 'posts', 'conflicts', 'e-conf.deleted.md'), 'conf-del');
+    }
+
+    it('defaults to draft and published while excluding conflicts and .deleted.md backups', () => {
+      seedWorkspaceFiles(tempDir);
+      const relPaths = Array.from(iterWorkspaceArticles(tempDir, 'posts'), (e) => e.relPath).sort();
+      expect(relPaths).toEqual(['posts/draft/a-draft.md', 'posts/published/c-pub.md']);
+    });
+
+    it('includes conflicts when includeConflicts: true and keeps .deleted.md excluded by default', () => {
+      seedWorkspaceFiles(tempDir);
+      const relPaths = Array.from(
+        iterWorkspaceArticles(tempDir, 'posts', { includeConflicts: true }),
+        (e) => e.relPath,
+      ).sort();
+      expect(relPaths).toEqual([
+        'posts/conflicts/d-conf.md',
+        'posts/draft/a-draft.md',
+        'posts/published/c-pub.md',
+      ]);
+    });
+
+    it('supports excludeDeletedBackups: false and custom statuses order', () => {
+      seedWorkspaceFiles(tempDir);
+      const relPaths = Array.from(
+        iterWorkspaceArticles(tempDir, 'posts', {
+          excludeDeletedBackups: false,
+          statuses: ['published', 'draft'],
+        }),
+        (e) => e.relPath,
+      );
+      expect(relPaths).toEqual([
+        'posts/published/c-pub.md',
+        'posts/draft/a-draft.md',
+        'posts/draft/b-draft.deleted.md',
+      ]);
+    });
   });
 });
