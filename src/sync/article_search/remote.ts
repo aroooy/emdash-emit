@@ -25,6 +25,10 @@ import { createAuthedFetch } from '../../client/http.js';
 import { articleContentEndpoint, searchEndpoint } from '../../client/endpoints.js';
 import { unwrapEnvelope } from '../../client/api.js';
 import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
+import {
+  taxonomyTermFilterAliases,
+  taxonomyTermMatchesFilter,
+} from '../../utils/taxonomy-term-match.js';
 import { findLocalFilesByUlid } from '../workspace/index.js';
 import { fetchAssignedTerms } from '../terms.js';
 import {
@@ -33,7 +37,7 @@ import {
   parseArticleDates,
   resolveArticleDateField,
 } from './query.js';
-import { searchLocalArticles } from './local.js';
+import { searchLocalArticles, readTaxonomyAliases } from './local.js';
 import {
   ARTICLE_SEARCH_DEFAULT_LIMIT,
   ARTICLE_SEARCH_DEFAULT_MAX_SCAN,
@@ -281,6 +285,21 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
   const normalizedTag = options.tag?.trim().toLowerCase();
   const normalizedCategory = options.category?.trim().toLowerCase();
 
+  // Remote assigned terms come back as canonical (often percent-encoded) slugs while a filter is usually
+  // typed decoded, so both sides must be expanded through the local definitions before comparison.
+  const categoryFilterAliases = normalizedCategory
+    ? taxonomyTermFilterAliases(
+        normalizedCategory,
+        readTaxonomyAliases(options.workspaceRoot, 'categories'),
+      ).map((alias) => alias.toLowerCase())
+    : [];
+  const tagFilterAliases = normalizedTag
+    ? taxonomyTermFilterAliases(
+        normalizedTag,
+        readTaxonomyAliases(options.workspaceRoot, 'tags'),
+      ).map((alias) => alias.toLowerCase())
+    : [];
+
   const statusesToFetch: Array<'published' | 'draft'> = options.status
     ? [options.status]
     : ['published', 'draft'];
@@ -417,7 +436,12 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
                 taxonomy: 'category',
                 fetchFn,
               });
-              if (catTerms && catTerms.some((c) => c.toLowerCase().includes(normalizedCategory))) {
+              if (
+                catTerms &&
+                catTerms.some((c) =>
+                  taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
+                )
+              ) {
                 matchesCategory = true;
                 matchedOn.push('category');
               }
@@ -433,7 +457,10 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
                 taxonomy: 'tag',
                 fetchFn,
               });
-              if (tagTerms && tagTerms.some((t) => t.toLowerCase().includes(normalizedTag))) {
+              if (
+                tagTerms &&
+                tagTerms.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))
+              ) {
                 matchesTag = true;
                 matchedOn.push('tag');
               }

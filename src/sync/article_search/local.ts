@@ -23,8 +23,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { readTaxonomyDir } from '../taxonomies.js';
 import { parseMarkdown } from '../../utils/frontmatter.js';
 import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
+import {
+  taxonomyTermFilterAliases,
+  taxonomyTermMatchesFilter,
+  type TaxonomyTermAliases,
+} from '../../utils/taxonomy-term-match.js';
 import { ApiError } from '../../client/error.js';
 import {
   inArticleDateRange,
@@ -39,6 +45,30 @@ import {
   type ArticleSearchOptions,
   type ArticleSearchResult,
 } from './types.js';
+
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Reads local taxonomy definitions (`categories/` or `tags/` YAML) so a filter typed in one spelling can
+ * resolve the others. A missing directory simply yields no definitions — matching then falls back to the
+ * filter's own raw and decoded spellings, which still covers ASCII terms and already-decoded frontmatter.
+ *
+ * `readTaxonomyDir()` is the single source of truth for these files across the repository (it also decodes
+ * legacy percent-encoded slugs into `slug` while preserving the raw value in `canonicalSlug`), so both the
+ * local and remote search paths share one reader rather than re-implementing YAML parsing.
+ */
+export function readTaxonomyAliases(
+  workspaceRoot: string,
+  dirName: 'categories' | 'tags',
+): TaxonomyTermAliases[] {
+  return readTaxonomyDir(path.join(workspaceRoot, dirName)).map((item) => ({
+    slug: item.slug,
+    canonicalSlug: item.canonicalSlug,
+    name: item.name,
+  }));
+}
 
 /**
  * Searches local markdown articles in the workspace without any network communication.
@@ -83,6 +113,22 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
   const normalizedSlug = options.slug?.trim().toLowerCase();
   const normalizedTag = options.tag?.trim().toLowerCase();
   const normalizedCategory = options.category?.trim().toLowerCase();
+
+  // A taxonomy filter typed in decoded spelling (`カメラレビュー`) must still match a frontmatter that
+  // carries the canonical percent-encoded slug, and vice versa. Local definitions bridge the two spellings
+  // when they exist; without them both raw and decoded forms of the filter are still tried.
+  const categoryDefinitions = normalizedCategory
+    ? readTaxonomyAliases(options.workspaceRoot, 'categories')
+    : [];
+  const tagDefinitions = normalizedTag ? readTaxonomyAliases(options.workspaceRoot, 'tags') : [];
+  const categoryFilterAliases = normalizedCategory
+    ? taxonomyTermFilterAliases(normalizedCategory, categoryDefinitions).map((alias) =>
+        alias.toLowerCase(),
+      )
+    : [];
+  const tagFilterAliases = normalizedTag
+    ? taxonomyTermFilterAliases(normalizedTag, tagDefinitions).map((alias) => alias.toLowerCase())
+    : [];
 
   const rawLimit = options.limit ?? ARTICLE_SEARCH_DEFAULT_LIMIT;
   const limit = Math.max(1, Math.min(rawLimit, ARTICLE_SEARCH_MAX_LIMIT));
@@ -171,16 +217,22 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
         continue;
       }
 
-      // Taxonomy filters
-      const categories = Array.isArray(fm.categories)
-        ? fm.categories.map((c) => String(c).toLowerCase())
-        : [];
-      if (normalizedCategory && !categories.some((c) => c.includes(normalizedCategory))) {
+      // Taxonomy filters — terms live under the frontmatter's `taxonomies:` map, never at the top level.
+      const frontmatterTaxonomies = (
+        fm.taxonomies && typeof fm.taxonomies === 'object' ? fm.taxonomies : {}
+      ) as Record<string, unknown>;
+      const categories = toArray(frontmatterTaxonomies.categories).map((c) =>
+        String(c).toLowerCase(),
+      );
+      if (
+        normalizedCategory &&
+        !categories.some((c) => taxonomyTermMatchesFilter(c, categoryFilterAliases))
+      ) {
         continue;
       }
 
-      const tags = Array.isArray(fm.tags) ? fm.tags.map((t) => String(t).toLowerCase()) : [];
-      if (normalizedTag && !tags.some((t) => t.includes(normalizedTag))) {
+      const tags = toArray(frontmatterTaxonomies.tags).map((t) => String(t).toLowerCase());
+      if (normalizedTag && !tags.some((t) => taxonomyTermMatchesFilter(t, tagFilterAliases))) {
         continue;
       }
 
@@ -201,10 +253,11 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
         );
         matchedOn.push(...textMatches);
 
-        if (categories.some((c) => c.includes(normalizedQuery))) {
+        const queryTermAliases = taxonomyTermFilterAliases(normalizedQuery);
+        if (categories.some((c) => taxonomyTermMatchesFilter(c, queryTermAliases))) {
           matchedOn.push('category');
         }
-        if (tags.some((t) => t.includes(normalizedQuery))) {
+        if (tags.some((t) => taxonomyTermMatchesFilter(t, queryTermAliases))) {
           matchedOn.push('tag');
         }
 
