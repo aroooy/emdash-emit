@@ -1105,7 +1105,7 @@ export function detectUnsupportedMarkdownSyntax(markdown: string): string[] {
   // markers and ordered lists still warn here, because excluding those characters would
   // also swallow legitimate Setext headings such as '*emphasized text*\n---' or
   // '2026 was great\n---'. That residual false positive is an accepted limitation —
-  // see docs/v0140-plan/README.md §3.5. Do not "fix" it by widening this class.
+  // see docs/markdown-and-ast.md (and docs/plans/v0.1.040-markdown-syntax-and-thematic-break.md §3.5). Do not "fix" it by widening this class.
   if (/(?:^[^\r\n#|>\-=][^\r\n]*)\r?\n {0,3}(?:={3,}|-{3,})\s*(?:\r?\n|$)/m.test(cleaned)) {
     warnings.push(
       'Setext headings (underlined with === or ---) are not supported by the line-based parser. Use ATX headings (# Heading) instead.',

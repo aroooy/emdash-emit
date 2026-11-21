@@ -1,359 +1,146 @@
 # AGENTS.md - Emit Development & AI Agent Operation Guide
 
-This document defines the **official workflow rules (The Golden Path) and coding standards** for AI agents (Antigravity, Claude Code, Cursor, etc.) and human developers working in this repository.
+This document defines the **official architectural invariants, development governance, and content authoring workflow (The Golden Path)** for AI agents (Antigravity, Claude Code, Cursor) and human developers working in this repository.
 
 ---
 
-## 1. Project Overview & Architecture
+## 1. Project Overview & Authoritative Specifications
 
 - **Project Name**: `emdash-emit` (CLI / MCP Command: `emit`)
-- **Target CMS**: **EmDash (Cloudflare Workers + D1)**
-- **Purpose**: Bidirectional sync between local Markdown workspace and remote EmDash, loss-free AST conversion, and Git-like Hybrid 3-Way Merge.
-- **Tech Stack**:
-  - Language: TypeScript 7.x (Node.js >= 22.0.0)
-  - Testing: Vitest
-  - Code Style: Prettier (`printWidth: 100`, `singleQuote: true`, `trailingComma: all`)
-  - Cache Storage: Node.js built-in `node:sqlite` (`DatabaseSync` / zero native compilation)
-  - ULID Generation: `ulidx` (26-character canonical ULID)
-  - 3-Way Merge: `node-diff3`
+- **Target CMS**: **EmDash (Cloudflare Workers + D1 + R2)**
+- **Purpose**: AI-first local authoring workspace ("Staging Desk") and bidirectional sync tool with loss-free Portable Text AST conversion, two-layer human/canonical representation, and Git-like Hybrid 3-Way Merge.
+- **Tech Stack**: TypeScript 7.x (Node.js >= 22.0.0), Vitest, Prettier (`printWidth: 100`, `singleQuote: true`, `trailingComma: all`), built-in `node:sqlite` (`DatabaseSync` / zero native dependencies), `ulidx`, `node-diff3`.
 
-### Reference Documents
+### Authoritative Domain Specifications (`docs/`)
 
-- **`docs/media-id-spaces.md`** — the authoritative specification of EmDash's two media identifier spaces (D1 record `id` vs R2 `storageKey`), which endpoint accepts which, and how migrated corpora behave. Read it before debugging any missing or unresolved image.
+Before modifying any subsystem or debugging domain behavior, consult the corresponding specification in `docs/`:
 
-### Architectural Layering & Dependency Invariants
-
-The codebase strictly enforces a 4-tier architectural layering model verified via `tests/layering.test.ts`:
-
-| Layer                                 | Responsibility & Modules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Allowed Imports (outbound: what this layer may import) | Allowed Consumers (inbound: who may import it)      | Prohibited Imports                    |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------- | ------------------------------------- |
-| **Layer 0: Primitives & Infra**       | `src/utils/`, `src/db/`, `src/client/` — Core types, SQLite cache (`cache.db`, schema migrations in `src/db/migrations.ts`, baseline snapshot reconstruction & `retrackLocalHashOnly` via `src/db/baseline.ts`), HTTP clients, centralized endpoint URL builders (`src/client/endpoints.ts`), media ID branded types (`MediaRecordId`, `StorageKey` in `src/utils/media-id.ts`), taxonomy key helpers (`src/utils/taxonomy-key.ts`), media ref precedence resolver (`src/utils/media-ref-precedence.ts`), MCP heartbeat (`src/utils/mcp-heartbeat.ts`), and canonical ULID helpers (`src/utils/ulid.ts`). | Nothing above itself (Layer 0 internals only)          | Layers 1, 2, 3                                      | Never imports Layer 1, 2, or 3.       |
-| **Layer 1: Sync Upstream**            | `src/sync/{baseline-reconstruction, status, diff, merge, preflight, guards, taxonomies, terms, bylines}` — Pure computation, baseline spelling reconstruction, status calculation, diff inspection, taxonomy term matching, and preflight safety verification (`src/sync/preflight/image_probe.ts`).                                                                                                                                                                                                                                                                                                      | Layer 0 only                                           | Layers 2, 3                                         | **NEVER imports Layer 2 or Layer 3.** |
-| **Layer 2: Sync Downstream**          | `src/sync/{orchestrator, push, pull, new, delete, conflicts, doctor, media}` — Orchestration, remote sync execution, 3-way merge conflict handling, and local file mutations.                                                                                                                                                                                                                                                                                                                                                                                                                             | Layers 0 and 1                                         | Layer 3 (strictly restricted to public API symbols) | Never imports Layer 3.                |
-| **Layer 3: Consumers & Presentation** | `src/cli/`, `src/mcp/`, `src/presentation/` — User interfaces, CLI commands, centralized CLI failure presenter (`src/cli/report-failure.ts`), MCP tools (`withResolvedContext`, `formatToolTextWithMeta` in `src/mcp/tool-errors.ts`), and unified report formatters (`src/presentation/article_report.ts`).                                                                                                                                                                                                                                                                                              | Layers 0, 1, and Layer 2 public API symbols            | Top-level entry points only                         | Never imported by Layer 0, 1, or 2.   |
-
-- **Layer 0 `node:fs` Scope Exception**: `node:fs` is explicitly allowed in Layer 0 for file-based configuration (`utils/config.ts`) and article media reference detection (`utils/media-body-refs.ts` via `shouldPreferLegacyRef`), which require reading workspace files without domain logic.
-- **Layer 0 Outbound Isolation (Axis 0)**: Layer 0 (`src/utils/`, `src/db/`, `src/client/`) must never import from Layer 1, Layer 2, or Layer 3.
-- **Layer 1 -> Layer 2 Prohibition (Axis 1)**: Layer 1 modules must remain side-effect-free and upstream-focused. They must never import Layer 2 modules (`pull`, `push`, `orchestrator`, `delete`, `doctor`, `conflicts`, `new`, `media`).
-- **Layer 3 -> Layer 2 Controlled Access (Axis 2)**: Consumers in Layer 3 may only import public API symbols explicitly declared in the Layer 2 allowlist (verified by `tests/layering.test.ts`).
-- **Layer 3 Intra-Layer Isolation (Axis 3)**: MCP tools (`src/mcp/`) must never import from CLI command modules (`src/cli/commands/`). Shared formatting logic must be placed in `src/presentation/` (e.g. `article_report.ts`, `pull_report.ts`).
-- **Lower Layers -> Layer 3 Prohibition (Axis 4)**: Layers 0, 1, and 2 (`src/utils/`, `src/db/`, `src/client/`, `src/sync/**`) must never import from Layer 3 (`src/cli/`, `src/mcp/`, `src/presentation/`).
-- **Non-CLI Logging Isolation (Axis 5)**: Non-CLI modules (`src/sync/`, `src/utils/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`) must never write to standard output via `console.log()` or `console.debug()`, preventing JSON-RPC transport stream pollution for MCP stdio clients. Standard error output (`console.error()`, `console.warn()`) is permitted for unrecoverable errors. Only `src/cli/` is permitted to invoke `console.log()` for human presentation.
-- **Layer 2 Sibling Coupling**: Downstream modules must not reach into a sibling Layer 2 module; shared knowledge belongs in Layer 0/Layer 1. The remaining permitted edges are recorded as an explicit name-by-name snapshot in `tests/layering.test.ts` (`orchestrator` → `pull/index.js`/`push/index.js`/`media/index.js` as the designated coordinator, `doctor` → `conflicts`/`media/index.js`, `push/media_stage` → `sync/media/index.js`, and `pull/media_stage` → `sync/media/index.js`), so a newly introduced sibling dependency fails the gate. Those edges point at each directory's implementation `index.ts`, never at the thin `src/sync/{pull,push,media}.ts` barrels — the barrels are reserved for the public npm façade (`src/index.ts`) only, and no repository-internal module may import them. Article body scanning (`scanArticleMediaReferences`) lives in `src/utils/media-body-refs.ts` for exactly this reason — `delete`, `doctor`, and `media/body_scan` all read it from Layer 0 instead of importing each other.
-- **Workspace Contracts (`src/sync/workspace/`)**: Workspace-level filesystem mutations and invariants (`calculateHash` in `src/sync/workspace/hash.ts`, `iterWorkspaceArticles` in `src/sync/workspace/articles.ts`, `findLocalFilesByUlid`, `CONFLICTS_SUBDIR`, `isQuarantinedRelativePath`, `resolveCanonicalArticlePath`, `quarantineLocalCopy`) are centralized in `src/sync/workspace/` and must not be imported from the pull pipeline (`src/sync/pull.ts` barrel or `src/sync/pull/index.js`).
-- **Media Companion & Ref Separation**: Companion parsing (`storageKeyFromMediaMeta`) resides in `src/utils/media-companion.ts` (Layer 0), and Markdown body ref analysis (`scanArticleMediaReferences`, `carriesDepthFreeMediaRef`, `shouldPreferLegacyRef`, `localizeArticleMediaRefs`) resides in `src/utils/media-body-refs.ts` (Layer 0), keeping Layer 1 free of Layer 2 media imports and Layer 2 modules free of sibling imports.
-
-### Modular Pull Architecture (`src/sync/pull/`)
-
-`pullArticle` and remote listing are decomposed into 6 focused modules under `src/sync/pull/` (with `src/sync/pull.ts` acting as a backward-compatible barrel re-export that is reserved for the public npm façade (`src/index.ts`) — repository-internal code, including Layer 2/Layer 3 and tests, must import the implementation directly from `src/sync/pull/index.js`):
-
-1. `types.ts`: Public and internal pull options, result types, `MediaMirrorSession`, and `FastPathContext`.
-2. `list.ts`: OpenAPI max batch limit discovery, cursor pagination (`listRemoteArticles`), and canonical title extraction (`extractCanonicalRemoteTitle`).
-3. `quarantine.ts`: Quarantine notice formatting (`formatQuarantineNotice`), divergent copy preservation (`quarantineDivergentLocalCopies`), and 404/410 remote deletion handling (`handleRemoteDeletedArticle`).
-4. `fast_path.ts`: Pure fast-path skip, legacy media ref self-healing, referenced unmirrored asset healing, frontmatter syntax repair, and 0-GET deleted taxonomy term pruning & baseline normalization (`tryFastPathOrHeal`).
-5. `media_stage.ts`: On-demand referenced media mirroring, `MediaMirrorSession` management (its shared library walk is bounded by `mediaSyncLimit`, default 100), 0-HTTP short-circuit inspection, in-flight download deduplication, and `featuredImage` resolution (symmetrical to `push/media_stage.ts`).
-6. `index.ts`: Top-level `pullArticle` orchestration and public symbol re-exports.
-
-- **Single-Article Pull Orchestration Facade (`src/sync/orchestrator.ts:pullSingleArticle`)**:
-  Single-article pull workflows across CLI (`src/cli/commands/pull.ts`) and MCP (`src/mcp/tools/sync-pull.ts`) are unified under `pullSingleArticle()` in `src/sync/orchestrator.ts` (the Layer 2 designated coordinator). It consolidates optional taxonomy synchronization, `pullArticle` execution with on-demand referenced media mirroring, and optional full media library sync (`includeMedia`), returning structured status flags (`categoriesFailed`, `tagsFailed`, `error`) to preserve Layer 2 presentation purity.
-
-- **Batch Pull Orchestration Facade (`src/sync/orchestrator.ts:pullBatch`)**:
-  Batch pull workflows across CLI (`src/cli/commands/pull.ts`) and MCP (`src/mcp/tools/sync-pull.ts`) are unified under `pullBatch()` in `src/sync/orchestrator.ts`. It consolidates remote taxonomy synchronization (wrapped in try/catch to contain errors without aborting article pull), `canPruneTaxonomies` derivation, article pull with on-demand referenced media mirroring, window pruning, and returning `taxonomies: OrchestratorTaxonomiesResult` (4 counts + optional `error`). CLI and MCP consumers delegate batch pulling to `pullBatch()` and do NOT execute `pullTaxonomies()` directly in batch flows; `pullTaxonomies` imports in `src/cli/commands/pull.ts` and `src/mcp/tools/sync-pull.ts` exist solely for the dedicated standalone commands (`emit pull-taxonomies` / `sync_pull_taxonomies`). In batch pull, local taxonomy hints are rendered via `getLocalTaxonomiesSummary` and `formatTaxonomiesHint` (Layer 1).
-
-- **Consolidated Pull Reporting & Behavioral Alignment (`src/presentation/pull_report.ts`)**:
-  Pull-related presentation logic across CLI and MCP is consolidated in `src/presentation/pull_report.ts` (`formatTaxonomySyncFailure`, `formatTaxonomySyncSuccess`, `formatArticleMediaSummary`, `formatPullStatusBreakdown`, `formatPullWindowLabel`). All taxonomy sync failure warnings across CLI (`printTaxonomySyncSummary`, single-article pull) and MCP (`sync_pull` single, batch, standalone) are standardized via `formatTaxonomySyncFailure`, guaranteeing consistent diagnostic patterns without divergent wording. Under partial taxonomy failure (e.g. categories fail while tags succeed), CLI and MCP align on warning-first semantics: suppressing incomplete success summary counts and preserving existing local definitions without misleading users or agents.
-
-### Modular Push Architecture (`src/sync/push/`)
-
-`pushArticle` is decomposed into 9 focused modules under `src/sync/push/` (with `src/sync/push.ts` acting as a backward-compatible barrel re-export that is reserved for the public npm façade (`src/index.ts`) — repository-internal code, including Layer 2/Layer 3 and tests, must import the implementation directly from `src/sync/push/index.js`; the same rule applies to the `src/sync/media.ts` barrel and `src/sync/media/index.js`):
-
-1. `types.ts`: Internal and public push options and result types.
-2. `guards.ts`: Standalone evaluation rails for G12, G15, G16, and G17 (`src/sync/guards.ts` also declares the canonical guard registry G1–G19 with remediation text, but the G19 wipe check itself fires in `taxonomy_plan.ts` / `merge_stage.ts`, where taxonomy adoption happens).
-3. `preflight_stage.ts`: Orchestrates `runPreflightChecks`, applies title auto-trim, and discovers offline draft images.
-4. `taxonomy_plan.ts`: Resolves taxonomy term IDs and canonicalizes categories/tags.
-5. `media_stage.ts`: Executes draft image auto-upload, rewrites Markdown body links, and tracks promoted media state.
-6. `tax_audit.ts`: Audits taxonomy changes against remote state, detecting divergence without synthetic responses.
-7. `transport.ts`: Pure HTTP transports for article creation, updates, taxonomy synchronization, and publish state transitions.
-8. `merge_stage.ts`: Handles 409 conflicts and taxonomy divergence via 3-way merge, preventing destructive overwrites.
-9. `commit.ts`: Post-push finalization; encapsulates `pendingFlagsFor` (`PendingFlagsResult`), Markdown serialization, local hash updates, file relocation, and base snapshot/sync state updates.
-10. `index.ts`: The top-level pipeline orchestrator coordinating the stages in strict sequence.
-
-- **Preflight Evaluation Precedence**: In accordance with T2-1 and Guard G6/G16 invariants, `runPreflightChecks` (including G6 `UNRESOLVED_CONFLICT_MARKERS`) is evaluated **strictly before** G16 (`TAXONOMY_CONFLICT_PENDING`).
-- **Flag Symmetry & NULL Rules (`PendingFlagsResult`)**: `conflictCopyPath`, `conflictCopyHash`, and `conflictAt` are set to `null` if and only if both `bodyConflictPending` and `taxonomyConflictPending` are 0.
-
-### Two-Track Revision Invariant (Track 1 Transport vs Track 2 Comparison)
-
-EmDash updates `draftRevisionId` (ULID) on draft saves without bumping `posts.version` or `posts.updatedAt`. To ensure reliable revision detection during pull while preventing synthetic revision string contamination during push, Emit enforces a strict separation between transport tokens and comparison keys:
-
-- **Track 1 (`revForTransport`)**: Raw server tokens (e.g. Base64 `version:updatedAt`) are stored verbatim in `base_snapshots.rev` and `entries.rev`. In `push/index.ts:136`, `baseSnapshot?.rev` is prioritized over `syncState?.remoteRev` when populating PUT `{ _rev }` payloads. Raw transport tokens must **never** be overwritten with composite keys, avoiding HTTP 409 conflict loops.
-- **Track 2 (`revForComparison`)**: Composite keys (`${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`) are stored in `sync_state.remote_rev` across all 4 save paths (`pull/index.ts` full pull, `pull/fast_path.ts` fast-path heal, `push/commit.ts`, and `push/merge_stage.ts`). `isSameRev()` is evaluated in `src/sync/pull/index.ts` to detect remote draft edits even when the major version number remains unchanged.
-- **Draft Selective Single GET Invariant**: EmDash list API (`GET /posts`) returns stale creation-time `posts.data` for drafts and published `liveData` for published articles with unpublished draft revisions (`draftRevisionId`). Therefore, when `pullArticle` evaluates whether a remote revision advance requires fetching full canonical content, it checks:
-  `needsFullDraftFetch = hasDraftRevision || (isDraft && Boolean(existingSync))`, evaluated as `needsFullDraftFetch && remoteChanged`.
-  A published article with an unpublished draft revision always carries `draftRevisionId`, triggering a single GET (`GET /posts/{id}`) to fetch the full canonical draft data. For an untracked draft article (`existingSync === null`), if it carries a `draftRevisionId` (created/edited via EmDash draft revisions), it discards the list item and triggers a single GET to avoid saving stale creation-time body on initial pull. If an untracked draft has no `draftRevisionId`, there is no evidence of staleness, and issuing single GETs for every untracked article would cause N+1 requests, so it intentionally reuses the list `rawItem`. Clean published articles (`draftRevisionId === null`) reuse the list `rawItem` with zero extra HTTP requests (0-GET).
-- **Published Articles with Draft Revisions Semantics**: In EmDash, published articles can hold uncommitted draft revisions. Emit keeps such articles in `posts/published/` (no directory churn) and visualizes them in `emit status` as `published* [has unpublished draft]` and in frontmatter as `status: published # draft revision`. When pushing modifications to such articles, standard `emit push <file>` stages the change as a draft on EmDash (omitting status in PUT). Explicit `--allow-publish` publishes the draft content live to the web.
-- **Single Source of Truth (`hasUncommittedDraftRevision`)**: Whether an article has an uncommitted remote draft is derived solely from `sync_state.remote_rev.includes('@draft:')` when status is published (`src/utils/draft-revision.ts`). Disk representation (Layer B) is derived from this truth via `src/utils/disk-spelling.ts`, and diagnostics never guess from CLI flags.
-- **Presentation Layer Separation**: `formatRevForDisplay()` hides composite suffixes (`@draft:...`) in CLI/MCP outputs (`diff`, `status`), presenting only the clean version number to users.
+| Domain / Subsystem | Authoritative Specification | When to Read |
+| --- | --- | --- |
+| **4-Tier Architecture, Layering, Auth/Origin & SQLite Schema** | **[docs/architecture-and-layers.md](docs/architecture-and-layers.md)** | Touching module imports, Workspace Contracts (`src/sync/workspace/`), profile/auth/origin resolution, `cache.db` tables, or CLI/MCP presentation & error handlers. |
+| **Pull/Push Pipelines, Two-Track Revisions & 3-Way Merge** | **[docs/sync-engine-and-revisions.md](docs/sync-engine-and-revisions.md)** | Modifying `orchestrator.ts`, `src/sync/pull/*`, `src/sync/push/*`, `_rev` / `draftRevisionId` tracking, distributed locks, 3-way merge, or `posts/conflicts/` quarantine. |
+| **Markdown, Frontmatter, YAML Quoting & Portable Text AST** | **[docs/markdown-and-ast.md](docs/markdown-and-ast.md)** | Modifying `FrontmatterSchema`, `parseMarkdownLenient`, `formatYamlScalar`, baseline reconstruction, Portable Text conversion, or `<!--ec:block ... -->` Tier 3 fences. |
+| **Two Media Identifier Spaces (`id` vs `storageKey`)** | **[docs/media-id-spaces.md](docs/media-id-spaces.md)** | **Mandatory reading before debugging any missing or 404 image.** Defines D1 record `id` vs R2 `storageKey`, endpoint matrices, and migrated-corpus behavior. |
+| **Local-First Media Pipeline, Mirror Naming & Pruning** | **[docs/media-pipeline.md](docs/media-pipeline.md)** | Modifying `src/sync/media/*`, `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path rewriting, `storageKeyToMarkdownRef` naming, or media pruning. |
+| **Taxonomies (Two-Layer Representation) & Bylines** | **[docs/taxonomies-and-bylines.md](docs/taxonomies-and-bylines.md)** | Modifying category/tag sync, percent-encoded (Layer A) vs decoded CJK (Layer B) slugs, collision resolution, 0-GET deleted term auto-healing, or remote taxonomy audit. |
+| **Safety Guardrails (G1–G19), Doctor, Search & FAQ** | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` epistemic rules (`[WALK_INCOMPLETE]`). |
+| **CLI Commands & MCP Tools Complete Reference** | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** | Inspecting or updating CLI flags (16 top-level commands + 10 subcommands) or MCP tool schemas (14 tools). |
 
 ---
 
-## 2. Workspace Structure (Git-style)
+## 2. Architectural Layering & Dependency Invariants
+
+The codebase strictly enforces a 4-tier unidirectional architecture verified by `tests/layering.test.ts`:
+
+| Layer | Responsibility & Modules | Allowed Outbound Imports | Allowed Inbound Consumers | Prohibited Imports |
+| --- | --- | --- | --- | --- |
+| **Layer 0: Primitives & Infra** | `src/utils/`, `src/db/`, `src/client/` — Core types, SQLite cache (`cache.db`, migrations, `retrackLocalHashOnly`), HTTP/auth/lock clients, endpoint builders, branded media IDs (`MediaRecordId`, `StorageKey`), `resolveLocalMediaRefsOption`, `parseMarkdownLenient`, `formatYamlScalar`, search option/date resolvers, ULID helpers. | Layer 0 internals only | Layers 1, 2, 3 | Never imports Layer 1, 2, or 3. |
+| **Layer 1: Sync Upstream** | `src/sync/{baseline-reconstruction, status, diff, merge, preflight, guards, taxonomies, terms, bylines}` — Pure computation, baseline spelling reconstruction, status/diff calculation, taxonomy matching, and preflight safety verification (`src/sync/preflight/image_probe.ts`). | Layer 0 only | Layers 2, 3 | **NEVER imports Layer 2 or Layer 3.** |
+| **Layer 2: Sync Downstream** | `src/sync/{orchestrator, push, pull, new, delete, conflicts, doctor, media, article_search, workspace}` — Orchestration, remote sync execution, 3-way merge conflict handling, search execution, and local file mutations. | Layers 0 and 1 | Layer 3 (restricted to `ALLOWED_LAYER_2_SYMBOLS`) | Never imports Layer 3. |
+| **Layer 3: Consumers & Presentation** | `src/cli/`, `src/mcp/`, `src/presentation/` — CLI commands, centralized CLI failure presenter (`src/cli/report-failure.ts`), MCP tools (`src/mcp/tool-errors.ts`), and shared report formatters (`src/presentation/{article_report, media_report, pull_report}.ts`). | Layers 0, 1, and `ALLOWED_LAYER_2_SYMBOLS` | Top-level entry points (`src/bin/emit.ts`, `src/index.ts`) only | Never imported by Layer 0, 1, or 2. |
+
+### Static Enforcement Axes & Allowlist Governance
+
+- **Axis 0 (Layer 0 Outbound Isolation)**: Layer 0 never imports Layer 1, 2, or 3 (`node:fs` is permitted in Layer 0 only for config/profile loading and `utils/media-body-refs.ts`).
+- **Axis 1 (Layer 1 → Layer 2 Prohibition)**: Layer 1 modules must remain side-effect-free and never import Layer 2 modules.
+- **Axis 2 (Layer 3 → Layer 2 Controlled Access)**: Layer 3 consumers may only import Layer 2 symbols listed in `ALLOWED_LAYER_2_SYMBOLS` (`tests/layering.test.ts`).
+- **Axis 3 (Layer 3 Intra-Layer Isolation)**: `src/mcp/` must never import from `src/cli/commands/`. Shared formatting belongs in `src/presentation/`.
+- **Axis 4 (Lower Layers → Layer 3 Prohibition)**: Layers 0, 1, and 2 must never import from Layer 3.
+- **Axis 5 (Non-CLI Logging Isolation)**: Non-CLI modules (`src/sync/`, `src/utils/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`) must **never** call `console.log()` or `console.debug()` (which corrupts MCP JSON-RPC stdio transport). Only `src/cli/` may invoke `console.log()`.
+- **Layer 2 Sibling Snapshot & Public Barrel Rule**:
+  - Layer 2 modules must not import sibling Layer 2 modules beyond the explicit snapshot in `tests/layering.test.ts` (`orchestrator` → `pull/index.js`, `push/index.js`, `media/index.js`; `doctor` → `conflicts`, `media/index.js`; `push/media_stage` → `sync/media/index.js`; `pull/media_stage` → `sync/media/index.js`).
+  - The thin barrels `src/sync/{pull,push,media}.ts` are reserved exclusively for the public npm façade (`src/index.ts`). **No internal module across `src/` or `tests/` may import those barrels**; always import `src/sync/{pull,push,media}/index.js`.
+  - Workspace filesystem contracts (`calculateHash`, `iterWorkspaceArticles`, `findLocalFilesByUlid`, `CONFLICTS_SUBDIR`, `isQuarantinedRelativePath`, `resolveCanonicalArticlePath`, `quarantineLocalCopy`) live in `src/sync/workspace/`.
+  - **Strict Allowlist Governance (Ask First)**: Never widen `ALLOWED_LAYER_2_SYMBOLS` or add a new Layer 2 sibling edge in `tests/layering.test.ts` without explicit project owner approval.
+
+---
+
+## 3. Core System Invariants (Top 7 Principles)
+
+1. **Two-Track Revision Invariant (`docs/sync-engine-and-revisions.md`)**:
+   - **Track 1 (`revForTransport`)**: Raw server tokens stored in `base_snapshots.rev` and `entries.rev`, sent verbatim in PUT `{ _rev }` payloads. Never overwrite with composite keys.
+   - **Track 2 (`revForComparison`)**: Composite keys (`${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`) stored in `sync_state.remote_rev` across all 4 save paths and compared via `isSameRev()`.
+   - **Draft Selective Single GET**: Articles with `draftRevisionId` (or tracked drafts when `remoteChanged`) trigger a single `GET /posts/{id}` because the list API returns stale creation-time `data` or published `liveData`. Clean published articles reuse list payloads with **0-GET**.
+   - **Published Articles with Draft Revisions (`published*`)**: Derived solely from `hasUncommittedDraftRevision()` (`status === 'published' && remote_rev.includes('@draft:')`). Kept in `posts/published/` with frontmatter `status: published # draft revision`. Standard `push` stages a draft; `--allow-publish` publishes live.
+2. **Two-Layer Representation Invariant (`docs/taxonomies-and-bylines.md`, `docs/media-pipeline.md`)**:
+   - **Layer A (Internal Baseline & Remote Payloads)**: `base_snapshots` (where `frontmatter_yaml` is JSON-encoded `Frontmatter`) and remote API requests always store canonical percent-encoded taxonomy slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) and canonical root-relative media URLs (`/_emdash/api/media/file/<storageKey>`).
+   - **Layer B (On-Disk Markdown & YAML)**: Disk files render decoded human-readable CJK slugs (`    - 未分類`) and, when `localMediaRefs: true` (default), article-relative body image paths (`../../media/<storageKey>`). Only `sync_state.local_hash` tracks the Layer B disk bytes.
+   - `resolveLocalMediaRefsOption()` lives in Layer 0 as a pure function; only the CLI (`resolveAndPersistLocalMediaRefs`) persists flag overrides to `.emit/config.json`—MCP tools must never mutate `.emit/config.json`.
+3. **Two Media ID Spaces & Mirror Naming Invariant (`docs/media-id-spaces.md`, `docs/media-pipeline.md`)**:
+   - EmDash assets have two unrelated 26-char ULIDs: D1 record `id` (used by `featuredImage` and `GET /_emdash/api/media/{id}`) and R2 `storageKey` (used by `/_emdash/api/media/file/{storageKey}` and `media_state` PK). Never interchange them.
+   - Local mirrors are named strictly from `storageKeyToMarkdownRef(storageKey)` (`media/<markdownRef>.<ext>` + `.yaml`), with `<stem>--<mediaId>` only on confirmed stem collision. Ownership (`mediaRecordIdForStem`) is read exclusively from companion YAML `id:`, never parsed from filenames.
+   - Media pruning seeds active IDs solely from remote records when `walkComplete === true`, protecting any mirror still referenced in `draft/`, `published/`, or `conflicts/`.
+   - **Epistemic Media Rule**: A 404 from `GET /_emdash/api/media/{id}` proves only that an ID-space lookup failed. Emit must **never** assert that a D1 record is missing and must **never** recommend a SQL `INSERT`.
+4. **Dual-Track Image & AST Fidelity Invariant (`docs/markdown-and-ast.md`)**:
+   - **Track A (Tier 1 Plain Images)**: Standard images without layout attributes serialize as `![alt](../../media/<storageKey>.<ext>)` for offline editor preview.
+   - **Track B (Tier 3 Preserved Blocks)**: Images with layout/styling (`alignment`, `displayWidth`, `caption`, etc.) and custom EmDash blocks serialize as single-line opaque comment fences (`<!--ec:block {...} -->`) protected by Guard **G9 (`MODIFIED_OPAQUE_BLOCK`)**.
+   - Only backtick code fences (` ``` `) are recognized as code blocks and exempted from image guards G5/G11; tilde fences (`~~~`) and Setext headings emit Guard **G8** warnings.
+5. **Diagnostic & Lenient Parse Alignment Invariant (`docs/markdown-and-ast.md`)**:
+   - All read-only inspectors (`status`, `doctor`, `conflicts`, `delete`, `article_search/local`, `media/body_scan`) must parse files through `parseMarkdownLenient()` (`src/utils/frontmatter.ts`) and check modification status via `reconstructBaseline()` / `isLocalFileUnmodified()` (`src/sync/baseline-reconstruction.ts`).
+   - Never call `saveSyncState()` directly to advance `local_hash` alone; always use `retrackLocalHashOnly()` (`src/db/baseline.ts`).
+6. **Epistemic Search & Offline Doctor Invariant (`docs/safety-guards-and-diagnostics.md`)**:
+   - Any remote `article-search` or `media-search` that stops before exhausting the remote library (`walkComplete: false`) must report `[WALK_INCOMPLETE]` and never assert that an item is absent.
+   - `emit doctor` is **100% offline by default**. Network requests occur only when `--check-auth`, `--check-media-urls`, or `--check-media-library` is explicitly passed; omitted flags emit no check entry at all.
+7. **CLI / MCP Presentation & Origin Symmetry Invariant (`docs/architecture-and-layers.md`)**:
+   - Target `origin` is resolved exclusively by `resolveOriginPriority()` (`--profile` > `EMDASH_ORIGIN` > auto-resolved profile > auth origin > `.emit/config.json` > `DEFAULT_ORIGIN`), surfacing every override as a warning naming the true source.
+   - CLI actions route all errors through `reportActionFailure()` (`❌ <message>` + `process.exit(1)`, zero raw stack traces).
+   - MCP tool handlers wrap all execution (including `resolveContext()`) in `try/catch`, returning `formatToolError(error)` and attaching `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`).
+
+---
+
+## 4. The Golden Path for AI Content Authoring (4-Step Cycle)
+
+When drafting, reviewing, or updating blog articles, AI agents must follow the **4-Step Cycle**:
 
 ```text
-/your-blog-workspace/               <-- Target workspace root directory
-├── .emit/                          <-- [Hidden Configuration & Cache Directory]
-│   ├── cache.db                    <-- SQLite local cache (node:sqlite)
-│   └── config.json                 <-- Instance connection and collection settings
-├── categories/                     <-- Category definitions (<id>-<label>.yaml, Two-Layer: decoded slug + canonicalSlug)
-├── tags/                           <-- Tag definitions (<id>-<label>.yaml, Two-Layer: decoded slug + canonicalSlug)
-├── media/                          <-- Media files & companion YAML (`media/<markdownRef>.<ext>` + `media/<markdownRef>.yaml`, where <markdownRef> is the sanitized storageKey basename — never the media record id; see docs/media-id-spaces.md)
-│   └── drafts/                     <-- Staging folder for offline draft images (auto-uploaded on push)
-└── posts/                          <-- [Local Markdown Files for Humans & AI]
-    ├── draft/                      <-- Draft articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
-    ├── published/                  <-- Published articles (<yyyyMMdd>_<ulid>-<title>.md, title || slug)
-    └── conflicts/                  <-- Read-only rescue copies written by pull when local content diverged (never articles, never pushed)
+[1. PULL / SEARCH]  Synchronize or locate article  -->  sync_pull / sync_status / sync_article_search
+    │
+[2. NEW / CHECK]    Scaffold or inspect target     -->  New: sync_new <slug> / Existing: sync_diff
+    │
+[3. DIRECT EDIT]    Edit canonical Markdown file   -->  posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
+    │
+[4. PUSH]           Validate & push to remote      -->  sync_push (filePath required)
 ```
 
-- **Boundary Rule**: All operations take place relative to the workspace root containing `.emit/`. Commands run from subdirectories (e.g. `posts/draft/`) automatically discover the parent workspace root.
+### Critical Authoring Rules for AI Agents
+
+1. **Pull Before Editing**: Run `sync_pull` (or `sync_status`) first. Batch `sync_pull` syncs the latest 30 published + 30 draft articles, refreshes `categories/` and `tags/`, and mirrors referenced media on demand.
+   - **Targeting Older Articles Outside the 30-Post Window**: Use `sync_article_search` (by keyword, `tag`, `category`, `since`/`until`, `status`, or `offline: true`) to discover the article's 26-character ULID, then run `sync_pull(id: "<ulid>")`. Never guess ULIDs.
+2. **One-Shot Scaffolding (`sync_new`) & No Throwaway Files (Guard G18)**:
+   - Never create disposable files (`temp.md`, `draft.md`, `scratch.md`). Always use `sync_new` with `title`, `categories`, `tags`, `description`, and `featuredImage` to generate a complete, schema-valid file in one step.
+3. **Never Move or Rename Files with `mv` (Guard G2)**:
+   - To change `title`, `slug`, or `status`, edit the YAML frontmatter and run `sync_push`. Emit relocates and renames the file automatically while keeping `cache.db` consistent.
+4. **Frontmatter & Body Rules (Guards G3, G4, G5, G7, G9, G10, G11)**:
+   - **Always nest `categories` and `tags` under `taxonomies:`** (top-level `categories:` / `tags:` are stripped by Zod). Use existing slugs or term ULIDs from `categories/*.yaml` and `tags/*.yaml`.
+   - **Do not repeat `# Title` at the top of the body** (Guard G7).
+   - **Do not modify or delete `<!--ec:block ... -->` lines** unless intentionally moving or removing that element (Guard G9).
+   - **Offline Draft Images**: Place new local images in `media/drafts/<filename>` and reference them on a standalone line (`![alt](../../media/drafts/<filename>)` or in `featuredImage`). `sync_push` uploads them, rewrites the URL, and moves the file to `media/<markdownRef>.<ext>`.
+   - **Staging Protection (Guard G3)**: Keep `status: draft` unless explicitly asked to publish (`allowPublish: true`).
+5. **Quarantine & Conflict Resolution (`posts/conflicts/`, Guards G6, G12–G17, G19)**:
+   - Never push a rescue copy under `posts/conflicts/` (blocked by Guard G12). Use `sync_conflicts` (`list`, `diff`, `resolve`, `prune`) to inspect or resolve quarantined copies.
+   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G19 specification and remediation flags.
 
 ---
 
-## 3. The Golden Path for AI Agents (4-Step Cycle)
+## 5. Development Governance, Quality Gates & Ask First Policy
 
-When drafting, reviewing, or updating articles, AI agents must strictly follow the **4-step cycle**:
+### Ask First Policy (4 Mandatory Categories)
 
-```text
-[1. PULL / STATUS]  Synchronize local state    -->  sync_pull / sync_status / sync_diff
-    │
-[2. NEW / CHECK]    Resolve target article     -->  New: sync_new <slug> / Existing: find file
-    │
-[3. DIRECT EDIT]    Edit canonical file        -->  posts/[status]/<yyyyMMdd>_<ulid>-<title>.md
-    │
-[4. PUSH]           Explicit push to remote    -->  sync_push (filePath required)
-```
+Before executing modifications in any of the following 4 categories, an AI agent or contributor **must pause and obtain explicit confirmation from the project owner**:
 
-1. **PULL / STATUS (`sync_pull` / `sync_status` / `sync_article_search`)**: Always pull or check status before editing to ensure the local cache reflects the latest remote revision. `sync_status` returns tracked articles sorted newest-first (descending by date prefix and ULID; date reflects publication/creation date, not last modified). To locate active edits, filter by `syncStatus: 'modified'`.
-   - **Targeting Past Articles Outside Sliding Window**: Batch `sync_pull` syncs the latest 30 articles per status. To edit an older historical article not present locally, use `sync_article_search` (or CLI `emit article-search`) by keyword, date range (`since`/`until`), status, slug, category, or tag to discover its canonical ULID, then run targeted single-article pull `sync_pull(id: "<ulid>")` (or CLI `emit pull <ulid>`). Do NOT guess ULIDs or call raw EmDash content APIs directly.
-   - **Distinction between `sync_status` and `sync_article_search`**:
-     - `sync_status`: Inspects local workspace tracking status (title/slug/id/filePath match in SQLite cache).
-     - `sync_article_search`: Multidimensional search across remote EmDash (official FTS / bounded walk) or local full-text Markdown body search (`offline: true`).
-   - Both batch mode `sync_pull` and single-article pull (`emit pull <target>`, `sync_pull(id: "...")` / `sync_pull(filePath: "...")`) automatically synchronize referenced media assets on-demand (Markdown body images and frontmatter `featuredImage`) into `media/` in a single pass, immediately resolving local relative paths for **body image references only**: the disk rewriting applies to `![...](/_emdash/api/media/file/<storageKey>)` links, while a frontmatter `featuredImage` is mirrored as a companion-backed asset and its value stays the canonical 26-character D1 record ULID (never rewritten to a local path — see `docs/media-id-spaces.md`). The on-demand resolution walk over the remote library is bounded by `mediaSyncLimit` (default 100); a key outside that window is reported as unresolved, never asserted absent. Batch mode also syncs up to `postsSyncLimit` (default `30` published + `30` draft) articles and synchronizes taxonomies (categories/tags). Use `postsOnly:true` (or CLI `--posts-only`) to skip taxonomies. Use `noMedia:true` (or CLI `--no-media`) to skip on-demand media mirroring. Use `includeMedia:true` (or CLI `--media`) to pull media library assets (bounded by `mediaSyncLimit`, default 100; note that referenced media is already mirrored on-demand without this flag).
-2. **NEW (`sync_new`)**: When creating new posts, always use `sync_new` (or `emit new`) to scaffold canonical ULID metadata and files. Pass `categories`, `tags`, `description`, and `featuredImage` (local draft path or ULID) directly to `sync_new` (or CLI `emit new -C ... -T ... -d ... -f ...`) to generate a complete, schema-compliant frontmatter in one step—eliminating the need to edit frontmatter YAML manually and avoiding syntax or nesting mistakes. Valid categories and tags (sorted by usage count) are returned automatically in the response hint and verified against local definitions with non-blocking warnings. To discover and reference existing remote images pre-uploaded via Web or mobile, use `emit media-search <query>` (or MCP `sync_media_search`) to find the canonical `storageKey`, then reference `/_emdash/api/media/file/<storageKey>` directly in the Markdown body (or pull an offline copy via `emit pull-media --storage-key <storageKey>`).
-3. **DIRECT EDIT**: Write your content in the generated `<collection>/draft/<yyyyMMdd>_<ulid>-<title>.md` directly. When one-shot scaffolding arguments were used in Step 2, you only need to write the Markdown body—no frontmatter editing required.
-   - **Preserved Block Protection (`<!--ec:block ... -->`)**: Articles may contain single-line comment fences preserving custom blocks or styled images (`alignment`, `displayWidth`). **AI agents must NEVER modify or delete these comment lines** unless intentionally requested by the user to move or remove the specific element. To move a block, move the entire comment line. To add new images, **always use standard Markdown syntax** (`![alt](../../media/drafts/img.png)`) — never fabricate synthetic `<!--ec:block ... -->` lines. Modifying or deleting opaque blocks without intent is rejected by Guard G9 (`MODIFIED_OPAQUE_BLOCK`).
-4. **PUSH (`sync_push`)**: When editing is complete, push the specific `filePath` to remote EmDash.
+1. **New npm packages**: Adding any package to `dependencies` or `devDependencies` in `package.json`.
+2. **Persistence schema modifications**: Adding or altering SQLite tables, columns, indexes, or migrations in `cache.db` (`src/db/`) or configuration keys in `.emit/config.json`.
+3. **Public Facade / Orchestrator API & Layering Allowlist changes**: Altering the signature or return shape of `pullBatch`, `pullSingleArticle`, `pushArticle`, or `pushAll`, or adding symbols/edges to `ALLOWED_LAYER_2_SYMBOLS` or the Layer 2 sibling snapshot in `tests/layering.test.ts`.
+4. **Specification deletions / core revisions**: Deleting or fundamentally altering authoritative specifications in `docs/` or core principles in `AGENTS.md`.
 
-### Canonical Frontmatter Schema (`src/utils/frontmatter.ts`)
+### Commit Readiness Checklist
 
-Every article file must adhere strictly to `FrontmatterSchema`:
+Before finalizing any commit, verify all 7 items:
 
-```yaml
----
-id: 01M6ABCDEF1234567890123456 # 26-char canonical ULID (DO NOT EDIT)
-slug: article-slug
-title: 'Article Title'
-collection: posts # Default: "posts"
-status: draft # "draft" or "published"
-publishedAt: null # ISO 8601 timestamp string or null
-locale: ja # Default: "ja"
-featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # Optional: 26-char media record ULID, local draft path (e.g. "../../media/drafts/eyecatch.jpg"), or null
-taxonomies: # Nested map of taxonomy key -> array of term slugs (or term ULIDs)
-  categories:
-    - 未分類 # Human-readable Japanese decoded display (or ASCII slug like "tech")
-  tags:
-    - カメラレビュー # Decoded CJK terms stay unquoted; ASCII terms like "typescript" stay unquoted
-seo: # Optional SEO metadata block
-  title: null
-  description: null
-  canonical: null # Must be an absolute URL (https://...) or null
-  noIndex: false
-  image: null
-bylines: # Author byline slugs (defaults to first non-guest author by slug ASC)
-  - aroooy
----
-```
-
-- **Never place `categories` or `tags` at the top level**: `parseMarkdown()` strips unknown top-level keys via Zod and `serializeMarkdown()` rewrites the frontmatter on every pull/push. Top-level `categories:` / `tags:` are silently discarded without triggering Guard G4. Always nest them under `taxonomies:`.
-- **Taxonomies decoded display (Two-Layer Representation)**:
-  - **In article frontmatter (`taxonomies:`)**: Taxonomy terms under `taxonomies:` are rendered in human-readable decoded display on disk (`    - 未分類`) while internally preserved as canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) in remote payloads, `computeTaxonomyHash`, and SQLite baseline snapshots (`base_snapshots.frontmatter_yaml`). When creating or editing articles, you may write either decoded Japanese (`未分類`), canonical slug (`%e6%9c%aa%e5%88%86%e9%a1%9e`), or ULID (note: if terms share a canonical slug, writing the slug resolves to the winner term; use ULID or a unique display name to target the loser).
-  - **In taxonomy definitions (`categories/`, `tags/`)**: Category and tag YAML definitions store human-readable decoded slugs in `slug:` (`slug: ローカルガイド`), preserving the raw remote slug in `canonicalSlug:` (`canonicalSlug: "%e3%83%ad..."`, omitted for standard ASCII terms). `readTaxonomyDir()` seamlessly loads both legacy (v0.1.25) and new (v0.1.26) formats.
-  - **Collision resolution**: When multiple terms share the same canonical slug, a deterministic winner (count desc → ULID desc) claims the slug in `slugToId`. Querying the shared slug resolves to the winner; to target a loser term specifically, pass its unique display name (if unique) or its **ULID** directly in frontmatter. Loser terms are omitted from summary/hint outputs via `dedupeBySlug`.
-- **0-GET Pruned Taxonomy Auto-Healing (v0.1.31)**: When tags or categories are deleted on remote EmDash, `posts` revisions do not advance. During `emit pull` / `sync_pull` (where taxonomies are synchronized upfront), untouched articles (`currentDiskHash === existingSync.localHash`) automatically prune nonexistent taxonomy terms in-place with zero extra GET requests (0-GET). Full baseline rewrite (`bumpBaselineHashOnly: false` with canonicalized Layer A slugs/ULID) prevents phantom diffs in `emit diff`. If all terms are pruned, `tags: []` is kept so remote orphan relations can be cleared on the next push. Unpushed local edits are strictly protected (never auto-pruned). If taxonomy synchronization was skipped (`--posts-only`) or failed, the epistemic rule suppresses pruning completely.
-- **`seo.canonical` requires an absolute URL**: Validated with `z.string().url().nullable().optional()`; relative paths fail parsing.
-- **Draft Revision Annotation (`status: published # draft revision`)**: When a published article has an uncommitted remote draft revision, Emit serializes `status: published # draft revision`. AI agents MUST NOT remove, alter, or synthesize this comment manually; Emit manages it automatically (preserving it during draft staging and clearing it when `--allow-publish` publishes live and remote reports no remaining draft revision).
-- **No duplicate `# Title` in body**: Do not repeat the article title as a top-level `# Heading` at the start of the Markdown body (Guard G7).
-
----
-
-## 4. Strict Safety Guardrails for AI Agents (G1–G19)
-
-These rules are enforced at the code level via Safety Guards (G1–G19) declared in `src/sync/guards.ts`:
-
-### 1. Prohibition of Throwaway Temporary Files & Duplicate Slug Guard (Guard G18 / `DUPLICATE_SLUG_CONFLICT`)
-
-- **Never create disposable files** such as `temp.md`, `draft.md`, or `scratch.md` in the workspace.
-- Always write directly to the canonical file generated by `sync_new` or pulled into the workspace.
-- **Duplicate Slug Guard (Guard G18 / `DUPLICATE_SLUG_CONFLICT`)**: `sync_new` verifies that the given slug does not collide with existing local files (draft or published) or indexed cache entries (completely offline and zero-communication). Remote slug collisions are deferred to `sync_push`, which guides renaming when remote rejects with `SLUG_CONFLICT` / `PUSH_CREATE_FAILED`.
-
-### 2. Never Move or Rename Files Manually (Guard G2 / `ID_MISMATCH_ERROR`)
-
-- **Do not use `mv` or shell file operations** to rename files or move them between `draft/` and `published/`.
-- To update the title, `slug`, or `status`, simply modify the YAML frontmatter and run `sync_push`. Emit will automatically move and rename files while maintaining cache database integrity.
-
-### 3. Single-Target Push Enforcement (Guard G1 / `SINGLE_TARGET_GUARD`)
-
-- `sync_push` requires a specific `filePath` (relative to the workspace root). `sync_diff` and single-article `sync_pull` accept either `filePath` or `id`. Bulk uncontrolled pushes without inspection are prohibited.
-
-### 4. Staging Protection (Do Not Publish Prematurely) (Guard G3 / `UNINTENDED_PUBLISH_GUARD`)
-
-- Unless explicitly requested by the user, keep the post status as `draft`.
-- Promoting to `status: published` requires explicit `allowPublish: true` confirmation.
-
-### 5. Taxonomy Validation (Guard G4 / `INVALID_TAXONOMY_ERROR`)
-
-- Do not invent nonexistent taxonomy terms. Preflight Guard G4 validates taxonomy terms on `sync_push` against the local `categories/` and `tags/` definitions. Validation only runs when those local definitions exist, so always run `emit pull` (or `sync_pull`) first to populate them.
-- Valid category and tag slugs are automatically provided as hints in the output of `sync_new`, `sync_pull` (batch mode, even with `postsOnly: true`), and `sync_pull_taxonomies`. Tags are sorted by usage count (most used first). Hint lists are capped per command, so the complete authoritative list is always the `categories/` and `tags/` YAML files themselves.
-- Canonical term ULIDs in frontmatter are transparently accepted and verified against local definitions; unknown or obsolete ULIDs not found locally are rejected as stale.
-
-### 6. Media References, Two ID Spaces & Offline Draft Images (Guard G5 / G10 / G11)
-
-- **Two distinct ID spaces (Critical):** EmDash separates **media record IDs** (`id`) from **storage keys** (`storageKey`). Never interchange them. The full specification — identifier matrix, endpoints, migrated-corpus behavior, and resolution order — is documented in `docs/media-id-spaces.md`; read it before debugging any media reference:
-  - **Frontmatter `featuredImage`** accepts a **26-character media record `id`** (e.g. `01M67P0MBMJQQXH2K95HHCYRYB`), a **local draft image path** (e.g. `../../media/drafts/eyecatch.jpg` or an already-promoted mirror under `media/`), or `null`. When a local draft path is specified, Emit automatically uploads the image and resolves its D1 `mediaId` during `emit push` / `sync_push`, committing the canonical ULID on disk. Preflight Guard **G10** rejects invalid file paths outside `media/` (e.g. `./hero.png`), missing draft files, and malformed IDs before pushing.
-  - **Markdown body images `![alt](...)`** use the **`storageKey`-based public route** `/_emdash/api/media/file/<storageKey>` (where `<storageKey>` is `<ulid>.<ext>` or `<ulid1>.<ulid2>.<ext>`). Passing a media record `id` into `/_emdash/api/media/file/<id>.<ext>` returns **HTTP 404**.
-- **Offline draft image auto-upload (G5 / G11):**
-  - Place new local images in `media/drafts/<filename>` and reference them on a **standalone line** in the Markdown body: `![alt text](../../media/drafts/<filename>)` (or `media/drafts/<filename>`).
-  - Preflight Guard **G11 (`LOCAL_IMAGE_AUTO_UPLOAD`)** validates that the file exists under `media/drafts/`, has a supported image extension (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.avif`, `.svg`), and is within the 50 MiB limit. During `emit push` / `sync_push`, Emit automatically uploads the image via the 4-stage media flow (`upload-url` → `PUT` → `confirm`), rewrites the Markdown line to the canonical root-relative `/_emdash/api/media/file/<storageKey>` URL, pushes the article, and promotes the file from `media/drafts/<filename>` to `media/<markdownRef>.<ext>` with its companion `media/<markdownRef>.yaml`. **`markdownRef` is derived from the storageKey** (`storageKeyToMarkdownRef`: basename of the key, invalid characters stripped, own extension removed, UTF-8-safe truncation), never from the media record id and never from `createdAt`, so the promoted file is named exactly as the body URL that references it and no date prefix or re-naming pass is needed. Two keys that sanitize to the same stem collide-resolve deterministically to `<stem>--<mediaId>` (`collisionSuffixedMarkdownRef`), so a second asset can never overwrite the first mirror.
-  - **Already-promoted asset reuse (never re-upload):** If a referenced draft image was already promoted by an earlier push, Emit resolves it through `media_state` and `media/*.yaml` and accepts the line, rewriting it to the existing canonical URL. The identical `![alt](../../media/drafts/<filename>)` line is therefore valid in a second article, and a direct `media/<markdownRef>.<ext>` reference is valid too — matched against recorded metadata (the mirror basename, the companion's `filename:`, or a legacy stem's name suffix / embedded record id), never by filename guessing. **Never move a promoted file back into `media/drafts/`.** Before baking a reused URL into the body, Emit verifies the record with `GET /_emdash/api/media/{id}`: a record deleted on remote aborts the push with `PROMOTED_MEDIA_NOT_FOUND_REMOTE` and purges the stale cache entry, while a server that does not implement the endpoint still pushes and reports `[MEDIA_EXISTENCE_UNVERIFIED]` as a warning.
-  - **Standalone line requirement:** Because EmDash's Portable Text AST treats images as top-level blocks (`/^!\[([^\]]*)\]\(([^)]+)\)$/`), inline local images inside a text paragraph (e.g. `Text ![alt](../../media/drafts/a.png) more text`) are rejected with `INLINE_LOCAL_IMAGE_NOT_SUPPORTED`. Images inside `<!--ec:block ... -->` opaque fences are ignored by G5/G11 so Guard **G9** is preserved. Any other local image path (e.g. `./hero.png`, an absolute filesystem path, or a `media/` path that cannot be resolved to a promoted media record) is rejected by Guard **G5 (`LOCAL_IMAGE_DETECTED`)**; a `media/drafts/` reference whose file is missing and has no promoted match is rejected with `MISSING_LOCAL_IMAGE_FILE`.
-  - **Only backtick fences are exempted:** G5/G11 skip image lines that sit inside ` ``` ` fenced code blocks (any fence length, matched by a closing fence of equal or greater length, so a body that documents Markdown examples is never inspected as real markup). Tilde fences (`~~~`) are **not** exempted, because the Portable Text mapper only treats backtick fences as code blocks — exempting `~~~` would let a local path bypass validation and still be converted into a real remote image block. Document code examples with backticks.
-- **Styled Image Blocks Tier 3 Opaque Fence Protection (v0.1.35):**
-  - Plain image blocks (`_type: 'image'`, `alt`, `asset: { url }`) serialize to standard Markdown `![alt](url)` (Tier 1).
-  - When an image block carries layout, styling, or custom metadata (e.g. `alignment: left/center/right`, `displayWidth`, `displayHeight`, `caption`, `title`, or extended `asset` properties beyond `url`), Emit automatically falls back to Tier 3 opaque comment fences (`<!--ec:block ... -->`) to guarantee round-trip fidelity and prevent destructive reset of server-side styling on push.
-  - Guard **G9 (`MODIFIED_OPAQUE_BLOCK`)** protects these fences against modification on disk. On initial pull of existing workspaces containing styled images, files are safely healed from plain markdown into opaque fences (`healed: true`).
-- **Confirmed `featuredImage` contract (live EmDash):** pushing `featured_image: { "id": "<ULID>" }` alone is accepted (HTTP 200); the server stores the media id and normalizes `"provider": "local"` itself. Never fabricate `provider`, `src`, `storageKey`, dimensions, or MIME type in a push payload.
-- **Unresolved body storageKeys (`[UNRESOLVED_MEDIA_ASSET]` warning):**
-  - A migrated body can bake the R2 `storageKey` into `/_emdash/api/media/file/<storageKey>` while the media record's D1 primary key is a different ULID. Emit resolves references through **confirmed metadata sources only** — the canonical `GET /_emdash/api/media/{id}` lookup, `media_state`, and `media/*.yaml` companions (a companion storageKey is read from `storageKey:` when present, otherwise recovered from its canonical `url:` by `storageKeyFromMediaMeta`) — and never infers a record id from a body URL segment.
-  - When nothing resolves, `emit pull-media --article <id>` reports the key in `orphanStorageKeys` (MCP `sync_pull_media` prints the same list) and warns `⚠️ [UNRESOLVED_MEDIA_ASSET] <n> storageKey(s) ...`.
-  - Point at Emit's own library walk first: `GET /_emdash/api/media` is the only endpoint that reports each record's own `storageKey` and exposes no key filter (`q` matches filenames only), so `emit doctor --check-media-library` (metadata-only walk) or `emit pull-media --all` (for full maintenance backup) indexes every storageKey the server holds without any server-side query. Only a key that survives a complete walk may be verified on the server, and only before registering anything: a blind INSERT can create a duplicate. Emit mirrors records and never repairs server data.
-  - **Epistemic warning requirement**: A 404 from `GET /_emdash/api/media/{id}` proves only that _that_ lookup failed, because the endpoint keys on the primary key while the body carries a storageKey, so **Emit must never assert that the D1 record is absent and must never recommend inserting one**. Keys whose ULID matches a record Emit resolved under that id or confirmed local mirror metadata are downgraded to `verifiedStorageKeys` instead. Remediation of genuinely missing records belongs to EmDash/Wrangler; once the record resolves, a normal `emit pull-media` mirrors the asset under its canonical `media/<markdownRef>.<ext>` name.
-  - `emit doctor --check-media-urls` probes `HEAD /_emdash/api/media/file/<key>` for references no local source can resolve and downgrades ones the origin still serves to an informational note instead of a missing-file warning — a served key proves only that the R2 object exists, never that a record is missing. Without the flag doctor stays offline and keeps reporting them as missing.
-  - `emit doctor --check-media-library` walks the whole library and reports its record count against the local mirror count, and a library-wide pull also reports `referencedUnmirroredStorageKeys`; every suggestion points at those Emit-side walks first and at server-side storageKey verification only for what a complete walk could not match — never at an INSERT.
-- When the cached remote entry already points at the same ULID, Emit resends that remote object verbatim so its original provider shape (`external` with `src`, or `local` with `meta.storageKey`) is preserved instead of being re-resolved from a bare id.
-- Emit canonicalizes `featuredImage` to uppercase on read, so lowercase input is safe; the local file is rewritten with the canonical form on the next pull or push.
-- `featuredImage: null` clears the hero image. Omitting the field leaves the remote value untouched.
-- Do not hand-write remote media URLs into `featuredImage`. A URL that contains a media ULID is accepted with a warning and resolved to the bare ULID, but the canonical frontmatter form is the bare 26-character ULID.
-- **Media search epistemic rule:** A media search (`emit media-search` / `sync_media_search`) that did not finish its walk reports `walkComplete: false` and must never assert that an asset is absent. Filename/alt resolution applies only to assets Emit already mirrored (`media_state` + companion YAML); a remote-only asset is searchable but carries no local mirror metadata, and fleet-scale listing remains the official EmDash MCP's responsibility.
-- **Article search epistemic rule:** An article search (`emit article-search` / `sync_article_search`) that did not finish its walk reports `walkComplete: false` and must never assert that an article is absent on remote. Local offline search (`--offline` / `offline: true`) queries only the workspace's Markdown files; absence in an offline search never proves the article does not exist on remote. An untracked remote hit provides `id` for targeted pull (`emit pull <id>` / `sync_pull(id: "...")`).
-- **Targeted `pull-media --storage-key` reports three outcomes, never silence:** a key that mirrors (or re-verifies) an asset reports the download/skip counts; a key nothing could resolve is an orphan and exits 1 with `[UNRESOLVED_MEDIA_ASSET]`; a key that is healthy but needed no download — confirmed by local mirror metadata, or simply outside the bounded walk — prints `ℹ️ Targeted storageKey(s) not downloaded` naming which. Never print a success line for a pull that mirrored nothing, and never exit without saying what happened.
-
-### 7. Media Mirror Naming & Index-Based Pruning Invariant
-
-- **Mirror names come from the storageKey, never from the record id**: `mediaMirrorNames()` (`src/sync/media/naming_mirror.ts`) derives both the binary and its `.yaml` companion from `storageKeyToMarkdownRef()` (`src/utils/naming.ts`) — basename of the key, invalid characters stripped, own extension removed so binary and companion share one stem, multi-ULID keys keep their internal dots, path-shaped keys collapse to their basename, truncation lands on UTF-8 character boundaries. A record id may appear in a filename **only** as a collision suffix (`<stem>--<mediaId>`, `collisionSuffixedMarkdownRef`) after `resolveMarkdownRefCollision()` has confirmed via companion YAML `id:` that another record already owns the bare stem; re-pulling the same record is idempotent and never spawns a second suffix.
-- **Legacy names stay readable, never authoritative**: a workspace that has not been re-pulled yet still holds `media/<yyyyMMdd>_<mediaId>-<name>.<ext>`. Emit accepts those stems when resolving an existing mirror (matching the sanitized name suffix or the embedded record id) so a migration re-pull renames in place instead of re-downloading, but no new name is ever generated from that shape. A record with no usable storageKey falls back to the old id-based stem.
-- **Ownership is read from companion YAML, never parsed from a filename**: `mediaRecordIdForStem()` accepts only a valid 26-char ULID under `id:` in `media/<stem>.yaml` and returns `null` otherwise — including when the stem itself begins with 26 ULID-ish characters. A storageKey-derived stem can coincidentally resemble an id, so filename-prefix attribution is unsafe everywhere: pruning, duplicate cleanup (`cleanupDuplicateMediaFilesForId`), and reuse matching must go through metadata or the `media_state` index.
-- **Pruning authority is remote records only**: `pullMediaLibrary` seeds its active-id set from the records it just listed, **never** from a local scan of existing mirrors. Seeding locally makes every existing mirror self-exempt and silently disables pruning entirely — that bug shipped in this migration and must not return (the helper that enabled it, `collectLocalMediaIds()`, has been deleted; do not reintroduce it). A file with no companion is never pruned because Emit cannot attribute it to a record; leftover synthesized residue from removed file-route fallbacks (`legacy_*`) is never matched by pruning and must be cleaned up manually.
-- **Cache schema v5 uses storageKey as primary key and separates hash columns**: In `media_state`, `storage_key` is the primary key (reflecting the immutable public address space). Local binary SHA-256 is tracked in `local_content_hash`, while remote record references (`media-record:<id>`) are tracked in `remote_record_ref`, resolving previous collision asymmetry. `markdown_ref` records the workspace-relative path of the storageKey-named mirror alongside `workspace_path` for clean offline resolution, lookups, and index-based pruning.
-- **`doctor` resolves body URLs by stem**: `runWorkspaceDoctor` builds `knownMediaStems` from mirror stems (whole stem, date-prefix-stripped stem, legacy name-suffix tail) and matches a body storageKey through `storageKeyToMarkdownRef(key)` first, so an already-migrated asset is never reported as an unresolved reference.
-- **On-demand media resolution walks are bounded**: the shared `MediaMirrorSession` library walk, `emit pull-media --article <id>`, and `emit pull-media --storage-key <key>` each stop at `mediaSyncLimit` (default 100) records — the same window `--check-media-library` uses — so one article's pull never pays for a full fleet-scale scan. Only an explicit full-library pass is unbounded. A key that lands outside the window stays in the verified/orphan evaluation and keeps `complete === false`, which leaves per-record lookups available; nothing may assert it is absent.
-- **Featured-image lookup reuses the walk, then stops**: with body images present (or in a batch), `featuredImage` resolves from `RemoteStorageKeyIndex.recordsById`. When that walk reported `complete === true` and the id is not in it, Emit skips the individual `GET /_emdash/api/media/{id}` instead of paying for a request that must 404. The single-GET fast path (no list walk at all) applies only to a non-batch article with **no body images** and an unmirrored `featuredImage`.
-- **Batch media statistics are session-wide**: `pullBatch` runs article pulls through a concurrency pool over one shared `MediaMirrorSession`, and in-flight dedup joins duplicate asset work. The reported `media.downloaded` / `skipped` therefore count each storageKey once per batch, not once per referencing article — a figure that is neither a per-article sum nor double counted.
-- **`localMediaRefs` localization scope is the body, never `featuredImage`**: the article-relative rewriting described above applies to Markdown body image references. A frontmatter `featuredImage` is never re-spelled to a local path; it stays the canonical 26-character record ULID (or an explicit draft/mirror path the user wrote) whatever the localization setting is.
-- **`localMediaRefs` changes the disk spelling only, never the remote payload**: when `.emit/config.json → localMediaRefs` is `true` (default-ON; opt back out with `emit pull --no-local-media-refs`, re-enable with `--local-media-refs`; MCP `sync_pull` / `sync_push` accept a `localMediaRefs` argument that overrides it), mirrored body images are written to the Markdown file as **article-relative** references — `../../media/<storageKey>` for an article under `<collection>/draft|published/`, i.e. `mediaRefPrefixForArticle(relPath) + "media/"` — so VS Code/Obsidian preview resolves the link offline from the article's own directory. The **baseline (`base_snapshots`), the canonical hash, and every remote push payload keep the canonical `/_emdash/api/media/file/<storageKey>` URL** — only `sync_state.local_hash` tracks the disk bytes. Push localizes _after_ preflight canonicalization, so `diff.ts` and the 3-way merge stay byte-identical to a remote pull. Never hand-write `../../media/<storageKey>` into a body expecting it to be pushed verbatim: Preflight Guards still run against the canonicalized form, and only a key already confirmed mirrored (`media_state` or a `media/*.yaml` companion) is localized back on disk. `inspectArticleDiff` renders the baseline in whichever spelling the disk already carries, so an untouched local-ref article must never report a phantom media rewrite — keep that alignment with what `status` reports.
-- **Legacy depth-free refs self-heal on pull**: a workspace built before article-relative refs carries `media/<storageKey>` (no depth) and its hash in `sync_state`. `pullArticle` detects that spelling on the fast path, re-spells the file to the article-relative form, and re-tracks it against the repaired hash — values are untouched, so the article keeps reporting `synced` and the next pull of the same revision skips. A workspace that never carried a depth-free ref gets the article-relative spelling on its first write; nothing ever writes the depth-free form to a new file.
-- **`localMediaRefs` precedence lives in Layer 0 (`src/utils/media-ref-precedence.ts:resolveLocalMediaRefsOption`)**: a pure argument-over-config resolver with zero disk access. MCP tools call it directly and must never persist the resolved value; only the CLI wrapper `resolveAndPersistLocalMediaRefs()` (`src/cli/context.ts`) writes `.emit/config.json` via `persistLocalMediaRefs()`. Never move this resolution into `src/cli/` — the layering gate does not catch that move, so the boundary is upheld by convention plus unit tests on `resolveLocalMediaRefsOption()` purity; MCP tools must never mutate workspace configuration.
-
-### 8. Rescue Copies under `posts/conflicts/` (Read-Only)
-
-- When a pull finds local content that diverges from the last synced baseline, Emit moves the divergent file to `<collection>/conflicts/<name>.conflict.md` before writing the canonical article, so unpushed writing is never discarded.
-- **Never treat a rescue copy as an article**: `getWorkspaceStatus` / `emit status` scan only `draft/` and `published/`, count `conflicts/` separately (`summary.conflicts`), and `pushAll` never selects it.
-- **Never push a rescue copy**: Guard **G12** (`QUARANTINED_COPY_NOT_PUSHABLE`) refuses it before any network request. Read the copy, merge the valuable lines into the canonical article, then delete the copy. To intentionally replace the remote version, copy the rescue file over the canonical path and push that canonical path instead.
-- **Never create files in `conflicts/` yourself** and never move a rescue copy back into `draft/` or `published/` with `mv`; merge its content into the canonical file instead.
-
-### 9. Conflict Resolution & Quarantine Boundary Guards (G13 / G14)
-
-- **Unpushed Edits Protection on Conflict Resolution (Guard G13 / `CANONICAL_HAS_UNPUSHED_EDITS`)**:
-  - Resolving a conflict via `accept-local` overwrites the canonical article with the quarantined copy.
-  - If the canonical article contains unpushed local edits that diverge from the cache baseline, `emit conflicts resolve --accept-local` (or `sync_conflicts` with `strategy: "accept-local"`) strictly aborts to prevent silent data loss.
-  - To discard canonical edits and force overwrite, explicitly pass `-f, --force` (or MCP `force: true`).
-- **Quarantined Path Restriction (Guard G14 / `QUARANTINED_PATH_REQUIRED`)**:
-  - `emit conflicts resolve` and `diff` strictly validate that target files are located within `<collection>/conflicts/`. Arbitrary workspace paths are rejected before any unlink or write operation.
-- **Pending Conflict Separation & Alignment (Schema v3)**:
-  - Cache schema v3 separates `body_conflict_pending` and `taxonomy_conflict_pending` in `sync_state`, with `conflict_pending = MAX(body_conflict_pending, taxonomy_conflict_pending)`.
-  - Push guards strictly evaluate preflight Guard **G6 (`UNRESOLVED_CONFLICT_MARKERS`)** before Guard **G16 (`TAXONOMY_CONFLICT_PENDING`)**, ensuring that files with unresolved conflict markers are halted with body-marker instructions rather than taxonomy guidance.
-  - Resolving a conflict via `accept-canonical` dispatches `cache.clearConflictsByKind(id, 'body')`, unblocking subsequent bare pushes.
-  - Conflict copy columns (`conflict_copy_path`, `conflict_copy_hash`, `conflict_at`) are cleared to `NULL` only when both `body_conflict_pending` and `taxonomy_conflict_pending` are 0.
-
-### 10. Taxonomy Conflict Management, Wipe Guard & Revive (G15 / G16 / G19)
-
-- **Delete-Pending Article Revival Guard (Guard G15 / `DELETE_PENDING_ARTICLE`)**:
-  - If an article was previously deleted but unconfirmed on remote (`delete_pending: 1`), pushing is blocked to prevent accidental zombie re-publication. Pass `--revive` (or `--force`) to intentionally resurrect and push the article.
-- **Taxonomy Conflict Pending Guard (Guard G16 / `TAXONOMY_CONFLICT_PENDING`)**:
-  - If a 3-way merge encounters diverged taxonomy assignments and cannot cleanly union them, `taxonomy_conflict_pending = 1` is recorded in `sync_state`. Re-pushing without specifying resolution is strictly blocked.
-  - Pass `--resolve-taxonomy=union|local|remote` (or MCP `resolveTaxonomy: "union"`) or `-f, --force` to confirm resolution.
-  - **Single-Side Adoption (ours/theirs) Semantics**: Passing explicit `--resolve-taxonomy local|remote` strictly adopts the chosen side. If the adopted side specifies an empty taxonomy (wipe), Guard G19 (`DESTRUCTIVE_TAXONOMY_WIPE`) is bypassed because the explicit user strategy intent is unambiguous.
-- **Destructive Taxonomy Wipe Guard (Guard G19 / `DESTRUCTIVE_TAXONOMY_WIPE`)**:
-  - Pushing an empty taxonomy array (`categories: []` or `tags: []`) that would wipe existing remote terms requires explicit confirmation via `--allow-wipe-taxonomies` (or MCP `allowWipeTaxonomies: true`), unless an explicit `--resolve-taxonomy` strategy was passed.
-  - **Remote Audit Parity**: When pre-PUT remote audit (`auditRemoteTaxonomies`) confirms that remote assignments are already 0 (`remoteCount === 0`, e.g. following remote term deletions), G19 in `push/taxonomy_plan.ts` is cleanly bypassed and `POST { termIds: [] }` is dispatched to clean up remote orphan relations safely without requiring manual `--allow-wipe-taxonomies`.
-  - **Merge Path Scope**: Note that the 409 / divergence merge path (`push/merge_stage.ts:181-195`) evaluates G19 independently based on observed live remote terms (`wipeWarnings`), which is intentionally stricter and requires an explicit `--resolve-taxonomy` or `--allow-wipe-taxonomies`.
-
-### 11. Quarantined Copy Pruning & Remote-Deleted Article Escape (R3)
-
-- **Quarantined Copy Pruning (`emit conflicts prune`)**:
-  - Quarantined copies in `<collection>/conflicts/` can be pruned via `emit conflicts prune` (with `--older-than <duration>` such as `7d` or `24h`, `--dry-run`).
-  - If a canonical article contains unpushed local edits, its rescue copy is skipped.
-  - Deletion backups (`.deleted.md`) that have no canonical article require `--allow-orphan-rescues` to be pruned.
-- **Remote-Deleted Article Deadlock Escape (`[REMOTE_ARTICLE_DELETED]`)**:
-  - When remote article returns 404/410 during push (PUT, conflict GET, or retry PUT), Emit halts with `[REMOTE_ARTICLE_DELETED]` (404) and offers 3 clean escape options:
-    1. Recreate as new article: remove `id:` from frontmatter and `emit push <file>`.
-    2. Discard local edits and untrack: `emit pull <id> --force` moves local edits to `<collection>/conflicts/*.local-dropped.md`, unlinks canonical article, and clears cache.
-    3. Delete with rescue backup: `emit delete <file> --discard-local-edits` deletes remote/cache and saves unpushed edits to `<collection>/conflicts/*.deleted.md`.
-
-### 12. Taxonomy Partial Failure Guard (Guard G17 / `TAXONOMY_APPLY_PENDING`)
-
-- **Taxonomy Apply Pending Guard (`TAXONOMY_APPLY_PENDING`)**:
-  - If article body PUT succeeds but subsequent taxonomy term update POST fails, `sync_state.taxonomy_apply_pending = 1` is recorded in the SQLite cache, and baseline taxonomies and hash are reverted to prior values to prevent silent drift.
-  - Subsequent bare re-pushes are strictly blocked by Guard G17 until resolved, preventing phantom clean overwrites. Pass `--allow-unapplied-taxonomies` (or MCP `allowUnappliedTaxonomies: true`) or `-f, --force` to override.
-  - To resolve cleanly: run `emit pull-taxonomies` (or MCP `sync_pull_taxonomies`), verify term permissions, and retry push. Single-article pull (`emit pull <id>`) also automatically refreshes taxonomy definitions to avoid `NOT_FOUND` errors.
-
-### 13. Guard Registry Invariants & Test Coverage (Rules 1–5)
-
-To prevent phantom errors, unregistered codes, and unasserted guards, `tests/guards.test.ts` statically enforces 5 automated invariants across `src/sync/guards.ts` and `tests/`:
-
-- **Rule 1 (Inclusion check)**: All guard codes declared in `GUARD_REGISTRY` must appear in `src/`.
-- **Rule 2 (Rogue code exclusion)**: Every error code emitted across `src/` must be classified in `GUARD_REGISTRY`, `OPERATIONAL_ERROR_CODES`, or `PROTECTION_ERROR_CODES`.
-- **Rule 3 (Mutual exclusivity)**: Guard error codes must not overlap, and IDs (1..19) must be strictly sequential without gaps.
-- **Rule 4 (Code-less guard validation)**: Behavior validation for guards without error codes (G1, G7, G8, G11 label).
-- **Rule 5 (Guard test coverage check)**: Across the 16 guards with error codes (20 unique error codes total), every code must appear as a string literal in `tests/` (excluding dynamic registry test files `tests/guards.test.ts` and `tests/presentation_symmetry.test.ts`). Note that Rule 5 validates the presence of code string literals in test files, serving as an automated regression rail alongside specific assertion tests.
-
----
-
-## 5. Development & Code Quality Standards
-
-- All new features and bug fixes must include unit tests under `tests/` using Vitest.
-- Run `npm run check` (`format:check`, `typecheck`, and `test`) before committing.
-- Ensure 100% clean exit (zero errors, all tests green).
-- `tsconfig.json` builds `src/` only (tests excluded). `tsconfig.test.json` type-checks `src/` **and** `tests/` and is wired into `npm run typecheck`, so test files are fully typed and editors resolve `node:*` imports correctly. Do not add `@types/node`; it is already configured via `"types": ["node"]`.
-- **MCP tool error contract**: every MCP tool handler must convert failures into `formatToolError(error)` (`src/mcp/tool-errors.ts`) instead of letting the callback throw. The MCP SDK catches a thrown error and returns only `error.message`, which silently drops the `[CODE]`, HTTP status, endpoint, `💡 Suggestion`, and `PushValidationError.errors` payload that CLI users see. This applies to **context resolution too**: `resolveContext()` can throw `AmbiguousProfileError` or workspace errors, so call it inside the guarded `try` (`tests/mcp_tool_errors.test.ts` asserts this for all context tools). Profile tools must read/write the same `profilesPath` that `createMcpServer` forwards, so an embedded server never lists profiles it cannot resolve.
-- **Baseline serialization invariant & Two-Layer Representation**: `base_snapshots` stores the frontmatter as **JSON-encoded** `Frontmatter` (column `frontmatter_yaml`, despite the name) with **canonical percent-encoded slugs** (Layer A), ensuring `computeTaxonomyHash` and remote 409 conflict detection remain strictly stable and immune to presentation-layer changes. Presentation and disk Markdown files render decoded terms (`    - 未分類`) (Layer B). `emit diff` / `sync_diff` and `emit status` / `sync_status` rebuild the baseline with `baselineMarkdown(JSON.parse(frontmatterYaml), bodyMarkdown, { preferEncodedTaxonomy: carriesPercentEncodedTaxonomy(diskContent) })`. If an untouched disk file carries legacy percent-encoded terms, the baseline is reconstructed with matching encoded spelling so phantom diffs are 100% prevented. Once healed by `pull`, both disk and baseline use clean decoded spelling. Any change to `formatFrontmatterYaml` / `serializeMarkdown` output must be made together with that reconstruction. `saved_at` is stored in epoch **seconds** (multiply by `1000` when rendering JS dates).
-- **Media localization & mirror naming invariant**: The remote payload, `base_snapshots`, and canonical article hash (the canonical-spelling Markdown hashed by `calculateHash`, see `src/sync/diff.ts` and `src/sync/conflicts.ts`) always retain canonical URLs (`/_emdash/api/media/file/<storageKey>`). Only `sync_state.local_hash` tracks disk bytes when `localMediaRefs: true` rewrites references to article-relative `../../media/<storageKey>`. Local mirrors are strictly named `media/<markdownRef>.<ext>` where `markdownRef` is derived from `storageKey` (`storageKeyToMarkdownRef`), never from media record IDs. In `media_state`, `storage_key` is the primary key. `inspectArticleDiff` renders baselines in whichever spelling the disk currently carries, so untouched local-ref files never report phantom diffs. Never send article-relative paths in remote payloads, and never rewrite baseline snapshots to disk spellings. See §7 for pruning authority and companion-based ownership rules.
-- **YAML scalar quoting rule (`formatYamlScalar`)**: `formatFrontmatterYaml` formats `id`, `slug`, `collection`, `locale`, `taxonomies` terms, and `bylines` through `formatYamlScalar(value)`. Decoded CJK strings (`未分類`, `カメラレビュー`) match standard Unicode letters (`\p{L}`) and are output **unquoted** (`    - 未分類`). In contrast, `%`-prefixed strings (such as percent-encoded Japanese taxonomy slugs like `"%e6%9c%aa%e5%88%86%e9%a1%9e"`), strings containing `%` or YAML punctuation, pure numbers/all-digit ULIDs, ISO dates, and reserved words (`true`, `null`, `yes`, etc.) are quoted via `JSON.stringify`. Leading `%` is a YAML 1.2 directive indicator and must never be emitted unquoted. **Hash-matched invalid files and percent-encoded legacy files are healed on the fast path**: `tryFastPathOrHeal` in `pull/fast_path.ts` upgrades valid percent-encoded taxonomy terms to decoded format in-place, and invalid/unquoted YAML routes to `lenientRepairMarkdownFrontmatter` (re-quoting plus relative re-indenting under parent taxonomy key) followed by strict serialization to clean decoded YAML, bumping baseline snapshot hash atomically without remote re-fetching. Unpushed local modifications with valid frontmatter are strictly preserved intact (Branch 3); unpushed files with broken syntax undergo non-destructive lenient frontmatter repair on disk before full pull evaluation. Subsequent pulls are zero-overhead no-ops (`synced`). Cached `invalid` files are automatically self-healed by batch `emit pull` / `sync_pull`; uncached `invalid` files outside the sliding window (`cached: false` in `getWorkspaceStatus`) are repaired by targeting their ULID explicitly via `emit pull <ULID>` or `sync_pull(id: "<ULID>")`.
-- **Diagnostic alignment invariant (`status` vs `diff` vs `doctor` vs `delete`)**: `getWorkspaceStatus` classifies every strict-parse failure as `invalid` and marks it `healable: true` when `lenientRepairMarkdownFrontmatter` would succeed, exposing `summary.healableInvalid`; `emit doctor` reports the same set as a `warning` ("repair automatically") and reserves `error` for unrecoverable files. For tracked valid articles, `reconstructBaseline()` and `isLocalFileUnmodified()` (`src/sync/baseline-reconstruction.ts`) and `retrackLocalHashOnly()` (`src/db/baseline.ts`) are shared across `status.ts`, `diff.ts`, `doctor.ts`, and `delete.ts` so spelling-only differences never cause false `modified` or `divergence` verdicts regardless of command execution order. Never call `saveSyncState` directly to advance `local_hash` alone; always use `retrackLocalHashOnly()`.
-- **Origin resolution invariant**: the effective `origin` is decided only by `resolveOriginPriority()` (`src/cli/context.ts`), which the MCP server also uses, so CLI and MCP can never disagree. Ranking is explicit `--profile` > `EMDASH_ORIGIN` > auto-resolved profile > resolved auth origin > `.emit/config.json` > `DEFAULT_ORIGIN`, and every higher-precedence source that overrides a lower one must emit a warning naming the real source. `loadConfig()` therefore keeps `EMDASH_ORIGIN` in the separate `envOrigin` field and never writes it into `.emit/config.json`; never collapse the two again or a warning will mislabel a file value as an env value. Profile workspace matching goes through `resolveDirectoryForComparison()` (`fs.realpathSync`) so symlinked workspaces still match. Tests must stay hermetic: `tests/setup/env-isolation.ts` (wired as a vitest `setupFiles` entry) deletes `EMDASH_ORIGIN`, `EMDASH_WORKSPACE`, `EMDASH_TOKEN`, and `EMDASH_API_TOKEN` before every file, so a developer's ambient env cannot change how profiles resolve inside the suite.
-- **CLI failure presentation (`src/cli/report-failure.ts`)**: command actions must convert local failures into one `❌ <message>` line plus `process.exit(1)` via the shared `reportActionFailure()` in `src/cli/report-failure.ts` (which preserves pre-prefixed `❌` messages without double-prefixing and adds `❌ Error:` to plain `Error`s; `emit profile *` uses `reportProfileFailure()` in `src/cli/commands/profile.ts`). Never let an action throw: commander prints a raw `file://` stack trace, which is useless for humans and wastes agent context. `tests/cli.test.ts` asserts this by stubbing `HOME`, `console.error`, and `process.exit` and running `program.parseAsync`.
-- **Opt-in remote doctor probes**: `emit doctor` is offline by default. The only checks that touch the network are the opt-in flags `--check-media-urls`, `--check-media-library` and `--check-auth` (MCP `sync_doctor` arguments `checkMediaUrls` / `checkMediaLibrary` / `checkAuth`), and an unspecified flag must push no check at all rather than an `ok` line — that invariant is what keeps every plain doctor run hermetic. The auth probe (`runRemoteAuthCheck`, Check 2c) sends exactly one authenticated `GET /_emdash/api/content/<collection>?limit=1` through `createAuthedFetch` and reads only the HTTP status: `2xx` → `ok`, `401`/`403` → `error` with an `emit profile set-token <name>` remediation, any other status or an unreachable origin → `warning`. It must never assert that a token is invalid on a non-401/403 outcome, and it targets the article endpoint (`articleContentEndpoint`, the resource Emit actually pushes to) rather than a taxonomy one so a posts-only token is not reported as broken. Because it performs HTTP, it lives in an awaited group — `runEnvironmentChecks()` must stay a pure synchronous function with no fetch inside it.
-- **Secret input handling (`emit profile set-token`)**: credential entry resolves in the order `--token` > `--stdin` > interactive prompt, and the prompt disables terminal echo only when stdin really is a TTY. The raw-mode restore must run both in the `finally` block and on the stdin `'close'` event, because an interrupted prompt (Ctrl-C) exits through the default SIGINT handler and a `finally` around the await never runs — leaving the user's shell in raw mode. A non-readable stdin fails with an actionable line instead of hanging, an empty pipe is an error rather than a silent credential clear, and neither the old nor the new token value may ever be printed. `profiles.yaml` keeps mode `0600`, and `setProfile()` must carry every other profile field forward so rotating one credential cannot drop the origin or workspace link.
-- **Init-generated Git hygiene (`.emit/.gitignore`)**: `initWorkspace()` writes `.emit/.gitignore` (`ensureEmitGitignore`) covering `cache.db`, `cache.db-wal`, `cache.db-shm`, `cache.db.bak-*` and `mcp_state.json`, and returns `{ gitignoreCreated }` so the CLI reports rather than re-derives what happened. An existing file is never rewritten or appended to, and nothing outside `.emit/` may ever be written: repository-level ignore policy (notably whether `media/` is tracked) belongs to the user, per README §6.
-- **Ask First Policy**:
-  Before executing modifications in any of the following 4 categories, an AI agent or contributor must pause and obtain explicit confirmation from the project owner:
-  1. **New npm packages**: Adding any package to `dependencies` or `devDependencies`.
-  2. **Persistence schema modifications**: Adding/modifying SQLite tables, columns, indexes, or migrations in `cache.db` or config keys in `.emit/config.json`.
-  3. **Public Facade / Orchestrator API breaking changes**: Altering signature or return shape of `pullBatch`, `pullSingleArticle`, `pushArticle`, or `pushAll`.
-  4. **Specification deletions / core revisions**: Deleting or fundamentally altering authoritative specifications in `docs/` or core principles in `AGENTS.md`.
-- **Commit Readiness Checklist**:
-  Before finalizing any commit, developers and AI agents must review and satisfy this 7-item checklist:
-  - [ ] **Localized Diff**: `git status` / `git diff` contains only files directly required for the task (no unintended edits or arbitrary refactorings).
-  - [ ] **Doc & Code Consistency**: All conditions and architectural boundaries match `AGENTS.md` with zero discrepancies.
-  - [ ] **Non-CLI Clean Logging**: No `console.log` or `console.debug` calls in non-CLI modules (Axis 5 PASS).
-  - [ ] **Zero Circular Dependencies**: `npm run check:cycles` outputs 0 circular dependencies (runs `madge` via `npx --yes` to preserve peer-dependency isolation against TypeScript 7.x; requires ambient network or warm npx cache).
-  - [ ] **Layering & Guard Invariants**: `tests/layering.test.ts` (Axis 0–5) and `tests/guards.test.ts` (Rule 1–5) PASS, with no unapproved symbols added to `ALLOWED_LAYER_2_SYMBOLS`.
-  - [ ] **Comprehensive Test Coverage**: All unit tests PASS with corresponding positive and negative test cases for changes.
-  - [ ] **Static Quality Gate**: `npm run check` (`format:check`, `typecheck`, `check:cycles`, `test`) is 100% green.
+- [ ] **Localized Diff**: `git status` / `git diff` contains only files directly required for the task.
+- [ ] **Doc & Code Consistency**: Implementation matches `AGENTS.md` and the authoritative specifications in `docs/`.
+- [ ] **Non-CLI Clean Logging**: Zero `console.log` or `console.debug` calls in non-CLI modules (Axis 5 PASS).
+- [ ] **Zero Circular Dependencies**: `npm run check:cycles` reports 0 circular dependencies.
+- [ ] **Layering & Guard Invariants**: `tests/layering.test.ts` (Axes 0–5) and `tests/guards.test.ts` (Rules 1–5) PASS without unapproved allowlist additions.
+- [ ] **Comprehensive Test Coverage**: All new features and bug fixes include unit tests under `tests/` (Vitest, hermetic via `tests/setup/env-isolation.ts`).
+- [ ] **Static Quality Gate**: `npm run check` (`format:check`, `typecheck`, `check:cycles`, `test`) exits 100% green.
