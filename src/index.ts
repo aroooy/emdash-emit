@@ -54,6 +54,7 @@ export * from './sync/push.js';
 export * from './sync/status.js';
 export * from './sync/taxonomies.js';
 export * from './sync/bylines.js';
+export * from './sync/article_search/index.js';
 export * from './utils/config.js';
 export * from './utils/frontmatter.js';
 export * from './utils/profile.js';

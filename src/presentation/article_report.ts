@@ -21,6 +21,7 @@
  */
 
 import type { PrunedTaxonomiesDetail } from '../utils/taxonomy-key.js';
+import type { ArticleSearchHit, ArticleSearchResult } from '../sync/article_search/index.js';
 
 /**
  * Presentation layer: unified report formatting helpers for CLI and MCP consumers.
@@ -173,4 +174,134 @@ export function formatPrunedTaxonomiesNotice(
   }
   if (parts.length === 0) return null;
   return `🏷️ Pruned deleted taxonomy term(s) from frontmatter (${parts.join(', ')}). Push the file to apply changes on remote.`;
+}
+
+/**
+ * Frames an offline article search as what it is: a view of this workspace's local files only.
+ */
+export function formatArticleOfflineSearchHeader(scannedCount: number): string {
+  return (
+    `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
+    `Searched ${scannedCount} local article(s) in this workspace.\n` +
+    `Remote EmDash library was NOT queried.`
+  );
+}
+
+/** The absence-protection line an offline article search must print when it finds nothing. */
+export const OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE =
+  'ℹ️ No matching articles found in local workspace. This does NOT prove the article does not exist on remote. Run without --offline to search the remote library.';
+
+/** The machine-readable counterpart of offline article search framing for MCP JSON payloads. */
+export function buildOfflineArticleSearchFraming(): {
+  source: 'local_workspace';
+  remoteQueried: false;
+  warning: string;
+} {
+  return {
+    source: 'local_workspace',
+    remoteQueried: false,
+    warning:
+      'Remote CMS was NOT checked. Absence from this list does NOT prove the article does not exist remotely.',
+  };
+}
+
+export interface ArticleSearchHeaderOptions {
+  offline?: boolean;
+  query?: string;
+  since?: string;
+  until?: string;
+  tag?: string;
+  category?: string;
+  slug?: string;
+}
+
+/**
+ * Formats the header line for article search results.
+ */
+export function formatArticleSearchHeader(
+  result: ArticleSearchResult,
+  options: ArticleSearchHeaderOptions,
+): string {
+  if (options.offline) {
+    return formatArticleOfflineSearchHeader(result.scannedCount);
+  }
+
+  const filters: string[] = [];
+  if (options.query) filters.push(`"${options.query}"`);
+  if (options.tag) filters.push(`tag:#${options.tag}`);
+  if (options.category) filters.push(`category:${options.category}`);
+  if (options.slug) filters.push(`slug:${options.slug}`);
+  if (options.since) filters.push(`since ${options.since}`);
+  if (options.until) filters.push(`until ${options.until}`);
+
+  const subject = filters.length > 0 ? filters.join(' ') : 'recency browse';
+  const modeLabel =
+    result.searchMode === 'fts'
+      ? 'mode: fts'
+      : result.fallbackReason
+        ? `mode: scan (fallback: ${result.fallbackReason})`
+        : 'mode: scan';
+
+  const taxLabel =
+    result.taxonomyFetchCount > 0
+      ? ` [taxonomies fetched: ${result.taxonomyFetchCount} GET(s)]`
+      : '';
+  const truncLabel = result.truncated ? ' [truncated at limit]' : '';
+
+  return `Article search: ${subject} (${modeLabel}, scanned ${result.scannedCount} article(s))${taxLabel}${truncLabel}`;
+}
+
+/**
+ * Formats a single article search hit line.
+ */
+export function formatArticleSearchHit(hit: ArticleSearchHit, index?: number): string {
+  const num = typeof index === 'number' ? `${index + 1}.`.padEnd(4, ' ') : '  ';
+  const dateStr = hit.publishedAt?.slice(0, 10) || hit.createdAt?.slice(0, 10) || '----';
+  const statusStr = `[${hit.status || 'unknown'}]`;
+  const qStr = hit.quarantined ? ' [quarantined — never push]' : '';
+  const localStr = hit.isLocal
+    ? hit.localPath
+      ? `[local: ${hit.localPath}]`
+      : '[local]'
+    : '[remote only]';
+
+  const lines = [`  ${num}${dateStr} ${statusStr} ${hit.title} (id: ${hit.id})${qStr} ${localStr}`];
+
+  if (hit.snippet) {
+    lines.push(`     ${hit.snippet}`);
+  }
+  if (!hit.isLocal && !hit.quarantined) {
+    lines.push(`     --> To edit or pull locally: emit pull ${hit.id}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats the notice when 0 hits were found.
+ */
+export function formatArticleSearchEmptyNotice(
+  result: ArticleSearchResult,
+  offline?: boolean,
+): string {
+  if (offline) {
+    return OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE;
+  }
+  if (result.walkComplete) {
+    return `No match found in the remote article library (${result.scannedCount} articles scanned).`;
+  }
+  return `No match in the first ${result.scannedCount} article(s).`;
+}
+
+/**
+ * Formats walk incomplete notice.
+ */
+export function formatArticleSearchWalkIncompleteNotice(
+  result: ArticleSearchResult,
+): string | null {
+  if (result.walkComplete) return null;
+  return (
+    `⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at --max-scan; absence is not proven.\n` +
+    `   Narrow the query or raise --max-scan (0 walks the whole library).`
+  );
 }

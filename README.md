@@ -49,6 +49,7 @@
   - [`emit pull-taxonomies`](#emit-pull-taxonomies)
   - [`emit pull-media`](#emit-pull-media)
   - [`emit media-search`](#emit-media-search)
+  - [`emit article-search`](#emit-article-search)
   - [`emit guide`](#emit-guide)
   - [`emit mcp`](#emit-mcp)
 - [🤖 Model Context Protocol (MCP) Support](#-model-context-protocol-mcp-support)
@@ -139,6 +140,7 @@ Emit is intentionally not a complete EmDash client. The [official EmDash MCP ser
 | Drafting, reviewing, diffing, publishing articles with safety guards                                                  | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools)         |
 | On-demand retrieval of any single historical article by ULID                                                          | **Emit** (`emit pull <id>`)                                      |
 | Finding a media asset to use in the article being drafted (keyword search over the remote library, with mirror status) | **Emit** (`emit media-search` / MCP `sync_media_search`)          |
+| Finding and targeting a past article outside the default sync window (keyword, date range, taxonomy, status)           | **Emit** (`emit article-search` / MCP `sync_article_search`)      |
 | Bulk media library management (mass upload, mass delete, full-library listing)                                        | **Official EmDash MCP** (e.g. `media_upload`) / Admin Dashboard  |
 | Site-wide content queries, arbitrary collection operations outside the authoring loop                                 | **Official EmDash MCP** raw content tools                        |
 
@@ -1069,6 +1071,41 @@ Absence is only proven when `walkComplete: true` (a complete walk). When stopped
 
 ---
 
+### `emit article-search`
+
+Search remote EmDash articles (or local workspace files with `--offline`) by keyword, date range (`--since` / `--until`), status (`draft` / `published`), slug, category, or tag. Displays matching articles with their ULID, title, status, publication date, and local workspace tracking state.
+
+The query is **optional**: run `emit article-search` bare to browse recent articles by recency.
+
+```bash
+emit article-search [query] [-t, --tag <slug>] [-c, --category <slug>] [--status <status>] [--slug <slug>] [--since <date>] [--until <date>] [--date-field <field>] [--offline] [-l, --limit <n>] [--max-scan <n>] [--include-conflicts] [-p, --profile <name>]
+```
+
+Options:
+- `-t, --tag <slug>`: Filter by tag slug.
+- `-c, --category <slug>`: Filter by category slug.
+- `--status <status>`: Filter by article status (`draft` or `published`).
+- `--slug <slug>`: Filter by article slug substring.
+- `--since <date>` / `--until <date>`: Restrict to articles on or after / on or before the given date, accepting `today`, `yesterday`, or `YYYY-MM-DD` (local time). A same-day pair (`--since` equal to `--until`) includes that day's articles.
+- `--date-field <field>`: Date field for comparison (`publishedAt`, `updatedAt`, or `createdAt`). Defaults to `publishedAt` for published articles and `createdAt` for drafts. When using `createdAt` (the default sort order), a `--since` boundary stops the walk early and reports `walkComplete: true`.
+- `--offline`: Search **only** local Markdown files in `posts/` with zero network requests. Results cover workspace files only and include Markdown body text.
+- `-l, --limit <n>`: Maximum hits to return (default: 20, max: 50).
+- `--max-scan <n>`: Maximum articles to read before stopping (default: 300, 50 with taxonomy filters; `0` = entire library).
+- `--include-conflicts`: Include quarantined rescue copies from `posts/conflicts/` in results (flagged with `[quarantined — never push]`).
+- `-p, --profile <name>`: Explicitly select a connection profile.
+
+#### Distinction Between `emit status --search` and `emit article-search`
+
+| Command | Search Scope | Primary Purpose |
+|---|---|---|
+| `emit status --search <term>` | Local SQLite cache metadata (`title`, `slug`, `id`, `filePath`) | Inspect local synchronization state and modified files in the active workspace. |
+| `emit article-search [query]` | Remote EmDash library (FTS / bounded walk) OR local Markdown bodies (`--offline`) | Locate and target past articles (even those outside the default 30-post sync window) by keyword, taxonomy, or date range before pulling with `emit pull <id>`. |
+
+Absence is only proven when `walkComplete: true`. When stopped early, `[WALK_INCOMPLETE]` indicates that an article may still exist in the unread portion of the remote library. When hits are not yet present in the local workspace, Emit guides the user or agent with `--> To edit or pull locally: emit pull <id>`.
+
+
+---
+
 ### `emit guide`
 
 Prints the concise Golden Path cheat sheet and AI safety rules directly to the console.
@@ -1152,7 +1189,8 @@ Emit features a first-class **Model Context Protocol (MCP)** server over stdio. 
 | `sync_diff`            | Inspect diff between working file and baseline snapshot                                                                                           | `filePath`, `id`, `profile`                                                                                                   |
 | `sync_pull_taxonomies` | Pull remote category and tag definitions (standalone; returns taxonomy hints)                                                                     | `profile`                                                                                                                     |
 | `sync_pull_media`      | Pull remote media files and metadata into `media/` (supports batch, targeted article media, or targeted storageKey)                               | `article`, `storageKey`, `limit`, `all`, `downloadFiles`, `profile`                                                          |
-| `sync_media_search`    | Search remote media library by keyword across filename, alt, caption, and storageKey with local mirror decoration                                   | `query` (required), `limit`, `maxScan`, `mirroredOnly`, `suggestKeywords`, `profile`                                          |
+| `sync_media_search`    | Search remote media library by keyword across filename, alt, caption, and storageKey with local mirror decoration                                   | `query`, `since`, `until`, `limit`, `maxScan`, `mirroredOnly`, `offline`, `suggestKeywords`, `profile`                       |
+| `sync_article_search`  | Search past articles on remote EmDash (or local with `offline:true`) by keyword, date range, status, slug, or taxonomy with local mirror tracking | `query`, `tag`, `category`, `status`, `slug`, `since`, `until`, `dateField`, `offline`, `limit`, `maxScan`, `includeConflicts`, `profile` |
 | `profile_list`         | List all configured connection profiles                                                                                                           | (none)                                                                                                                        |
 | `profile_switch`       | Switch active profile for multi-site environments                                                                                                 | `name` (required), `persist`                                                                                                  |
 

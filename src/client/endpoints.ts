@@ -87,6 +87,10 @@ export function openApiEndpoint(origin: string): string {
   return new URL('/_emdash/api/openapi.json', origin).toString();
 }
 
+export function searchEndpoint(origin: string): string {
+  return new URL('/_emdash/api/search', origin).toString();
+}
+
 export function authTokenEndpoint(origin: string): string {
   return new URL('/_emdash/api/auth/token', origin).toString();
 }

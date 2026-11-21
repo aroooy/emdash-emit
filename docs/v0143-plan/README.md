@@ -305,13 +305,13 @@ emit article-search [query] [options]
 
 0. [x] **Phase 0（§3.0）の実測 M1〜M5 が完了し、結果が §2.1 に反映されている**。特に M4（リストの `createdAt` 降順）が確認でき、P2 の早期打ち切りは実装可と確定した。
        0b. [x] **§3.0.1 の残存項目 M6〜M9 を実測解決済み**。M7 で OpenAPI に `/search` が掲載されている公式契約であることを確認。M6 で trigram の 1〜2 文字制限（「カワ」で「カワセミ」が取れない現象）を実証し、短クエリ（< 3 文字）時の scan フォールバックを確定。
-1. [ ] `src/sync/article_search/` 配下に検索コアロジック（FTS 経路・走査フォールバック・オフライン走査・フィルタ）が実装されている。
-2. [ ] `src/client/endpoints.ts` に検索エンドポイントヘルパーが追加され、URL 組み立てが Layer 0 に集約されている。
-3. [ ] `DAY_MS` が `src/utils/search-date.ts`（Layer 0）へ昇格され、`src/sync/media/remote_index.ts` の私的定義が置き換えられている。
-4. [ ] CLI `emit article-search [query]`（**エイリアスなし**）が登録され、各オプションが正常に動作する。失敗は `reportActionFailure()` 経由で `❌` 1 行 + exit 1 になる。
-5. [ ] MCP `sync_article_search` が登録され、AI エージェントが自律的に利用できる。失敗は `formatToolError()` 経由。
-6. [ ] `tests/layering.test.ts` の `LAYER_2_MODULE_NAMES` / `layer2Dirs` / allowlist に追加され、レイヤリング Axis 0〜5 がすべてグリーンである。
-7. [ ] 追加した全エラーコードが `OPERATIONAL_ERROR_CODES` に分類済みで、`tests/guards.test.ts` Rule 1〜5 がグリーンである。
-8. [ ] テストマトリクス T0〜T5 の全単体テストが作成され、`npm run check` が 100% パスする（`format:check`, `typecheck`, `check:cycles`, `test`）。
-9. [ ] `README.md` および `AGENTS.md` に新しい記事検索コマンドと推奨ワークフローが追記され、**`status --search` と `article-search` の役割分担**が明記されている。
-10. [ ] MCP サーバー説明文（`src/mcp/server.ts`）に新ツールと使い分けが反映されている。
+1. [x] `src/sync/article_search/` 配下に検索コアロジック（FTS 経路・走査フォールバック・オフライン走査・フィルタ）が実装されている。
+2. [x] `src/client/endpoints.ts` に検索エンドポイントヘルパーが追加され、URL 組み立てが Layer 0 に集約されている。
+3. [x] `DAY_MS` が `src/utils/search-date.ts`（Layer 0）へ昇格され、`src/sync/media/remote_index.ts` の私的定義が置き換えられている。
+4. [x] CLI `emit article-search [query]`（**エイリアスなし**）が登録され、各オプションが正常に動作する。失敗は `reportActionFailure()` 経由で `❌` 1 行 + exit 1 になる。
+5. [x] MCP `sync_article_search` が登録され、AI エージェントが自律的に利用できる。失敗は `formatToolError()` 経由。
+6. [x] `tests/layering.test.ts` の `LAYER_2_MODULE_NAMES` / `layer2Dirs` / allowlist に追加され、レイヤリング Axis 0〜5 がすべてグリーンである。
+7. [x] 追加した全エラーコードが `OPERATIONAL_ERROR_CODES` に分類済みで、`tests/guards.test.ts` Rule 1〜5 がグリーンである。
+8. [x] テストマトリクス T0〜T5 の全単体テストが作成され、`npm run check` が 100% パスする（`format:check`, `typecheck`, `check:cycles`, `test`）。
+9. [x] `README.md` および `AGENTS.md` に新しい記事検索コマンドと推奨ワークフローが追記され、**`status --search` と `article-search` の役割分担**が明記されている。
+10. [x] MCP サーバー説明文（`src/mcp/server.ts`）に新ツールと使い分けが反映されている。

@@ -56,6 +56,7 @@ const LAYER_2_MODULE_NAMES = [
   'conflicts',
   'doctor',
   'media',
+  'article_search',
 ];
 
 /**
@@ -93,6 +94,13 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'collectLocalMirrorIndex',
     'searchRemoteMedia',
     'searchLocalMirrorMedia',
+  ]),
+  article_search: new Set([
+    'searchRemoteArticles',
+    'searchLocalArticles',
+    'ArticleSearchResult',
+    'ArticleSearchHit',
+    'ArticleSearchOptions',
   ]),
 };
 
@@ -243,6 +251,7 @@ describe('Architectural Layering Invariants', () => {
       path.join(SRC_ROOT, 'sync', 'push'),
       path.join(SRC_ROOT, 'sync', 'media'),
       path.join(SRC_ROOT, 'sync', 'workspace'),
+      path.join(SRC_ROOT, 'sync', 'article_search'),
     ];
     const layer2Files = new Set(
       layer2Dirs

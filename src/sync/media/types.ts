@@ -24,10 +24,8 @@ import path from 'node:path';
 import { ApiError } from '../../client/error.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import type { StorageKey } from '../../utils/media-id.js';
-import { parseSearchDateBoundary } from '../../utils/search-date.js';
+import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
 
-/** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** Default hits returned when the caller names no limit — mirrors the remote walk's default. */
 const LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT = 20;
 

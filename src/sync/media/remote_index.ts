@@ -26,9 +26,7 @@ import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { mediaListEndpoint } from '../../client/endpoints.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
-import { parseSearchDateBoundary } from '../../utils/search-date.js';
-/** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { parseSearchDateBoundary, DAY_MS } from '../../utils/search-date.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
   MEDIA_SEARCH_MAX_LIMIT,

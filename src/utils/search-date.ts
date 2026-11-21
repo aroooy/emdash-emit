@@ -68,6 +68,9 @@ export function parseSearchDateBoundary(
   return { since: parsed.getTime() };
 }
 
+/** One calendar day in milliseconds, used to make an `until` boundary inclusive of that day. */
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Local midnight of the day `date` falls in — the anchor every boundary is measured from. */
 function startOfLocalDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
