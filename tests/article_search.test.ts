@@ -2264,4 +2264,15 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
       }
     });
   });
+
+  describe('v0.1.45 P7: clampSearchLimit() shared search limit bounds', () => {
+    it('L-1: clamps undefined to 20, <= 0 to 1, and > 50 to 50', async () => {
+      const { clampSearchLimit } = await import('../src/utils/search-options.js');
+      expect(clampSearchLimit(undefined)).toBe(20);
+      expect(clampSearchLimit(0)).toBe(1);
+      expect(clampSearchLimit(-5)).toBe(1);
+      expect(clampSearchLimit(999)).toBe(50);
+      expect(clampSearchLimit(25)).toBe(25);
+    });
+  });
 });

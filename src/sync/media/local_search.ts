@@ -23,15 +23,8 @@
 import path from 'node:path';
 import { ApiError } from '../../client/error.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
-import {
-  MEDIA_SEARCH_MAX_LIMIT,
-  type LocalMirrorIndex,
-  type MediaSearchHit,
-  type MediaSearchResult,
-} from './types.js';
-
-/** Default hits returned when the caller names no limit — mirrors the remote walk's default. */
-const LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT = 20;
+import { clampSearchLimit } from '../../utils/search-options.js';
+import type { LocalMirrorIndex, MediaSearchHit, MediaSearchResult } from './types.js';
 
 /**
  * Offline search over the mirrors this workspace already holds.
@@ -65,8 +58,7 @@ export function searchLocalMirrorMedia(options: {
   }
   const normalizedQuery = trimmed ? trimmed.toLowerCase() : '';
 
-  const rawLimit = options.limit ?? LOCAL_MEDIA_SEARCH_DEFAULT_LIMIT;
-  const limit = Math.max(1, Math.min(rawLimit, MEDIA_SEARCH_MAX_LIMIT));
+  const limit = clampSearchLimit(options.limit);
 
   const index = options.mirrorIndex;
   const hits: MediaSearchHit[] = [];

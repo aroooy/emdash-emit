@@ -27,9 +27,9 @@ import { createAuthedFetch } from '../../client/http.js';
 import { mediaListEndpoint } from '../../client/endpoints.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
+import { clampSearchLimit, SEARCH_DEFAULT_LIMIT } from '../../utils/search-options.js';
 import {
   MEDIA_LIST_PAGE_SIZE,
-  MEDIA_SEARCH_MAX_LIMIT,
   type EmDashMediaItem,
   type LocalMirrorIndex,
   type MediaSearchHit,
@@ -37,7 +37,7 @@ import {
   type RemoteStorageKeyIndex,
 } from './types.js';
 
-export const MEDIA_SEARCH_DEFAULT_LIMIT = 20;
+export const MEDIA_SEARCH_DEFAULT_LIMIT = SEARCH_DEFAULT_LIMIT;
 /** Default scan ceiling. `maxScan: 0` means unlimited (a complete walk). */
 export const MEDIA_SEARCH_DEFAULT_MAX_SCAN = 500;
 
@@ -226,8 +226,7 @@ export async function searchRemoteMedia(
 
   const normalizedQuery = trimmed ? trimmed.toLowerCase() : '';
 
-  const rawLimit = options.limit ?? MEDIA_SEARCH_DEFAULT_LIMIT;
-  const limit = Math.max(1, Math.min(rawLimit, MEDIA_SEARCH_MAX_LIMIT));
+  const limit = clampSearchLimit(options.limit, MEDIA_SEARCH_DEFAULT_LIMIT);
   const maxScan =
     options.maxScan === 0
       ? Infinity

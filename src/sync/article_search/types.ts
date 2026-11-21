@@ -21,9 +21,10 @@
  */
 
 import type { CacheDatabase } from '../../db/cache.js';
+import { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT } from '../../utils/search-options.js';
 
-export const ARTICLE_SEARCH_DEFAULT_LIMIT = 20;
-export const ARTICLE_SEARCH_MAX_LIMIT = 50;
+export const ARTICLE_SEARCH_DEFAULT_LIMIT = SEARCH_DEFAULT_LIMIT;
+export const ARTICLE_SEARCH_MAX_LIMIT = SEARCH_MAX_LIMIT;
 export const ARTICLE_SEARCH_DEFAULT_MAX_SCAN = 300;
 export const ARTICLE_SEARCH_TAXONOMY_MAX_SCAN = 50;
 

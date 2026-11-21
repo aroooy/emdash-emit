@@ -22,6 +22,7 @@
 
 import type { CacheDatabase } from '../../db/cache.js';
 import type { StorageKey } from '../../utils/media-id.js';
+import { SEARCH_MAX_LIMIT } from '../../utils/search-options.js';
 
 export const MEDIA_BINARY_EXTENSIONS = [
   '.jpg',
@@ -36,7 +37,7 @@ export const MEDIA_BINARY_EXTENSIONS = [
 export const MEDIA_LIST_PAGE_SIZE = 100;
 
 /** Hit cap for a media search, shared by the remote walk and the offline mirror scan. */
-export const MEDIA_SEARCH_MAX_LIMIT = 50;
+export const MEDIA_SEARCH_MAX_LIMIT = SEARCH_MAX_LIMIT;
 
 export interface EmDashMediaItem {
   id: string;

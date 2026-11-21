@@ -25,6 +25,7 @@ import path from 'node:path';
 import { readTaxonomyDir } from '../taxonomies.js';
 import { parseMarkdownLenient } from '../../utils/frontmatter.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
+import { clampSearchLimit } from '../../utils/search-options.js';
 import {
   taxonomyTermFilterAliases,
   taxonomyTermMatchesFilter,
@@ -37,8 +38,6 @@ import {
   resolveArticleDateField,
 } from './query.js';
 import {
-  ARTICLE_SEARCH_DEFAULT_LIMIT,
-  ARTICLE_SEARCH_MAX_LIMIT,
   type ArticleSearchHit,
   type ArticleSearchOptions,
   type ArticleSearchResult,
@@ -104,8 +103,7 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     ? taxonomyTermFilterAliases(normalizedTag, tagDefinitions).map((alias) => alias.toLowerCase())
     : [];
 
-  const rawLimit = options.limit ?? ARTICLE_SEARCH_DEFAULT_LIMIT;
-  const limit = Math.max(1, Math.min(rawLimit, ARTICLE_SEARCH_MAX_LIMIT));
+  const limit = clampSearchLimit(options.limit);
 
   const statusDirs: Array<{ dirName: string; defaultStatus: string; isConflict: boolean }> = [
     { dirName: 'published', defaultStatus: 'published', isConflict: false },

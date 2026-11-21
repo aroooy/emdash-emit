@@ -28,6 +28,7 @@ import { unwrapEnvelope, isSameRev, extractComparisonRev, extractRev } from '../
 import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
+import { clampSearchLimit } from '../../utils/search-options.js';
 import {
   taxonomyTermFilterAliases,
   taxonomyTermMatchesFilter,
@@ -44,9 +45,7 @@ import {
 } from './query.js';
 import { searchLocalArticles, readTaxonomyAliases } from './local.js';
 import {
-  ARTICLE_SEARCH_DEFAULT_LIMIT,
   ARTICLE_SEARCH_DEFAULT_MAX_SCAN,
-  ARTICLE_SEARCH_MAX_LIMIT,
   ARTICLE_SEARCH_TAXONOMY_MAX_SCAN,
   type ArticleSearchHit,
   type ArticleSearchOptions,
@@ -97,8 +96,7 @@ export async function searchRemoteArticles(
   const hasTaxonomyFilter = Boolean(options.tag?.trim() || options.category?.trim());
   const hasDateFilter = Boolean(sinceBoundary !== null || untilBoundary !== null);
 
-  const rawLimit = options.limit ?? ARTICLE_SEARCH_DEFAULT_LIMIT;
-  const limit = Math.max(1, Math.min(rawLimit, ARTICLE_SEARCH_MAX_LIMIT));
+  const limit = clampSearchLimit(options.limit);
 
   // Determine path:
   const mustUseScan = hasTaxonomyFilter || hasDateFilter || !normalizedQuery;
