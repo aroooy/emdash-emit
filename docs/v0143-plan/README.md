@@ -31,26 +31,26 @@
 
 ---
 
-## 2. 現状の実測スナップショット（v0.1.42 時点）
+## 2. 現状の実測スナップショット（v0.1.42 コード + Phase 0 live 実測）
 
-すべて実際のコードに基づく計測結果であり、推定を含まない。
+コード由来の値は実際のソースに基づく計測結果、`【実測済】` と明記した値は 2026-11-21 の Phase 0 live 実測によるものであり、推定を含まない。
 
 ### 2.1 実測値一覧
 
-| 項目                               | 実測値                                                                                                                                                                                                                                                                                                                                | 検査コード / コマンド                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 現行の記事検索 CLI                 | `emit status -s, --search <term>`（title, slug, ID, filePath でローカル配列を filter）。加えて `--slug` / `--status` / `--sync-status` フィルタが**既に存在**するため、「検索手段が皆無」ではない点に注意。本版の新規性は **リモート走査** と **メタ属性（タグ・カテゴリー・日付）の直交絞り込み**、および **本文検索** にある        | `src/cli/commands/status.ts:104-107, 119-121`                                                    |
-| 現行の記事検索 MCP                 | **存在しない**（`sync_status` に `search` / `slugFilter` / `status` / `syncStatus` フィルタがあるのみでリモート検索ツールなし）                                                                                                                                                                                                       | `src/mcp/tools/sync-status.ts:47-58`                                                             |
-| 記事同期リミット既定値             | `postsSyncLimit: 30`（draft 30 + published 30）                                                                                                                                                                                                                                                                                       | `src/utils/config.ts:74`                                                                         |
-| EmDash 記事リスト API              | `GET /_emdash/api/content/{collection}`。**Emit が送信するクエリは `status` / `limit` / `cursor` の 3 のみ**（`orderBy`・`sort` は一切送っていない）                                                                                                                                                                                  | `src/sync/pull/list.ts:107-110, 129`                                                             |
-| **記事リストのソート順**           | **【実測済】`createdAt` 降順（新着順）**。EmDash 仕様で `orderBy: 'createdAt' (default)`, `order: 'desc' (default)` と定義。実機レスポンスも `2026-11-20 -> 11-19 -> 11-19 -> 11-13 -> 11-12` と完全な降順であることを確認。                                                                                                     | Phase 0 実測 M4、`emdash` MCP `content_list` スキーマ・実レスポンス                               |
-| **リストアイテムの日付フィールド** | **【実測済】トップレベルに `createdAt`, `updatedAt`, `publishedAt`（ISO 文字列）が完備**。よってリスト走査時の日付判定に追加 GET は**不要（0-GET 走査可能）**。ただし `RemoteArticleItem` 型には未マッピングのため、`rawItem` からのパースが必要                                                                               | Phase 0 実測 M5、`src/sync/pull/types.ts:136-143`                                                |
-| **リストアイテムの taxonomy**      | **【実測済】リストレスポンスにカテゴリー・タグは含まれない**。リモートの taxonomy 取得は記事ごとに `GET /content/{collection}/{id}/taxonomies/{taxonomy}` を **category / tag で 1 回ずつ（= 2 GET）**発行する                                                                                                                     | Phase 0 実測 M5、`src/sync/terms.ts:46, 99-100`                                                 |
-| EmDash 記事 API 1ページ上限        | openapi.json より動的取得（フォールバック既定 100 件）                                                                                                                                                                                                                                                                                | `src/sync/pull/list.ts:50-84`                                                                    |
-| **EmDash サーバー側検索 API**      | **【実測済】`GET /_emdash/api/search` は正常稼働中**（スコア・タイトル・スニペット付きでヒット返却）。日本語 1〜2 文字（「日」「日記」）でも正常にマッチし、**trigram 3 文字制約は存在しない**。ただしレスポンスに taxonomy や日付は含まない（`id, slug, title, snippet, score` 等のみ）                                           | Phase 0 実測 M1〜M3、`emdash` MCP `search` 実測                                                  |
-| 日付パースヘルパー                 | `parseSearchDateBoundary(raw)` が Layer 0 に配備済み（`today`, `yesterday`, `YYYY-MM-DD`）。ただし **`DAY_MS` は Layer 0 には存在せず** `media/remote_index.ts:31` に独自定義されている                                                                                                                                               | `src/utils/search-date.ts:34`、`src/sync/media/remote_index.ts:31, 237`                          |
-| メディア検索の先行実装             | `searchRemoteMedia`（Layer 2 `remote_index.ts`）、`searchLocalMirrorMedia`（`types.ts`）。認識論的フィールドは `scannedCount` / `walkComplete` / `totalCount` / `truncated` / `normalizedQuery`                                                                                                                                       | `src/sync/media/remote_index.ts:208-`、`src/sync/media/types.ts:281-293`                         |
-| オフライン検索に使えるキャッシュ列 | `entries` テーブルは `title, slug, status, published_at, raw_json` を持つが **本文 Markdown は含まない**。本文は `base_snapshots.body_markdown` にあるが、これは同期ベースラインでありディスク上の現在内容ではなく、untracked 記事には存在しない                                                                                      | `src/db/schema.sql`、`src/db/cache.ts:162`（`getEntry(id)`）                                     |
+| 項目                               | 実測値                                                                                                                                                                                                                                                                                                                         | 検査コード / コマンド                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| 現行の記事検索 CLI                 | `emit status -s, --search <term>`（title, slug, ID, filePath でローカル配列を filter）。加えて `--slug` / `--status` / `--sync-status` フィルタが**既に存在**するため、「検索手段が皆無」ではない点に注意。本版の新規性は **リモート走査** と **メタ属性（タグ・カテゴリー・日付）の直交絞り込み**、および **本文検索** にある | `src/cli/commands/status.ts:104-107, 119-121`                            |
+| 現行の記事検索 MCP                 | **存在しない**（`sync_status` に `search` / `slugFilter` / `status` / `syncStatus` フィルタがあるのみでリモート検索ツールなし）                                                                                                                                                                                                | `src/mcp/tools/sync-status.ts:47-58`                                     |
+| 記事同期リミット既定値             | `postsSyncLimit: 30`（draft 30 + published 30）                                                                                                                                                                                                                                                                                | `src/utils/config.ts:74`                                                 |
+| EmDash 記事リスト API              | `GET /_emdash/api/content/{collection}`。**Emit が送信するクエリは `status` / `limit` / `cursor` の 3 のみ**（`orderBy`・`sort` は一切送っていない）                                                                                                                                                                           | `src/sync/pull/list.ts:107-110, 129`                                     |
+| **記事リストのソート順**           | **【実測済】`createdAt` 降順（新着順）**。EmDash 仕様で `orderBy: 'createdAt' (default)`, `order: 'desc' (default)` と定義。実機レスポンスも `2026-11-20 -> 11-19 -> 11-19 -> 11-13 -> 11-12` と完全な降順であることを確認。                                                                                                   | Phase 0 実測 M4、`emdash` MCP `content_list` スキーマ・実レスポンス      |
+| **リストアイテムの日付フィールド** | **【実測済】トップレベルに `createdAt`, `updatedAt`, `publishedAt`（ISO 文字列）が完備**。よってリスト走査時の日付判定に追加 GET は**不要（0-GET 走査可能）**。ただし `RemoteArticleItem` 型には未マッピングのため、`rawItem` からのパースが必要                                                                               | Phase 0 実測 M5、`src/sync/pull/types.ts:136-143`                        |
+| **リストアイテムの taxonomy**      | **【実測済】リストレスポンスにカテゴリー・タグは含まれない**。リモートの taxonomy 取得は記事ごとに `GET /content/{collection}/{id}/taxonomies/{taxonomy}` を **category / tag で 1 回ずつ（= 2 GET）**発行する                                                                                                                 | Phase 0 実測 M3、`src/sync/terms.ts:46, 99-100`                          |
+| EmDash 記事 API 1ページ上限        | openapi.json より動的取得（フォールバック既定 100 件）                                                                                                                                                                                                                                                                         | `src/sync/pull/list.ts:50-84`                                            |
+| **EmDash サーバー側検索 API**      | **【実測済】`GET /_emdash/api/search` は正常稼働中**（スコア・タイトル・スニペット付きでヒット返却）。日本語 1〜2 文字（「日」「日記」）でも正常にマッチし、**trigram 3 文字制約は存在しない**。ただしレスポンスに taxonomy や日付は含まない（`id, slug, title, snippet, score` 等のみ）                                       | Phase 0 実測 M1〜M3、`emdash` MCP `search` 実測                          |
+| 日付パースヘルパー                 | `parseSearchDateBoundary(raw)` が Layer 0 に配備済み（`today`, `yesterday`, `YYYY-MM-DD`）。ただし **`DAY_MS` は Layer 0 には存在せず** `media/remote_index.ts:31` に独自定義されている                                                                                                                                        | `src/utils/search-date.ts:34`、`src/sync/media/remote_index.ts:31, 237`  |
+| メディア検索の先行実装             | `searchRemoteMedia`（Layer 2 `remote_index.ts`）、`searchLocalMirrorMedia`（`types.ts`）。認識論的フィールドは `scannedCount` / `walkComplete` / `totalCount` / `truncated` / `normalizedQuery`                                                                                                                                | `src/sync/media/remote_index.ts:208-`、`src/sync/media/types.ts:281-293` |
+| オフライン検索に使えるキャッシュ列 | `entries` テーブルは `title, slug, status, published_at, raw_json` を持つが **本文 Markdown は含まない**。本文は `base_snapshots.body_markdown` にあるが、これは同期ベースラインでありディスク上の現在内容ではなく、untracked 記事には存在しない                                                                               | `src/db/schema.sql`、`src/db/cache.ts:162`（`getEntry(id)`）             |
 
 ---
 
@@ -60,42 +60,69 @@
 
 2026-11-21 に live instance (`https://aroooy.net`) を対象に実測を実施し、すべての設計前提を確定した。
 
-| #   | 実測項目                                                                  | 方法                                                           | 実測結果と確定した設計帰結                                                                                                   |
-| --- | ------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| M1  | `GET /_emdash/api/search` が有効か（posts collection で search が on か） | 認証付き GET、既知タイトルで `q` を実行                        | **【有効】** 200 OK、スコア・タイトル・スニペット付きで返却。→ **サーバー側検索を本命経路（Primary）に採用決定**             |
-| M2  | search の日本語挙動（trigram 制約）                                       | 1 文字 / 2 文字 / 3 文字の日本語クエリで比較                   | **【制約なし】** 1 文字「日」（20件）、2 文字「日記」（5件）でも正常ヒット。→ `[FTS_TRIGRAM_LIMIT]` 警告や制約フォールバックは不要 |
-| M3  | search が `taxonomy`（tag/category）や日付範囲を返すか                    | レスポンススキーマ確認                                         | **【返さない】** `id, slug, title, snippet, score` のみ。→ taxonomy/日付フィルタ指定時はクライアント側走査（Scan 経路）と連携 |
-| M4  | `GET /_emdash/api/content/{collection}` の既定ソート順                    | openapi.json のパラメータ一覧 + 実レスポンスの `id` / 日付列挙 | **【`createdAt` 降順（DESC）】** 実レスポンスの日付降順を確認。→ **P2 の早期打ち切り（Early-exit）の実装を確定**            |
-| M5  | リスト API が `publishedAt` / `createdAt` / `updatedAt` を返すか          | 実レスポンスのキー列挙                                         | **【含む】** 各アイテムのトップレベルに全日付プロパティあり。→ **日付走査の追加 GET は不要（0-GET 走査可能）**               |
+| #   | 実測項目                                                                  | 方法                                                           | 実測結果と確定した設計帰結                                                                                                                                                                                                                                                                                                                                        |
+| --- | ------------------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1  | `GET /_emdash/api/search` が有効か（posts collection で search が on か） | 認証付き GET、既知タイトルで `q` を実行                        | **【有効】** 200 OK、スコア・タイトル・スニペット付きで返却。→ **サーバー側検索を本命経路（Primary）に採用決定**                                                                                                                                                                                                                                                  |
+| M2  | search の日本語挙動（trigram 制約）                                       | 1 文字 / 2 文字 / 3 文字の日本語クエリで比較                   | **【短クエリでもヒット】** 1 文字「日」（20件）、2 文字「日記」（5件）でも正常ヒット。**ただし公式ドキュメントは trigram トークナイザについて「Queries shorter than three Unicode characters return no matches」と明記しており、本実測結果と矛盾する**（→ §3.0.1 の再検証 M6 を追加）。当面は「短クエリは FTS で 0 件になり得る」前提で scan フォールバックを残す |
+| M3  | search が `taxonomy`（tag/category）や日付範囲を返すか                    | レスポンススキーマ確認                                         | **【返さない】** `id, slug, title, snippet, score` のみ。→ taxonomy/日付フィルタ指定時はクライアント側走査（Scan 経路）と連携                                                                                                                                                                                                                                     |
+| M4  | `GET /_emdash/api/content/{collection}` の既定ソート順                    | openapi.json のパラメータ一覧 + 実レスポンスの `id` / 日付列挙 | **【`createdAt` 降順（DESC）】** 実レスポンスの日付降順を確認。→ **P2 の早期打ち切り（Early-exit）の実装を確定**                                                                                                                                                                                                                                                  |
+| M5  | リスト API が `publishedAt` / `createdAt` / `updatedAt` を返すか          | 実レスポンスのキー列挙                                         | **【含む】** 各アイテムのトップレベルに全日付プロパティあり。→ **日付走査の追加 GET は不要（0-GET 走査可能）**                                                                                                                                                                                                                                                    |
 
 **確定した検索アーキテクチャ**:
+
 - **キーワードのみ検索**: サーバー側 FTS（`searchMode: 'fts'`）を優先使用し、爆速レスポンスを実現。
 - **新着ブラウズ（クエリなし）**: リスト API を新着順（降順）で走査（`searchMode: 'scan'`）。
 - **taxonomy フィルタ指定時**: クライアント側走査へ切り替え、該当記事のみ追加 GET（記事あたり 2 GET）で terms を検証。HTTP 爆発を防ぐため `maxScan` 既定を 50 に抑制。
 - **日付範囲フィルタ指定時**: リスト API に日付が含まれるため、追加 GET なし（0-GET）でクライアント走査判定。`dateField: 'createdAt'`（既定）なら `--since` 到達で早期打ち切り。
 
+### 3.0.1 Phase 0 で未確定のまま残った項目（実装前に埋める必要あり）
+
+Phase 0 は「M1〜M5 の有無」を確定させたが、以下は依然として未検証であり、うち M6 と M7 は**計画書の記述と公式ドキュメント／Emit コードが矛盾している**ため、そのまま実装すると誤った設計になる。
+
+| #   | 未確定項目                                               | 何が問題か                                                                                                                                                                                                                                                                                                                           | 対処                                                                                                                                                                                                                                      |
+| --- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M6  | **search の tokenizer と短クエリ挙動の矛盾**（M2）       | EmDash 公式 REST API Reference は検索トークナイザについて「`trigram` … **Queries shorter than three Unicode characters return no matches**」と明記。日本語 collection が trigram 設定なら 1〜2 文字は 0 件が正しく、実測でヒットしたという報告と両立しない（unicode61 設定だった／部分一致ではなくスコアリングの別挙動などの可能性） | live instance の `search-enable` 設定（tokenizer 種別）を確認し、**同一クエリで 0 件ケースを再現できるか再実行**。再現できない場合も「短クエリは FTS が 0 件を返すことがある」前提で scan フォールバックを残す                            |
+| M7  | **`GET /_emdash/api/search` の OpenAPI 掲載状況**        | EmDash は「OpenAPI に載らないルートは外部クライアント向けのサポート対象外」と明文化している。M1 の実測が **`emdash` MCP ツール経由**（§2.1 の検査コード列にその旨が記されている）なら、REST として OpenAPI に存在するかは未確認になる                                                                                                | `GET /_emdash/api/openapi.json` に `/search` が含まれるかを認証付きで確認。含まれない場合は **REST 依存を公式契約にしない**判断が必要（Ask First カテゴリ 4 相当の決定）。少なくとも MCP 経由の実測と REST 実測を区別して §2.1 に記録する |
+| M8  | **search のページネーション上限と `totalCount`**         | 「全件からヒットが即座に返る」とされるが、`limit` の上限（他 list は 1–100 既定 50）と総件数の有無が未確認。上限がある場合、多数ヒット時の「見えていないヒット」を認識論的に扱わなければならない                                                                                                                                     | 実測で `limit` 上限と `nextCursor` の挙動を確認し、`walkComplete` / `truncated` の FTS 版セマンティクスを決める。FTS は「走査」ではないため **`scannedCount` と `walkComplete` の意味を scan 経路とは別定義で明文化**する                 |
+| M9  | **search レスポンスのラップ構造と日付・status フィルタ** | Emit は `unwrapEnvelope()`（`src/client/api.ts:39`）で envelope を解決しているが、search のキー名（`items` / `data`）と `nextCursor` の有無は未確認。また search 側に `status` があっても**日付範囲パラメータは存在しない**ため、FTS と `--since/--until` の併用戦略が決まっていない                                                 | envelope キーと cursor を実測で固定。日付フィルタとの併用は「FTS でヒット取得 → `entries` / 追加 GET で日付判定」か「scan 経路に切り替え」のいずれかに明示的に決め、Layer 1 の純関数としてテストする                                      |
+
+**残存する設計上の空白（実測では埋まらないもの）**:
+
+- **FTS スコアと recency の非両立**: FTS は `score` 順、scan は `createdAt` 降順。同一コマンドで「キーワード + 新着順」を要求したときの順序が未定義。`sort: 'relevance' | 'recency'` を明示的に設計へ追加するか、FTS 経路では recency 並べ替えを行わないと宣言する。
+- **キーワード + taxonomy 複合の経路**: FTS は taxonomy を返さない（M3）ため、複合時は「FTS ヒットに対して記事ごと 2 GET」か「scan に完全切替」のどちらかになる。§3.1 は当初「taxonomy 指定時は scan へ切り替え」と「FTS を優先」の両方を書いており矛盾していたが、**§3.1 の決定ルールで scan 固定に統一済み**。追加 GET は `limit` 到達で打ち切るため `taxonomyFetchCount ≤ limit × 2` に有界である。
+- **`maxScan` と FTS の関係**: `--max-scan` は scan 経路にのみ意味を持つ。FTS 経路で指定された場合は無視し、その旨を出力すると §3.1 で確定済み（T0-4）。
+
 ---
 
 ### 3.1 P1: リモート記事検索（`emit article-search` / `sync_article_search`）
 
-#### 検索経路の選択（二段構え）
+#### 検索経路の選択（単一の決定ルール）
 
-1. **Primary — サーバー側 FTS（M1 で有効が確認できた場合）**
-   - `GET /_emdash/api/search?q=...&collections={collection}&status=...&limit=...&cursor=...`
-   - メディア検索に存在しなかった「サーバー側絞り込み」であり、`maxScan` 走査コストと認識論的限界の両方を根本的に削減する。
-   - エンドポイント URL ヘルパーを `src/client/endpoints.ts`（Layer 0）に新設する（現行コードには該当ヘルパーが一切ない）。
-2. **Fallback — クライアントサイド走査**
-   - `listRemoteArticles()` 相当の cursor ページネーションで `maxScan` まで読み、Layer 1 の純フィルタで絞り込む。
-   - Fallback を使った事実は必ず出力で宣言する（`searchMode: 'fts' | 'scan'`）。エージェントに「サーバーが検索できた」と誤認させない。
+**判定順序（上位から順に評価し、最初に応じた経路へ確定する。以後フォールバックしない）**:
+
+1. **`offline: true`** → ローカル Markdown 走査（§3.4）。ネットワーク通信はゼロ。
+2. **`tag` / `category` 指定あり** → **scan 経路**（`searchMode: 'scan'`）。FTS は taxonomy を返さないため（M3）、taxonomy 条件を FTS と組み合わせることはできない。`maxScan` 既定 50。
+3. **`since` / `until` 指定あり** → **scan 経路**。search に日付パラメータが存在しないため（§3.0.1 M9）、FTS では範囲絞り込みができない。`createdAt` 基準なら早期打ち切りが有効（§3.2-4）。
+4. **`query` のみ指定** → **FTS 経路**（`searchMode: 'fts'`）。
+5. **条件なし** → **scan 経路**（新着ブラウズ、`createdAt` 降順）。
+
+**フォールバック**: FTS が HTTP エラー（404 / 5xx / 未掲載）を返した場合のみ scan へ落ちる。その場合 `searchMode: 'scan'` と `fallbackReason` を必ず出力し、「サーバーが検索できた」と誤認させない。**FTS が 0 件を返した場合はフォールバックしない**（0 件は正当な結果であり、無宣言で再走査するとコストと結果の両方が読めなくなる）。ただし M6 の短クエリ問題が確認された場合のみ、`query` 長が短いときに scan を併走させる例外を許す。
+
+- **FTS**: `GET /_emdash/api/search?q=...&collections={collection}&status=...&limit=...&cursor=...`
+  - メディア検索に存在しなかった「サーバー側絞り込み」であり、`maxScan` 走査コストと認識論的限界の両方を根本的に削減する。
+  - エンドポイント URL ヘルパー `searchEndpoint(origin)` を `src/client/endpoints.ts`（Layer 0）に新設する（現行コードには `openApiEndpoint()` はあるが該当ヘルパーがない）。
+- **scan**: `listRemoteArticles()` 相当の cursor ページネーションで `maxScan` まで読み、Layer 1 の純フィルタで絞り込む。
 
 #### HTTP コスト宣言（重要）
 
-- **キーワードのみ / 新着ブラウズ**: list 1 本 for `maxScan` 件（メディア検索と同桁）。
-- **`--tag` / `--category` 指定時**: リストアイテムに taxonomy が乗らないため、リモート実態に基づく絞り込みは **記事あたり 2 GET**（`fetchAssignedTerms` の category + tag）を要求する。`maxScan: 300` をそのまま適用すると **最大 600 GET** になり、メディア検索と桁が異なる。したがって:
-  - taxonomy フィルタ指定時は **単一 GET 経路（FTS）を優先**し、走査フォールバック時の `maxScan` 既定値を **50** に引き下げる（明示指定は可能）。
+- **キーワードのみ（FTS 経路）**: `GET /_emdash/api/search` **1 本**。メディア検索より 1 桁軽い。ただし FTS ヒットに日付や taxonomy が含まれないため、それらを要求した場合は scan 経路へ切り替わる（§3.1 の決定ルール）。
+- **新着ブラウズ（scan 経路）**: list 1 本 for `maxScan` 件（メディア検索と同桁）。
+- **`--tag` / `--category` 指定時**: リストアイテムに taxonomy が乗らないため、リモート実態に基づく絞り込みは **記事あたり 2 GET**（category + tag）を要求する。`maxScan: 300` をそのまま適用すると **最大 600 GET** になり、メディア検索と桁が異なる。したがって:
+  - taxonomy フィルタ指定時は scan 経路に確定し、**`maxScan` 既定値を 50 に引き下げる**（明示指定は可能）。FTS は taxonomy を返さないため優先経路にはならない。
+  - **追加 GET は「候補として上位まで読んだ記事」に対してのみ発行する**。list を先に `maxScan` 件集めてから順に検証し、`limit` に到達した時点で残りの検証を打ち切る（`taxonomyFetchCount ≤ limit × 2` に有界）。
   - 追加 GET を発行した件数を `taxonomyFetchCount` として結果に含め、CLI/MCP で表示する。
-  - taxonomy 取得には **Layer 1 の既存 `fetchAssignedTerms()`（`src/sync/terms.ts:46`）を再利用**する。新規実装はしない（Axis 1 は Layer 2 → Layer 1 を禁止していないため利用可）。レイヤリングテストの sibling / allowlist 記述にこの依存を登録する。
-- **`--since` / `--until` 指定時**: M5 で日付が list に含まれると確認できた場合のみ追加 GET なし。含まれない場合は同じく `maxScan` を 50 に引き下げる。
+  - taxonomy 取得には **Layer 1 の既存 `fetchAssignedTerms()`（`src/sync/terms.ts:46`）を再利用**する。新規実装はしない。**ただしこの関数は `(options) => Promise<string[] | null>` の形であり、`pull/index.ts:117` が薄いクロージャで包んで使っているのが既存パターン**。検索側も同様にクロージャを注入する形を採る（Axis 1 は Layer 2 → Layer 1 を禁止していないため利用可）。レイヤリングテストの sibling / allowlist 記述にこの依存を登録する。
+- **`--since` / `--until` 指定時**: **M5 で日付が list に含まれることが確認済みのため、追加 GET なし（0-GET）で判定できる**。`maxScan` は taxonomy 時のような引き下げは不要（キーワードなしの新着ブラウズと同じ 300 据え置き可）。
 
 #### CLI 仕様
 
@@ -111,7 +138,7 @@ emit article-search [query] [options]
 - `--status <draft|published>`: 公開ステータスで限定（省略時は両方）。
 - `--slug <slug>`: スラッグ完全一致または前方一致で限定。
 - `-l, --limit <n>`: 表示件数上限（既定: 20、最大: 50）。
-- `--max-scan <n>`: 走査するリモート記事の最大件数。既定は **キーワードのみ / 新着ブラウズ時 300**、**taxonomy・日付フィルタ指定時は 50**（§3.1 の HTTP コスト宣言参照）。`0` = 全件走査（明示要求時のみ）。
+- `--max-scan <n>`: **scan 経路にのみ意味を持つ**走査上限。既定は **新着ブラウズ / 日付フィルタ時 300**、**taxonomy フィルタ指定時 50**（§3.1 の HTTP コスト宣言参照）。`0` = 全件走査（明示要求時のみ）。FTS 経路で指定された場合は無視し、出力に `maxScan is scan-only; ignored for FTS path.` を添える。
 - `-p, --profile <name>`: 接続プロファイル指定。
 
 #### MCP ツール仕様 (`sync_article_search`)
@@ -147,18 +174,20 @@ emit article-search [query] [options]
    - `since` と `until` を独立パースし、同一日指定（same-day boundary: 当日 0:00 〜 翌日 0:00）を完全に保証。
    - **`DAY_MS` は Layer 0 に昇格させる**: 現状 `src/sync/media/remote_index.ts:31` に独自定義されており、記事側に同じ値を再定義すると二重定義になる。`search-date.ts` へ移設し、**メディア側も差し替える**（対称性）。これは既存コードの変更だが挙動不変であり Ask First 対象外。
 2. **日付ソースの解決（必須）**:
-   - `RemoteArticleItem` には日付フィールドが存在しないため（§2.1）、`rawItem` から `publishedAt` / `createdAt` / `updatedAt` を読み出すヘルパーを Layer 1 に新設する。list レスポンスに日付が含まれない場合（M5）は、記事ごとの単一 GET を要求する。
+   - `RemoteArticleItem` 型には日付フィールドが未マッピングだが、**list レスポンスのトップレベルに `createdAt` / `updatedAt` / `publishedAt` が揃っていることは M5 で確認済み**。よって `rawItem` から読むヘルパーを Layer 1 に新設すれば足り、**追加 GET は不要**。
+   - ヘルパーは不正値・欠損に対して `null` を返し、例外を投げない（T2-5）。
 3. **日付基準フィールド（`dateField`）の解決ルール**:
    - 明示指定がない場合の既定値:
      - `status === 'published'`: `publishedAt` を優先、未設定時は `createdAt`。
      - `status === 'draft'`: `createdAt` を優先、未設定時は `updatedAt`。
      - 混在時: 各記事のステータスに応じた上記の判定を適用。
    - 明示指定時: 指定されたフィールド（`publishedAt` / `updatedAt` / `createdAt`）の ISO タイムスタンプを使用（未設定の記事は範囲外としてスキップ）。
-4. **降順走査と早期打ち切り（Early-exit）— 条件付き**:
-   - **Phase 0 の M4 で「リスト API が日付フィールドについて降順（新着順）」が実測確認できた場合のみ**実装する。現状 Emit は `orderBy` / `sort` を一切送っておらず、status 未指定時は draft と published を並列取得して連結するため、単一の降順ストリームである保証がない（§2.1）。
-   - 早期打ち切りが有効なケースでは、`dateField` がリストのソート順と一致する場合に `since` 境界より古いレコードへ到達した時点で walk を即時中断し、`walkComplete: true`（指定範囲内の全走査が完了した正当な完了）として `[WALK_INCOMPLETE]` 警告を出さない。
-   - **M4 が不成立の場合**: 早期打ち切りは実装せず、`maxScan` まで完全走査して `walkComplete` を正直に報告する。FTS 経路が使える場合はサーバー側で範囲絞り込みを行う。
-   - 注意: `dateField` がリストのソートキーと**異なるフィールド**（例: ソートが `createdAt`、比較が `updatedAt`）の場合も早期打ち切りは不正になる。この不一致時は常に非早期打ち切りとする。
+4. **降順走査と早期打ち切り（Early-exit）— 実装確定、ただし条件付き**:
+   - **M4 でリスト API の既定が `createdAt` 降順（DESC）であることが仕様・実レスポンスの両面で確認済み**。よって早期打ち切りの実装を確定する。
+   - **打ち切りが有効なのは `dateField === 'createdAt'` のときのみ**。`publishedAt` / `updatedAt` を比較対象にした場合、リストは `createdAt` 順で並んでいるため「以降がすべて範囲外」を保証できず、打ち切ると**該当記事を漏らす**（＝不在の誤認）。この不一致時は常に全走査し、`walkComplete` を正直に報告する。
+   - 打ち切り成立時は `since` 境界より古いレコードへ到達した時点で walk を即時中断し、`walkComplete: true`（指定範囲内の全走査が完了した正当な完了）として `[WALK_INCOMPLETE]` 警告を出さない。
+   - **status 未指定時の注意**: Emit は draft と published を**並列取得して連結**する（`pull/list.ts:206-211`）。各系列はそれぞれ `createdAt` 降順だが、連結結果は降順ではない。早期打ち切りは**系列ごとに独立して評価**し、連結後に再整列して `--until` 境界で切る。連結列に対して単一の打ち切り位置を使ってはならない。
+   - **明示的に `orderBy` / `order` を送らないこと**: 既定が降順である以上、パラメータを追加すると将来のサーバー側既定変更時に挙動が発散する。既存の送信クエリ（`status` / `limit` / `cursor`）を変えない。
 
 ---
 
@@ -240,38 +269,42 @@ emit article-search [query] [options]
 
 ## 6. テストマトリクス（Test Matrix）
 
-| ID       | テスト分類            | 検証内容                                                                                                                                                          |
-| -------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **T0-1** | 検索経路              | FTS 応答が有効なときに `searchMode: 'fts'` で結果が返ること                                                                                                       |
-| **T0-2** | 検索経路              | FTS が 404 / 無効、またはクエリが trigram 下限（日本語 1〜2 文字）に該当する場合、`searchMode: 'scan'` へフォールバックし、その事実が出力に現れること             |
-| **T1-1** | リモート検索          | クエリなし実行時に最新記事一覧が取得できること（新着ブラウズ）                                                                                                    |
-| **T1-2** | リモート検索          | タイトル・スラッグ・抜粋によるキーワード部分一致検索ができること（走査フォールバック時）                                                                          |
-| **T1-3** | メタ属性フィルタ      | `--tag` による指定タグ所持記事の絞り込み                                                                                                                          |
-| **T1-4** | メタ属性フィルタ      | `--category` による指定カテゴリー所持記事の絞り込み                                                                                                               |
-| **T1-5** | メタ属性フィルタ      | `--status draft` / `--status published` によるステータス絞り込み                                                                                                  |
-| **T1-6** | メタ属性フィルタ      | `--slug` によるスラッグピンポイント検索                                                                                                                           |
-| **T1-7** | HTTP コスト           | taxonomy フィルタ指定時に発行される追加 GET が `taxonomyFetchCount` で報告され、`maxScan` 既定が 50 に下がること（600 GET のような無宣言コストを発生させない）    |
-| **T1-8** | 認識論的保護          | `walkComplete: false` のとき `[WALK_INCOMPLETE] ... absence is not proven.` が出力され、不在を断定しないこと                                                      |
-| **T2-1** | 日付範囲              | `--since` / `--until` による日付範囲絞り込み                                                                                                                      |
-| **T2-2** | 日付範囲              | same-day boundary（`--since` と `--until` が同日）が当日を正しく包含すること                                                                                      |
-| **T2-3** | 日付範囲              | 早期打ち切り（Early-exit）と `walkComplete: true` の判定。**M4 で降順が確認できたケースのみ**。`dateField` がソートキーと不一致の場合は打ち切らないこと           |
-| **T2-4** | 日付基準              | `--date-field` による `publishedAt` / `updatedAt` / `createdAt` の切り替え                                                                                        |
-| **T2-5** | 日付ソース            | `rawItem` に日付キーが無い／不正な値の記事が例外にならず範囲外扱いになること                                                                                      |
-| **T3-1** | 同期状況可視化        | ローカル存在する記事が `isLocal: true` と判定されパスが表示されること                                                                                             |
-| **T3-2** | 同期状況可視化        | 未取得記事に `[remote only]` と `emit pull <id>` の誘導が表示されること                                                                                           |
-| **T4-1** | オフライン検索        | `--offline` 時に一切のネットワーク fetch なしでローカル記事（本文含む）が検索できること                                                                           |
-| **T4-2** | 認識論的保護          | オフライン検索ヘッダー `[SOURCE: LOCAL WORKSPACE ONLY]` が出力されること                                                                                          |
-| **T4-3** | 認識論的保護          | オフライン検索 0 件時に不在保護警告が出力されること                                                                                                               |
-| **T4-4** | quarantined 排除      | `posts/conflicts/` の copy が既定の検索結果に含まれないこと。`--include-conflicts` 時は `[quarantined — never push]` が付き、canonical と別セクションになること   |
-| **T5-1** | 品質・レイヤリング    | `npm run check` 100% 合格、`tests/layering.test.ts` Axis 0〜5 順守。`sync/article_search` が `layer2Dirs` に登録済みで、新規 sibling 結合が gate に検出されること |
-| **T5-2** | エラーコード registry | 検索系で追加した全エラーコードが `OPERATIONAL_ERROR_CODES` に分類済みで、`tests/guards.test.ts` Rule 2 / Rule 3 / Rule 5 がグリーンであること                     |
-| **T5-3** | MCP エラー契約        | `sync_article_search` の失敗が `formatToolError()` 経由になり、`[CODE]` / status / suggestion が落ちないこと（`resolveContext()` も guarded try 内）              |
+| ID       | テスト分類            | 検証内容                                                                                                                                                                                                |
+| -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **T0-1** | 検索経路              | `query` のみの実行で FTS が呼ばれ `searchMode: 'fts'` になること。list API へはリクエストしないこと                                                                                                     |
+| **T0-2** | 検索経路              | FTS が HTTP エラー（404 / 5xx）を返した場合のみ scan へフォールバックし、`searchMode: 'scan'` と `fallbackReason` が出力に現れること。**FTS が 0 件を返した場合はフォールバックしない**                 |
+| **T0-3** | 検索経路              | 決定ルールの優先順が守られること: `offline` > `tag`/`category`（scan）> `since`/`until`（scan）> `query` のみ（fts）> 条件なし（scan）。taxonomy 指定時に FTS を呼ばないこと                            |
+| **T0-4** | 検索経路              | `--max-scan` が FTS 経路で無視され、その旨が出力されること。FTS の `limit` と scan の `maxScan` が混同されないこと                                                                                      |
+| **T1-1** | リモート検索          | クエリなし実行時に最新記事一覧が取得できること（新着ブラウズ）                                                                                                                                          |
+| **T1-2** | リモート検索          | タイトル・スラッグ・抜粋によるキーワード部分一致検索ができること（走査フォールバック時）                                                                                                                |
+| **T1-3** | メタ属性フィルタ      | `--tag` による指定タグ所持記事の絞り込み                                                                                                                                                                |
+| **T1-4** | メタ属性フィルタ      | `--category` による指定カテゴリー所持記事の絞り込み                                                                                                                                                     |
+| **T1-5** | メタ属性フィルタ      | `--status draft` / `--status published` によるステータス絞り込み                                                                                                                                        |
+| **T1-6** | メタ属性フィルタ      | `--slug` によるスラッグピンポイント検索                                                                                                                                                                 |
+| **T1-7** | HTTP コスト           | taxonomy フィルタ指定時に発行される追加 GET が `taxonomyFetchCount` で報告され、`limit` 到達で検証を打ち切るため `taxonomyFetchCount ≤ limit × 2` に収まること。既定 `maxScan` が 50 に下がること       |
+| **T1-8** | 認識論的保護          | `walkComplete: false` のとき `[WALK_INCOMPLETE] ... absence is not proven.` が出力され、不在を断定しないこと                                                                                            |
+| **T2-1** | 日付範囲              | `--since` / `--until` による日付範囲絞り込み                                                                                                                                                            |
+| **T2-2** | 日付範囲              | same-day boundary（`--since` と `--until` が同日）が当日を正しく包含すること                                                                                                                            |
+| **T2-3** | 日付範囲              | 早期打ち切り（Early-exit）と `walkComplete: true` の判定は **`dateField === 'createdAt'` のときのみ**発火すること。`publishedAt` / `updatedAt` 指定時は全走査し、範囲内記事が後ろにあっても必ず拾うこと |
+| **T2-6** | 日付範囲              | status 未指定（draft + published 並列取得・連結）時に、各系列で独立して打ち切り評価されること。連結列の先頭だけ見て打ち切る実装にならないこと                                                           |
+| **T2-4** | 日付基準              | `--date-field` による `publishedAt` / `updatedAt` / `createdAt` の切り替え                                                                                                                              |
+| **T2-5** | 日付ソース            | `rawItem` に日付キーが無い／不正な値の記事が例外にならず範囲外扱いになること                                                                                                                            |
+| **T3-1** | 同期状況可視化        | ローカル存在する記事が `isLocal: true` と判定されパスが表示されること                                                                                                                                   |
+| **T3-2** | 同期状況可視化        | 未取得記事に `[remote only]` と `emit pull <id>` の誘導が表示されること                                                                                                                                 |
+| **T4-1** | オフライン検索        | `--offline` 時に一切のネットワーク fetch なしでローカル記事（本文含む）が検索できること                                                                                                                 |
+| **T4-2** | 認識論的保護          | オフライン検索ヘッダー `[SOURCE: LOCAL WORKSPACE ONLY]` が出力されること                                                                                                                                |
+| **T4-3** | 認識論的保護          | オフライン検索 0 件時に不在保護警告が出力されること                                                                                                                                                     |
+| **T4-4** | quarantined 排除      | `posts/conflicts/` の copy が既定の検索結果に含まれないこと。`--include-conflicts` 時は `[quarantined — never push]` が付き、canonical と別セクションになること                                         |
+| **T5-1** | 品質・レイヤリング    | `npm run check` 100% 合格、`tests/layering.test.ts` Axis 0〜5 順守。`sync/article_search` が `layer2Dirs` に登録済みで、新規 sibling 結合が gate に検出されること                                       |
+| **T5-2** | エラーコード registry | 検索系で追加した全エラーコードが `OPERATIONAL_ERROR_CODES` に分類済みで、`tests/guards.test.ts` Rule 2 / Rule 3 / Rule 5 がグリーンであること                                                           |
+| **T5-3** | MCP エラー契約        | `sync_article_search` の失敗が `formatToolError()` 経由になり、`[CODE]` / status / suggestion が落ちないこと（`resolveContext()` も guarded try 内）                                                    |
 
 ---
 
 ## 7. Definition of Done (DoD)
 
-0. [x] **Phase 0（§3.0）の実測 M1〜M5 が完了し、結果が §2.1 に反映されている**。特に M4（リストの降順）成否により P2 の早期打ち切りを実装するかが確定している。
+0. [x] **Phase 0（§3.0）の実測 M1〜M5 が完了し、結果が §2.1 に反映されている**。特に M4（リストの `createdAt` 降順）が確認でき、P2 の早期打ち切りは実装可と確定した。
+       0b. [ ] **§3.0.1 の残存項目 M6〜M9 を解消してから実装を開始する**。M6（trigram 短クエリ矛盾）と M7（search の OpenAPI 掲載可否）は、計画書の記述が公式ドキュメント／Emit コードと矛盾しており、未解消のまま実装すると誤った設計になる。M7 が「OpenAPI 未掲載」だった場合、REST 依存を採用するかは Ask First カテゴリ 4 相当の判断としてプロジェクトオーナーに確認する。
 1. [ ] `src/sync/article_search/` 配下に検索コアロジック（FTS 経路・走査フォールバック・オフライン走査・フィルタ）が実装されている。
 2. [ ] `src/client/endpoints.ts` に検索エンドポイントヘルパーが追加され、URL 組み立てが Layer 0 に集約されている。
 3. [ ] `DAY_MS` が `src/utils/search-date.ts`（Layer 0）へ昇格され、`src/sync/media/remote_index.ts` の私的定義が置き換えられている。
