@@ -8,40 +8,45 @@ This document is the authoritative specification for Emit's 4-tier architectural
 
 Emit strictly enforces a unidirectional 4-tier architecture verified statically by `tests/layering.test.ts` and circular dependency checks (`npm run check:cycles` via `madge`).
 
-```text
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ Top-Level Entry Points: src/bin/emit.ts (CLI)  |  src/index.ts (Public npm Façade)│
-└───────────────────────────────────────┬───────────────────────────────────────────┘
-                                        ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ LAYER 3: Consumers & Presentation (src/cli/, src/mcp/, src/presentation/)         │
-│  • CLI commands & reportActionFailure()  [Only src/cli/ may call console.log()]   │
-│  • MCP stdio tools & formatToolError() + _meta   [Axis 3: Never imports src/cli/] │
-│  • Shared report formatters: article_report.ts, media_report.ts, pull_report.ts   │
-└───────────────────┬───────────────────────────────────────────┬───────────────────┘
-                    │ Axis 2: Restricted to                     │
-                    │ ALLOWED_LAYER_2_SYMBOLS                   │
-                    ▼                                           ▼
-┌───────────────────────────────────────────────────┐   ┌───────────────────────────┐
-│ LAYER 2: Sync Downstream (src/sync/...)           │   │ LAYER 1: Sync Upstream    │
-│  • orchestrator.ts (pullBatch, pullSingleArticle) │   │  • baseline-reconstruction│
-│  • pull/index.js (6 modules)                      │   │  • status, diff, merge    │
-│  • push/index.js (10 modules)                     │──►│  • preflight, image_probe │
-│  • media/index.js (10 modules)                    │   │  • guards (G1–G19)        │
-│  • article_search/, workspace/, doctor, conflicts │   │  • taxonomies, terms,     │
-│  • new.ts, delete.ts                              │   │    bylines                │
-│  [Never imports Layer 3; Sibling edges snapshotted│   │  [Axis 1: NEVER imports   │
-│   in tests/layering.test.ts]                      │   │   Layer 2 or Layer 3]     │
-└───────────────────────────────────────┬───────────┘   └───────────────┬───────────┘
-                                        │                               │
-                                        ▼                               ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ LAYER 0: Primitives & Infrastructure (src/utils/, src/db/, src/client/)           │
-│  • SQLite cache.db (node:sqlite DatabaseSync, migrations v5, baseline.ts)         │
-│  • HTTP/Auth/Lock/Media clients, Portable Text AST mapper, endpoint builders      │
-│  • Frontmatter & lenient parser, formatYamlScalar, media-refs, search resolvers   │
-│  [Axis 0: Never imports Layer 1, 2, or 3]                                         │
-└───────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Entry["Top-Level Entry Points: src/bin/emit.ts (CLI) | src/index.ts (Public npm Façade)"]
+
+    subgraph L3 ["LAYER 3: Consumers & Presentation (src/cli/, src/mcp/, src/presentation/)"]
+        CLI["src/cli/commands/* & reportActionFailure() (Only src/cli/ may call console.log)"]
+        MCP["src/mcp/tools/* & formatToolError() + _meta (Axis 3: Never imports src/cli/)"]
+        Pres["src/presentation/{article_report, media_report, pull_report}.ts"]
+        CLI --> Pres
+        MCP --> Pres
+    end
+
+    subgraph L2 ["LAYER 2: Sync Downstream (src/sync/...)"]
+        Orch["orchestrator.ts (pullBatch, pullSingleArticle, pushAll)"]
+        Pull["pull/index.js (6 modules)"]
+        Push["push/index.js (10 modules)"]
+        Media["media/index.js (10 modules)"]
+        Down["article_search/, workspace/, doctor.ts, conflicts.ts, new.ts, delete.ts"]
+        Orch --> Pull & Push & Media
+    end
+
+    subgraph L1 ["LAYER 1: Sync Upstream (Pure Computation & Guards)"]
+        Up["baseline-reconstruction.ts, status.ts, diff.ts, merge.ts"]
+        Guards["preflight.ts, preflight/image_probe.ts, guards.ts (G1–G19)"]
+        Tax["taxonomies.ts, terms.ts, bylines.ts"]
+    end
+
+    subgraph L0 ["LAYER 0: Primitives & Infrastructure (src/utils/, src/db/, src/client/)"]
+        DB["src/db/: SQLite cache.db (node:sqlite DatabaseSync, migrations v5, baseline.ts)"]
+        Client["src/client/: HTTP/Auth/Lock/Media clients, Portable Text AST mapper, endpoints.ts"]
+        Utils["src/utils/: Frontmatter & parseMarkdownLenient, formatYamlScalar, media-refs, search resolvers"]
+    end
+
+    Entry --> L3
+    L3 -->|"Axis 2: ALLOWED_LAYER_2_SYMBOLS only"| L2
+    L3 --> L1
+    L2 -->|"Axis 1: Layer 1 never imports Layer 2"| L1
+    L2 --> L0
+    L1 -->|"Axis 0: Layer 0 never imports L1/L2/L3"| L0
 ```
 
 | Layer | Responsibility & Modules | Allowed Outbound Imports | Allowed Inbound Consumers | Prohibited Imports |

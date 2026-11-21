@@ -78,29 +78,25 @@ export function parseMarkdownLenient(content: string, filePath?: string): Parsed
 
 Emit separates the **internal baseline representation (Layer A)** from the **on-disk human/editor representation (Layer B)**:
 
-```text
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│               LAYER A: Remote EmDash API & SQLite base_snapshots                  │
-│ • Taxonomies: Canonical %-encoded slugs (e.g. ["%e6%9c%aa%e5%88%86%e9%a1%9e"])    │
-│ • Body AST:   Portable Text JSON blocks (or canonical Markdown in base_snapshots) │
-│ • Media URLs: Canonical root-relative URLs (/_emdash/api/media/file/<storageKey>) │
-│ • Revisions:  Raw transport token in base_snapshots.rev (Track 1)                 │
-│               + composite "${version}@draft:${draftRevId}" in sync_state (Track 2)│
-└───────────────────┬───────────────────────────────────────────▲───────────────────┘
-                    │ Pull (Decode + Localize)                  │ Push (Canonicalize
-                    │ & reconstructBaseline()                   │       + AST Convert)
-                    ▼                                           │
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│               LAYER B: Local Disk Markdown (posts/draft|published/*.md)           │
-│ • Taxonomies: Decoded human-readable Unicode (  - 未分類) via formatYamlScalar()  │
-│ • Draft Flag: "status: published # draft revision" when @draft: revision exists   │
-│ • Body AST (3-Tier Mapping):                                                      │
-│   ├─ Tier 1/2: Headings, Lists, Marks, GFM Tables (| col |), Breaks (---)         │
-│   ├─ Track A (Plain Image):  ![alt](../../media/<storageKey>) [Offline Preview]   │
-│   └─ Track B (Tier 3 Block): <!--ec:block {"_type":"image","alignment":...} -->   │
-│                              [Opaque JSON comment fence protected by Guard G9]    │
-│ • Tracking:   Only sync_state.local_hash hashes Layer B disk bytes                │
-└───────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph LayerA ["LAYER A: Remote EmDash API & SQLite base_snapshots"]
+        A_Tax["Taxonomies: Canonical %-encoded slugs (e.g. %e6%9c%aa%e5%88%86%e9%a1%9e)"]
+        A_AST["Body AST: Portable Text JSON blocks (or canonical Markdown in base_snapshots)"]
+        A_Media["Media URLs: Canonical root-relative URLs (/_emdash/api/media/file/<storageKey>)"]
+        A_Rev["Revisions: Track 1 raw _rev in base_snapshots.rev + Track 2 version@draft:id in sync_state"]
+    end
+
+    subgraph LayerB ["LAYER B: Local Disk Markdown (posts/draft|published/*.md)"]
+        B_Tax["Taxonomies: Decoded human-readable Unicode (- 未分類) via formatYamlScalar()"]
+        B_Draft["Draft Annotation: status: published # draft revision (when @draft: revision exists)"]
+        B_T1["Tier 1 & 2 Prose: ATX Headings, Lists, Marks, GFM Tables (| col |), Thematic Breaks (---)"]
+        B_TrackA["Track A (Tier 1 Plain Image): ![alt](../../media/<storageKey>) (Offline Editor Preview)"]
+        B_TrackB["Track B (Tier 3 Preserved Block): <!--ec:block {...} --> (Protected by Guard G9)"]
+    end
+
+    LayerA -->|"emit pull (Decode + Localize) & reconstructBaseline()"| LayerB
+    LayerB -->|"emit push (Canonicalize + markdownToPortableText)"| LayerA
 ```
 
 | Aspect | Layer A (Internal Baseline & Remote Payloads) | Layer B (On-Disk Markdown File) |

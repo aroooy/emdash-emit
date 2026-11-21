@@ -8,73 +8,36 @@ This document specifies Emit's bidirectional synchronization engine (`src/sync/o
 
 `src/sync/orchestrator.ts` is the designated Layer 2 coordinator that unifies sync workflows across CLI (`src/cli/commands/pull.ts`, `push.ts`) and MCP (`src/mcp/tools/sync-pull.ts`, `sync-push.ts`):
 
-```text
-=====================================================================================
-                      PULL PIPELINE & TWO-TRACK REVISION FLOW
-=====================================================================================
-  Remote EmDash API                            Local Workspace & SQLite cache.db
-┌──────────────────────┐                     ┌──────────────────────────────────────┐
-│ 1. Sync Taxonomies   │ ──(categories/tags)►│ derives canPruneTaxonomies           │
-│ 2. List / Single GET │ ──(version,         │ Track 1: revForTransport (raw _rev)  │
-│    (Sliding Window)  │    draftRevisionId)►│ Track 2: revForComparison            │
-└──────────────────────┘                     │   ("${version}@draft:${draftRevId}") │
-                                             └──────────────────┬───────────────────┘
-                                                                ▼
-                                              ┌─────────────────────────────────┐
-                                              │ isSameRev(syncState.remoteRev)? │
-                                              └───────┬─────────────────┬───────┘
-                                           YES (0-GET)│                 │NO (Remote Changed)
-                                                      ▼                 ▼
-┌─────────────────────────────────────────────────────────┐   ┌─────────────────────────────────┐
-│ Fast-Path & In-Place Self-Healing (pull/fast_path.ts)   │   │ Draft Selective Single GET      │
-│ • Heal legacy depth-free media refs -> ../../media/     │   │ • If hasDraftRevision or tracked│
-│ • Upgrade %-encoded slugs -> decoded CJK ("未分類")     │   │   draft -> GET /posts/{id}      │
-│ • Lenient frontmatter YAML repair                       │   │ • If local disk modified ->     │
-│ • 0-GET deleted taxonomy auto-prune (if local clean)    │   │   quarantine to posts/conflicts/│
-│ • Mirror any missing referenced media assets            │   │ • Write Layer B Markdown &      │
-└─────────────────────────────────────────────────────────┘   │   save Layer A base_snapshots   │
-                                                              └─────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Pull ["PULL PIPELINE & TWO-TRACK REVISION FLOW (src/sync/pull/)"]
+        P1["1. Sync Taxonomies (categories & tags) -> derives canPruneTaxonomies"]
+        P2["2. List Sliding Window (30+30) or Single GET -> Extract Track 1 (raw _rev) & Track 2 (version@draft:id)"]
+        P3{"isSameRev(syncState.remoteRev)?"}
+        PFast["0-GET Fast-Path & In-Place Self-Healing (pull/fast_path.ts): Heal legacy media refs, decode %-slugs, lenient YAML repair, 0-GET deleted taxonomy prune"]
+        PGet["Draft Selective Single GET: Fetch full draft if hasDraftRevision or tracked draft"]
+        PQ["Quarantine local edits to posts/conflicts/*.conflict.md if disk diverged"]
+        PSave["Write Layer B Markdown (decoded slugs, ../../media/) & save Layer A base_snapshots"]
 
-=====================================================================================
-                PUSH PIPELINE (src/sync/push/index.ts Execution Order)
-=====================================================================================
-  [1. Offline State Guards (push/guards.ts)]
-       ├── G12: Reject posts/conflicts/* rescue copies
-       ├── G15: Block delete_pending articles (unless --revive / --force)
-       └── G17: Block taxonomy_apply_pending (unless --allow-unapplied-taxonomies)
-        │
-        ▼
-  [2. Preflight Stage (push/preflight_stage.ts)]  ◄── (Evaluated strictly BEFORE G16)
-       ├── G2–G11: ID match, G3 allow-publish, G5/G10/G11 local images,
-       │           G6 conflict markers, G8 syntax/fences, G9 opaque block integrity
-       └── G7: Auto-trim redundant top "# Title" heading
-        │
-        ▼
-  [3. Taxonomy Conflict & Plan (push/guards.ts -> push/taxonomy_plan.ts)]
-       ├── G16: Block taxonomy_conflict_pending (unless --resolve-taxonomy / --force)
-       └── G4 & G19: Resolve term slugs/ULIDs & block destructive empty taxonomy wipe
-        │
-        ▼
-  [4. Draft Media Auto-Upload (push/media_stage.ts)]  ◄── (Runs BEFORE article lock)
-       └── 4-Stage Upload (upload-url -> PUT -> confirm) or verify reused asset via GET
-        │
-        ▼
-  [5. Distributed Mutex Lock (client/lock.ts)]
-       └── POST /_emdash/api/content/{collection}/{id}/lock (7-min lease + heartbeat)
-        │  (try / finally guarantees lock release)
-        ▼
-  [6. Pre-PUT Remote Taxonomy Audit & Transport (tax_audit.ts -> transport.ts)]
-       ├── Audit live remote terms vs base_snapshots (detects out-of-band term edits)
-       ├── PUT article with Track 1 raw `_rev` (baseSnapshot.rev) + POST /terms
-       └── On HTTP 409 or Taxonomy Divergence ──► [7. Hybrid 3-Way Merge (merge_stage.ts)]
-                                                   • Frontmatter: key-by-key
-                                                   • Taxonomies:  set-based union/conflict
-                                                   • Body:        node-diff3 line merge
-        │
-        ▼
-  [8. Local Commit & Finalization (push/commit.ts)]
-       └── Localize body links to ../../media/<storageKey> on disk (Layer B),
-           keep canonical URLs in base_snapshots (Layer A), relocate file & update cache.db
+        P1 --> P2 --> P3
+        P3 -->|"YES (0-GET)"| PFast
+        P3 -->|"NO (Remote Changed)"| PGet --> PQ --> PSave
+    end
+
+    subgraph Push ["PUSH PIPELINE EXECUTION ORDER (src/sync/push/index.ts)"]
+        S1["1. Offline State Guards (push/guards.ts): G12 quarantine check, G15 delete_pending, G17 taxonomy_apply_pending"]
+        S2["2. Preflight Stage (push/preflight_stage.ts - BEFORE G16): G2–G11 checks, G6 conflict markers, G9 opaque blocks, G7 title auto-trim"]
+        S3["3. Taxonomy Conflict & Plan (guards.ts -> taxonomy_plan.ts): G16 taxonomy_conflict_pending, G4 term resolution, G19 empty wipe guard"]
+        S4["4. Draft Media Auto-Upload (push/media_stage.ts - BEFORE article lock): 4-stage upload (upload-url -> PUT -> confirm) or GET verify reused assets"]
+        S5["5. Distributed Mutex Lock (client/lock.ts): POST /lock (7-min lease + heartbeat, try/finally release)"]
+        S6["6. Pre-PUT Remote Taxonomy Audit & Transport (tax_audit.ts -> transport.ts): Audit live remote terms, PUT article with Track 1 raw _rev + POST /terms"]
+        S7["7. Hybrid 3-Way Merge (merge_stage.ts on HTTP 409 / Taxonomy Divergence): Key-by-key frontmatter + Set-based taxonomies + node-diff3 body"]
+        S8["8. Local Commit & Finalization (push/commit.ts): Localize body links to ../../media/<storageKey> on disk, keep canonical URLs in base_snapshots, update cache.db"]
+
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+        S6 -->|"200 OK"| S8
+        S6 -->|"409 Conflict or Term Divergence"| S7 --> S8
+    end
 ```
 
 - **`pullBatch()`**:

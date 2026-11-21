@@ -27,39 +27,36 @@ This document specifies Emit's Local-First media pipeline (`src/sync/media/`, `s
 
 Authors and AI agents can draft articles completely offline by placing new images in `<workspace>/media/drafts/<filename>` and referencing them in Markdown.
 
-```text
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ 1. OFFLINE AUTHORING (Staging in media/drafts/)                                   │
-│    • Binary placed at:   media/drafts/sunset.png                                  │
-│    • Body reference:     ![Sunset](../../media/drafts/sunset.png) (standalone)    │
-│    • Or frontmatter:     featuredImage: "../../media/drafts/sunset.png"           │
-│    • Preflight G5/G10/G11: Verifies standalone line, extension, and size <= 50MiB │
-└─────────────────────────────────────────┬─────────────────────────────────────────┘
-                                          │ emit push <article.md>
-                                          ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ 2. 4-STAGE UPLOAD & TWO-ID-SPACE RESOLUTION (src/sync/push/media_stage.ts)        │
-│    (a) POST /_emdash/api/media/upload-url (with sha1:<hex> for deduplication)     │
-│    (b) PUT binary bytes to signed R2 upload URL                                   │
-│    (c) POST /_emdash/api/media/{id}/confirm                                       │
-│          ├──► D1 Record `id` (26-char ULID)   ──► Written to `featuredImage`      │
-│          └──► R2 `storageKey` (<ulid>.<ext>)  ──► Written to Body URL             │
-│                                                   (/_emdash/api/media/file/<key>) │
-└─────────────────────────────────────────┬─────────────────────────────────────────┘
-                                          │
-                                          ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│ 3. IN-PLACE PROMOTION (Move, Not Copy) & LOCALIZATION                             │
-│    • Moves media/drafts/sunset.png ──► media/<markdownRef>.<ext>                  │
-│      (where <markdownRef> = storageKeyToMarkdownRef(storageKey), ext stripped     │
-│       so binary .<ext> and companion .yaml share the exact same stem;             │
-│       for standard "<ulid>.<ext>" keys, "<markdownRef>.<ext>" === "<storageKey>") │
-│    • Writes companion media/<markdownRef>.yaml (records both `id` & `storageKey`) │
-│    • Upserts SQLite `media_state` (PK: storage_key, status: 'ready')              │
-│    • Rewrites article body on disk to `../../media/<storageKey>` (localMediaRefs) │
-│    • Subsequent articles referencing the same image reuse the promoted asset      │
-│      after verifying `GET /_emdash/api/media/{id}` (0 re-uploads)                 │
-└───────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Stage1 ["1. OFFLINE AUTHORING (Staging in media/drafts/)"]
+        D1["Binary placed at: media/drafts/sunset.png"]
+        D2["Body reference: ![Sunset](../../media/drafts/sunset.png) (standalone line)"]
+        D3["Or frontmatter: featuredImage: '../../media/drafts/sunset.png'"]
+        D4["Preflight G5/G10/G11: Verifies standalone line, extension, and size <= 50MiB"]
+        D1 --> D2 & D3 --> D4
+    end
+
+    subgraph Stage2 ["2. 4-STAGE UPLOAD & TWO-ID-SPACE RESOLUTION (src/sync/push/media_stage.ts)"]
+        U1["(a) POST /_emdash/api/media/upload-url (with sha1:<hex> deduplication)"]
+        U2["(b) PUT binary bytes to signed R2 upload URL"]
+        U3["(c) POST /_emdash/api/media/{id}/confirm"]
+        ID1["D1 Record id (26-char ULID) -> Written to frontmatter featuredImage"]
+        ID2["R2 storageKey (<ulid>.<ext>) -> Written to Body URL (/_emdash/api/media/file/<storageKey>)"]
+        U1 --> U2 --> U3
+        U3 --> ID1 & ID2
+    end
+
+    subgraph Stage3 ["3. IN-PLACE PROMOTION (Move, Not Copy) & LOCALIZATION"]
+        M1["Moves media/drafts/sunset.png -> media/<markdownRef>.<ext> (where markdownRef = storageKeyToMarkdownRef)"]
+        M2["Writes companion media/<markdownRef>.yaml (records both D1 id & R2 storageKey)"]
+        M3["Upserts SQLite media_state (PK: storage_key, status: 'ready')"]
+        M4["Rewrites article body on disk to ../../media/<storageKey> (localMediaRefs: true)"]
+        M5["Cross-article reuse: Subsequent articles verify GET /_emdash/api/media/{id} (0 re-uploads)"]
+        M1 --> M2 --> M3 --> M4 --> M5
+    end
+
+    Stage1 -->|"emit push <article.md>"| Stage2 --> Stage3
 ```
 
 ### 2.1 Supported Locations & Preflight Guards (G5, G10, G11)
