@@ -2,7 +2,7 @@
 
 - **対象バージョン**: `v0.1.45`
 - **作成日**: 2026-11-21 (Rev.1)
-- **ステータス**: 起案（Pending Review — P8 は Ask First カテゴリ 4、X-6 はカテゴリ 3 のオーナー確認を要する）
+- **ステータス**: 完了（Completed — P0〜P8 実装・`npm run check` 100% green、P9 は実測ゲートにより X-8 へ引き継ぎ）
 - **起点**: `ed31d6eb`（v0.1.37 Phase 2 barrel 収束）から `HEAD`（v0.1.44）までの 42 コミット・src 約 +3,974 行の監査結果
 - **目的**:
   1. **P1: 検索系の前段処理正本化** — 日付境界パース＋`ApiError` 生成が 4 モジュールで計 8 ブロック完全に複製されており、うちメディア検索 2 モジュールは**誤ったエラーコード**（`MEDIA_SEARCH_QUERY_REQUIRED`）を投げている。Layer 0 にリゾルバを集約し、エラーコードを `DATE_BOUNDARY_INVALID` に是正する。〔→ R-1〕
@@ -527,20 +527,20 @@ export function clampSearchLimit(
 
 ## 7. Definition of Done (DoD)
 
-1. [ ] `src/utils/search-date.ts:resolveSearchDateBoundaries()` が新設され、日付境界の `ApiError` 生成が src 内で **1 箇所**になっている（`grep -c 'Invalid date boundary:' src/` == 1）。
-2. [ ] メディア検索の日付エラーが `DATE_BOUNDARY_INVALID` を返し、`tests/media_search.test.ts` T1-6 が更新済みで green。空クエリ拒否（T1-8）は `MEDIA_SEARCH_QUERY_REQUIRED` のまま。
-3. [ ] `src/sync/media/types.ts` の `export function` が **ゼロ**に戻り、`searchLocalMirrorMedia()` は `src/sync/media/local_search.ts` に所在。barrel と `ALLOWED_LAYER_2_SYMBOLS` は無変更。
-4. [ ] メディア検索の header / empty / hit / walk-incomplete / usage hint / tag hint / size がすべて `src/presentation/media_report.ts` 経由になり、`src/cli/commands/media.ts` のインライン整形がゼロ。CLI 出力は P0 snapshot と**バイト単位で一致**。
-5. [ ] `tests/presentation_symmetry.test.ts` に検索系の対称性ケース（S-1, S-2）が追加され green。
-6. [ ] `src/utils/frontmatter.ts:parseMarkdownLenient()` が新設され、`gray-matter` の直接 import が **`utils/frontmatter.ts` の 1 箇所のみ**。`sync/article_search/local.ts` は lenient ルートを使用し、F-2 で status / doctor と診断が一致。
-7. [ ] `collectArticleStorageKeys()` の harvest が 2 回に半減し、M-1/M-2 で結果集合の同値が固定済み。未使用 import ゼロ。
-8. [ ] `executeScanSearch()` が約 240 行へ縮小し、`readTaxonomiesFromBaseline()` の `reason` による前条件テスト T-1〜T-8 が green（T-8 で cache 非汚染を担保）。
-9. [ ] limit clamp 式が src 内で **1 箇所**（`grep -c 'Math.max(1, Math.min' src/` == 1）、maxScan 既定値は media / article / taxonomy の差異を維持。
-10. [ ] （オーナー承認後）`src/sync/workspace/articles.ts:iterWorkspaceArticles()` が新設され、6 箇所の走査ループが差し替え済み。AGENTS.md Workspace Contracts 行に本ヘルパーが追記されている。
-11. [ ] `tests/layering.test.ts`（Axis 0〜5）と `tests/guards.test.ts`（Rule 1〜5）が**無変更**で green。新規エラーコード追加ゼロ、`ALLOWED_LAYER_2_SYMBOLS` 無変更。
-12. [ ] 非 CLI モジュールに `console.log` / `console.debug` ゼロ（Axis 5）、循環依存 0 件（`npm run check:cycles`）。
-13. [ ] `CHANGELOG.md` に `## [0.1.45] - 2026-11-21` セクションが追記され、`package.json` / `package-lock.json` が `0.1.45`。P1・P4 の挙動変更は `Fixed`、リファクタリングは `Changed` に分離して記載。
-14. [ ] `npm run check`（format:check / typecheck / check:cycles / test）が 100% green。
+1. [x] `src/utils/search-date.ts:resolveSearchDateBoundaries()` が新設され、日付境界の `ApiError` 生成が src 内で **1 箇所**になっている（`grep -c 'Invalid date boundary:' src/` == 1）。
+2. [x] メディア検索の日付エラーが `DATE_BOUNDARY_INVALID` を返し、`tests/media_search.test.ts` T1-6 が更新済みで green。空クエリ拒否（T1-8）は `MEDIA_SEARCH_QUERY_REQUIRED` のまま。
+3. [x] `src/sync/media/types.ts` の `export function` が **ゼロ**に戻り、`searchLocalMirrorMedia()` は `src/sync/media/local_search.ts` に所在。barrel と `ALLOWED_LAYER_2_SYMBOLS` は無変更。
+4. [x] メディア検索の header / empty / hit / walk-incomplete / usage hint / tag hint / size がすべて `src/presentation/media_report.ts` 経由になり、`src/cli/commands/media.ts` のインライン整形がゼロ。CLI 出力は P0 snapshot と**バイト単位で一致**。
+5. [x] `tests/presentation_symmetry.test.ts` に検索系の対称性ケース（S-1, S-2）が追加され green。
+6. [x] `src/utils/frontmatter.ts:parseMarkdownLenient()` が新設され、`gray-matter` の直接 import が **`utils/frontmatter.ts` の 1 箇所のみ**。`sync/article_search/local.ts` は lenient ルートを使用し、F-2 で status / doctor と診断が一致。
+7. [x] `collectArticleStorageKeys()` の harvest が 2 回に半減し、M-1/M-2 で結果集合の同値が固定済み。未使用 import ゼロ。
+8. [x] `executeScanSearch()` が約 240 行へ縮小し、`readTaxonomiesFromBaseline()` の `reason` による前条件テスト T-1〜T-8 が green（T-8 で cache 非汚染を担保）。
+9. [x] limit clamp 式が src 内で **1 箇所**（`grep -c 'Math.max(1, Math.min' src/` == 1）、maxScan 既定値は media / article / taxonomy の差異を維持。
+10. [x] （オーナー承認後）`src/sync/workspace/articles.ts:iterWorkspaceArticles()` が新設され、6 箇所の走査ループが差し替え済み。AGENTS.md Workspace Contracts 行に本ヘルパーが追記されている。
+11. [x] `tests/layering.test.ts`（Axis 0〜5）と `tests/guards.test.ts`（Rule 1〜5）が**無変更**で green。新規エラーコード追加ゼロ、`ALLOWED_LAYER_2_SYMBOLS` 無変更。
+12. [x] 非 CLI モジュールに `console.log` / `console.debug` ゼロ（Axis 5）、循環依存 0 件（`npm run check:cycles`）。
+13. [x] `CHANGELOG.md` に `## [0.1.45] - 2026-11-21` セクションが追記され、`package.json` / `package-lock.json` が `0.1.45`。P1・P4 の挙動変更は `Fixed`、リファクタリングは `Changed` に分離して記載。
+14. [x] `npm run check`（format:check / typecheck / check:cycles / test）が 100% green。
 
 ---
 

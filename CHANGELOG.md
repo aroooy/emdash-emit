@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.45] - 2026-11-21
+
+### Fixed
+
+- **Media Search Date Boundary Error Code (`src/utils/search-date.ts`, `src/sync/media/remote_index.ts`, `src/sync/media/local_search.ts`, v0.1.45 P1)**:
+  - Invalid `--since` / `--until` boundaries in media search previously threw `MEDIA_SEARCH_QUERY_REQUIRED` with a misleading "A non-empty search query is required" suggestion. Centralized date-boundary parsing and `ApiError` construction into `resolveSearchDateBoundaries()` (Layer 0), ensuring all article and media search commands throw `DATE_BOUNDARY_INVALID` consistently.
+- **Lenient Frontmatter Repair in Offline Article Search (`src/utils/frontmatter.ts`, `src/sync/article_search/local.ts`, v0.1.45 P4)**:
+  - `searchLocalArticles` previously bypassed `lenientRepairMarkdownFrontmatter()` by calling `gray-matter` directly, causing articles with syntax-repairable frontmatter (e.g. unquoted percent-encoded slugs) to be skipped offline while `status` / `doctor` reported them as `healable: true`. Introduced `parseMarkdownLenient()` in Layer 0 and unified all 6 read-only inspection paths (`article_search/local.ts`, `status.ts`, `doctor.ts`, `conflicts.ts` x2, `media/body_scan.ts`), removing `gray-matter` imports outside `utils/frontmatter.ts`.
+
+### Changed
+
+- **Media Search Layering & Presentation Consolidation (`src/sync/media/local_search.ts`, `src/presentation/media_report.ts`, v0.1.45 P2–P3)**:
+  - Extracted `searchLocalMirrorMedia()` from `src/sync/media/types.ts` into `src/sync/media/local_search.ts`, restoring `types.ts` to pure type/constant definitions.
+  - Moved CLI media-search formatting into `src/presentation/media_report.ts` and unified `[WALK_INCOMPLETE]` wording across CLI and MCP via `formatMediaSearchWalkIncompleteNotice()`, backed by characterization snapshots and presentation symmetry tests.
+- **Media Scanner Convergence & Search Fast-Path Extraction (`src/utils/media-refs.ts`, `src/sync/media/body_scan.ts`, `src/sync/article_search/remote.ts`, v0.1.45 P5–P6)**:
+  - Removed redundant regex harvests on `scannedRefs` in `collectArticleStorageKeys()`.
+  - Consolidated `classifyMediaUrl` and `isInlineCodeSpan` into `scanClassifiedMediaReferences()` in Layer 0 (`src/utils/media-refs.ts`), reducing `scanArticleMediaDetailed()` in `doctor.ts` to a thin wrapper.
+  - Extracted `readTaxonomiesFromBaseline()` from `executeScanSearch()` with explicit `BaselineTaxonomyRead` reason codes for discrete precondition unit testing.
+- **Shared Search Limit Constants & Workspace Article Iterator (`src/utils/search-options.ts`, `src/sync/workspace/articles.ts`, v0.1.45 P7–P8)**:
+  - Centralized `SEARCH_DEFAULT_LIMIT`, `SEARCH_MAX_LIMIT`, and `clampSearchLimit()` in `src/utils/search-options.ts` while preserving existing `maxScan` defaults and public re-exports.
+  - Added `iterWorkspaceArticles()` in `src/sync/workspace/articles.ts` (documented in `AGENTS.md` Workspace Contracts) to replace 6 duplicated directory traversal loops across `status`, `doctor`, `conflicts`, `pull_library`, `article_search/local`, and `media/prune_protect`.
+
 ## [0.1.44] - 2026-11-21
 
 ### Added
