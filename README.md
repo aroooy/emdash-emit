@@ -30,12 +30,12 @@
 EmDash is a modern serverless headless CMS built on Cloudflare Workers, D1, and R2. **Emit** turns any local directory into a Git-like local authoring workbench, allowing you and AI coding agents to draft, inspect, diff, and publish Markdown articles with strict safety guardrails.
 
 ```text
-┌───────────────────────┐                    ┌─────────────────────────┐
-│   Local Workspace     │   emit push / pull │   Remote EmDash Server  │
-│  posts/draft/*.md     │ ◄────────────────► │   Cloudflare Workers    │
-│  posts/published/*.md │   (AST + Frontmatter)│   Cloudflare D1 SQL     │
-│  media/* + cache.db   │                    │   Cloudflare R2 Media   │
-└───────────────────────┘                    └─────────────────────────┘
+┌───────────────────────┐                      ┌─────────────────────────┐
+│    Local Workspace    │   emit push / pull   │   Remote EmDash Server  │
+│  posts/draft/*.md     │ ◄──────────────────► │   Cloudflare Workers    │
+│  posts/published/*.md │  (AST + Frontmatter) │   Cloudflare D1 SQL     │
+│  media/* + cache.db   │                      │   Cloudflare R2 Media   │
+└───────────────────────┘                      └─────────────────────────┘
 ```
 
 ### The "Staging Desk" Philosophy & Non-Goals
@@ -62,17 +62,39 @@ Emit and the [Official EmDash MCP server](https://github.com/aroooy/emdash) are 
 
 ## 🌟 Key Features
 
-- **AI-First Authoring Loop**: Purpose-built CLI and stdio MCP server with structured `_meta` context and actionable remediation messages.
-- **Sliding Window + Unpushed Edits Safeguard**: Keeps workspaces lean (30 published + 30 drafts by default) while refusing to prune any file with unpushed local changes.
-- **Multi-Site Directory Auto-Detection**: Register profiles in `~/.config/emit/profiles.yaml` with `--workspace`; `cd` into any blog directory and Emit automatically targets the right site without manual switching.
-- **Two-Layer Human-Friendly Representation**:
-  - **Taxonomies**: Server-side percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) are displayed on disk as readable decoded Unicode (`未分類`).
-  - **Local Media References (`localMediaRefs: true`)**: Mirrored body images use article-relative `../../media/<storageKey>` paths for offline preview in VS Code / Obsidian while pushing canonical `/_emdash/api/media/file/<storageKey>` URLs to EmDash.
-- **Dual-Track Image & Custom Block Fidelity**: Standard images render as Markdown `![alt](...)` (Track A), while styled images (`alignment`, `displayWidth`) and custom blocks are preserved losslessly inside `<!--ec:block ... -->` comment fences (Track B / Tier 3).
-- **Offline Draft Image Auto-Upload**: Drop new images into `media/drafts/`, reference them in Markdown, and `emit push` uploads, rewrites URLs, and promotes them to `media/<markdownRef>.<ext>` automatically.
-- **Two-Track Revision & Draft Revision Support**: Tracks live published articles that hold uncommitted remote draft revisions (`published* [has unpublished draft]` / `status: published # draft revision`).
-- **Distributed Lock & Hybrid 3-Way Merge**: Acquires a 7-minute remote lease (`POST /lock`) and merges concurrent frontmatter and body edits via `node-diff3`, rescuing divergent local files to `posts/conflicts/`.
-- **Zero Native Dependencies**: Uses Node.js 22+ built-in `node:sqlite` (`DatabaseSync`)—no `node-gyp` or C++ compiler required.
+### 1. Lossless Portable Text ⇔ Markdown Bidirectional Sync (3-Tier AST Engine)
+
+Most headless CMS tools only support one-way Markdown import or strip custom styling attributes on round-trip. Emit implements a **3-Tier Portable Text AST engine** that converts standard prose cleanly while protecting rich CMS layout attributes from destructive resets:
+
+```text
+  Remote EmDash Portable Text AST (JSON Blocks)
+  ├── Tier 1 & 2: Headings, Lists, Marks, GFM Tables, Thematic Breaks (---)
+  │     + Plain Images ──► Track A: ![alt](../../media/<storageKey>)  [🖼️ Offline Editor Preview]
+  └── Tier 3: Styled Images (alignment, displayWidth, caption) & Custom Blocks (core:gallery)
+        ──► Track B: <!--ec:block {"_type":"image","alignment":"left",...} --> [🔒 Protected by Guard G9]
+```
+
+- **GFM Tables & Thematic Breaks**: Pipe tables (`| col |`) and horizontal rules (`---`) round-trip losslessly to EmDash Portable Text `table` and `thematicBreak` blocks.
+- **Dual-Track Image & Custom Block Fidelity**: Plain images serialize as standard Markdown (`Track A`) for immediate preview in VS Code / Obsidian, while styled images (`alignment`, `displayWidth`, `caption`) and custom EmDash blocks automatically fall back to single-line opaque comment fences (`Track B`, `<!--ec:block {...} -->`) guarded by **G9 (`MODIFIED_OPAQUE_BLOCK`)** so server-side layout is never lost on push.
+
+### 2. True Local-First Offline Authoring & Two-Layer Representation
+
+Emit separates **Layer A (canonical server & baseline data)** from **Layer B (human- & editor-friendly disk files)**:
+
+- **Offline Image Preview with Zero Phantom Diffs (`localMediaRefs: true`)**: On disk, mirrored body images are written as article-relative paths (`../../media/<storageKey>`, resolving to local mirror `media/<markdownRef>.<ext>`), so Markdown preview works 100% offline. In `.emit/cache.db` (`base_snapshots`) and remote payloads, Emit preserves the canonical `/_emdash/api/media/file/<storageKey>` URL—meaning `emit diff` and `emit status` never report false diffs.
+- **Automated Offline Draft Image Pipeline (`media/drafts/`)**: Drop new images into `media/drafts/<filename>`, reference them on a standalone line (`![alt](../../media/drafts/<filename>)` or in `featuredImage`), and run `emit push`. Emit automatically executes EmDash's 4-stage upload (`upload-url` → `PUT` → `confirm`), rewrites the link, and moves the file to `media/<markdownRef>.<ext>` (+ `.yaml` companion), reusing already-promoted assets across articles without re-uploading.
+- **Human-Readable Decoded CJK Taxonomies**: Server-side percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) are rendered on disk as readable decoded Unicode (`未分類`) while retaining canonical encoding in baseline snapshots and API requests.
+
+### 3. CMS-Grade Concurrency, Two-Track Revisions & Structure-Aware 3-Way Merge
+
+- **Uncommitted Draft Revisions on Published Articles (`published*`)**: When a live published article is edited and saved as an unpublished draft in the EmDash Web Admin, Emit detects it via **Two-Track Revisions** (separating raw transport `_rev` from composite comparison keys `${version}@draft:${draftRevisionId}`). The file stays in `posts/published/` with `status: published # draft revision` (`published* [has unpublished draft]` in `emit status`): a normal `emit push` updates the remote draft, while `--allow-publish` publishes it live.
+- **Structure-Aware Hybrid 3-Way Merge & Distributed Locks**: Acquires a 7-minute mutual exclusion lease (`POST /lock`) before writing. If concurrent edits occur, Emit performs a 3-way merge across three distinct structural dimensions—**(1) YAML Frontmatter key-by-key**, **(2) Taxonomy categories/tags as mathematical sets** (with pre-PUT remote taxonomy auditing), and **(3) Markdown body line-by-line via `node-diff3`**—while rescuing divergent local files to `posts/conflicts/`.
+
+### 4. Hardened for Autonomous AI Agents (19 Guardrails & Epistemic Search)
+
+- **19 Code-Level Preflight & Sync Guardrails (G1–G19)**: Physically blocks AI agent accidents before any network request—preventing unapproved live publishing (**G3**), hallucinated category/tag names (**G4**), manual `mv` filename corruption (**G2**), pushing quarantined conflict copies (**G12**), or accidental taxonomy wipes (**G19**).
+- **Epistemic Search (`[WALK_INCOMPLETE]`) & 0-GET Self-Healing**: When `emit article-search` or `emit media-search` stops at `--max-scan` before exhausting the remote library, it explicitly outputs `[WALK_INCOMPLETE]` so AI agents never hallucinate that an older article is absent. On pull, untouched local articles self-heal deleted remote taxonomy terms and legacy spellings on the **0-GET fast path**.
+- **Zero-Friction Multi-Site Profiles & Zero Native Dependencies**: Auto-detects the target EmDash site from your current working directory (`~/.config/emit/profiles.yaml`) and runs on Node.js 22+ built-in `node:sqlite` (`DatabaseSync`) with zero C++ `node-gyp` dependencies.
 
 ---
 
@@ -184,16 +206,40 @@ your-blog/
 
 ## 📝 Markdown, Frontmatter & The 4-Step Golden Path
 
-### The 4-Step Authoring Cycle
+### The Authoring Workflows (New Posts vs. Revising Past Posts & 2-Stage Push)
+
+Emit supports two primary entry flows—**Workflow A (One-Shot New Draft)** and **Workflow B (Discovering & Revising Existing/Historical Posts)**—both converging into offline Markdown authoring and a **2-Stage Push** (Draft Staging → Live Publish):
 
 ```text
-[1. PULL / SEARCH]  Sync active window or find past post  ──►  emit pull / emit article-search
-    │
-[2. NEW / STATUS]   Scaffold draft or inspect status      ──►  emit new <slug> / emit status
-    │
-[3. DIRECT EDIT]    Write Markdown & stage draft images   ──►  posts/draft/*.md + media/drafts/*
-    │
-[4. DIFF & PUSH]    Review diff & push with G1–G19 guards ──►  emit diff / emit push <filePath>
+  [0. SYNC WORKSPACE]  emit pull  (Syncs latest 30+30 posts, categories/tags & referenced media)
+           │
+           ├─────────────────────────────────────────────┐
+           ▼ (Workflow A: Create New Post)               ▼ (Workflow B: Revise Existing / Past Post)
+  [1A. ONE-SHOT SCAFFOLD]                       [1B. DISCOVER & TARGET]
+   emit new <slug> -t "Title" \                  • Recent (in window): inspect "emit status"
+     -C tech -T ai -d "SEO desc" \               • Older (outside 30-post window):
+     -f "../../media/drafts/cover.jpg"               emit article-search "keyword" --tag ai
+   (Generates schema-valid YAML in 1 step;           ──► emit pull <26-char-ULID>
+    no manual frontmatter YAML editing!)         (Pulls post + mirrors its images on demand)
+           │                                             │
+           └─────────────────────┬───────────────────────┘
+                                 ▼
+  [2. OFFLINE AUTHORING & MEDIA STAGING]
+   • Edit Markdown body in VS Code / Obsidian / Cursor (images preview offline via ../../media/)
+   • New local images: drop in media/drafts/<file> & reference as ![alt](../../media/drafts/<file>)
+   • Existing remote images: find via "emit media-search [--since today | --offline]"
+   • Preserved blocks: keep <!--ec:block {...} --> lines intact (layout/styling protected by G9)
+                                 │
+                                 ▼
+  [3. DIFF & 2-STAGE PUSH (Draft Staging ──► Live Publish)]
+   • Inspect changes:  emit diff <file>
+   • Stage as Draft:   emit push <file>
+                       (Auto-uploads media/drafts/* -> moves to media/, acquires 7-min lock,
+                        3-way merges if needed, and saves draft on EmDash.
+                        *Even on a live published post, bare "emit push" safely stages an
+                         unpublished draft revision [published*] without altering live!*)
+   • Publish Live:     Set "status: published" in frontmatter, then run:
+                       emit push <file> --allow-publish
 ```
 
 ### Canonical Frontmatter Example

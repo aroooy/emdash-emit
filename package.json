@@ -1,7 +1,7 @@
 {
   "name": "emdash-emit",
   "version": "0.1.46",
-  "description": "AI-First Local Workspace & Sync Tool for EmDash (Cloudflare Workers + D1)",
+  "description": "AI-First Offline Markdown Workspace & Lossless Portable Text Bidirectional Sync for EmDash CMS (CLI & MCP)",
   "author": "hiroaki <45134003+aroooy@users.noreply.github.com>",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,11 @@
     "portable-text",
     "local-first",
     "ai-agent",
-    "antigravity"
+    "antigravity",
+    "headless-cms",
+    "bidirectional-sync",
+    "three-way-merge",
+    "offline-first"
   ],
   "type": "module",
   "bin": {

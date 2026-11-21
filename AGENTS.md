@@ -88,18 +88,38 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
 
 ---
 
-## 4. The Golden Path for AI Content Authoring (4-Step Cycle)
+## 4. The Golden Path for AI Content Authoring (Workflows A/B & 2-Stage Push)
 
-When drafting, reviewing, or updating blog articles, AI agents must follow the **4-Step Cycle**:
+When drafting, reviewing, or updating blog articles, AI agents must follow the **Golden Path Workflows**:
 
 ```text
-[1. PULL / SEARCH]  Synchronize or locate article  -->  sync_pull / sync_status / sync_article_search
-    │
-[2. NEW / CHECK]    Scaffold or inspect target     -->  New: sync_new <slug> / Existing: sync_diff
-    │
-[3. DIRECT EDIT]    Edit canonical Markdown file   -->  posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
-    │
-[4. PUSH]           Validate & push to remote      -->  sync_push (filePath required)
+  [0. SYNC WORKSPACE]  sync_pull / sync_status  (Syncs 30+30 window, categories/tags & media)
+           │
+           ├─────────────────────────────────────────────┐
+           ▼ (Workflow A: Create New Post)               ▼ (Workflow B: Revise Existing / Past Post)
+  [1A. ONE-SHOT SCAFFOLD]                       [1B. DISCOVER & TARGET]
+   sync_new(slug, title, categories,             • In window: locate via sync_status
+     tags, description, featuredImage)           • Outside 30-post window:
+   (Generates complete frontmatter in 1 step;      sync_article_search(query, tag, since, ...)
+    no manual YAML header editing required)        ──► sync_pull(id: "<26-char-ULID>")
+           │                                             │
+           └─────────────────────┬───────────────────────┘
+                                 ▼
+  [2. DIRECT MARKDOWN EDIT & MEDIA STAGING]
+   • Edit posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
+   • New local images: place in media/drafts/<file> & reference as ![alt](../../media/drafts/<file>)
+   • Existing remote images: discover via sync_media_search(query, since, offline)
+   • Preserved blocks: keep <!--ec:block {...} --> lines intact (protected by Guard G9)
+                                 │
+                                 ▼
+  [3. DIFF & 2-STAGE PUSH (Draft Staging ──► Live Publish)]
+   • Review diff:     sync_diff(filePath)
+   • Stage as Draft:  sync_push(filePath)
+                      (Auto-uploads media/drafts/* -> promotes to media/, acquires 7-min lock,
+                       3-way merges if needed. On a live published post, bare sync_push safely
+                       stages an unpublished draft revision [published*] without altering live)
+   • Publish Live:    Only when explicitly requested, set status: published and run:
+                      sync_push(filePath, allowPublish: true)
 ```
 
 ### Critical Authoring Rules for AI Agents

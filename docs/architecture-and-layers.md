@@ -8,6 +8,42 @@ This document is the authoritative specification for Emit's 4-tier architectural
 
 Emit strictly enforces a unidirectional 4-tier architecture verified statically by `tests/layering.test.ts` and circular dependency checks (`npm run check:cycles` via `madge`).
 
+```text
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ Top-Level Entry Points: src/bin/emit.ts (CLI)  |  src/index.ts (Public npm Façade)│
+└───────────────────────────────────────┬───────────────────────────────────────────┘
+                                        ▼
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ LAYER 3: Consumers & Presentation (src/cli/, src/mcp/, src/presentation/)         │
+│  • CLI commands & reportActionFailure()  [Only src/cli/ may call console.log()]   │
+│  • MCP stdio tools & formatToolError() + _meta   [Axis 3: Never imports src/cli/] │
+│  • Shared report formatters: article_report.ts, media_report.ts, pull_report.ts   │
+└───────────────────┬───────────────────────────────────────────┬───────────────────┘
+                    │ Axis 2: Restricted to                     │
+                    │ ALLOWED_LAYER_2_SYMBOLS                   │
+                    ▼                                           ▼
+┌───────────────────────────────────────────────────┐   ┌───────────────────────────┐
+│ LAYER 2: Sync Downstream (src/sync/...)           │   │ LAYER 1: Sync Upstream    │
+│  • orchestrator.ts (pullBatch, pullSingleArticle) │   │  • baseline-reconstruction│
+│  • pull/index.js (6 modules)                      │   │  • status, diff, merge    │
+│  • push/index.js (10 modules)                     │──►│  • preflight, image_probe │
+│  • media/index.js (10 modules)                    │   │  • guards (G1–G19)        │
+│  • article_search/, workspace/, doctor, conflicts │   │  • taxonomies, terms,     │
+│  • new.ts, delete.ts                              │   │    bylines                │
+│  [Never imports Layer 3; Sibling edges snapshotted│   │  [Axis 1: NEVER imports   │
+│   in tests/layering.test.ts]                      │   │   Layer 2 or Layer 3]     │
+└───────────────────────────────────────┬───────────┘   └───────────────┬───────────┘
+                                        │                               │
+                                        ▼                               ▼
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ LAYER 0: Primitives & Infrastructure (src/utils/, src/db/, src/client/)           │
+│  • SQLite cache.db (node:sqlite DatabaseSync, migrations v5, baseline.ts)         │
+│  • HTTP/Auth/Lock/Media clients, Portable Text AST mapper, endpoint builders      │
+│  • Frontmatter & lenient parser, formatYamlScalar, media-refs, search resolvers   │
+│  [Axis 0: Never imports Layer 1, 2, or 3]                                         │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
+
 | Layer | Responsibility & Modules | Allowed Outbound Imports | Allowed Inbound Consumers | Prohibited Imports |
 | --- | --- | --- | --- | --- |
 | **Layer 0: Primitives & Infra** | `src/utils/`, `src/db/`, `src/client/` — Core types, SQLite cache (`cache.db`, schema migrations in `src/db/migrations.ts`, baseline snapshot reconstruction & `retrackLocalHashOnly` via `src/db/baseline.ts`), HTTP clients, centralized endpoint URL builders (`src/client/endpoints.ts`), media ID branded types (`MediaRecordId`, `StorageKey` in `src/utils/media-id.ts`), taxonomy key helpers (`src/utils/taxonomy-key.ts`), media ref precedence resolver (`src/utils/media-ref-precedence.ts`), search option/date resolvers (`src/utils/search-options.ts`, `src/utils/search-date.ts`), MCP heartbeat (`src/utils/mcp-heartbeat.ts`), and canonical ULID helpers (`src/utils/ulid.ts`). | Layer 0 internals only | Layers 1, 2, 3 | Never imports Layer 1, 2, or 3. |

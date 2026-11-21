@@ -78,6 +78,31 @@ export function parseMarkdownLenient(content: string, filePath?: string): Parsed
 
 Emit separates the **internal baseline representation (Layer A)** from the **on-disk human/editor representation (Layer B)**:
 
+```text
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│               LAYER A: Remote EmDash API & SQLite base_snapshots                  │
+│ • Taxonomies: Canonical %-encoded slugs (e.g. ["%e6%9c%aa%e5%88%86%e9%a1%9e"])    │
+│ • Body AST:   Portable Text JSON blocks (or canonical Markdown in base_snapshots) │
+│ • Media URLs: Canonical root-relative URLs (/_emdash/api/media/file/<storageKey>) │
+│ • Revisions:  Raw transport token in base_snapshots.rev (Track 1)                 │
+│               + composite "${version}@draft:${draftRevId}" in sync_state (Track 2)│
+└───────────────────┬───────────────────────────────────────────▲───────────────────┘
+                    │ Pull (Decode + Localize)                  │ Push (Canonicalize
+                    │ & reconstructBaseline()                   │       + AST Convert)
+                    ▼                                           │
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│               LAYER B: Local Disk Markdown (posts/draft|published/*.md)           │
+│ • Taxonomies: Decoded human-readable Unicode (  - 未分類) via formatYamlScalar()  │
+│ • Draft Flag: "status: published # draft revision" when @draft: revision exists   │
+│ • Body AST (3-Tier Mapping):                                                      │
+│   ├─ Tier 1/2: Headings, Lists, Marks, GFM Tables (| col |), Breaks (---)         │
+│   ├─ Track A (Plain Image):  ![alt](../../media/<storageKey>) [Offline Preview]   │
+│   └─ Track B (Tier 3 Block): <!--ec:block {"_type":"image","alignment":...} -->   │
+│                              [Opaque JSON comment fence protected by Guard G9]    │
+│ • Tracking:   Only sync_state.local_hash hashes Layer B disk bytes                │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
+
 | Aspect | Layer A (Internal Baseline & Remote Payloads) | Layer B (On-Disk Markdown File) |
 | --- | --- | --- |
 | **Storage Location** | `base_snapshots.frontmatter_yaml` (**JSON-encoded** `Frontmatter`) & `base_snapshots.body_markdown` | `posts/draft/*.md`, `posts/published/*.md` |
