@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.44] - 2026-11-21
+
+### Added
+
+- **Media Search Hit-Limit Early Exit (`searchRemoteMedia`, `src/sync/media/remote_index.ts`, v0.1.44 P1)**:
+  - Remote media search stops scanning remote pages immediately once `--limit` is satisfied (`hitLimitReached`), saving superfluous HTTP pagination requests.
+  - Epistemic completeness is strictly preserved: a hit-limited scan retains `walkComplete: false` and sets `truncated: true`, continuing to output `[WALK_INCOMPLETE]` without asserting negative existence.
+  - Symmetrical hit-limit diagnostic notice (`formatMediaSearchHitLimitNotice`) informs CLI users and MCP agents how to broaden the result window (`raise --limit` / `raise limit`).
+- **Baseline Fast-Path for Taxonomy Filtering in Article Search (`executeScanSearch`, `src/sync/article_search/remote.ts`, v0.1.44 P2)**:
+  - Eliminates N+1 remote GET requests during scan-based article search (`--category` / `--tag`) by reading taxonomy terms directly from local baseline snapshots (`base_snapshots.frontmatter_yaml`) for clean, tracked articles.
+  - Strictly guarded by five preconditions: valid cache record, rev-check match via composite comparison key (`extractComparisonRev` extracting version from Base64 transport tokens if omitted in list items), all four pending flags clear (`deletePending`, `bodyConflictPending`, `taxonomyApplyPending`, `taxonomyConflictPending`), and disk content clean (`isLocalFileUnmodified`).
+  - Search maintains pure read-only semantics: passing `healOnSpellingMatch: false` ensures spelling variations (e.g. localized media refs) evaluate the fast-path without mutating `sync_state.local_hash` as a side effect.
+  - Graceful fallback: unpushed local edits, remote revisions, missing snapshots, or legacy snapshots without recorded taxonomies seamlessly fall back to individual GET requests.
+  - Cache hit statistics (`taxonomyCacheHitCount`) are exposed in CLI headers and MCP tool results.
+- **Offline Search Guidance for Agents & Users (`formatArticleSearchOfflineHint`, `src/presentation/article_report.ts`, v0.1.44 P3)**:
+  - Emits proactive hints when remote article search yields 0 hits or encounters walk truncation, directing agents to instant local Markdown body search (`--offline` / `offline: true`).
+  - Shared formatter guarantees unified wording across CLI and MCP, while MCP payloads include structured metadata (`hint.offlineSearch === true`).
+
 ## [0.1.43] - 2026-11-21
 
 ### Added
