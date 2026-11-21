@@ -35,7 +35,7 @@ import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { storageKeyFromMediaMeta } from '../utils/media-companion.js';
 import { mediaFileEndpoint, articleContentEndpoint } from '../client/endpoints.js';
 import { createAuthedFetch } from '../client/http.js';
-import { calculateHash } from './workspace/index.js';
+import { calculateHash, iterWorkspaceArticles } from './workspace/index.js';
 import { collectRemoteStorageKeys } from './media/index.js';
 import { checkMcpProcess } from '../utils/mcp-heartbeat.js';
 import { detectWorkspaceLinkDrift } from '../utils/profile.js';
@@ -384,30 +384,25 @@ function runContentIntegrityChecks(
   const invalidFiles: string[] = [];
   const healableFiles: string[] = [];
   let totalArticles = 0;
-  for (const status of ['draft', 'published']) {
-    const dir = path.join(options.workspaceRoot, collection, status);
-    if (!fs.existsSync(dir)) continue;
-
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-    for (const file of files) {
-      totalArticles++;
-      const fullPath = path.join(dir, file);
+  for (const { relPath, fullPath } of iterWorkspaceArticles(options.workspaceRoot, collection, {
+    excludeDeletedBackups: false,
+  })) {
+    totalArticles++;
+    try {
+      const content = fs.readFileSync(fullPath, 'utf8');
       try {
-        const content = fs.readFileSync(fullPath, 'utf8');
-        try {
-          parseMarkdown(content);
-        } catch {
-          // Attempt lenient parse via single canonical entry point
-          const parsed = parseMarkdownLenient(content, fullPath);
-          if (parsed) {
-            healableFiles.push(path.join(collection, status, file));
-          } else {
-            throw new Error('Unrecoverable parse error');
-          }
-        }
+        parseMarkdown(content);
       } catch {
-        invalidFiles.push(path.join(collection, status, file));
+        // Attempt lenient parse via single canonical entry point
+        const parsed = parseMarkdownLenient(content, fullPath);
+        if (parsed) {
+          healableFiles.push(relPath);
+        } else {
+          throw new Error('Unrecoverable parse error');
+        }
       }
+    } catch {
+      invalidFiles.push(relPath);
     }
   }
 
@@ -758,123 +753,115 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   const referencedStems = new Set<string>();
   for (const k of knownFeaturedStorageKeys) referencedStorageKeys.add(k);
 
-  for (const status of ['draft', 'published']) {
-    const dir = path.join(options.workspaceRoot, collection, status);
-    if (!fs.existsSync(dir)) continue;
+  for (const { relPath, fullPath } of iterWorkspaceArticles(options.workspaceRoot, collection, {
+    excludeDeletedBackups: false,
+  })) {
+    try {
+      const content = fs.readFileSync(fullPath, 'utf8');
+      const detailed = scanArticleMediaDetailed(content);
 
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-    for (const file of files) {
+      let featuredImg: string | undefined;
       try {
-        const content = fs.readFileSync(path.join(dir, file), 'utf8');
-        const detailed = scanArticleMediaDetailed(content);
-
-        let featuredImg: string | undefined;
-        try {
-          const parsed = parseMarkdown(content);
-          featuredImg = parsed.frontmatter.featuredImage ?? undefined;
-        } catch {
-          const match = content.match(/^featuredImage:\s*["']?([^"'\r\n]+)["']?/m);
-          if (match) featuredImg = match[1].trim();
-        }
-
-        if (featuredImg) {
-          referencedMediaIds.add(featuredImg.trim());
-          const ulidMatch = featuredImg.match(/[0-9A-HJ-NP-Z]{26}/i);
-          if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
-          const m = featuredImg.match(/(?:^|\/)media\/file\/([^?#]+)/);
-          if (m) referencedStorageKeys.add(m[1]);
-          const stemMatch = featuredImg.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
-          if (stemMatch) referencedStems.add(stemMatch[1].replace(/\.[^.]+$/, ''));
-        }
-
-        for (const ref of [
-          ...detailed.normalRefs,
-          ...detailed.informationalRefs,
-          ...detailed.invalidRefs,
-        ]) {
-          const m = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
-          if (m) {
-            referencedStorageKeys.add(m[1]);
-            const stem = storageKeyToMarkdownRef(m[1]);
-            if (stem) referencedStems.add(stem);
-          }
-          const localMatch = ref.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
-          if (localMatch) {
-            const stem = localMatch[1].replace(/\.[^.]+$/, '');
-            referencedStems.add(stem);
-          }
-          const ulidMatch = ref.match(/[0-9A-HJ-NP-Z]{26}/i);
-          if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
-        }
-
-        const checkRef = (ref: string): boolean => {
-          // Check 1: EmDash public storageKey route: /_emdash/api/media/file/<storageKey>
-          const storageKeyMatch = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
-          if (storageKeyMatch) {
-            const key = storageKeyMatch[1];
-            if (knownStorageKeys.has(key)) return true;
-            // The body URL may carry the media record id instead of the storageKey, or a key whose
-            // companion YAML lacks the field: resolve by ULID, then by the mirror stem that names the key.
-            const ulidMatch = key.match(/[0-9A-HJ-NP-Z]{26}/);
-            if (ulidMatch && knownMediaIds.has(ulidMatch[0].toUpperCase())) return true;
-            const keyStem = storageKeyToMarkdownRef(key);
-            if (keyStem && knownMediaStems.has(keyStem)) return true;
-            for (const stem of knownMediaStems) {
-              if (key.endsWith(stem)) return true;
-            }
-            return knownFeaturedStorageKeys.has(key);
-          }
-          // Check 2: Direct relative or local filesystem path
-          const cleanRef = ref.replace(/^[./]+/, '');
-          const directFull = path.isAbsolute(ref) ? ref : path.join(options.workspaceRoot, ref);
-          if (
-            fs.existsSync(directFull) ||
-            knownLocalFiles.has(ref) ||
-            knownLocalFiles.has(cleanRef)
-          ) {
-            return true;
-          }
-          // Check 3: A local mirror reference (`../../media/<storageKey>` or the older depth-free
-          // `media/<storageKey>`) names the key outright, so a collision-suffixed or truncated mirror stem
-          // leaves no file at that exact path. Resolve it through
-          // the same confirmed-key and stem indexes Check 1 uses instead of reporting a mirrored asset missing.
-          const localKeyMatch = cleanRef.match(/^media\/([^?#]+)/);
-          if (localKeyMatch) {
-            const key = localKeyMatch[1];
-            if (knownStorageKeys.has(key)) return true;
-            const keyStem = storageKeyToMarkdownRef(key);
-            if (keyStem && knownMediaStems.has(keyStem)) return true;
-          }
-          return false;
-        };
-
-        for (const ref of detailed.normalRefs) {
-          if (checkRef(ref)) continue;
-          const source = path.join(collection, status, file);
-          const key = options.checkMediaUrls ? probeKey(ref) : null;
-          if (key) {
-            pendingRemoteProbes.push({ ref, key, source });
-          } else {
-            missingMedia.push(`${ref} (referenced by ${source})`);
-          }
-        }
-
-        for (const ref of detailed.informationalRefs) {
-          if (!checkRef(ref)) {
-            informationalUnresolved.push(
-              `${ref} (code-example/custom-block in ${path.join(collection, status, file)})`,
-            );
-          }
-        }
-
-        for (const ref of detailed.invalidRefs) {
-          invalidMediaRefs.push(
-            `${ref} (malformed reference in ${path.join(collection, status, file)})`,
-          );
-        }
+        const parsed = parseMarkdown(content);
+        featuredImg = parsed.frontmatter.featuredImage ?? undefined;
       } catch {
-        // Skip unreadable files
+        const match = content.match(/^featuredImage:\s*["']?([^"'\r\n]+)["']?/m);
+        if (match) featuredImg = match[1].trim();
       }
+
+      if (featuredImg) {
+        referencedMediaIds.add(featuredImg.trim());
+        const ulidMatch = featuredImg.match(/[0-9A-HJ-NP-Z]{26}/i);
+        if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
+        const m = featuredImg.match(/(?:^|\/)media\/file\/([^?#]+)/);
+        if (m) referencedStorageKeys.add(m[1]);
+        const stemMatch = featuredImg.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
+        if (stemMatch) referencedStems.add(stemMatch[1].replace(/\.[^.]+$/, ''));
+      }
+
+      for (const ref of [
+        ...detailed.normalRefs,
+        ...detailed.informationalRefs,
+        ...detailed.invalidRefs,
+      ]) {
+        const m = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
+        if (m) {
+          referencedStorageKeys.add(m[1]);
+          const stem = storageKeyToMarkdownRef(m[1]);
+          if (stem) referencedStems.add(stem);
+        }
+        const localMatch = ref.match(/(?:^|\/)media\/(?:drafts\/)?([^/?#]+)/);
+        if (localMatch) {
+          const stem = localMatch[1].replace(/\.[^.]+$/, '');
+          referencedStems.add(stem);
+        }
+        const ulidMatch = ref.match(/[0-9A-HJ-NP-Z]{26}/i);
+        if (ulidMatch) referencedMediaIds.add(ulidMatch[0].toUpperCase());
+      }
+
+      const checkRef = (ref: string): boolean => {
+        // Check 1: EmDash public storageKey route: /_emdash/api/media/file/<storageKey>
+        const storageKeyMatch = ref.match(/(?:^|\/)media\/file\/([^?#]+)/);
+        if (storageKeyMatch) {
+          const key = storageKeyMatch[1];
+          if (knownStorageKeys.has(key)) return true;
+          // The body URL may carry the media record id instead of the storageKey, or a key whose
+          // companion YAML lacks the field: resolve by ULID, then by the mirror stem that names the key.
+          const ulidMatch = key.match(/[0-9A-HJ-NP-Z]{26}/);
+          if (ulidMatch && knownMediaIds.has(ulidMatch[0].toUpperCase())) return true;
+          const keyStem = storageKeyToMarkdownRef(key);
+          if (keyStem && knownMediaStems.has(keyStem)) return true;
+          for (const stem of knownMediaStems) {
+            if (key.endsWith(stem)) return true;
+          }
+          return knownFeaturedStorageKeys.has(key);
+        }
+        // Check 2: Direct relative or local filesystem path
+        const cleanRef = ref.replace(/^[./]+/, '');
+        const directFull = path.isAbsolute(ref) ? ref : path.join(options.workspaceRoot, ref);
+        if (
+          fs.existsSync(directFull) ||
+          knownLocalFiles.has(ref) ||
+          knownLocalFiles.has(cleanRef)
+        ) {
+          return true;
+        }
+        // Check 3: A local mirror reference (`../../media/<storageKey>` or the older depth-free
+        // `media/<storageKey>`) names the key outright, so a collision-suffixed or truncated mirror stem
+        // leaves no file at that exact path. Resolve it through
+        // the same confirmed-key and stem indexes Check 1 uses instead of reporting a mirrored asset missing.
+        const localKeyMatch = cleanRef.match(/^media\/([^?#]+)/);
+        if (localKeyMatch) {
+          const key = localKeyMatch[1];
+          if (knownStorageKeys.has(key)) return true;
+          const keyStem = storageKeyToMarkdownRef(key);
+          if (keyStem && knownMediaStems.has(keyStem)) return true;
+        }
+        return false;
+      };
+
+      for (const ref of detailed.normalRefs) {
+        if (checkRef(ref)) continue;
+        const source = relPath;
+        const key = options.checkMediaUrls ? probeKey(ref) : null;
+        if (key) {
+          pendingRemoteProbes.push({ ref, key, source });
+        } else {
+          missingMedia.push(`${ref} (referenced by ${source})`);
+        }
+      }
+
+      for (const ref of detailed.informationalRefs) {
+        if (!checkRef(ref)) {
+          informationalUnresolved.push(`${ref} (code-example/custom-block in ${relPath})`);
+        }
+      }
+
+      for (const ref of detailed.invalidRefs) {
+        invalidMediaRefs.push(`${ref} (malformed reference in ${relPath})`);
+      }
+    } catch {
+      // Skip unreadable files
     }
   }
 

@@ -26,7 +26,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown, parseMarkdownLenient } from '../utils/frontmatter.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { computeContextDiff } from './diff.js';
-import { calculateHash } from './workspace/index.js';
+import { calculateHash, iterWorkspaceArticles } from './workspace/index.js';
 
 export type ConflictFileType = 'conflict' | 'dropped' | 'deleted' | 'unknown';
 
@@ -139,14 +139,9 @@ export function findCanonicalArticlePath(
 
   // If exact baseName doesn't match, attempt search by ULID in draft and published dirs
   if (articleId && articleId.length === 26) {
-    for (const sub of ['draft', 'published']) {
-      const dir = path.join(workspaceRoot, collection, sub);
-      if (fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir);
-        const match = files.find((f) => f.includes(articleId) && f.endsWith('.md'));
-        if (match) {
-          return path.join(collection, sub, match);
-        }
+    for (const { relPath, fileName } of iterWorkspaceArticles(workspaceRoot, collection)) {
+      if (fileName.includes(articleId)) {
+        return relPath;
       }
     }
   }

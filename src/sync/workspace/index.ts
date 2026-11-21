@@ -25,8 +25,9 @@ import path from 'node:path';
 import { extractUlidFromFilename } from '../../utils/naming.js';
 import { computeArticleRelativePath } from '../../utils/frontmatter.js';
 import { calculateHash } from './hash.js';
+import { iterWorkspaceArticles, type WorkspaceArticleEntry } from './articles.js';
 
-export { calculateHash };
+export { calculateHash, iterWorkspaceArticles, type WorkspaceArticleEntry };
 
 /** Subdirectory (under a collection) reserved for preserved divergent local copies. */
 export const CONFLICTS_SUBDIR = 'conflicts';

@@ -21,8 +21,8 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
+import { iterWorkspaceArticles } from '../workspace/index.js';
 import { collectArticleReferencedMediaIds, collectArticleStorageKeys } from './body_scan.js';
 
 /** The two ID spaces a protected reference can live in — see docs/media-id-spaces.md. */
@@ -65,42 +65,30 @@ export function collectPruneProtectionSets(
   const protectedStems = new Set<string>();
   const protectedRecordIds = new Set<string>();
 
-  for (const statusDir of ['draft', 'published', 'conflicts']) {
-    const dir = path.join(workspaceRoot, collection, statusDir);
-    if (!fs.existsSync(dir)) continue;
-    let entries: string[];
+  for (const { fullPath } of iterWorkspaceArticles(workspaceRoot, collection, {
+    includeConflicts: true,
+  })) {
+    let content: string;
     try {
-      entries = fs.readdirSync(dir);
+      content = fs.readFileSync(fullPath, 'utf8');
     } catch {
+      // An unreadable article contributes nothing to the protection set — it cannot be blamed for a
+      // mirror it might have referenced, but it also cannot vouch for one.
       continue;
     }
-    for (const file of entries) {
-      if (!file.endsWith('.md')) continue;
-      // A deletion backup is the residue of an article that no longer exists remotely. Keeping its
-      // references alive would make the corresponding record permanently unprunable.
-      if (file.endsWith('.deleted.md')) continue;
-      let content: string;
-      try {
-        content = fs.readFileSync(path.join(dir, file), 'utf8');
-      } catch {
-        // An unreadable article contributes nothing to the protection set — it cannot be blamed for a
-        // mirror it might have referenced, but it also cannot vouch for one.
-        continue;
-      }
 
-      for (const descriptor of collectArticleStorageKeys(content)) {
-        const stem = storageKeyToMarkdownRef(descriptor.storageKey);
-        if (stem) protectedStems.add(stem);
-        // The article-relative spelling (`../../media/<storageKey>`) names the mirror outright, so its
-        // extension-stripped basename is a second accepted stem for the same asset.
-        const key = descriptor.storageKey;
-        const withoutExt = key.replace(/\.[A-Za-z0-9]{1,11}$/, '');
-        if (withoutExt && withoutExt !== key) protectedStems.add(withoutExt);
-      }
+    for (const descriptor of collectArticleStorageKeys(content)) {
+      const stem = storageKeyToMarkdownRef(descriptor.storageKey);
+      if (stem) protectedStems.add(stem);
+      // The article-relative spelling (`../../media/<storageKey>`) names the mirror outright, so its
+      // extension-stripped basename is a second accepted stem for the same asset.
+      const key = descriptor.storageKey;
+      const withoutExt = key.replace(/\.[A-Za-z0-9]{1,11}$/, '');
+      if (withoutExt && withoutExt !== key) protectedStems.add(withoutExt);
+    }
 
-      for (const mediaId of collectArticleReferencedMediaIds(content)) {
-        protectedRecordIds.add(mediaId.toUpperCase());
-      }
+    for (const mediaId of collectArticleReferencedMediaIds(content)) {
+      protectedRecordIds.add(mediaId.toUpperCase());
     }
   }
 

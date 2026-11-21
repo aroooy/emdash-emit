@@ -28,7 +28,7 @@ import {
   parseMarkdown,
   parseMarkdownLenient,
 } from '../utils/frontmatter.js';
-import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
+import { calculateHash, CONFLICTS_SUBDIR, iterWorkspaceArticles } from './workspace/index.js';
 import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { formatRevForDisplay } from '../client/api.js';
@@ -158,85 +158,80 @@ export function getWorkspaceStatus(
     };
   }
 
-  // Scan draft/ and published/ subdirectories
-  const subdirs: Array<'draft' | 'published'> = ['draft', 'published'];
-  for (const sub of subdirs) {
-    const subDirPath = path.join(collectionDir, sub);
-    if (!fs.existsSync(subDirPath)) continue;
+  // Scan draft/ and published/ subdirectories via canonical workspace iterator
+  for (const { relPath, fullPath, fileName: file, status: sub } of iterWorkspaceArticles(
+    workspaceRoot,
+    collection,
+    { excludeDeletedBackups: false },
+  )) {
+    const content = fs.readFileSync(fullPath, 'utf8');
 
-    const files = fs.readdirSync(subDirPath).filter((f) => f.endsWith('.md'));
-    for (const file of files) {
-      const relPath = path.join(collection, sub, file);
-      const fullPath = path.join(workspaceRoot, relPath);
-      const content = fs.readFileSync(fullPath, 'utf8');
+    try {
+      const parsed = parseMarkdown(content);
+      const currentHash = calculateHash(content);
+      const syncState = cache.getSyncState(parsed.frontmatter.id);
 
-      try {
-        const parsed = parseMarkdown(content);
-        const currentHash = calculateHash(content);
-        const syncState = cache.getSyncState(parsed.frontmatter.id);
+      let syncStatus: 'synced' | 'modified' | 'untracked' = 'untracked';
+      const conflictPending = syncState?.conflictPending === 1;
+      const deletePending = syncState?.deletePending === 1;
+      const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
+      const hasUnpublishedDraft = hasUncommittedDraftRevision(syncState);
 
-        let syncStatus: 'synced' | 'modified' | 'untracked' = 'untracked';
-        const conflictPending = syncState?.conflictPending === 1;
-        const deletePending = syncState?.deletePending === 1;
-        const taxonomyApplyPending = syncState?.taxonomyApplyPending === 1;
-        const hasUnpublishedDraft = hasUncommittedDraftRevision(syncState);
-
-        if (syncState) {
-          const unmodified = isLocalFileUnmodified({
-            workspaceRoot,
-            cache,
-            id: parsed.frontmatter.id,
-            relPath,
-            localContent: content,
-            currentHash,
-            syncState,
-          });
-          if (unmodified && !conflictPending && !taxonomyApplyPending) {
-            syncStatus = 'synced';
-          } else {
-            syncStatus = 'modified';
-          }
-        }
-
-        items.push({
+      if (syncState) {
+        const unmodified = isLocalFileUnmodified({
+          workspaceRoot,
+          cache,
           id: parsed.frontmatter.id,
-          slug: parsed.frontmatter.slug,
-          title: parsed.frontmatter.title,
-          status: parsed.frontmatter.status,
-          syncStatus,
-          filePath: relPath,
-          rev: formatRevForDisplay(syncState?.remoteRev),
-          hasUnpublishedDraft: hasUnpublishedDraft || undefined,
-          conflictPending: conflictPending || undefined,
-          deletePending: deletePending || undefined,
-          taxonomyApplyPending: taxonomyApplyPending || undefined,
+          relPath,
+          localContent: content,
+          currentHash,
+          syncState,
         });
-      } catch (err: unknown) {
-        const fallbackId = extractUlidFromFilename(file) || 'unknown';
-        const baseWithoutDate = stripDatePrefix(file).replace(/\.md$/i, '');
-        const fallbackTitle =
-          fallbackId !== 'unknown' && baseWithoutDate.startsWith(`${fallbackId}-`)
-            ? baseWithoutDate.slice(fallbackId.length + 1)
-            : baseWithoutDate;
-        const syncState = fallbackId !== 'unknown' ? cache.getSyncState(fallbackId) : null;
-        const errorMsg = formatFrontmatterParseError(err);
-        // Match `emit doctor`: distinguish files that a syntax-only lenient repair can recover from
-        // files with unrecoverable frontmatter, so status and doctor never disagree.
-        const healable = parseMarkdownLenient(content) !== null;
-
-        items.push({
-          id: fallbackId,
-          slug: syncState?.slug || 'invalid-frontmatter',
-          title: fallbackTitle,
-          status: sub,
-          syncStatus: 'invalid',
-          filePath: relPath,
-          rev: formatRevForDisplay(syncState?.remoteRev),
-          cached: Boolean(syncState),
-          healable: healable || undefined,
-          error: errorMsg,
-        });
+        if (unmodified && !conflictPending && !taxonomyApplyPending) {
+          syncStatus = 'synced';
+        } else {
+          syncStatus = 'modified';
+        }
       }
+
+      items.push({
+        id: parsed.frontmatter.id,
+        slug: parsed.frontmatter.slug,
+        title: parsed.frontmatter.title,
+        status: parsed.frontmatter.status,
+        syncStatus,
+        filePath: relPath,
+        rev: formatRevForDisplay(syncState?.remoteRev),
+        hasUnpublishedDraft: hasUnpublishedDraft || undefined,
+        conflictPending: conflictPending || undefined,
+        deletePending: deletePending || undefined,
+        taxonomyApplyPending: taxonomyApplyPending || undefined,
+      });
+    } catch (err: unknown) {
+      const fallbackId = extractUlidFromFilename(file) || 'unknown';
+      const baseWithoutDate = stripDatePrefix(file).replace(/\.md$/i, '');
+      const fallbackTitle =
+        fallbackId !== 'unknown' && baseWithoutDate.startsWith(`${fallbackId}-`)
+          ? baseWithoutDate.slice(fallbackId.length + 1)
+          : baseWithoutDate;
+      const syncState = fallbackId !== 'unknown' ? cache.getSyncState(fallbackId) : null;
+      const errorMsg = formatFrontmatterParseError(err);
+      // Match `emit doctor`: distinguish files that a syntax-only lenient repair can recover from
+      // files with unrecoverable frontmatter, so status and doctor never disagree.
+      const healable = parseMarkdownLenient(content) !== null;
+
+      items.push({
+        id: fallbackId,
+        slug: syncState?.slug || 'invalid-frontmatter',
+        title: fallbackTitle,
+        status: sub === 'conflicts' ? 'draft' : sub,
+        syncStatus: 'invalid',
+        filePath: relPath,
+        rev: formatRevForDisplay(syncState?.remoteRev),
+        cached: Boolean(syncState),
+        healable: healable || undefined,
+        error: errorMsg,
+      });
     }
   }
 

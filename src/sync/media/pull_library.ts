@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAuthedFetch } from '../../client/http.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
+import { iterWorkspaceArticles } from '../workspace/index.js';
 import { collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
@@ -275,19 +276,17 @@ export async function pullMedia(options: PullMediaOptions): Promise<PullMediaRes
   let referencedUnmirroredStorageKeys: string[] | undefined = undefined;
   if (options.all) {
     const referenced = new Set<string>();
-    for (const status of ['draft', 'published']) {
-      const statusDir = path.join(options.workspaceRoot, options.collection || 'posts', status);
-      if (!fs.existsSync(statusDir)) continue;
-      for (const file of fs.readdirSync(statusDir)) {
-        if (!file.endsWith('.md')) continue;
-        try {
-          const content = fs.readFileSync(path.join(statusDir, file), 'utf8');
-          for (const descriptor of collectArticleStorageKeys(content)) {
-            referenced.add(descriptor.storageKey);
-          }
-        } catch {
-          // An unreadable article contributes nothing to the census.
+    for (const { fullPath } of iterWorkspaceArticles(
+      options.workspaceRoot,
+      options.collection || 'posts',
+    )) {
+      try {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        for (const descriptor of collectArticleStorageKeys(content)) {
+          referenced.add(descriptor.storageKey);
         }
+      } catch {
+        // An unreadable article contributes nothing to the census.
       }
     }
     if (referenced.size > 0) {

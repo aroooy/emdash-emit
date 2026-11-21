@@ -26,6 +26,7 @@ import { readTaxonomyDir } from '../taxonomies.js';
 import { parseMarkdownLenient } from '../../utils/frontmatter.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import { clampSearchLimit } from '../../utils/search-options.js';
+import { iterWorkspaceArticles } from '../workspace/index.js';
 import {
   taxonomyTermFilterAliases,
   taxonomyTermMatchesFilter,
@@ -105,146 +106,130 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
 
   const limit = clampSearchLimit(options.limit);
 
-  const statusDirs: Array<{ dirName: string; defaultStatus: string; isConflict: boolean }> = [
-    { dirName: 'published', defaultStatus: 'published', isConflict: false },
-    { dirName: 'draft', defaultStatus: 'draft', isConflict: false },
-  ];
-
-  if (options.includeConflicts) {
-    statusDirs.push({ dirName: 'conflicts', defaultStatus: 'draft', isConflict: true });
-  }
+  const statuses: Array<'draft' | 'published' | 'conflicts'> = options.includeConflicts
+    ? ['published', 'draft', 'conflicts']
+    : ['published', 'draft'];
 
   const hits: ArticleSearchHit[] = [];
   let scannedCount = 0;
 
-  for (const { dirName, defaultStatus, isConflict } of statusDirs) {
-    const dirPath = path.join(root, collection, dirName);
-    if (!fs.existsSync(dirPath)) continue;
+  for (const { relPath, fullPath, fileName: file, status } of iterWorkspaceArticles(
+    root,
+    collection,
+    { statuses },
+  )) {
+    const isConflict = status === 'conflicts';
+    const defaultStatus = isConflict ? 'draft' : status;
 
-    let entries: string[];
+    scannedCount++;
+
+    let content: string;
     try {
-      entries = fs.readdirSync(dirPath);
+      content = fs.readFileSync(fullPath, 'utf8');
     } catch {
       continue;
     }
 
-    for (const file of entries) {
-      if (!file.endsWith('.md')) continue;
-      if (file.endsWith('.deleted.md')) continue;
-
-      scannedCount++;
-      const fullPath = path.join(dirPath, file);
-      const relPath = path.posix.join(collection, dirName, file);
-
-      let content: string;
-      try {
-        content = fs.readFileSync(fullPath, 'utf8');
-      } catch {
-        continue;
-      }
-
-      const parsed = parseMarkdownLenient(content, fullPath);
-      if (!parsed) {
-        continue;
-      }
-      const fm = (parsed.frontmatter || {}) as unknown as Record<string, unknown>;
-      const bodyText = parsed.body;
-
-      const articleId = String(fm.id || '').trim();
-      const articleSlug = String(fm.slug || '').trim();
-      const articleTitle = String(fm.title || file.replace(/\.md$/, '')).trim();
-      const articleStatus = String(fm.status || defaultStatus)
-        .trim()
-        .toLowerCase();
-
-      // Status filter
-      if (options.status && articleStatus !== options.status.toLowerCase()) {
-        continue;
-      }
-
-      // Slug filter
-      if (normalizedSlug) {
-        if (!articleSlug.toLowerCase().includes(normalizedSlug)) {
-          continue;
-        }
-      }
-
-      // Date range filter
-      const dates = parseArticleDates({
-        ...fm,
-        createdAt: fm.createdAt,
-        publishedAt: fm.publishedAt,
-      });
-      const dateToCompare = resolveArticleDateField(dates, articleStatus, options.dateField);
-      if (!inArticleDateRange(dateToCompare, sinceBoundary, untilBoundary)) {
-        continue;
-      }
-
-      // Taxonomy filters — terms live under the frontmatter's `taxonomies:` map, never at the top level.
-      const frontmatterTaxonomies = (
-        fm.taxonomies && typeof fm.taxonomies === 'object' ? fm.taxonomies : {}
-      ) as Record<string, unknown>;
-      const categories = toArray(frontmatterTaxonomies.categories).map((c) =>
-        String(c).toLowerCase(),
-      );
-      if (
-        normalizedCategory &&
-        !categories.some((c) => taxonomyTermMatchesFilter(c, categoryFilterAliases))
-      ) {
-        continue;
-      }
-
-      const tags = toArray(frontmatterTaxonomies.tags).map((t) => String(t).toLowerCase());
-      if (normalizedTag && !tags.some((t) => taxonomyTermMatchesFilter(t, tagFilterAliases))) {
-        continue;
-      }
-
-      // Keyword match
-      const matchedOn: Array<
-        'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'
-      > = [];
-
-      if (normalizedQuery) {
-        const textMatches = matchesArticleKeyword(
-          {
-            title: articleTitle,
-            slug: articleSlug,
-            excerpt: typeof fm.excerpt === 'string' ? fm.excerpt : undefined,
-            body: bodyText,
-          },
-          normalizedQuery,
-        );
-        matchedOn.push(...textMatches);
-
-        const queryTermAliases = taxonomyTermFilterAliases(normalizedQuery);
-        if (categories.some((c) => taxonomyTermMatchesFilter(c, queryTermAliases))) {
-          matchedOn.push('category');
-        }
-        if (tags.some((t) => taxonomyTermMatchesFilter(t, queryTermAliases))) {
-          matchedOn.push('tag');
-        }
-
-        if (matchedOn.length === 0) {
-          continue;
-        }
-      } else {
-        matchedOn.push('recency');
-      }
-
-      hits.push({
-        id: articleId,
-        slug: articleSlug || null,
-        title: articleTitle,
-        status: articleStatus,
-        createdAt: dates.createdAt,
-        publishedAt: dates.publishedAt,
-        updatedAt: dates.updatedAt,
-        isLocal: true,
-        localPath: relPath,
-        quarantined: isConflict,
-        matchedOn,
-      });
+    const parsed = parseMarkdownLenient(content, fullPath);
+    if (!parsed) {
+      continue;
     }
+    const fm = (parsed.frontmatter || {}) as unknown as Record<string, unknown>;
+    const bodyText = parsed.body;
+
+    const articleId = String(fm.id || '').trim();
+    const articleSlug = String(fm.slug || '').trim();
+    const articleTitle = String(fm.title || file.replace(/\.md$/, '')).trim();
+    const articleStatus = String(fm.status || defaultStatus)
+      .trim()
+      .toLowerCase();
+
+    // Status filter
+    if (options.status && articleStatus !== options.status.toLowerCase()) {
+      continue;
+    }
+
+    // Slug filter
+    if (normalizedSlug) {
+      if (!articleSlug.toLowerCase().includes(normalizedSlug)) {
+        continue;
+      }
+    }
+
+    // Date range filter
+    const dates = parseArticleDates({
+      ...fm,
+      createdAt: fm.createdAt,
+      publishedAt: fm.publishedAt,
+    });
+    const dateToCompare = resolveArticleDateField(dates, articleStatus, options.dateField);
+    if (!inArticleDateRange(dateToCompare, sinceBoundary, untilBoundary)) {
+      continue;
+    }
+
+    // Taxonomy filters — terms live under the frontmatter's `taxonomies:` map, never at the top level.
+    const frontmatterTaxonomies = (
+      fm.taxonomies && typeof fm.taxonomies === 'object' ? fm.taxonomies : {}
+    ) as Record<string, unknown>;
+    const categories = toArray(frontmatterTaxonomies.categories).map((c) =>
+      String(c).toLowerCase(),
+    );
+    if (
+      normalizedCategory &&
+      !categories.some((c) => taxonomyTermMatchesFilter(c, categoryFilterAliases))
+    ) {
+      continue;
+    }
+
+    const tags = toArray(frontmatterTaxonomies.tags).map((t) => String(t).toLowerCase());
+    if (normalizedTag && !tags.some((t) => taxonomyTermMatchesFilter(t, tagFilterAliases))) {
+      continue;
+    }
+
+    // Keyword match
+    const matchedOn: Array<'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'> =
+      [];
+
+    if (normalizedQuery) {
+      const textMatches = matchesArticleKeyword(
+        {
+          title: articleTitle,
+          slug: articleSlug,
+          excerpt: typeof fm.excerpt === 'string' ? fm.excerpt : undefined,
+          body: bodyText,
+        },
+        normalizedQuery,
+      );
+      matchedOn.push(...textMatches);
+
+      const queryTermAliases = taxonomyTermFilterAliases(normalizedQuery);
+      if (categories.some((c) => taxonomyTermMatchesFilter(c, queryTermAliases))) {
+        matchedOn.push('category');
+      }
+      if (tags.some((t) => taxonomyTermMatchesFilter(t, queryTermAliases))) {
+        matchedOn.push('tag');
+      }
+
+      if (matchedOn.length === 0) {
+        continue;
+      }
+    } else {
+      matchedOn.push('recency');
+    }
+
+    hits.push({
+      id: articleId,
+      slug: articleSlug || null,
+      title: articleTitle,
+      status: articleStatus,
+      createdAt: dates.createdAt,
+      publishedAt: dates.publishedAt,
+      updatedAt: dates.updatedAt,
+      isLocal: true,
+      localPath: relPath,
+      quarantined: isConflict,
+      matchedOn,
+    });
   }
 
   // Sort newest first by dateToCompare
