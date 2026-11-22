@@ -28,6 +28,13 @@ export const ARTICLE_SEARCH_MAX_LIMIT = SEARCH_MAX_LIMIT;
 export const ARTICLE_SEARCH_DEFAULT_MAX_SCAN = 300;
 export const ARTICLE_SEARCH_TAXONOMY_MAX_SCAN = 50;
 
+export interface ArticleSearchSnapshotInfo {
+  capturedAt: string;
+  ageDays: number;
+  stale: boolean;
+  articleCount: number;
+}
+
 export interface ArticleSearchHit {
   id: string;
   slug: string | null;
@@ -40,6 +47,8 @@ export interface ArticleSearchHit {
   isLocal: boolean;
   localPath: string | null;
   quarantined?: boolean;
+  fromSnapshot?: boolean;
+  bodyUnverified?: boolean;
   score?: number;
   matchedOn: Array<'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'>;
 }
@@ -55,6 +64,7 @@ export interface ArticleSearchResult {
   taxonomyFetchCount: number;
   taxonomyCacheHitCount: number;
   fallbackReason?: string;
+  snapshot?: ArticleSearchSnapshotInfo;
 }
 
 export interface ArticleSearchOptions {

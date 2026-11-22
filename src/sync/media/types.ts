@@ -251,6 +251,13 @@ export interface MirroredAssetResult {
   orphanStorageKeys: string[];
 }
 
+export interface MediaSearchSnapshotInfo {
+  capturedAt: string;
+  ageDays: number;
+  stale: boolean;
+  mediaCount: number;
+}
+
 /** One media-search hit, decorated with the local mirror state Emit actually holds. */
 export interface MediaSearchHit {
   /** D1 media record id (uppercase ULID). NEVER usable in a body URL. */
@@ -267,6 +274,8 @@ export interface MediaSearchHit {
   mirrored: boolean;
   /** Workspace-relative mirror path (`media/<markdownRef>.<ext>`), null when not mirrored. */
   localPath: string | null;
+  /** True when this hit came from the cached metadata snapshot rather than a local mirror. */
+  fromSnapshot?: boolean;
   /** Which field matched the query, so an agent can read why a row was returned. */
   matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'>;
 }
@@ -283,6 +292,8 @@ export interface MediaSearchResult {
   truncated: boolean;
   /** Query as normalized for matching (lowercased), echoed so agents can audit. Empty for a recency browse. */
   normalizedQuery: string;
+  /** Present when a metadata snapshot exists in cache.db. */
+  snapshot?: MediaSearchSnapshotInfo;
 }
 
 export interface LocalMirrorEntry {

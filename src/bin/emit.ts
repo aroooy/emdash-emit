@@ -35,6 +35,7 @@ import { registerConflictsCommand } from '../cli/commands/conflicts.js';
 import { registerDoctorCommand } from '../cli/commands/doctor.js';
 import { registerMediaSearchCommand } from '../cli/commands/media.js';
 import { registerArticleSearchCommand } from '../cli/commands/article-search.js';
+import { registerSnapshotCommand } from '../cli/commands/snapshot.js';
 import { getPackageVersion } from '../utils/version.js';
 
 export const program = new Command();
@@ -57,6 +58,7 @@ registerConflictsCommand(program, resolveContext);
 registerDoctorCommand(program, resolveContext);
 registerMediaSearchCommand(program, resolveContext);
 registerArticleSearchCommand(program, resolveContext);
+registerSnapshotCommand(program, resolveContext);
 
 // emit mcp
 program

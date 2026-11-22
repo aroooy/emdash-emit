@@ -38,6 +38,7 @@ import {
 import { resolveOriginPriority, resolveExplicitBooleanOption } from '../src/cli/context.js';
 import { createCliContextResolver } from '../src/cli/context.js';
 import { DEFAULT_ORIGIN, initWorkspace } from '../src/utils/config.js';
+import { CacheDatabase } from '../src/db/cache.js';
 import { loadProfilesFile, setProfile } from '../src/utils/profile.js';
 
 describe('Emit CLI (Commander)', () => {
@@ -1384,6 +1385,54 @@ describe('Emit CLI (Commander)', () => {
       const cmd2 = createTestCommand();
       cmd2.parse(['--no-media', '--media'], { from: 'user' });
       expect(resolveExplicitBooleanOption(cmd2, 'media')).toBe(true);
+    });
+  });
+
+  describe('emit snapshot (v0.1.47)', () => {
+    it('supports --status and --clear offline without remote requests', async () => {
+      const logLines: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => logLines.push(args.map(String).join(' '));
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        await program.parseAsync(['node', 'emit', 'snapshot', '--status']);
+        expect(logLines.join('\n')).toContain('Snapshot (posts): none');
+
+        const localCache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+        try {
+          localCache.saveSnapshotMeta({
+            collection: 'posts',
+            capturedAt: Date.now(),
+            articleCount: 4,
+            mediaCount: 2,
+            taxonomyFetchedCount: 1,
+            taxonomyReusedCount: 3,
+            articleSingleGetCount: 1,
+            durationMs: 25,
+          });
+        } finally {
+          localCache.close();
+        }
+
+        logLines.length = 0;
+        await program.parseAsync(['node', 'emit', 'snapshot', '--status']);
+        expect(logLines.join('\n')).toContain('4 article(s) · 2 media record(s)');
+
+        logLines.length = 0;
+        await program.parseAsync(['node', 'emit', 'snapshot', '--clear']);
+        expect(logLines.join('\n')).toContain('Cleared snapshot for "posts"');
+
+        const verifyCache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+        try {
+          expect(verifyCache.getSnapshotMeta('posts')).toBeNull();
+        } finally {
+          verifyCache.close();
+        }
+      } finally {
+        process.chdir(prevCwd);
+        console.log = origLog;
+      }
     });
   });
 });

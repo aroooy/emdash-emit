@@ -20,13 +20,18 @@
  * SOFTWARE.
  */
 
-import { formatOfflineSearchHeader, OFFLINE_SEARCH_EMPTY_NOTICE } from './article_report.js';
+import {
+  formatOfflineSearchHeader,
+  OFFLINE_SEARCH_EMPTY_NOTICE,
+  type MediaSearchSnapshotView,
+} from './article_report.js';
 
 export interface MediaSearchHitView {
   mediaId: string;
   storageKey: string | null;
   mirrored: boolean;
   localPath: string | null;
+  fromSnapshot?: boolean;
   alt: string | null;
   caption: string | null;
   mimeType: string | null;
@@ -39,6 +44,7 @@ export interface MediaSearchResultView {
   walkComplete: boolean;
   totalCount: number | null;
   truncated: boolean;
+  snapshot?: MediaSearchSnapshotView;
 }
 
 /**
@@ -60,7 +66,7 @@ export function formatMediaSearchHeader(
   options: { subject: string; offline: boolean },
 ): string {
   if (options.offline) {
-    return formatOfflineSearchHeader(result.scannedCount);
+    return formatOfflineSearchHeader(result.scannedCount, result.snapshot);
   }
   const totalLabel =
     result.totalCount !== null ? `${result.totalCount} records` : 'an unknown-size library';
@@ -89,7 +95,11 @@ export function formatMediaSearchEmptyNotice(
  */
 export function formatMediaSearchHit(hit: MediaSearchHitView, index: number): string[] {
   const num = `${index + 1}.`.padEnd(4, ' ');
-  const statusBadge = hit.mirrored ? '[mirrored]' : '[not mirrored]';
+  const statusBadge = hit.mirrored
+    ? '[mirrored]'
+    : hit.fromSnapshot
+      ? '[snapshot]'
+      : '[not mirrored]';
   const line1 = `  ${num}${hit.mediaId}  storageKey ${hit.storageKey || '(none)'}  ${statusBadge}`;
 
   const parts: string[] = [];

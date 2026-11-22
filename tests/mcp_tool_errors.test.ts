@@ -411,4 +411,30 @@ describe('MCP Tool Error Formatting', () => {
       else delete process.env.EMDASH_ORIGIN;
     }
   });
+
+  it('surfaces structured MCP tool error on sync_snapshot when remote fetch fails', async () => {
+    const origToken = process.env.EMDASH_TOKEN;
+    const origOrigin = process.env.EMDASH_ORIGIN;
+    const origFetch = globalThis.fetch;
+    try {
+      process.env.EMDASH_TOKEN = 'mock-pat';
+      process.env.EMDASH_ORIGIN = 'https://mock.example.com';
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        text: async () => 'boom',
+      }) as unknown as typeof fetch;
+
+      const registered = handlersOf(createMcpServer({ workspaceRoot: tempDir, cache }));
+      const result = await registered['sync_snapshot'].handler({ action: 'capture' });
+      expect(result.isError).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origToken) process.env.EMDASH_TOKEN = origToken;
+      else delete process.env.EMDASH_TOKEN;
+      if (origOrigin) process.env.EMDASH_ORIGIN = origOrigin;
+      else delete process.env.EMDASH_ORIGIN;
+    }
+  });
 });

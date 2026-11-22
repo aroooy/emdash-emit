@@ -106,6 +106,50 @@ export interface MediaStateRecord {
   uploadedAt?: number | null;
 }
 
+export type SnapshotBodySource = 'list-live' | 'single-get' | 'list-stale';
+
+export interface SnapshotMetaRecord {
+  collection: string;
+  capturedAt: number;
+  articleCount: number;
+  mediaCount: number;
+  taxonomyFetchedCount: number;
+  taxonomyReusedCount: number;
+  articleSingleGetCount: number;
+  durationMs: number;
+}
+
+export interface SnapshotArticleRecord {
+  id: string;
+  collection: string;
+  slug: string;
+  title: string;
+  status: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  publishedAt?: string | null;
+  comparisonRev: string;
+  excerpt?: string | null;
+  bodyMarkdown: string;
+  bodySource: SnapshotBodySource;
+  categoriesJson: string;
+  tagsJson: string;
+  taxonomyVerified: number;
+  capturedAt: number;
+}
+
+export interface SnapshotMediaRecord {
+  mediaId: string;
+  storageKey?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  alt?: string | null;
+  caption?: string | null;
+  createdAt?: string | null;
+  capturedAt: number;
+}
+
 export class CacheDatabase {
   private db: DatabaseSync;
   private dbPath: string;
@@ -697,6 +741,265 @@ export class CacheDatabase {
       }
       throw err;
     }
+  }
+
+  // --- Snapshot Catalog Methods (Schema v6) ---
+
+  public getSnapshotMeta(collection = 'posts'): SnapshotMetaRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM snapshot_meta WHERE collection = ?')
+      .get(collection) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapSnapshotMetaRow(row);
+  }
+
+  public getLatestSnapshotMeta(): SnapshotMetaRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM snapshot_meta ORDER BY captured_at DESC LIMIT 1')
+      .get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapSnapshotMetaRow(row);
+  }
+
+  private mapSnapshotMetaRow(row: Record<string, unknown>): SnapshotMetaRecord {
+    return {
+      collection: String(row.collection),
+      capturedAt: Number(row.captured_at),
+      articleCount: Number(row.article_count),
+      mediaCount: Number(row.media_count),
+      taxonomyFetchedCount: Number(row.taxonomy_fetched_count),
+      taxonomyReusedCount: Number(row.taxonomy_reused_count),
+      articleSingleGetCount: Number(row.article_single_get_count),
+      durationMs: Number(row.duration_ms),
+    };
+  }
+
+  public saveSnapshotMeta(meta: SnapshotMetaRecord): void {
+    this.db
+      .prepare(
+        `
+      INSERT INTO snapshot_meta (
+        collection, captured_at, article_count, media_count,
+        taxonomy_fetched_count, taxonomy_reused_count, article_single_get_count, duration_ms
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(collection) DO UPDATE SET
+        captured_at = excluded.captured_at,
+        article_count = excluded.article_count,
+        media_count = excluded.media_count,
+        taxonomy_fetched_count = excluded.taxonomy_fetched_count,
+        taxonomy_reused_count = excluded.taxonomy_reused_count,
+        article_single_get_count = excluded.article_single_get_count,
+        duration_ms = excluded.duration_ms
+    `,
+      )
+      .run(
+        meta.collection,
+        meta.capturedAt,
+        meta.articleCount,
+        meta.mediaCount,
+        meta.taxonomyFetchedCount,
+        meta.taxonomyReusedCount,
+        meta.articleSingleGetCount,
+        meta.durationMs,
+      );
+  }
+
+  public getSnapshotArticle(id: string): SnapshotArticleRecord | null {
+    const row = this.db.prepare('SELECT * FROM snapshot_articles WHERE id = ?').get(id) as
+      Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapSnapshotArticleRow(row);
+  }
+
+  public listSnapshotArticles(collection = 'posts'): SnapshotArticleRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM snapshot_articles WHERE collection = ?')
+      .all(collection) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapSnapshotArticleRow(r));
+  }
+
+  public upsertSnapshotArticlesBatch(options: {
+    collection: string;
+    records: SnapshotArticleRecord[];
+    walkComplete: boolean;
+  }): { upserted: number; pruned: number } {
+    return this.runTransaction(() => {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO snapshot_articles (
+          id, collection, slug, title, status,
+          created_at, updated_at, published_at, comparison_rev,
+          excerpt, body_markdown, body_source,
+          categories_json, tags_json, taxonomy_verified, captured_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const keepIds = new Set<string>();
+      for (const rec of options.records) {
+        keepIds.add(rec.id);
+        stmt.run(
+          rec.id,
+          rec.collection,
+          rec.slug,
+          rec.title,
+          rec.status,
+          rec.createdAt ?? null,
+          rec.updatedAt ?? null,
+          rec.publishedAt ?? null,
+          rec.comparisonRev,
+          rec.excerpt ?? null,
+          rec.bodyMarkdown,
+          rec.bodySource,
+          rec.categoriesJson,
+          rec.tagsJson,
+          rec.taxonomyVerified,
+          rec.capturedAt,
+        );
+      }
+
+      let pruned = 0;
+      if (options.walkComplete) {
+        const existingRows = this.db
+          .prepare('SELECT id FROM snapshot_articles WHERE collection = ?')
+          .all(options.collection) as Array<{ id: string }>;
+        const delStmt = this.db.prepare('DELETE FROM snapshot_articles WHERE id = ?');
+        for (const row of existingRows) {
+          if (!keepIds.has(String(row.id))) {
+            delStmt.run(String(row.id));
+            pruned++;
+          }
+        }
+      }
+
+      return { upserted: options.records.length, pruned };
+    });
+  }
+
+  public listSnapshotMedia(): SnapshotMediaRecord[] {
+    const rows = this.db.prepare('SELECT * FROM snapshot_media').all() as Array<
+      Record<string, unknown>
+    >;
+    return rows.map((r) => ({
+      mediaId: String(r.media_id),
+      storageKey:
+        r.storage_key !== null && r.storage_key !== undefined ? String(r.storage_key) : null,
+      filename: r.filename !== null && r.filename !== undefined ? String(r.filename) : null,
+      mimeType: r.mime_type !== null && r.mime_type !== undefined ? String(r.mime_type) : null,
+      size: r.size !== null && r.size !== undefined ? Number(r.size) : null,
+      alt: r.alt !== null && r.alt !== undefined ? String(r.alt) : null,
+      caption: r.caption !== null && r.caption !== undefined ? String(r.caption) : null,
+      createdAt: r.created_at !== null && r.created_at !== undefined ? String(r.created_at) : null,
+      capturedAt: Number(r.captured_at),
+    }));
+  }
+
+  public upsertSnapshotMediaBatch(options: {
+    records: SnapshotMediaRecord[];
+    walkComplete: boolean;
+  }): { upserted: number; pruned: number } {
+    return this.runTransaction(() => {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO snapshot_media (
+          media_id, storage_key, filename, mime_type, size, alt, caption, created_at, captured_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const keepIds = new Set<string>();
+      for (const rec of options.records) {
+        keepIds.add(rec.mediaId);
+        stmt.run(
+          rec.mediaId,
+          rec.storageKey ?? null,
+          rec.filename ?? null,
+          rec.mimeType ?? null,
+          rec.size ?? null,
+          rec.alt ?? null,
+          rec.caption ?? null,
+          rec.createdAt ?? null,
+          rec.capturedAt,
+        );
+      }
+
+      let pruned = 0;
+      if (options.walkComplete) {
+        const existingRows = this.db.prepare('SELECT media_id FROM snapshot_media').all() as Array<{
+          media_id: string;
+        }>;
+        const delStmt = this.db.prepare('DELETE FROM snapshot_media WHERE media_id = ?');
+        for (const row of existingRows) {
+          if (!keepIds.has(String(row.media_id))) {
+            delStmt.run(String(row.media_id));
+            pruned++;
+          }
+        }
+      }
+
+      return { upserted: options.records.length, pruned };
+    });
+  }
+
+  public clearSnapshot(collection?: string): { articlesCleared: number; mediaCleared: number } {
+    return this.runTransaction(() => {
+      const artCountRow = (
+        collection
+          ? this.db
+              .prepare('SELECT COUNT(*) as cnt FROM snapshot_articles WHERE collection = ?')
+              .get(collection)
+          : this.db.prepare('SELECT COUNT(*) as cnt FROM snapshot_articles').get()
+      ) as { cnt: number };
+      const medCountRow = this.db.prepare('SELECT COUNT(*) as cnt FROM snapshot_media').get() as {
+        cnt: number;
+      };
+
+      if (collection) {
+        this.db.prepare('DELETE FROM snapshot_articles WHERE collection = ?').run(collection);
+        this.db.prepare('DELETE FROM snapshot_meta WHERE collection = ?').run(collection);
+      } else {
+        this.db.exec('DELETE FROM snapshot_articles;');
+        this.db.exec('DELETE FROM snapshot_meta;');
+      }
+
+      const remainingMeta = this.db.prepare('SELECT COUNT(*) as cnt FROM snapshot_meta').get() as {
+        cnt: number;
+      };
+      const shouldClearMedia = !collection || Number(remainingMeta?.cnt ?? 0) === 0;
+      if (shouldClearMedia) {
+        this.db.exec('DELETE FROM snapshot_media;');
+      }
+
+      return {
+        articlesCleared: Number(artCountRow?.cnt ?? 0),
+        mediaCleared: shouldClearMedia ? Number(medCountRow?.cnt ?? 0) : 0,
+      };
+    });
+  }
+
+  private mapSnapshotArticleRow(row: Record<string, unknown>): SnapshotArticleRecord {
+    return {
+      id: String(row.id),
+      collection: String(row.collection),
+      slug: String(row.slug),
+      title: String(row.title),
+      status: String(row.status),
+      createdAt:
+        row.created_at !== null && row.created_at !== undefined ? String(row.created_at) : null,
+      updatedAt:
+        row.updated_at !== null && row.updated_at !== undefined ? String(row.updated_at) : null,
+      publishedAt:
+        row.published_at !== null && row.published_at !== undefined
+          ? String(row.published_at)
+          : null,
+      comparisonRev: String(row.comparison_rev),
+      excerpt: row.excerpt !== null && row.excerpt !== undefined ? String(row.excerpt) : null,
+      bodyMarkdown: String(row.body_markdown ?? ''),
+      bodySource: String(row.body_source ?? 'list-live') as SnapshotBodySource,
+      categoriesJson: String(row.categories_json ?? '[]'),
+      tagsJson: String(row.tags_json ?? '[]'),
+      taxonomyVerified: Number(row.taxonomy_verified ?? 1),
+      capturedAt: Number(row.captured_at),
+    };
   }
 
   public close(): void {

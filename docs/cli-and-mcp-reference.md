@@ -254,7 +254,17 @@ emit media-search [query] [-l, --limit <n>] [--max-scan <n>] [--mirrored-only] [
 
 ---
 
-### 15. `emit guide`
+### 15. `emit snapshot`
+
+Captures, inspects, or clears a full-library metadata snapshot (articles, media, taxonomies) in `.emit/cache.db` (Schema v6) for comprehensive offline search and 0-GET remote taxonomy filtering.
+
+```bash
+emit snapshot [-c, --collection <collection>] [--status] [--clear] [--concurrency <number>] [-p, --profile <name>]
+```
+
+---
+
+### 16. `emit guide`
 
 Prints the Golden Path workflow cheat sheet, two-ID-space reminder, and AI collaboration safety rules to stdout (zero network or workspace context required).
 
@@ -264,7 +274,7 @@ emit guide
 
 ---
 
-### 16. `emit mcp`
+### 17. `emit mcp`
 
 Starts the Emit Model Context Protocol (MCP) server over stdio.
 
@@ -276,7 +286,7 @@ emit mcp [-w, --workspace <path>]
 
 ## Part 2: Model Context Protocol (MCP) Tool Reference
 
-All 14 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
+All 15 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
 
 | # | MCP Tool Name | CLI Equivalent | Key Parameters (Zod Schema) | Description |
 | --- | --- | --- | --- | --- |
@@ -292,5 +302,6 @@ All 14 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 10 | `sync_pull_media` | `emit pull-media` | `article?`, `storageKey?`, `limit?`, `all?`, `noPrune?`, `downloadFiles?`, `profile?` | Mirror media assets by article (`article`), specific key (`storageKey`), or bounded library window (`mediaSyncLimit`). |
 | 11 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
 | 12 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
-| 13 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
-| 14 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |
+| 13 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
+| 14 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
+| 15 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |

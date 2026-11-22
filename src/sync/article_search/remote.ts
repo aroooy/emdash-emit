@@ -237,11 +237,14 @@ interface ExecuteScanParams {
   fallbackReason?: string;
 }
 
+export const MAX_TAXONOMY_REMOTE_FETCHES = 100;
+
 export interface BaselineTaxonomyRead {
   /** null = fast-path not satisfied -> caller falls back to remote terms GET */
   terms: { categories: string[]; tags: string[] } | null;
   reason:
     | 'cache-hit'
+    | 'snapshot-hit'
     | 'no-cache'
     | 'pending-flag'
     | 'rev-mismatch'
@@ -266,9 +269,32 @@ export function readTaxonomiesFromBaseline(params: {
     return { terms: null, reason: 'no-cache' };
   }
 
+  const rawRevCandidate = String(item._rev || item.rev || item.version || '');
+  const remoteRev = extractRev(item, rawRevCandidate || '1');
+  const comparisonRev = extractComparisonRev(item, remoteRev);
+
+  const trySnapshotFallback = (): BaselineTaxonomyRead | null => {
+    const snap = cache.getSnapshotArticle(itemId);
+    if (!snap || snap.taxonomyVerified !== 1) return null;
+    if (!comparisonRev || !isSameRev(snap.comparisonRev, comparisonRev)) return null;
+    try {
+      const categories = JSON.parse(snap.categoriesJson) as unknown;
+      const tags = JSON.parse(snap.tagsJson) as unknown;
+      return {
+        terms: {
+          categories: Array.isArray(categories) ? categories.map(String) : [],
+          tags: Array.isArray(tags) ? tags.map(String) : [],
+        },
+        reason: 'snapshot-hit',
+      };
+    } catch {
+      return null;
+    }
+  };
+
   const syncState = cache.getSyncState(itemId);
   if (!syncState) {
-    return { terms: null, reason: 'no-cache' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'no-cache' };
   }
 
   if (
@@ -277,14 +303,11 @@ export function readTaxonomiesFromBaseline(params: {
     syncState.taxonomyApplyPending === 1 ||
     syncState.taxonomyConflictPending === 1
   ) {
-    return { terms: null, reason: 'pending-flag' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'pending-flag' };
   }
 
-  const rawRevCandidate = String(item._rev || item.rev || item.version || '');
-  const remoteRev = extractRev(item, rawRevCandidate || '1');
-  const comparisonRev = extractComparisonRev(item, remoteRev);
   if (!comparisonRev || !isSameRev(syncState.remoteRev, comparisonRev)) {
-    return { terms: null, reason: 'rev-mismatch' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'rev-mismatch' };
   }
 
   const fullPath = syncState.localFilePath
@@ -313,12 +336,12 @@ export function readTaxonomiesFromBaseline(params: {
   }
 
   if (!isDiskUnmodified) {
-    return { terms: null, reason: 'disk-modified' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'disk-modified' };
   }
 
   const baseSnapshot = cache.getBaseSnapshot(itemId);
   if (!baseSnapshot) {
-    return { terms: null, reason: 'no-snapshot' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'no-snapshot' };
   }
 
   const fm = readBaselineFrontmatter(baseSnapshot);
@@ -328,7 +351,7 @@ export function readTaxonomiesFromBaseline(params: {
     typeof fm.taxonomies === 'object' &&
     (Array.isArray(fm.taxonomies.categories) || Array.isArray(fm.taxonomies.tags));
   if (!hasRecordedTaxonomies) {
-    return { terms: null, reason: 'no-recorded-taxonomies' };
+    return trySnapshotFallback() ?? { terms: null, reason: 'no-recorded-taxonomies' };
   }
 
   return {
@@ -355,9 +378,11 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
   } = params;
 
   const hasTaxonomyFilter = Boolean(options.tag?.trim() || options.category?.trim());
-  const defaultMaxScan = hasTaxonomyFilter
-    ? ARTICLE_SEARCH_TAXONOMY_MAX_SCAN
-    : ARTICLE_SEARCH_DEFAULT_MAX_SCAN;
+  const hasSnapshot = Boolean(options.cache?.getSnapshotMeta(collection));
+  const defaultMaxScan =
+    hasTaxonomyFilter && !hasSnapshot
+      ? ARTICLE_SEARCH_TAXONOMY_MAX_SCAN
+      : ARTICLE_SEARCH_DEFAULT_MAX_SCAN;
 
   const maxScan =
     options.maxScan === 0
@@ -395,13 +420,14 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
   let taxonomyCacheHitCount = 0;
   let allSeriesComplete = true;
   let hitLimitReached = false;
+  let fetchCapReached = false;
 
   const localTaxonomyMaps = hasTaxonomyFilter ? loadLocalTaxonomyMaps(options.workspaceRoot) : null;
 
   const isCreatedAtSort = options.dateField === 'createdAt' || !options.dateField;
 
   for (const status of statusesToFetch) {
-    if (scannedCount >= maxScan || hitLimitReached) {
+    if (scannedCount >= maxScan || hitLimitReached || fetchCapReached) {
       allSeriesComplete = false;
       break;
     }
@@ -552,6 +578,13 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
             }
 
             if (!usedFastPath) {
+              if (options.token && (normalizedCategory || normalizedTag)) {
+                if (taxonomyFetchCount >= MAX_TAXONOMY_REMOTE_FETCHES) {
+                  fetchCapReached = true;
+                  allSeriesComplete = false;
+                  break;
+                }
+              }
               if (normalizedCategory && options.token) {
                 taxonomyFetchCount++;
                 const catTerms = await fetchAssignedTerms({
@@ -628,7 +661,7 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
         }
       }
 
-      if (seriesReachedSince || !envelope.nextCursor || hitLimitReached) {
+      if (seriesReachedSince || !envelope.nextCursor || hitLimitReached || fetchCapReached) {
         cursor = undefined;
         break;
       }

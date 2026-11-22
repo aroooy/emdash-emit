@@ -23,6 +23,7 @@
 import type { Command } from 'commander';
 import { getWorkspaceStatus, filterStatusItems } from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
+import { formatSnapshotAge, formatSnapshotTimestamp } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
 import { sameOrigin } from '../context.js';
 import type { ResolveProfileResult, WorkspaceLinkDrift } from '../../utils/profile.js';
@@ -219,6 +220,18 @@ export function registerStatusInitCommands(
         console.log(
           '   Review each copy, merge any valuable content into the canonical article, then delete it. ' +
             'They are never pushed or pruned; pushing one directly is refused (QUARANTINED_COPY_NOT_PUSHABLE).\n',
+        );
+      }
+
+      const snapMeta = ctx.cache.getSnapshotMeta(collection);
+      if (snapMeta) {
+        const snapIso = new Date(snapMeta.capturedAt).toISOString();
+        const snapStale =
+          Date.now() - snapMeta.capturedAt >= 7 * 86_400_000
+            ? ' ⚠️ [STALE_SNAPSHOT: >7d old — run "emit snapshot"]'
+            : '';
+        console.log(
+          `📸 Snapshot: ${formatSnapshotTimestamp(snapIso)} (${formatSnapshotAge(snapIso)}) · ${snapMeta.articleCount} articles · ${snapMeta.mediaCount} media${snapStale}\n`,
         );
       }
     });

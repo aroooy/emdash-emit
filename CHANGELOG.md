@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.47] - 2026-11-22
+
+### Added
+
+- **Remote Full-Library Metadata Snapshot (`emit snapshot` / `sync_snapshot`, `src/sync/snapshot/`, `src/db/migrations.ts`, `src/db/cache.ts`, v0.1.47)**:
+  - Upgraded `.emit/cache.db` to **Schema v6** (`CURRENT_CACHE_SCHEMA_VERSION = 6`), adding three independent snapshot catalog tables (`snapshot_meta`, `snapshot_articles`, `snapshot_media`) without altering existing sync state or baseline invariants.
+  - Added `captureWorkspaceSnapshot()`, `getWorkspaceSnapshotStatus()`, and `clearWorkspaceSnapshot()` (also re-exported from `src/index.ts`), plus CLI `emit snapshot [--status] [--clear] [-c, --collection] [--concurrency] [-p, --profile]` and MCP `sync_snapshot` (`action: "capture" | "status" | "clear"`).
+  - Enforces the **Draft Selective Single GET** invariant via `body_source` (`list-live` | `single-get` | `list-stale`) and `taxonomy_verified` self-healing: clean published articles reuse list payloads with 0 extra GETs, matching `comparisonRev` rows reuse verified `base_snapshots` / prior snapshot rows with 0 extra GETs, and failed taxonomy or single-GET fallbacks are marked for automatic re-verification on the next capture.
+  - Stores site-wide (collection-independent) media catalog records keyed by `media_id` with nullable `storage_key` in `snapshot_media`, pruning stale rows only when `walkComplete === true` and preserving shared media until the final `snapshot_meta` entry is cleared.
+- **Snapshot-Aware Offline Search & 0-GET Taxonomy Fast-Path (`src/sync/article_search/`, `src/sync/media/local_search.ts`, `src/presentation/`, `emit status` / `sync_status`)**:
+  - `article-search --offline` / `sync_article_search(offline: true)` merges `snapshot_articles` below local disk files (`seenDiskIds` precedence), excludes `list-stale` bodies from keyword body matching, and marks hits with `[snapshot]` / `[body unverified]`.
+  - `media-search --offline` / `sync_media_search(offline: true)` merges site-wide `snapshot_media` below local mirrors (`mirroredOnly: true` skips snapshot rows) using `getLatestSnapshotMeta()`.
+  - Remote `article-search` with `--tag` / `--category` checks `snapshot_articles` (`'snapshot-hit'` when `taxonomyVerified === 1` and `isSameRev`), dynamically expands `defaultMaxScan` from `50` to `300` when a snapshot exists for the target collection, and caps remote term GETs at `MAX_TAXONOMY_REMOTE_FETCHES = 100` (setting `walkComplete: false` if reached).
+  - Both offline search headers and `emit status` / `sync_status` surface snapshot capture timestamp, age, and `[STALE_SNAPSHOT]` warnings when `>= 7` days old, while keeping output identical when no snapshot is present.
+
 ## [0.1.46] - 2026-11-21
 
 ### Changed

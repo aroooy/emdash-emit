@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPackageVersion } from '../utils/version.js';
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 5;
+export const CURRENT_CACHE_SCHEMA_VERSION = 6;
 
 function pruneBackups(dbPath: string): void {
   if (dbPath === ':memory:') return;
@@ -164,6 +164,65 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
     );
     CREATE INDEX IF NOT EXISTS idx_media_state_media_id ON media_state (media_id);
     CREATE INDEX IF NOT EXISTS idx_media_state_status ON media_state (status);
+  `);
+
+  // 6. snapshot_meta table: records when the remote metadata snapshot was captured (Schema v6)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS snapshot_meta (
+      collection TEXT PRIMARY KEY,
+      captured_at INTEGER NOT NULL,
+      article_count INTEGER NOT NULL DEFAULT 0,
+      media_count INTEGER NOT NULL DEFAULT 0,
+      taxonomy_fetched_count INTEGER NOT NULL DEFAULT 0,
+      taxonomy_reused_count INTEGER NOT NULL DEFAULT 0,
+      article_single_get_count INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // 7. snapshot_articles table: full-library article metadata & verified body catalog (Schema v6)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS snapshot_articles (
+      id TEXT PRIMARY KEY,
+      collection TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT,
+      updated_at TEXT,
+      published_at TEXT,
+      comparison_rev TEXT NOT NULL,
+      excerpt TEXT,
+      body_markdown TEXT NOT NULL DEFAULT '',
+      body_source TEXT NOT NULL DEFAULT 'list-live',
+      categories_json TEXT NOT NULL DEFAULT '[]',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      taxonomy_verified INTEGER NOT NULL DEFAULT 1,
+      captured_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_snapshot_articles_collection ON snapshot_articles (collection);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_articles_status ON snapshot_articles (status);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_articles_slug ON snapshot_articles (slug);
+  `);
+
+  // 8. snapshot_media table: full-library media metadata catalog without binary downloads (Schema v6)
+  // Primary key is media_id (D1 26-char record ULID) so migrated records lacking a storageKey are
+  // stored and pruned accurately. Dimensions (width/height) are intentionally omitted as unnecessary
+  // for offline search.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS snapshot_media (
+      media_id TEXT PRIMARY KEY,
+      storage_key TEXT,
+      filename TEXT,
+      mime_type TEXT,
+      size INTEGER,
+      alt TEXT,
+      caption TEXT,
+      created_at TEXT,
+      captured_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_snapshot_media_storage_key ON snapshot_media (storage_key);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_media_created_at ON snapshot_media (created_at);
   `);
 
   const versionRow = db.prepare('PRAGMA user_version;').get() as

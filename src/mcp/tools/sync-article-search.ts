@@ -149,7 +149,7 @@ export function registerSyncArticleSearchTool(
         if (args.tag) payload.tag = args.tag;
         if (args.category) payload.category = args.category;
         if (args.status) payload.status = args.status;
-        if (args.offline) Object.assign(payload, buildOfflineArticleSearchFraming());
+        if (args.offline) Object.assign(payload, buildOfflineArticleSearchFraming(result.snapshot));
         if (offlineHint) {
           payload.hint = {
             offlineSearch: true,

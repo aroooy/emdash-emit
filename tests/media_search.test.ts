@@ -1458,4 +1458,160 @@ describe('Media Search Engine & Local Mirror Index (v0.1.16)', () => {
       expect(payload.note).toContain(mcpNotice);
     });
   });
+
+  describe('v0.1.47: Snapshot integration in offline media search', () => {
+    it('merges snapshot_media into offline search, gives mirrorIndex precedence, handles null storageKey, and respects mirroredOnly', async () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-media-snap-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const mirroredId = '01M67P08DXFTYDPFRTJCC4XMB1';
+        const mirroredKey = '01M67P08DXFTYDPFRTJCC4XMB1.jpg';
+        const snapOnlyId = '01M67P08DXFTYDPFRTJCC4XMB2';
+        const snapOnlyKey = '01M67P08DXFTYDPFRTJCC4XMB2.webp';
+        const nullKeyId = '01M67P08DXFTYDPFRTJCC4XMB3';
+
+        const mirrorIndex = new Map([
+          [
+            mirroredKey,
+            {
+              mediaId: mirroredId,
+              storageKey: mirroredKey,
+              localPath: `media/${mirroredKey}`,
+              filename: 'mirrored-photo.jpg',
+              alt: 'Mirrored Sunset',
+              caption: null,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        ]);
+
+        const oldCapturedAt = Date.now() - 8 * 86_400_000;
+        wsCache.saveSnapshotMeta({
+          collection: 'posts',
+          capturedAt: oldCapturedAt,
+          articleCount: 0,
+          mediaCount: 3,
+          taxonomyFetchedCount: 0,
+          taxonomyReusedCount: 0,
+          articleSingleGetCount: 0,
+          durationMs: 10,
+        });
+        wsCache.upsertSnapshotMediaBatch({
+          walkComplete: true,
+          records: [
+            {
+              mediaId: mirroredId,
+              storageKey: mirroredKey,
+              filename: 'stale-duplicate.jpg',
+              mimeType: 'image/jpeg',
+              size: 100,
+              alt: 'Duplicate',
+              caption: null,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              capturedAt: oldCapturedAt,
+            },
+            {
+              mediaId: snapOnlyId,
+              storageKey: snapOnlyKey,
+              filename: 'camera-gear.webp',
+              mimeType: 'image/webp',
+              size: 2048,
+              alt: 'Camera Gear',
+              caption: null,
+              createdAt: '2026-01-02T00:00:00.000Z',
+              capturedAt: oldCapturedAt,
+            },
+            {
+              mediaId: nullKeyId,
+              storageKey: null,
+              filename: 'legacy-camera.png',
+              mimeType: 'image/png',
+              size: 512,
+              alt: null,
+              caption: null,
+              createdAt: '2026-01-03T00:00:00.000Z',
+              capturedAt: oldCapturedAt,
+            },
+          ],
+        });
+
+        const res = searchLocalMirrorMedia({
+          query: 'camera',
+          mirrorIndex,
+          cache: wsCache,
+        });
+        expect(res.hits).toHaveLength(2);
+        expect(res.hits[0].mirrored).toBe(false);
+        expect(res.hits[0].fromSnapshot).toBe(true);
+        expect(res.hits.some((h) => h.mediaId === nullKeyId && h.storageKey === null)).toBe(true);
+        expect(res.snapshot?.stale).toBe(true);
+
+        const mirroredOnlyRes = searchLocalMirrorMedia({
+          query: 'camera',
+          mirrorIndex,
+          cache: wsCache,
+          mirroredOnly: true,
+        });
+        expect(mirroredOnlyRes.hits).toHaveLength(0);
+
+        const { formatMediaSearchHeader, formatMediaSearchHit } =
+          await import('../src/presentation/media_report.js');
+        expect(formatMediaSearchHeader(res, { subject: '"camera"', offline: true })).toContain(
+          'STALE_SNAPSHOT',
+        );
+        expect(formatMediaSearchHit(res.hits[0], 0)[0]).toContain('[snapshot]');
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('finds site-wide snapshot_media via getLatestSnapshotMeta even when snapshot was captured under a non-posts collection', () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-media-snap-pages-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const now = Date.now();
+        wsCache.saveSnapshotMeta({
+          collection: 'pages',
+          capturedAt: now,
+          articleCount: 2,
+          mediaCount: 1,
+          taxonomyFetchedCount: 0,
+          taxonomyReusedCount: 0,
+          articleSingleGetCount: 0,
+          durationMs: 10,
+        });
+        wsCache.upsertSnapshotMediaBatch({
+          walkComplete: true,
+          records: [
+            {
+              mediaId: '01M6P08DXFTYDPFRTJCC4XMB99',
+              storageKey: '01M6P08DXFTYDPFRTJCC4XMB99.png',
+              filename: 'pages-banner.png',
+              mimeType: 'image/png',
+              size: 1024,
+              alt: 'Banner',
+              caption: null,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              capturedAt: now,
+            },
+          ],
+        });
+
+        const res = searchLocalMirrorMedia({
+          query: 'pages-banner',
+          mirrorIndex: new Map(),
+          cache: wsCache,
+        });
+        expect(res.hits).toHaveLength(1);
+        expect(res.hits[0].fromSnapshot).toBe(true);
+        expect(res.snapshot?.mediaCount).toBe(1);
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

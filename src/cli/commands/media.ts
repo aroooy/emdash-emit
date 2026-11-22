@@ -80,6 +80,8 @@ export function registerMediaSearchCommand(
               until: options.until,
               limit,
               mirrorIndex,
+              cache: ctx.cache,
+              mirroredOnly: Boolean(options.mirroredOnly),
             })
           : await searchRemoteMedia({
               workspaceRoot: ctx.root,

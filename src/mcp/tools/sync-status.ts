@@ -117,6 +117,11 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           );
         }
 
+        const snapMeta = ctx.cache.getSnapshotMeta(collection);
+        const snapAgeDays = snapMeta
+          ? Math.max(0, Math.floor((Date.now() - snapMeta.capturedAt) / 86_400_000))
+          : null;
+
         const responsePayload = {
           summary: status.summary,
           hasUnpublishedDraftCount: status.summary.flags?.hasUnpublishedDraft || 0,
@@ -156,6 +161,18 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
           ...(status.summary.conflicts > 0
             ? {
                 conflictsNote: `${status.summary.conflicts} preserved local copy(ies) exist in ${collection}/conflicts/ (sync conflicts and deletion rescue backups are both preserved here). Review each copy, merge valuable content manually, or use sync_conflicts (action: 'list' | 'diff' | 'resolve'). Preserved copies are never pushed or pruned automatically, and sync_push refuses a posts/conflicts/ path with QUARANTINED_COPY_NOT_PUSHABLE.`,
+              }
+            : {}),
+          ...(snapMeta
+            ? {
+                snapshot: {
+                  capturedAt: snapMeta.capturedAt,
+                  capturedAtIso: new Date(snapMeta.capturedAt).toISOString(),
+                  ageDays: snapAgeDays,
+                  stale: snapAgeDays !== null && snapAgeDays >= 7,
+                  articleCount: snapMeta.articleCount,
+                  mediaCount: snapMeta.mediaCount,
+                },
               }
             : {}),
         };

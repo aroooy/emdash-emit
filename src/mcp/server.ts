@@ -44,6 +44,7 @@ import { registerSyncConflictsTool } from './tools/sync-conflicts.js';
 import { registerSyncDoctorTool } from './tools/sync-doctor.js';
 import { registerSyncMediaSearchTool } from './tools/sync-media-search.js';
 import { registerSyncArticleSearchTool } from './tools/sync-article-search.js';
+import { registerSyncSnapshotTool } from './tools/sync-snapshot.js';
 import { getPackageVersion } from '../utils/version.js';
 import { recordMcpHeartbeat } from './heartbeat.js';
 
@@ -243,6 +244,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   registerSyncDoctorTool(server, resolveContext);
   registerSyncMediaSearchTool(server, resolveContext);
   registerSyncArticleSearchTool(server, resolveContext);
+  registerSyncSnapshotTool(server, resolveContext);
 
   return server;
 }

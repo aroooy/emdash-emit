@@ -48,6 +48,15 @@ function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function parseJsonStringArray(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Reads local taxonomy definitions (`categories/` or `tags/` YAML) so a filter typed in one spelling can
  * resolve the others. A missing directory simply yields no definitions — matching then falls back to the
@@ -111,6 +120,7 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     : ['published', 'draft'];
 
   const hits: ArticleSearchHit[] = [];
+  const seenDiskIds = new Set<string>();
   let scannedCount = 0;
 
   for (const { relPath, fullPath, fileName: file, status } of iterWorkspaceArticles(
@@ -138,6 +148,9 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     const bodyText = parsed.body;
 
     const articleId = String(fm.id || '').trim();
+    if (articleId) {
+      seenDiskIds.add(articleId);
+    }
     const articleSlug = String(fm.slug || '').trim();
     const articleTitle = String(fm.title || file.replace(/\.md$/, '')).trim();
     const articleStatus = String(fm.status || defaultStatus)
@@ -232,6 +245,108 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     });
   }
 
+  let snapshotInfo: ArticleSearchResult['snapshot'];
+  const snapshotMeta = options.cache?.getSnapshotMeta(collection) ?? null;
+  if (snapshotMeta && options.cache) {
+    const ageDays = Math.max(0, Math.floor((Date.now() - snapshotMeta.capturedAt) / 86_400_000));
+    snapshotInfo = {
+      capturedAt: new Date(snapshotMeta.capturedAt).toISOString(),
+      ageDays: Number.isFinite(ageDays) ? ageDays : 0,
+      stale: Number.isFinite(ageDays) ? ageDays >= 7 : false,
+      articleCount: snapshotMeta.articleCount,
+    };
+
+    const snapshotRows = options.cache.listSnapshotArticles(collection);
+    for (const row of snapshotRows) {
+      if (seenDiskIds.has(row.id)) {
+        continue;
+      }
+
+      scannedCount++;
+
+      const rowStatus = row.status.toLowerCase();
+      if (options.status && rowStatus !== options.status.toLowerCase()) {
+        continue;
+      }
+
+      const rowSlug = (row.slug || '').trim();
+      if (normalizedSlug && !rowSlug.toLowerCase().includes(normalizedSlug)) {
+        continue;
+      }
+
+      const dates = parseArticleDates({
+        createdAt: row.createdAt ?? undefined,
+        publishedAt: row.publishedAt ?? undefined,
+        updatedAt: row.updatedAt ?? undefined,
+      });
+      const dateToCompare = resolveArticleDateField(dates, rowStatus, options.dateField);
+      if (!inArticleDateRange(dateToCompare, sinceBoundary, untilBoundary)) {
+        continue;
+      }
+
+      const categories = parseJsonStringArray(row.categoriesJson).map((c) => c.toLowerCase());
+      if (
+        normalizedCategory &&
+        !categories.some((c) => taxonomyTermMatchesFilter(c, categoryFilterAliases))
+      ) {
+        continue;
+      }
+
+      const tags = parseJsonStringArray(row.tagsJson).map((t) => t.toLowerCase());
+      if (normalizedTag && !tags.some((t) => taxonomyTermMatchesFilter(t, tagFilterAliases))) {
+        continue;
+      }
+
+      const matchedOn: Array<
+        'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'
+      > = [];
+
+      if (normalizedQuery) {
+        const textMatches = matchesArticleKeyword(
+          {
+            title: row.title,
+            slug: rowSlug,
+            excerpt: row.excerpt ?? undefined,
+            // Case 5 (`list-stale`) carries stale creation-time body from the list API; exclude it
+            // from keyword body search to avoid false hits/misses on outdated content.
+            body: row.bodySource === 'list-stale' ? undefined : (row.bodyMarkdown ?? undefined),
+          },
+          normalizedQuery,
+        );
+        matchedOn.push(...textMatches);
+
+        const queryTermAliases = taxonomyTermFilterAliases(normalizedQuery);
+        if (categories.some((c) => taxonomyTermMatchesFilter(c, queryTermAliases))) {
+          matchedOn.push('category');
+        }
+        if (tags.some((t) => taxonomyTermMatchesFilter(t, queryTermAliases))) {
+          matchedOn.push('tag');
+        }
+
+        if (matchedOn.length === 0) {
+          continue;
+        }
+      } else {
+        matchedOn.push('recency');
+      }
+
+      hits.push({
+        id: row.id,
+        slug: rowSlug || null,
+        title: row.title || row.id,
+        status: rowStatus,
+        createdAt: dates.createdAt,
+        publishedAt: dates.publishedAt,
+        updatedAt: dates.updatedAt,
+        isLocal: false,
+        localPath: null,
+        fromSnapshot: true,
+        ...(row.bodySource === 'list-stale' ? { bodyUnverified: true } : {}),
+        matchedOn,
+      });
+    }
+  }
+
   // Sort newest first by dateToCompare
   hits.sort((a, b) => {
     const da = a.publishedAt || a.createdAt || '';
@@ -252,5 +367,6 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
     normalizedQuery,
     taxonomyFetchCount: 0,
     taxonomyCacheHitCount: 0,
+    ...(snapshotInfo ? { snapshot: snapshotInfo } : {}),
   };
 }

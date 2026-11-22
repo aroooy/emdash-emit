@@ -24,6 +24,30 @@ import type { PrunedTaxonomiesDetail } from '../utils/taxonomy-key.js';
 import type { ArticleSearchHit, ArticleSearchResult } from '../sync/article_search/index.js';
 import { getLocalTaxonomiesSummary } from '../sync/taxonomies.js';
 
+export type ArticleSearchSnapshotView = NonNullable<ArticleSearchResult['snapshot']>;
+
+export interface MediaSearchSnapshotView {
+  capturedAt: string;
+  ageDays: number;
+  stale: boolean;
+  mediaCount: number;
+}
+
+export function formatSnapshotAge(capturedAt: string): string {
+  const ms = Date.now() - Date.parse(capturedAt);
+  if (!Number.isFinite(ms) || ms < 0) return 'just now';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${Math.max(1, mins)}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+export function formatSnapshotTimestamp(capturedAt: string): string {
+  return capturedAt.slice(0, 16).replace('T', ' ');
+}
+
 /**
  * Presentation layer: unified report formatting helpers for CLI and MCP consumers.
  *
@@ -100,11 +124,22 @@ export function formatPruneSkippedNotice(limit: number | null | undefined): stri
  * truth concludes an absent asset does not exist remotely and re-uploads a duplicate on returning online. So
  * the framing is loud, appears first, and repeats on the empty result.
  */
-export function formatOfflineSearchHeader(scannedCount: number): string {
+export function formatOfflineSearchHeader(
+  scannedCount: number,
+  snapshot?: MediaSearchSnapshotView,
+): string {
+  if (!snapshot) {
+    return (
+      `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
+      `Searched ${scannedCount} mirrored asset(s) in this workspace.\n` +
+      `Remote EmDash library was NOT queried.`
+    );
+  }
+  const staleTag = snapshot.stale ? ' ⚠️ [STALE_SNAPSHOT: >7d old]' : '';
   return (
-    `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
-    `Searched ${scannedCount} mirrored asset(s) in this workspace.\n` +
-    `Remote EmDash library was NOT queried.`
+    `[SOURCE: LOCAL WORKSPACE + SNAPSHOT @ ${formatSnapshotTimestamp(snapshot.capturedAt)} (${formatSnapshotAge(snapshot.capturedAt)}) (OFFLINE)]\n` +
+    `Searched ${scannedCount} mirrored/cached asset(s) (${snapshot.mediaCount} in snapshot).${staleTag}\n` +
+    `Remote EmDash library was NOT queried live.`
   );
 }
 
@@ -113,16 +148,20 @@ export const OFFLINE_SEARCH_EMPTY_NOTICE =
   'No matching media found in local workspace. (Remote EmDash library was NOT checked. The asset may exist remotely.)';
 
 /** The machine-readable counterpart of that framing for MCP JSON payloads. */
-export function buildOfflineSearchFraming(): {
+export function buildOfflineSearchFraming(snapshot?: MediaSearchSnapshotView): {
   source: 'local_mirrors';
   remoteQueried: false;
   warning: string;
+  snapshot?: MediaSearchSnapshotView;
+  staleSnapshot?: true;
 } {
   return {
     source: 'local_mirrors',
     remoteQueried: false,
     warning:
       'Remote CMS was NOT checked. Absence from this list does NOT prove the asset does not exist remotely.',
+    ...(snapshot ? { snapshot } : {}),
+    ...(snapshot?.stale ? { staleSnapshot: true as const } : {}),
   };
 }
 
@@ -180,11 +219,22 @@ export function formatPrunedTaxonomiesNotice(
 /**
  * Frames an offline article search as what it is: a view of this workspace's local files only.
  */
-export function formatArticleOfflineSearchHeader(scannedCount: number): string {
+export function formatArticleOfflineSearchHeader(
+  scannedCount: number,
+  snapshot?: ArticleSearchSnapshotView,
+): string {
+  if (!snapshot) {
+    return (
+      `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
+      `Searched ${scannedCount} local article(s) in this workspace.\n` +
+      `Remote EmDash library was NOT queried.`
+    );
+  }
+  const staleTag = snapshot.stale ? ' ⚠️ [STALE_SNAPSHOT: >7d old]' : '';
   return (
-    `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
-    `Searched ${scannedCount} local article(s) in this workspace.\n` +
-    `Remote EmDash library was NOT queried.`
+    `[SOURCE: LOCAL WORKSPACE + SNAPSHOT @ ${formatSnapshotTimestamp(snapshot.capturedAt)} (${formatSnapshotAge(snapshot.capturedAt)}) (OFFLINE)]\n` +
+    `Searched ${scannedCount} local/cached article(s) (${snapshot.articleCount} in snapshot).${staleTag}\n` +
+    `Remote EmDash library was NOT queried live.`
   );
 }
 
@@ -193,16 +243,20 @@ export const OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE =
   'ℹ️ No matching articles found in local workspace. This does NOT prove the article does not exist on remote. Run without --offline to search the remote library.';
 
 /** The machine-readable counterpart of offline article search framing for MCP JSON payloads. */
-export function buildOfflineArticleSearchFraming(): {
+export function buildOfflineArticleSearchFraming(snapshot?: ArticleSearchSnapshotView): {
   source: 'local_workspace';
   remoteQueried: false;
   warning: string;
+  snapshot?: ArticleSearchSnapshotView;
+  staleSnapshot?: true;
 } {
   return {
     source: 'local_workspace',
     remoteQueried: false,
     warning:
       'Remote CMS was NOT checked. Absence from this list does NOT prove the article does not exist remotely.',
+    ...(snapshot ? { snapshot } : {}),
+    ...(snapshot?.stale ? { staleSnapshot: true as const } : {}),
   };
 }
 
@@ -224,7 +278,7 @@ export function formatArticleSearchHeader(
   options: ArticleSearchHeaderOptions,
 ): string {
   if (options.offline) {
-    return formatArticleOfflineSearchHeader(result.scannedCount);
+    return formatArticleOfflineSearchHeader(result.scannedCount, result.snapshot);
   }
 
   const filters: string[] = [];
@@ -266,7 +320,9 @@ export function formatArticleSearchHit(hit: ArticleSearchHit, index?: number): s
     ? hit.localPath
       ? `[local: ${hit.localPath}]`
       : '[local]'
-    : '[remote only]';
+    : hit.fromSnapshot
+      ? `[snapshot]${hit.bodyUnverified ? ' [body unverified]' : ''}`
+      : '[remote only]';
 
   const lines = [`  ${num}${dateStr} ${statusStr} ${hit.title} (id: ${hit.id})${qStr} ${localStr}`];
 

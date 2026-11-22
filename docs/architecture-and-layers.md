@@ -145,7 +145,7 @@ Both CLI and MCP resolve the target instance `origin` through `resolveOriginPrio
 
 ## 4. Local SQLite Cache Schema (`.emit/cache.db`)
 
-Emit uses Node.js 22+ built-in `node:sqlite` (`DatabaseSync` in `src/db/cache.ts`, zero native C++ addons) with schema migrations managed in `src/db/migrations.ts` (current schema version: **v5**). If a workspace database carries a higher `PRAGMA user_version` than the running binary supports, Emit halts immediately with `[CACHE_SCHEMA_MISMATCH]`.
+Emit uses Node.js 22+ built-in `node:sqlite` (`DatabaseSync` in `src/db/cache.ts`, zero native C++ addons) with schema migrations managed in `src/db/migrations.ts` (current schema version: **v6**). If a workspace database carries a higher `PRAGMA user_version` than the running binary supports, Emit halts immediately with `[CACHE_SCHEMA_MISMATCH]`.
 
 | Table | Primary Key | Purpose & Key Columns |
 | --- | --- | --- |
@@ -154,6 +154,9 @@ Emit uses Node.js 22+ built-in `node:sqlite` (`DatabaseSync` in `src/db/cache.ts
 | `sync_state` | `id` (ULID) | Tracks workspace-relative `local_path`, `local_hash` (SHA-256 of disk bytes), `remote_rev` (Track 2 composite comparison key `${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`), `last_synced_at`, and pending flags: `conflict_pending`, `body_conflict_pending`, `taxonomy_conflict_pending`, `delete_pending`, `taxonomy_apply_pending`, plus `conflict_copy_path`, `conflict_copy_hash`, `conflict_at`. |
 | `bylines` | `id` (ULID) | Caches remote author records (`id`, `slug`, `display_name`, `is_guest`, `updated_at`) synced via `/_emdash/api/mcp` (`byline_list`) during pull. |
 | `media_state` | `storage_key` | Schema v5: Tracks offline draft image uploads and mirrored assets keyed by `storage_key` (the immutable public file address). Columns: `storage_key` (PK), `media_id` (D1 record ULID), `local_content_hash` (SHA-256 of local binary), `remote_record_ref` (`media-record:<id>`), `url`, `workspace_path`, `markdown_ref` (storageKey-derived stem), `uploaded_at`, and `status` (`pending` \| `uploaded` \| `ready` \| `failed`). Indexed on `media_id`, `status`, and `local_content_hash`. |
+| `snapshot_meta` | `collection` | Schema v6: Tracks full-library metadata snapshot capture timestamp (`captured_at`), article/media counts, taxonomy fetch/reuse counts, and capture duration. |
+| `snapshot_articles` | `id` (ULID) | Schema v6: Full-library article metadata & body catalog (`body_source`: `list-live` \| `single-get` \| `list-stale`, `taxonomy_verified`, `comparison_rev`, `categories_json`, `tags_json`) for offline search and 0-GET taxonomy filtering. |
+| `snapshot_media` | `media_id` (ULID) | Schema v6: Site-wide (collection-independent) full-library media catalog keyed by `media_id` with nullable `storage_key` for offline `media-search` (skipped when `mirroredOnly` is true; cleared when the last `snapshot_meta` row is cleared). |
 
 ---
 

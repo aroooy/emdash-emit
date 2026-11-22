@@ -288,7 +288,7 @@ Write your Markdown body here (do not repeat `# Building AI-Powered CMS Tools` a
 
 ## 🛠 CLI Commands Overview
 
-Emit provides **16 top-level CLI commands** (plus **10 subcommands** under `profile` and `conflicts`). For all flags, parameters, and output examples, see **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)**.
+Emit provides **17 top-level CLI commands** (plus **10 subcommands** under `profile` and `conflicts`). For all flags, parameters, and output examples, see **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)**.
 
 | Command | Summary | Common Example |
 | --- | --- | --- |
@@ -306,6 +306,7 @@ Emit provides **16 top-level CLI commands** (plus **10 subcommands** under `prof
 | `emit media-search [q]` | Search remote media library (or local mirrors via `--offline`) by keyword and date range | `emit media-search "header" --mirrored-only` |
 | `emit pull-taxonomies` | Standalone download of remote categories and tags into `categories/*.yaml` and `tags/*.yaml` | `emit pull-taxonomies` |
 | `emit pull-media` | Mirror media assets by `--article <id>`, `--storage-key <key>`, or bounded library window | `emit pull-media --article 01M6ABCDEF...` |
+| `emit snapshot` | Capture full-library metadata snapshot (articles, media, taxonomies) into `cache.db` for offline search | `emit snapshot` / `emit snapshot --status` |
 | `emit guide` | Print the concise Golden Path cheat sheet and AI safety rules to the console | `emit guide` |
 | `emit mcp` | Launch Emit as a Model Context Protocol (MCP) stdio server for AI coding agents | `emit mcp` |
 
@@ -330,7 +331,7 @@ Emit includes a first-class stdio MCP server so AI coding agents (**Google Antig
 
 *(If Emit is not installed globally, use `"command": "npx", "args": ["-y", "emdash-emit", "mcp"]`.)*
 
-### Available MCP Tools (14 Tools)
+### Available MCP Tools (15 Tools)
 
 Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) and returns actionable error codes and remediation hints. See **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** for full parameter schemas.
 
@@ -348,6 +349,7 @@ Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resol
 | `sync_media_search` | Search remote media library or local mirrors (`offline: true`) by keyword and date range |
 | `sync_pull_taxonomies` | Standalone sync of remote category and tag YAML definitions |
 | `sync_pull_media` | Mirror media assets by `article`, `storageKey`, or bounded library window |
+| `sync_snapshot` | Capture, inspect (`status`), or `clear` full-library metadata snapshot in `cache.db` |
 | `profile_list` | List all configured EmDash connection profiles and resolution rationale |
 | `profile_switch` | Switch active session/default profile for multi-site environments |
 
@@ -357,7 +359,7 @@ Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resol
 
 Detailed specifications, subsystem designs, and troubleshooting guides are organized by domain boundary under **[docs/](docs/README.md)**:
 
-1. **[Architecture, Layering & Infrastructure (`docs/architecture-and-layers.md`)](docs/architecture-and-layers.md)** — 4-tier layering rules (Axes 0–5), Workspace Contracts, Profile/Auth/Origin resolution precedence, SQLite `cache.db` schema (v5), and CLI/MCP presentation symmetry.
+1. **[Architecture, Layering & Infrastructure (`docs/architecture-and-layers.md`)](docs/architecture-and-layers.md)** — 4-tier layering rules (Axes 0–5), Workspace Contracts, Profile/Auth/Origin resolution precedence, SQLite `cache.db` schema (v6), and CLI/MCP presentation symmetry.
 2. **[Sync Engine, Revisions & 3-Way Merge (`docs/sync-engine-and-revisions.md`)](docs/sync-engine-and-revisions.md)** — Modular Pull (6 stages) & Push (10 modules), Two-Track Revision model (`revForTransport` vs `revForComparison`), `published*` draft revisions, distributed locks, Hybrid 3-Way Merge, and `posts/conflicts/` quarantine lifecycle.
 3. **[Markdown, Frontmatter & Portable Text AST (`docs/markdown-and-ast.md`)](docs/markdown-and-ast.md)** — `FrontmatterSchema`, `parseMarkdownLenient` self-healing, YAML scalar quoting, baseline reconstruction, Portable Text conversion, and Dual-Track Image Model (Tier 1 vs Tier 3 `<!--ec:block ... -->`).
 4. **[Local-First Media Pipeline (`docs/media-pipeline.md`)](docs/media-pipeline.md)** — `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path localization, `storageKeyToMarkdownRef` mirror naming, and remote-authoritative media pruning.

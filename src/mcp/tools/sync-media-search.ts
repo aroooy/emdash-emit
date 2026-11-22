@@ -89,6 +89,8 @@ export function registerSyncMediaSearchTool(
               until: args.until,
               limit: args.limit,
               mirrorIndex,
+              cache: ctx.cache,
+              mirroredOnly: Boolean(args.mirroredOnly),
             })
           : await searchRemoteMedia({
               workspaceRoot: ctx.root,
@@ -132,7 +134,7 @@ export function registerSyncMediaSearchTool(
         if (args.until) payload.until = args.until;
         // Offline framing must be machine-readable too: an agent deciding whether to re-upload an asset
         // reads this payload, so a local-only list must never look like the library's truth.
-        if (args.offline) Object.assign(payload, buildOfflineSearchFraming());
+        if (args.offline) Object.assign(payload, buildOfflineSearchFraming(result.snapshot));
         if (note) payload.note = note;
         if (tagHints) payload.tagHints = tagHints;
 

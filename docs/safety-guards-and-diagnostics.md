@@ -69,11 +69,10 @@ Emit provides multidimensional search across both articles (`src/sync/article_se
 2. **Early Termination on Hit Limit & `--since` Date Boundary**:
    - When the requested `--limit` (default `20`, max `50`, clamped via `clampSearchLimit` in `src/utils/search-options.ts`) is reached, the walk terminates immediately to save HTTP requests and prints a hit-limit notice.
    - Because EmDash lists records newest-first (`createdAt DESC`), a `--since` boundary (resolved via `resolveSearchDateBoundaries` in `src/utils/search-date.ts`, raising `DATE_BOUNDARY_INVALID` on malformed input) stops the cursor walk as soon as an older record is reached and still reports `walkComplete: true`.
-3. **0-GET Local Baseline Fast-Path for Taxonomy Filtering (`src/sync/article_search/remote.ts`)**:
-   - EmDash's list endpoint does not include article taxonomy assignments. When searching articles with `--tag` or `--category`, `readTaxonomiesFromBaseline()` checks if the remote article exists in the local SQLite cache with no pending flags, matching revision (`isSameRev`), and unmodified disk content (`isLocalFileUnmodified` with `healOnSpellingMatch: false` so read-only search never mutates the cache).
-   - On a cache hit, taxonomy membership is verified in memory from `base_snapshots` with **0 extra HTTP GET requests**, reporting `[taxonomies cached: <n>]` in the search header.
+3. **0-GET Local Baseline & Snapshot Fast-Path for Taxonomy Filtering (`src/sync/article_search/remote.ts`)**:
+   - EmDash's list endpoint does not include article taxonomy assignments. When searching articles with `--tag` or `--category`, `readTaxonomiesFromBaseline()` checks `base_snapshots` (unmodified disk + matching rev + no pending flags) and falls back to `snapshot_articles` (`taxonomy_verified === 1` + matching rev) to verify taxonomy membership in memory with **0 extra HTTP GET requests** (`[taxonomies cached: <n>]`). When a snapshot exists, `defaultMaxScan` expands from `50` to `300` (capped at `MAX_TAXONOMY_REMOTE_FETCHES = 100` remote term GETs, setting `walkComplete: false` if reached).
 4. **Offline Framing (`--offline` / `offline: true`)**:
-   - Offline searches inspect only local files (`iterWorkspaceArticles` for Markdown bodies; `media_state` + `media/*.yaml` for media mirrors) with zero network traffic, prepending `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]`. Absence in an offline search never proves absence on remote.
+   - Offline searches inspect local workspace files (`iterWorkspaceArticles` / `media_state` + `media/*.yaml`) and, when captured via `emit snapshot`, merge cached `snapshot_articles` / `snapshot_media` rows (with disk/mirror precedence, `list-stale` body exclusion + `[body unverified]`, and `[STALE_SNAPSHOT]` warning when `>= 7d` old). Absence in an offline search never proves absence on live remote.
 
 ---
 

@@ -629,4 +629,204 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
 
     migrated.close();
   });
+
+  it('v0.1.47 Phase 1: initializes fresh DB directly at Schema v6 with snapshot tables', () => {
+    expect(cache.getSchemaVersion()).toBe(6);
+    expect(cache.getSnapshotMeta('posts')).toBeNull();
+    expect(cache.listSnapshotArticles('posts')).toEqual([]);
+    expect(cache.listSnapshotMedia()).toEqual([]);
+  });
+
+  it('v0.1.47 Phase 1: migrates Schema v5 DB to v6 without disturbing existing tables', () => {
+    const v5DbPath = path.join(tempDir, '.emit', 'v5.db');
+    const { DatabaseSync } = require('node:sqlite');
+    const rawDb = new DatabaseSync(v5DbPath);
+    rawDb.exec(`
+      CREATE TABLE entries (id TEXT PRIMARY KEY, collection TEXT NOT NULL, slug TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL, rev TEXT NOT NULL, published_at TEXT, raw_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE base_snapshots (id TEXT PRIMARY KEY, rev TEXT NOT NULL, body_markdown TEXT NOT NULL, frontmatter_yaml TEXT NOT NULL, hash TEXT NOT NULL, saved_at INTEGER NOT NULL);
+      CREATE TABLE sync_state (id TEXT PRIMARY KEY, local_file_path TEXT NOT NULL, local_hash TEXT NOT NULL, remote_rev TEXT NOT NULL, status TEXT NOT NULL, slug TEXT NOT NULL, last_synced_at INTEGER NOT NULL, conflict_pending INTEGER NOT NULL DEFAULT 0, body_conflict_pending INTEGER NOT NULL DEFAULT 0, taxonomy_conflict_pending INTEGER NOT NULL DEFAULT 0, delete_pending INTEGER NOT NULL DEFAULT 0, conflict_copy_hash TEXT, conflict_copy_path TEXT, conflict_at INTEGER, remote_taxonomy_hash TEXT, taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE bylines (id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, is_guest INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL);
+      CREATE TABLE media_state (storage_key TEXT PRIMARY KEY, media_id TEXT NOT NULL, local_content_hash TEXT, remote_record_ref TEXT, url TEXT NOT NULL, workspace_path TEXT, markdown_ref TEXT, status TEXT NOT NULL, uploaded_at INTEGER);
+      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
+      VALUES ('01M6KEEP000000000000000001', 'posts/published/keep.md', 'h1', '1', 'published', 'keep', 1730000000);
+      PRAGMA user_version = 5;
+    `);
+    rawDb.close();
+
+    const migrated = new CacheDatabase(v5DbPath);
+    expect(migrated.getSchemaVersion()).toBe(6);
+    expect(migrated.getSyncState('01M6KEEP000000000000000001')?.slug).toBe('keep');
+    expect(migrated.getSnapshotMeta('posts')).toBeNull();
+    migrated.close();
+  });
+
+  it('v0.1.47 Phase 1: upserts snapshot articles/media (including null storageKey) and prunes only when walkComplete is true', () => {
+    const ts1 = 1730000000000;
+    const res1 = cache.upsertSnapshotArticlesBatch({
+      collection: 'posts',
+      walkComplete: true,
+      records: [
+        {
+          id: '01M6ART0000000000000000001',
+          collection: 'posts',
+          slug: 'first',
+          title: 'First Post',
+          status: 'published',
+          createdAt: '2026-11-01T00:00:00.000Z',
+          updatedAt: '2026-11-01T00:00:00.000Z',
+          publishedAt: '2026-11-01T00:00:00.000Z',
+          comparisonRev: '1@live:01M6REV1',
+          excerpt: 'First excerpt',
+          bodyMarkdown: 'Hello first body',
+          bodySource: 'list-live',
+          categoriesJson: '["tech"]',
+          tagsJson: '["ai"]',
+          taxonomyVerified: 1,
+          capturedAt: ts1,
+        },
+        {
+          id: '01M6ART0000000000000000002',
+          collection: 'posts',
+          slug: 'second',
+          title: 'Second Post',
+          status: 'draft',
+          createdAt: '2026-11-02T00:00:00.000Z',
+          updatedAt: '2026-11-02T00:00:00.000Z',
+          publishedAt: null,
+          comparisonRev: '1@draft:01M6REV2',
+          excerpt: null,
+          bodyMarkdown: 'Second draft body',
+          bodySource: 'single-get',
+          categoriesJson: '[]',
+          tagsJson: '[]',
+          taxonomyVerified: 1,
+          capturedAt: ts1,
+        },
+      ],
+    });
+    expect(res1).toEqual({ upserted: 2, pruned: 0 });
+
+    // Partial walk (walkComplete: false) must NOT prune existing records
+    const partialRes = cache.upsertSnapshotArticlesBatch({
+      collection: 'posts',
+      walkComplete: false,
+      records: [cache.getSnapshotArticle('01M6ART0000000000000000001')!],
+    });
+    expect(partialRes).toEqual({ upserted: 1, pruned: 0 });
+    expect(cache.listSnapshotArticles('posts')).toHaveLength(2);
+
+    // Complete walk (walkComplete: true) prunes deleted record
+    const completeRes = cache.upsertSnapshotArticlesBatch({
+      collection: 'posts',
+      walkComplete: true,
+      records: [cache.getSnapshotArticle('01M6ART0000000000000000001')!],
+    });
+    expect(completeRes).toEqual({ upserted: 1, pruned: 1 });
+    expect(cache.listSnapshotArticles('posts')).toHaveLength(1);
+
+    // Media snapshot supports null storageKey (A-2) and prunes only on walkComplete: true
+    const medRes = cache.upsertSnapshotMediaBatch({
+      walkComplete: true,
+      records: [
+        {
+          mediaId: '01M6MED0000000000000000001',
+          storageKey: '01M6KEY0000000000000000001.jpg',
+          filename: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          size: 12345,
+          alt: 'Sunset',
+          caption: null,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          capturedAt: ts1,
+        },
+        {
+          mediaId: '01M6MED0000000000000000002',
+          storageKey: null,
+          filename: 'legacy-no-key.png',
+          mimeType: 'image/png',
+          size: 500,
+          alt: null,
+          caption: null,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          capturedAt: ts1,
+        },
+      ],
+    });
+    expect(medRes).toEqual({ upserted: 2, pruned: 0 });
+    expect(cache.listSnapshotMedia()).toHaveLength(2);
+
+    cache.saveSnapshotMeta({
+      collection: 'posts',
+      capturedAt: ts1,
+      articleCount: 1,
+      mediaCount: 2,
+      taxonomyFetchedCount: 2,
+      taxonomyReusedCount: 0,
+      articleSingleGetCount: 1,
+      durationMs: 320,
+    });
+    expect(cache.getSnapshotMeta('posts')?.mediaCount).toBe(2);
+
+    const cleared = cache.clearSnapshot('posts');
+    expect(cleared).toEqual({ articlesCleared: 1, mediaCleared: 2 });
+    expect(cache.getSnapshotMeta('posts')).toBeNull();
+    expect(cache.listSnapshotArticles('posts')).toEqual([]);
+    expect(cache.listSnapshotMedia()).toEqual([]);
+  });
+
+  it('preserves site-wide snapshot_media when clearing one collection while another remains in snapshot_meta', () => {
+    const dbPath = path.join(tempDir, 'cache.db');
+    const cache = new CacheDatabase(dbPath);
+    const ts1 = 1_760_000_000_000;
+    const ts2 = 1_760_000_100_000;
+
+    cache.saveSnapshotMeta({
+      collection: 'posts',
+      capturedAt: ts1,
+      articleCount: 1,
+      mediaCount: 1,
+      taxonomyFetchedCount: 0,
+      taxonomyReusedCount: 0,
+      articleSingleGetCount: 0,
+      durationMs: 10,
+    });
+    cache.saveSnapshotMeta({
+      collection: 'pages',
+      capturedAt: ts2,
+      articleCount: 1,
+      mediaCount: 1,
+      taxonomyFetchedCount: 0,
+      taxonomyReusedCount: 0,
+      articleSingleGetCount: 0,
+      durationMs: 10,
+    });
+    cache.upsertSnapshotMediaBatch({
+      walkComplete: true,
+      records: [
+        {
+          mediaId: '01M6MED0000000000000000099',
+          storageKey: '01M6MED0000000000000000099.png',
+          filename: 'shared.png',
+          mimeType: 'image/png',
+          size: 100,
+          alt: null,
+          caption: null,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          capturedAt: ts2,
+        },
+      ],
+    });
+
+    expect(cache.getLatestSnapshotMeta()?.collection).toBe('pages');
+
+    const clearedPages = cache.clearSnapshot('pages');
+    expect(clearedPages).toEqual({ articlesCleared: 0, mediaCleared: 0 });
+    expect(cache.listSnapshotMedia()).toHaveLength(1);
+    expect(cache.getLatestSnapshotMeta()?.collection).toBe('posts');
+
+    const clearedPosts = cache.clearSnapshot('posts');
+    expect(clearedPosts).toEqual({ articlesCleared: 0, mediaCleared: 1 });
+    expect(cache.listSnapshotMedia()).toEqual([]);
+    cache.close();
+  });
 });

@@ -987,4 +987,58 @@ Inline body
       globalThis.fetch = origFetch;
     }
   });
+
+  it('registers sync_snapshot and supports status, clear, and sync_status snapshot metadata (v0.1.47)', async () => {
+    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    expect(registered['sync_snapshot']).toBeDefined();
+
+    const emptyStatus = JSON.parse(
+      (await registered['sync_snapshot'].handler({ action: 'status' })).content[0].text,
+    );
+    expect(emptyStatus.action).toBe('status');
+    expect(emptyStatus.meta).toBeNull();
+
+    cache.saveSnapshotMeta({
+      collection: 'posts',
+      capturedAt: Date.now(),
+      articleCount: 5,
+      mediaCount: 3,
+      taxonomyFetchedCount: 2,
+      taxonomyReusedCount: 3,
+      articleSingleGetCount: 1,
+      durationMs: 30,
+    });
+
+    const populatedStatus = JSON.parse(
+      (await registered['sync_snapshot'].handler({ action: 'status' })).content[0].text,
+    );
+    expect(populatedStatus.meta.articleCount).toBe(5);
+    expect(populatedStatus.meta.mediaCount).toBe(3);
+    expect(populatedStatus.meta.stale).toBe(false);
+
+    const syncStatusPayload = JSON.parse(
+      (await registered['sync_status'].handler({})).content[0].text,
+    );
+    expect(syncStatusPayload.snapshot.articleCount).toBe(5);
+    expect(syncStatusPayload.snapshot.mediaCount).toBe(3);
+
+    const cleared = JSON.parse(
+      (await registered['sync_snapshot'].handler({ action: 'clear' })).content[0].text,
+    );
+    expect(cleared.action).toBe('clear');
+    expect(cache.getSnapshotMeta('posts')).toBeNull();
+  });
 });

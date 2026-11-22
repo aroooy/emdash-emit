@@ -57,6 +57,7 @@ const LAYER_2_MODULE_NAMES = [
   'doctor',
   'media',
   'article_search',
+  'snapshot',
 ];
 
 /**
@@ -101,6 +102,15 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'ArticleSearchResult',
     'ArticleSearchHit',
     'ArticleSearchOptions',
+  ]),
+  snapshot: new Set([
+    'captureWorkspaceSnapshot',
+    'getWorkspaceSnapshotStatus',
+    'clearWorkspaceSnapshot',
+    'SnapshotCaptureOptions',
+    'SnapshotCaptureResult',
+    'SnapshotStatusResult',
+    'SnapshotClearResult',
   ]),
 };
 
@@ -252,6 +262,7 @@ describe('Architectural Layering Invariants', () => {
       path.join(SRC_ROOT, 'sync', 'media'),
       path.join(SRC_ROOT, 'sync', 'workspace'),
       path.join(SRC_ROOT, 'sync', 'article_search'),
+      path.join(SRC_ROOT, 'sync', 'snapshot'),
     ];
     const layer2Files = new Set(
       layer2Dirs
@@ -273,6 +284,7 @@ describe('Architectural Layering Invariants', () => {
       'sync/doctor.ts': new Set(['./conflicts.js', './media/index.js']),
       'sync/push/media_stage.ts': new Set(['../media/index.js']),
       'sync/pull/media_stage.ts': new Set(['../media/index.js']),
+      'sync/snapshot/index.ts': new Set(['../media/index.js', '../pull/index.js']),
     };
 
     const violations: { file: string; line: number; source: string }[] = [];

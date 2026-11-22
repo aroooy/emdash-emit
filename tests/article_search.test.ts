@@ -2275,4 +2275,214 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
       expect(clampSearchLimit(25)).toBe(25);
     });
   });
+
+  describe('v0.1.47: Snapshot integration in offline & taxonomy search', () => {
+    it('merges snapshot-only articles in offline search, gives disk precedence, and excludes list-stale body from keyword match', async () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-art-snap-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      fs.mkdirSync(path.join(wsDir, 'posts', 'published'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const diskId = '01KNGD5W934R00000000000001';
+        fs.writeFileSync(
+          path.join(wsDir, 'posts', 'published', `20260101_${diskId}-disk.md`),
+          `---\nid: ${diskId}\nslug: disk-post\ntitle: Disk Version Title\nstatus: published\n---\n\nDisk body\n`,
+          'utf8',
+        );
+
+        const snapFreshId = '01KNGD5W934R00000000000002';
+        const snapStaleId = '01KNGD5W934R00000000000003';
+        const oldCapturedAt = Date.now() - 8 * 86_400_000;
+        wsCache.saveSnapshotMeta({
+          collection: 'posts',
+          capturedAt: oldCapturedAt,
+          articleCount: 3,
+          mediaCount: 0,
+          taxonomyFetchedCount: 0,
+          taxonomyReusedCount: 0,
+          articleSingleGetCount: 0,
+          durationMs: 10,
+        });
+        wsCache.upsertSnapshotArticlesBatch({
+          collection: 'posts',
+          walkComplete: true,
+          records: [
+            {
+              id: diskId,
+              collection: 'posts',
+              slug: 'disk-post',
+              title: 'Snapshot Stale Duplicate',
+              status: 'published',
+              excerpt: null,
+              bodyMarkdown: 'Body',
+              bodySource: 'list-live',
+              taxonomyVerified: 1,
+              categoriesJson: '[]',
+              tagsJson: '[]',
+              publishedAt: '2026-01-01T00:00:00.000Z',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              comparisonRev: '1@live:rev1',
+              capturedAt: oldCapturedAt,
+            },
+            {
+              id: snapFreshId,
+              collection: 'posts',
+              slug: 'snap-fresh',
+              title: 'Snapshot Camera Guide',
+              status: 'published',
+              excerpt: 'Lens overview',
+              bodyMarkdown: 'Full mirrorless body token',
+              bodySource: 'list-live',
+              taxonomyVerified: 1,
+              categoriesJson: '["tech"]',
+              tagsJson: '["camera"]',
+              publishedAt: '2026-01-02T00:00:00.000Z',
+              createdAt: '2026-01-02T00:00:00.000Z',
+              updatedAt: '2026-01-02T00:00:00.000Z',
+              comparisonRev: '1@live:rev2',
+              capturedAt: oldCapturedAt,
+            },
+            {
+              id: snapStaleId,
+              collection: 'posts',
+              slug: 'snap-stale',
+              title: 'Unverified Draft Title',
+              status: 'draft',
+              excerpt: null,
+              bodyMarkdown: 'hidden-stale-body-keyword',
+              bodySource: 'list-stale',
+              taxonomyVerified: 0,
+              categoriesJson: '[]',
+              tagsJson: '[]',
+              publishedAt: null,
+              createdAt: '2026-01-03T00:00:00.000Z',
+              updatedAt: '2026-01-03T00:00:00.000Z',
+              comparisonRev: '1@draft:rev3',
+              capturedAt: oldCapturedAt,
+            },
+          ],
+        });
+
+        // 1. Body keyword in list-stale must NOT match
+        const staleBodyRes = searchLocalArticles({
+          query: 'hidden-stale-body-keyword',
+          offline: true,
+          origin: 'https://example.com',
+          workspaceRoot: wsDir,
+          cache: wsCache,
+        });
+        expect(staleBodyRes.hits).toHaveLength(0);
+        expect(staleBodyRes.snapshot?.stale).toBe(true);
+
+        // 2. Title match on list-stale carries bodyUnverified: true
+        const staleTitleRes = searchLocalArticles({
+          query: 'Unverified Draft',
+          offline: true,
+          origin: 'https://example.com',
+          workspaceRoot: wsDir,
+          cache: wsCache,
+        });
+        expect(staleTitleRes.hits).toHaveLength(1);
+        expect(staleTitleRes.hits[0].fromSnapshot).toBe(true);
+        expect(staleTitleRes.hits[0].bodyUnverified).toBe(true);
+
+        // 3. Disk precedence & snapshot-only hit
+        const allRes = searchLocalArticles({
+          offline: true,
+          origin: 'https://example.com',
+          workspaceRoot: wsDir,
+          cache: wsCache,
+        });
+        expect(allRes.hits.map((h) => h.id)).toEqual([snapStaleId, snapFreshId, diskId]);
+        expect(allRes.hits.find((h) => h.id === diskId)?.title).toBe('Disk Version Title');
+        expect(allRes.hits.find((h) => h.id === diskId)?.fromSnapshot).toBeUndefined();
+
+        const { formatArticleSearchHeader, formatArticleSearchHit } =
+          await import('../src/presentation/article_report.js');
+        const header = formatArticleSearchHeader(allRes, { offline: true });
+        expect(header).toContain('STALE_SNAPSHOT');
+        expect(formatArticleSearchHit(staleTitleRes.hits[0], 0)).toContain(
+          '[snapshot] [body unverified]',
+        );
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('uses snapshot-hit in readTaxonomiesFromBaseline only when taxonomyVerified === 1 and rev matches', () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-tax-snap-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const verifiedId = '01KNGD5W934R00000000000010';
+        const unverifiedId = '01KNGD5W934R00000000000011';
+        wsCache.upsertSnapshotArticlesBatch({
+          collection: 'posts',
+          walkComplete: true,
+          records: [
+            {
+              id: verifiedId,
+              collection: 'posts',
+              slug: 'v',
+              title: 'V',
+              status: 'published',
+              excerpt: null,
+              bodyMarkdown: 'b',
+              bodySource: 'list-live',
+              taxonomyVerified: 1,
+              categoriesJson: '["news"]',
+              tagsJson: '["alpha"]',
+              publishedAt: '2026-01-01T00:00:00.000Z',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              comparisonRev: '2@live:live2',
+              capturedAt: Date.now(),
+            },
+            {
+              id: unverifiedId,
+              collection: 'posts',
+              slug: 'u',
+              title: 'U',
+              status: 'published',
+              excerpt: null,
+              bodyMarkdown: 'b',
+              bodySource: 'list-live',
+              taxonomyVerified: 0,
+              categoriesJson: '["news"]',
+              tagsJson: '["beta"]',
+              publishedAt: '2026-01-01T00:00:00.000Z',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              comparisonRev: '2@live:live2',
+              capturedAt: Date.now(),
+            },
+          ],
+        });
+
+        const hit = readTaxonomiesFromBaseline({
+          cache: wsCache,
+          itemId: verifiedId,
+          item: { id: verifiedId, status: 'published', version: 2, liveRevisionId: 'live2' },
+          workspaceRoot: wsDir,
+        });
+        expect(hit).toEqual({
+          terms: { categories: ['news'], tags: ['alpha'] },
+          reason: 'snapshot-hit',
+        });
+
+        const missUnverified = readTaxonomiesFromBaseline({
+          cache: wsCache,
+          itemId: unverifiedId,
+          item: { id: unverifiedId, status: 'published', version: 2, liveRevisionId: 'live2' },
+          workspaceRoot: wsDir,
+        });
+        expect(missUnverified.terms).toBeNull();
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
