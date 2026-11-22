@@ -80,6 +80,10 @@ export const OPERATIONAL_ERROR_CODES = [
   'MEDIA_BINARY_UPLOAD_FAILED',
   'MEDIA_CONFIRM_FAILED',
   'MEDIA_NOT_READY',
+  'MEDIA_METADATA_UPDATE_FAILED',
+  'MEDIA_METADATA_UPDATE_REQUIRED',
+  'INVALID_MEDIA_COMPANION',
+  'MEDIA_COMPANION_NOT_FOUND',
   // list / fetch failures
   'ARTICLE_LIST_FAILED',
   'ARTICLE_PULL_FAILED',
@@ -370,6 +374,14 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Binary upload to remote storage failed. Check network stability and try pushing again.',
   MEDIA_CONFIRM_FAILED:
     'Failed to confirm media upload with remote CMS. Verify remote media service health.',
+  MEDIA_METADATA_UPDATE_FAILED:
+    'Failed to update media metadata on remote. Verify that the 26-character D1 media record ID exists and check network connectivity.',
+  MEDIA_METADATA_UPDATE_REQUIRED:
+    'Provide --alt and/or --caption explicitly, or run "emit pull-media" first so a local companion YAML is available.',
+  INVALID_MEDIA_COMPANION:
+    'Ensure the target is a valid media/<stem>.yaml companion file containing a 26-character D1 media record ID ("id:").',
+  MEDIA_COMPANION_NOT_FOUND:
+    'Verify the companion YAML path under media/<stem>.yaml or run "emit pull-media" to mirror remote media metadata.',
 };
 
 /**

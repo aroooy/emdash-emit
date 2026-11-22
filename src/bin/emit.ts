@@ -33,7 +33,7 @@ import { registerStatusInitCommands } from '../cli/commands/status.js';
 import { registerDeleteCommand } from '../cli/commands/delete.js';
 import { registerConflictsCommand } from '../cli/commands/conflicts.js';
 import { registerDoctorCommand } from '../cli/commands/doctor.js';
-import { registerMediaSearchCommand } from '../cli/commands/media.js';
+import { registerMediaSearchCommand, registerPushMediaCommand } from '../cli/commands/media.js';
 import { registerArticleSearchCommand } from '../cli/commands/article-search.js';
 import { registerSnapshotCommand } from '../cli/commands/snapshot.js';
 import { getPackageVersion } from '../utils/version.js';
@@ -57,6 +57,7 @@ registerDeleteCommand(program, resolveContext);
 registerConflictsCommand(program, resolveContext);
 registerDoctorCommand(program, resolveContext);
 registerMediaSearchCommand(program, resolveContext);
+registerPushMediaCommand(program, resolveContext);
 registerArticleSearchCommand(program, resolveContext);
 registerSnapshotCommand(program, resolveContext);
 

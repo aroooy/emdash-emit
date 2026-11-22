@@ -69,6 +69,7 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('mcp');
     expect(commandNames).toContain('profile');
     expect(commandNames).toContain('media-search');
+    expect(commandNames).toContain('push-media');
   });
 
   it('delete command exposes safety options', () => {
@@ -1815,6 +1816,61 @@ describe('Emit CLI (Commander)', () => {
         process.chdir(prevCwd);
         console.log = origLog;
         console.error = origError;
+      }
+    });
+
+    it('emit push-media updates metadata from companion YAML and flags (v0.1.52)', async () => {
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+
+      const logLines: string[] = [];
+      const origLog = console.log;
+      const origFetch = globalThis.fetch;
+      const origToken = process.env.EMDASH_TOKEN;
+      const origOrigin = process.env.EMDASH_ORIGIN;
+
+      console.log = (...args: unknown[]) => {
+        logLines.push(args.map(String).join(' '));
+      };
+      process.env.EMDASH_TOKEN = 'test-token';
+      process.env.EMDASH_ORIGIN = 'https://aroooy.net';
+
+      try {
+        const mediaId = '01M67P0MBMJQQXH2K95HHCYRYB';
+        const storageKey = '01M67P0MBMJQQXH2K95HHCYRYB.01M6CONFIRMED0000000000000.png';
+        const stem = '01M67P0MBMJQQXH2K95HHCYRYB.01M6CONFIRMED0000000000000';
+        const mediaDir = path.join(tempDir, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(mediaDir, `${stem}.yaml`),
+          `id: ${mediaId}\nfilename: sample.png\nmimeType: image/png\nsize: 68\nalt: "CLI Alt"\ncaption: "CLI Caption"\nstorageKey: ${storageKey}\nstatus: ready\n`,
+          'utf8',
+        );
+
+        globalThis.fetch = vi.fn().mockImplementation(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: {} }),
+        })) as unknown as typeof fetch;
+
+        await program.parseAsync([
+          'node',
+          'emit',
+          'push-media',
+          `media/${stem}.yaml`,
+          '--alt',
+          'Override Alt',
+        ]);
+        expect(logLines.join('\n')).toContain(`Updated metadata for media/${stem}.yaml`);
+        expect(logLines.join('\n')).toContain(`mediaId: ${mediaId}`);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;
+        else delete process.env.EMDASH_TOKEN;
+        if (origOrigin !== undefined) process.env.EMDASH_ORIGIN = origOrigin;
+        else delete process.env.EMDASH_ORIGIN;
+        process.chdir(prevCwd);
+        console.log = origLog;
       }
     });
   });

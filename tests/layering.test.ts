@@ -92,6 +92,10 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
   doctor: new Set(['runWorkspaceDoctor']),
   media: new Set([
     'pullMedia',
+    'pushMedia',
+    'PushMediaOptions',
+    'PushMediaResult',
+    'PushMediaItemResult',
     'collectLocalMirrorIndex',
     'searchRemoteMedia',
     'searchLocalMirrorMedia',

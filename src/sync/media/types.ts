@@ -311,3 +311,31 @@ export interface LocalMirrorEntry {
 
 /** storageKey -> mirror entry. Built from confirmed metadata sources only. */
 export type LocalMirrorIndex = Map<string, LocalMirrorEntry>;
+
+export interface PushMediaOptions {
+  workspaceRoot: string;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  targets: string[];
+  alt?: string;
+  caption?: string;
+  cache?: CacheDatabase;
+  fetchFn?: typeof fetch;
+}
+
+export interface PushMediaItemResult {
+  target: string;
+  action: 'uploaded' | 'deduplicated' | 'metadata-updated';
+  mediaId: string;
+  storageKey?: string;
+  url?: string;
+  filePath?: string;
+  yamlPath?: string;
+  alt?: string;
+  caption?: string;
+}
+
+export interface PushMediaResult {
+  items: PushMediaItemResult[];
+}

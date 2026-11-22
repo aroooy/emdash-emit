@@ -1,6 +1,6 @@
 # CLI Command & MCP Tool Complete Reference
 
-This document provides the complete reference for all **16 top-level CLI commands** (plus **10 subcommands**) and all **14 Model Context Protocol (MCP) tools** in Emit (`emdash-emit`).
+This document provides the complete reference for all **18 top-level CLI commands** (plus **10 subcommands**) and all **16 Model Context Protocol (MCP) tools** in Emit (`emdash-emit`).
 
 ---
 
@@ -226,6 +226,22 @@ emit pull-media [-a, --article <id-or-path>] [--storage-key <key...>] [--all] [-
 
 ---
 
+### 12b. `emit push-media`
+
+Uploads standalone local image file(s) to the remote EmDash media library and/or updates `alt` and `caption` metadata on existing media records (symmetric counterpart to `emit pull-media`).
+
+```bash
+emit push-media <targets...> [--alt <text>] [--caption <text>] [-p, --profile <name>]
+```
+
+- `<targets...>`: One or more targets:
+  - **Mode A (`media/<stem>.yaml`)**: Updates remote `PUT /_emdash/api/media/{mediaId}` from `--alt` / `--caption` flags (and writes them back to the `.yaml` preserving all other fields) or, when flags are omitted, pushes the `alt` and `caption` values edited directly in `media/<stem>.yaml`.
+  - **Mode B (local image file)**: If the image is an already-mirrored `media/<stem>.<ext>` with a valid companion `media/<stem>.yaml` `id:`, deterministically routes to Mode A metadata update. Otherwise validates via `probeLocalImageFile()`, uploads via the 4-phase upload contract (or dedup), and mirrors into `media/<markdownRef>.<ext>` + `.yaml` (moving files from `media/drafts/*` and copying external paths so originals are preserved).
+  - **Mode C (`<mediaId>` or `<storageKey>`)**: Resolves `storageKey` to its 26-character D1 `mediaId` (never passing `storageKey` directly to `PUT /_emdash/api/media/{mediaId}`) and updates remote metadata.
+- `--alt <text>` / `--caption <text>`: Explicit metadata values to set (pass `""` to clear an existing value).
+
+---
+
 ### 13. `emit article-search`
 
 Searches remote EmDash articles (or local Markdown files with `--offline`) by keyword, taxonomy, status, slug, or date range. Omit `[query]` to browse recent articles.
@@ -290,7 +306,7 @@ emit mcp [-w, --workspace <path>]
 
 ## Part 2: Model Context Protocol (MCP) Tool Reference
 
-All 15 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
+All 16 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
 
 | # | MCP Tool Name | CLI Equivalent | Key Parameters (Zod Schema) | Description |
 | --- | --- | --- | --- | --- |
@@ -304,8 +320,9 @@ All 15 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 8 | `sync_doctor` | `emit doctor` | `collection?`, `strictMedia?`, `checkMediaUrls?`, `checkMediaLibrary?`, `checkAuth?`, `profile?` | Run workspace diagnostics (offline by default; opt-in remote probes via `checkAuth`, `checkMediaUrls`, `checkMediaLibrary`). |
 | 9 | `sync_pull_taxonomies` | `emit pull-taxonomies` | `profile?` | Standalone sync of remote categories and tags into `categories/*.yaml` and `tags/*.yaml`. |
 | 10 | `sync_pull_media` | `emit pull-media` | `article?`, `storageKey?`, `limit?`, `all?`, `noPrune?`, `downloadFiles?`, `profile?` | Mirror media assets by article (`article`), specific key (`storageKey`), or bounded library window (`mediaSyncLimit`). |
-| 11 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
-| 12 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
-| 13 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
-| 14 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
-| 15 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |
+| 11 | `sync_push_media` | `emit push-media` | `targets` *(required, `string[]`)*, `alt?`, `caption?`, `profile?` | Upload standalone local image file(s) (`media/drafts/*` move or external copy) and/or sync `alt`/`caption` metadata from flags or local `media/<stem>.yaml`. |
+| 12 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
+| 13 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
+| 14 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
+| 15 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
+| 16 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |

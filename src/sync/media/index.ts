@@ -30,3 +30,4 @@ export * from './pull_library.js';
 export * from './prune_protect.js';
 export * from './remote_index.js';
 export * from './local_search.js';
+export * from './push_media.js';

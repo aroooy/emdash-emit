@@ -287,6 +287,69 @@ async function syncRemoteMediaMetadata(
 }
 
 /**
+ * Strict update of `alt` / `caption` on a remote media record via `PUT /_emdash/api/media/{mediaId}`.
+ * Unlike `syncRemoteMediaMetadata`, this function:
+ *   1. Allows empty string `""` values so callers can clear existing `alt` or `caption` fields
+ *      (conforming to EmDash's `media_update` schema where `alt` and `caption` are `type: "string"`).
+ *   2. Uses `createAuthedFetch` and throws `ApiError` (`MEDIA_METADATA_UPDATE_FAILED`) on HTTP failure.
+ */
+export async function updateRemoteMediaMetadata(
+  mediaId: MediaRecordId | string,
+  metadata: { alt?: string; caption?: string },
+  options: {
+    origin: string;
+    token: string;
+    refreshToken?: string;
+    fetchFn?: typeof fetch;
+  },
+): Promise<{ alt?: string; caption?: string }> {
+  const body: Record<string, string> = {};
+  if (metadata.alt !== undefined) {
+    body.alt = metadata.alt.trim();
+  }
+  if (metadata.caption !== undefined) {
+    body.caption = metadata.caption.trim();
+  }
+  if (Object.keys(body).length === 0) {
+    return {};
+  }
+
+  const fetchFn = createAuthedFetch(options);
+  const itemUrl = mediaDetailEndpoint(options.origin, mediaId);
+  const res = await fetchFn(itemUrl, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    let errText = '';
+    try {
+      errText = await res.text();
+    } catch {
+      errText = res.statusText;
+    }
+    throw new ApiError({
+      message:
+        `Failed to update metadata for media "${mediaId}": HTTP ${res.status} ${errText}`.trim(),
+      code: 'MEDIA_METADATA_UPDATE_FAILED',
+      status: res.status,
+      endpoint: `/_emdash/api/media/${mediaId}`,
+      suggestion:
+        res.status === 404
+          ? 'Verify that the 26-character D1 media record ID exists on remote (do not pass an R2 storageKey directly to the media detail endpoint).'
+          : 'Check network connectivity and token permissions, then retry.',
+    });
+  }
+
+  return body;
+}
+
+/**
  * Compensating transaction for failed uploads after `POST /_emdash/api/media/upload-url`
  * has created a pending record on the server.
  *
@@ -490,6 +553,16 @@ async function resolveReusableUpload(
     confirmedStorageKey,
     options.origin,
   );
+
+  // Sync non-empty alt/caption when reusing an already-ready local media asset (last-writer-wins; 0-PUT when omitted/empty or during post-confirm 'uploaded' crash recovery)
+  if (existingLocal.status === 'ready') {
+    await syncRemoteMediaMetadata(
+      existingLocal.mediaId,
+      { alt: options.alt, caption: options.caption },
+      { origin: options.origin, token: options.token, fetchFn },
+    );
+  }
+
   return {
     mediaId: existingLocal.mediaId,
     storageKey: confirmedStorageKey,
@@ -540,6 +613,14 @@ async function finalizeServerDedupHit(
     url: canonicalUrl,
     status: 'uploaded',
   });
+
+  // Sync non-empty alt/caption on server dedup hit (last-writer-wins; 0-PUT when omitted/empty)
+  await syncRemoteMediaMetadata(
+    existingTarget.mediaId,
+    { alt: options.alt, caption: options.caption },
+    { origin: options.origin, token: options.token, fetchFn },
+  );
+
   return {
     mediaId: existingTarget.mediaId,
     storageKey: confirmedStorageKey,

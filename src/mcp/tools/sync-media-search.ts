@@ -24,6 +24,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   collectLocalMirrorIndex,
+  pushMedia,
   searchLocalMirrorMedia,
   searchRemoteMedia,
 } from '../../sync/media/index.js';
@@ -139,6 +140,53 @@ export function registerSyncMediaSearchTool(
         if (tagHints) payload.tagHints = tagHints;
 
         return formatToolSuccess(payload, ctx.meta);
+      }),
+  );
+
+  server.tool(
+    'sync_push_media',
+    'Upload local image file(s) to the remote EmDash media library and/or update alt/caption metadata on existing media records. Accepts one or more targets: (1) local image paths (e.g. "media/drafts/hero.jpg" which is moved into "media/<markdownRef>.<ext>", or an external path which is copied into "media/"), (2) companion YAML paths ("media/<stem>.yaml") to push edited alt/caption values to remote, or (3) a 26-char D1 mediaId or R2 storageKey (automatically resolved to its D1 mediaId before calling PUT /_emdash/api/media/{mediaId}). Pass alt="" or caption="" to clear existing metadata.',
+    {
+      targets: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe(
+          'One or more local image paths (e.g. "media/drafts/hero.jpg"), companion YAML paths ("media/<stem>.yaml"), storageKeys, or 26-char mediaIds.',
+        ),
+      alt: z
+        .string()
+        .optional()
+        .describe(
+          'Alt text to set on the media record(s) (pass "" to clear). Omit when pushing edits from a local media/<stem>.yaml file.',
+        ),
+      caption: z
+        .string()
+        .optional()
+        .describe(
+          'Caption text to set on the media record(s) (pass "" to clear). Omit when pushing edits from a local media/<stem>.yaml file.',
+        ),
+      profile: z.string().optional().describe('Target profile name for multi-site setups'),
+    },
+    async (args) =>
+      withResolvedContext(resolveContext, args, async (ctx) => {
+        const result = await pushMedia({
+          workspaceRoot: ctx.root,
+          origin: ctx.origin,
+          token: ctx.auth.token,
+          refreshToken: ctx.auth.refreshToken,
+          targets: args.targets,
+          alt: args.alt,
+          caption: args.caption,
+          cache: ctx.cache,
+        });
+
+        return formatToolSuccess(
+          {
+            total: result.items.length,
+            items: result.items,
+          },
+          ctx.meta,
+        );
       }),
   );
 }

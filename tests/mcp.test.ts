@@ -98,6 +98,7 @@ describe('Emit MCP Server', () => {
       'sync_conflicts',
       'sync_doctor',
       'sync_media_search',
+      'sync_push_media',
     ];
 
     const registered = (
@@ -1133,6 +1134,65 @@ Inline body
       });
       expect(bypassed.isError).toBeUndefined();
       expect(bypassed.content[0].text).toContain('Bypassed Guard G9');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('sync_push_media uploads standalone media and updates companion YAML metadata (v0.1.52)', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const mediaId = '01M67P0MBMJQQXH2K95HHCYRYB';
+    const storageKey = '01M67P0MBMJQQXH2K95HHCYRYB.01M6CONFIRMED0000000000000.png';
+    const stem = '01M67P0MBMJQQXH2K95HHCYRYB.01M6CONFIRMED0000000000000';
+    const mediaDir = path.join(tempDir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mediaDir, `${stem}.yaml`),
+      `id: ${mediaId}\nfilename: sample.png\nmimeType: image/png\nsize: 68\nalt: "MCP YAML Alt"\ncaption: "MCP YAML Caption"\nstorageKey: ${storageKey}\nstatus: ready\n`,
+      'utf8',
+    );
+
+    const origFetch = globalThis.fetch;
+    const putPayloads: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (_urlStr: string, init?: RequestInit) => {
+      putPayloads.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      return { ok: true, status: 200, json: async () => ({ success: true, data: {} }) };
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await registered['sync_push_media'].handler({
+        targets: [`media/${stem}.yaml`],
+      });
+      expect(res.isError).toBeUndefined();
+      const parsed = JSON.parse(res.content[0].text) as {
+        total: number;
+        items: Array<{ action: string; mediaId: string; alt: string; caption: string }>;
+      };
+      expect(parsed.total).toBe(1);
+      expect(parsed.items[0]).toMatchObject({
+        action: 'metadata-updated',
+        mediaId,
+        alt: 'MCP YAML Alt',
+        caption: 'MCP YAML Caption',
+      });
+      expect(putPayloads).toEqual([{ alt: 'MCP YAML Alt', caption: 'MCP YAML Caption' }]);
     } finally {
       globalThis.fetch = origFetch;
     }

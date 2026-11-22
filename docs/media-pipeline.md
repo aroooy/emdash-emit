@@ -8,7 +8,7 @@ This document specifies Emit's Local-First media pipeline (`src/sync/media/`, `s
 
 ## 1. Architecture of `src/sync/media/`
 
-`src/sync/media/` is organized into 10 focused modules (imported internally via `src/sync/media/index.js`; `src/sync/media.ts` is reserved strictly for the public `src/index.ts` npm façade):
+`src/sync/media/` is organized into 11 focused modules (imported internally via `src/sync/media/index.js`; `src/sync/media.ts` is reserved strictly for the public `src/index.ts` npm façade):
 
 1. **`types.ts`**: Shared interfaces, constants (`MEDIA_BINARY_EXTENSIONS`, `MEDIA_LIST_PAGE_SIZE`, `MEDIA_SEARCH_MAX_LIMIT`), and result shapes (zero runtime functions).
 2. **`naming_mirror.ts`**: `mediaMirrorNames()`, `resolveMarkdownRefCollision()`, `mediaRecordIdForStem()`, and duplicate cleanup (`cleanupDuplicateMediaFilesForId`).
@@ -20,6 +20,7 @@ This document specifies Emit's Local-First media pipeline (`src/sync/media/`, `s
 8. **`pull_article.ts`**: `pullArticleMedia()` — targeted on-demand mirroring for a single article's `featuredImage` and body images.
 9. **`pull_library.ts`**: `pullMediaLibrary()` — batch/full media library synchronization, targeted `--storage-key` pulls, and index-based orphan pruning.
 10. **`prune_protect.ts`**: Scans workspace articles (`draft/`, `published/`, and `conflicts/`, excluding `.deleted.md` backups) to protect any media asset still referenced locally from being pruned.
+11. **`push_media.ts`**: `pushMedia()` — unified standalone image upload (`media/drafts/*` move promotion or external path copy promotion) and remote metadata synchronization (`PUT /_emdash/api/media/{mediaId}` from flags or editable companion `media/<stem>.yaml`).
 
 ---
 
@@ -107,6 +108,12 @@ Local mirrors under `media/` are named strictly after the asset's **`storageKey`
 A `storageKey`-derived stem frequently starts with a 26-character ULID (the storageKey ULID), which looks syntactically identical to a D1 record `id` ULID.
 
 - **Invariant**: `mediaRecordIdForStem()` reads ownership **exclusively** from the `id:` field inside `media/<stem>.yaml`. It never parses a ULID prefix from a filename. Files in `media/` without a companion `.yaml` cannot be attributed to a remote record and are never touched by pruning or duplicate cleanup.
+
+### 3.3 Standalone Media Upload & Editable Companion YAML (`emit push-media` / `sync_push_media`)
+
+- **Editable Working Copy (`media/<stem>.yaml`)**: Companion `.yaml` files under `media/` serve as editable working copies for `alt` and `caption`. Running `emit push-media media/<stem>.yaml` (or passing `media/<stem>.<ext>` when its companion `.yaml` has a valid 26-char `id:`) reads `alt` and `caption` from the YAML (or from `--alt` / `--caption` override flags, including `""` empty-string clearing) and sends `PUT /_emdash/api/media/{mediaId}`, preserving all other companion fields (`id`, `filename`, `mimeType`, `size`, `width`, `height`, `storageKey`, `contentHash`, `status`, `url`, `createdAt`).
+- **Source File Protection on Standalone Upload**: When uploading a new image via `emit push-media <path>`, files under `media/drafts/` are **moved** into `media/<markdownRef>.<ext>`, whereas files outside `media/drafts/` (such as `~/Pictures/photo.jpg`) are **copied** into `media/<markdownRef>.<ext>` so the user's original file is preserved.
+- **Deduplication Metadata Sync (Last-Writer-Wins)**: When an upload hits local `media_state` cache reuse or server-side `sha1:<hex>` deduplication (`existing: true`), non-empty `alt` / `caption` values are synced to `PUT /_emdash/api/media/{mediaId}` following a **last-writer-wins** rule for shared media records. When `alt` and `caption` are omitted or empty during automatic deduplication, zero `PUT` requests are sent.
 
 ---
 

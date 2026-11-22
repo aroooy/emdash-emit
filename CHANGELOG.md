@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.52] - 2026-11-23
+
+### Added
+
+- **Unified Standalone Media Upload & Metadata Sync (`emit push-media` / `sync_push_media`, `src/sync/media/push_media.ts`, `src/client/media.ts`, `src/cli/commands/media.ts`, `src/mcp/tools/sync-media-search.ts`)**:
+  - Added `emit push-media <targets...> [--alt <text>] [--caption <text>] [-p, --profile <name>]` and MCP tool `sync_push_media(targets, alt?, caption?, profile?)` as the symmetric counterpart to `emit pull-media` / `sync_pull_media`.
+  - **Mode A (Companion YAML metadata sync)**: Passing `media/<stem>.yaml` updates remote `PUT /_emdash/api/media/{mediaId}` from `--alt` / `--caption` flags (merging back into the `.yaml` while preserving all other fields) or, when flags are omitted, pushes the `alt` and `caption` values edited directly in `media/<stem>.yaml`. Supports empty string `""` clearing.
+  - **Mode B (Local image upload & deterministic mirror routing)**: Passing an already-mirrored `media/<stem>.<ext>` with a valid companion `media/<stem>.yaml` `id:` deterministically routes to Mode A metadata update. Passing a new image file validates it via `probeLocalImageFile()`, uploads via the 4-phase contract, and promotes into `media/<markdownRef>.<ext>` + `.yaml` (moving files from `media/drafts/*` and copying external paths so user originals are preserved).
+  - **Mode C (`<mediaId>` / `<storageKey>` metadata update)**: Resolves `storageKey` to its 26-character D1 `mediaId` (respecting the Two Media ID Spaces invariant) before calling `PUT /_emdash/api/media/{mediaId}`, while rejecting missing local file paths (`./`, `../`, `/`, `~/`, `media/`, `.yaml`) immediately with `MISSING_LOCAL_IMAGE_FILE` / `MEDIA_COMPANION_NOT_FOUND`.
+
+### Fixed
+
+- **Deduplication Hit Metadata Sync (`src/client/media.ts`)**:
+  - `resolveReusableUpload()` (local `media_state` cache hit) and `finalizeServerDedupHit()` (server `existing: true` hit) now call `syncRemoteMediaMetadata()` when non-empty `alt` or `caption` is provided (last-writer-wins; 0 `PUT` requests when omitted or empty).
+
 ## [0.1.51] - 2026-11-22
 
 ### Changed

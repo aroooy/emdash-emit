@@ -23,6 +23,7 @@
 import type { Command } from 'commander';
 import {
   collectLocalMirrorIndex,
+  pushMedia,
   searchLocalMirrorMedia,
   searchRemoteMedia,
 } from '../../sync/media/index.js';
@@ -159,4 +160,59 @@ export function registerMediaSearchCommand(
         reportActionFailure(err);
       }
     });
+}
+
+export function registerPushMediaCommand(
+  program: Command,
+  resolveContext: CliContextResolver,
+): void {
+  program
+    .command('push-media <targets...>')
+    .description(
+      'Upload local image file(s) to remote EmDash media library and/or sync alt/caption metadata from flags or local media/<stem>.yaml',
+    )
+    .option(
+      '--alt <text>',
+      'Alt text to set on the remote media record(s) (pass "" to clear; omit to push alt from local media/<stem>.yaml)',
+    )
+    .option(
+      '--caption <text>',
+      'Caption text to set on the remote media record(s) (pass "" to clear; omit to push caption from local media/<stem>.yaml)',
+    )
+    .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .action(
+      async (targets: string[], options: { alt?: string; caption?: string; profile?: string }) => {
+        try {
+          const ctx = resolveContext(options.profile);
+          const result = await pushMedia({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            targets,
+            alt: options.alt,
+            caption: options.caption,
+            cache: ctx.cache,
+          });
+
+          for (const item of result.items) {
+            if (item.action === 'uploaded') {
+              console.log(
+                `✅ Uploaded ${item.target} -> ${item.filePath ?? item.storageKey ?? item.mediaId} (mediaId: ${item.mediaId}, storageKey: ${item.storageKey ?? 'n/a'})`,
+              );
+            } else if (item.action === 'deduplicated') {
+              console.log(
+                `♻️  Deduplicated ${item.target} -> ${item.filePath ?? item.storageKey ?? item.mediaId} (mediaId: ${item.mediaId}, storageKey: ${item.storageKey ?? 'n/a'})`,
+              );
+            } else {
+              console.log(
+                `✅ Updated metadata for ${item.target} (mediaId: ${item.mediaId}${item.storageKey ? `, storageKey: ${item.storageKey}` : ''}${item.yamlPath ? `, yaml: ${item.yamlPath}` : ''})`,
+              );
+            }
+          }
+        } catch (err) {
+          reportActionFailure(err);
+        }
+      },
+    );
 }

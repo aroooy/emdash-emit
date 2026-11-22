@@ -613,4 +613,120 @@ describe('EmDash 4-Phase Media Upload Client & Compensation', () => {
     expect(failedState?.status).toBe('failed');
     expect(failedState?.mediaId).toBe(mediaId);
   });
+
+  it('syncs non-empty alt/caption on server dedup and local cache dedup hits (last-writer-wins) and sends 0 PUTs when omitted (v0.1.52)', async () => {
+    const putBodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'POST' && url.endsWith('/_emdash/api/media/upload-url')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              existing: true,
+              mediaId,
+              storageKey: confirmedStorageKey,
+              url: confirmedUrl,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (method === 'GET' && url.endsWith(`/_emdash/api/media/${mediaId}`)) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaId,
+                filename: 'dedup.png',
+                mimeType: 'image/png',
+                size: TINY_PNG_BUFFER.length,
+                storageKey: confirmedStorageKey,
+                status: 'ready',
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (method === 'PUT' && url.endsWith(`/_emdash/api/media/${mediaId}`)) {
+        putBodies.push({
+          url,
+          body: JSON.parse(String(init?.body || '{}')) as Record<string, unknown>,
+        });
+        return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+      }
+
+      throw new Error(`Unexpected: ${method} ${url}`);
+    }) as unknown as typeof fetch;
+
+    // 1. Server dedup hit WITHOUT alt/caption -> 0 PUT calls (negative case)
+    const noMetaRes = await uploadMediaFile({
+      buffer: TINY_PNG_BUFFER,
+      filename: 'dedup.png',
+      origin,
+      token,
+      fetchFn,
+    });
+    expect(noMetaRes.deduplicated).toBe(true);
+    expect(putBodies).toHaveLength(0);
+
+    // 2. Server dedup hit WITH alt/caption -> 1 PUT call ( also populates cache )
+    const serverDedupRes = await uploadMediaFile({
+      buffer: TINY_PNG_BUFFER,
+      filename: 'dedup.png',
+      alt: 'Server Dedup Alt',
+      caption: 'Server Dedup Caption',
+      origin,
+      token,
+      cache,
+      fetchFn,
+    });
+    expect(serverDedupRes.deduplicated).toBe(true);
+    expect(putBodies).toEqual([
+      {
+        url: `${origin}/_emdash/api/media/${mediaId}`,
+        body: { alt: 'Server Dedup Alt', caption: 'Server Dedup Caption' },
+      },
+    ]);
+
+    // 3. Local media_state cache reuse (status='ready') WITHOUT alt/caption -> 0 additional PUT calls
+    const savedState = cache.getMediaState(confirmedStorageKey)!;
+    cache.saveMediaState({ ...savedState, status: 'ready' });
+    putBodies.length = 0;
+    const localNoMetaRes = await uploadMediaFile({
+      buffer: TINY_PNG_BUFFER,
+      filename: 'dedup.png',
+      origin,
+      token,
+      cache,
+      fetchFn,
+    });
+    expect(localNoMetaRes.deduplicated).toBe(true);
+    expect(putBodies).toHaveLength(0);
+
+    // 4. Local media_state cache reuse WITH updated alt -> 1 PUT call
+    const localWithMetaRes = await uploadMediaFile({
+      buffer: TINY_PNG_BUFFER,
+      filename: 'dedup.png',
+      alt: 'Updated Local Dedup Alt',
+      origin,
+      token,
+      cache,
+      fetchFn,
+    });
+    expect(localWithMetaRes.deduplicated).toBe(true);
+    expect(putBodies).toEqual([
+      {
+        url: `${origin}/_emdash/api/media/${mediaId}`,
+        body: { alt: 'Updated Local Dedup Alt' },
+      },
+    ]);
+  });
 });

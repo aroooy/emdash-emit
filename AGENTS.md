@@ -24,7 +24,7 @@ Before modifying any subsystem or debugging domain behavior, consult the corresp
 | **Local-First Media Pipeline, Mirror Naming & Pruning** | **[docs/media-pipeline.md](docs/media-pipeline.md)** | Modifying `src/sync/media/*`, `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path rewriting, `storageKeyToMarkdownRef` naming, or media pruning. |
 | **Taxonomies (Two-Layer Representation) & Bylines** | **[docs/taxonomies-and-bylines.md](docs/taxonomies-and-bylines.md)** | Modifying category/tag sync, percent-encoded (Layer A) vs decoded CJK (Layer B) slugs, collision resolution, 0-GET deleted term auto-healing, or remote taxonomy audit. |
 | **Safety Guardrails (G1–G19), Doctor, Search & FAQ** | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` epistemic rules (`[WALK_INCOMPLETE]`). |
-| **CLI Commands & MCP Tools Complete Reference** | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** | Inspecting or updating CLI flags (17 top-level commands + 10 subcommands) or MCP tool schemas (15 tools). |
+| **CLI Commands & MCP Tools Complete Reference** | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** | Inspecting or updating CLI flags (18 top-level commands + 10 subcommands) or MCP tool schemas (16 tools). |
 
 ---
 
