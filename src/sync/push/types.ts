@@ -36,6 +36,10 @@ export interface PushOptions extends MapperOptions {
   refreshToken?: string;
   fetchFn?: typeof fetch;
   allowPublish?: boolean;
+  /**
+   * Explicit bypass for Guard G9 when <!--ec:block ... --> opaque block JSON or structure was modified.
+   */
+  allowModifiedOpaqueBlocks?: boolean;
   knownTaxonomies?: Record<string, string[]>;
   candidates?: TaxonomyCandidates;
   resolveTaxonomy?: TaxonomyResolutionStrategy;

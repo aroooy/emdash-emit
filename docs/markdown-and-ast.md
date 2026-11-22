@@ -148,9 +148,12 @@ To balance **Local-First offline editing** with **100% CMS round-trip fidelity**
 
 ### Guard G9 (`MODIFIED_OPAQUE_BLOCK`) & Authoring Rules
 
-- **Tamper Protection**: During `emit push` / `sync_push`, Preflight Guard **G9 (`MODIFIED_OPAQUE_BLOCK`)** compares every `<!--ec:block ... -->` fence against `base_snapshots`. Corrupted JSON or unauthorized payload tampering blocks the push.
+- **Tamper Protection (3-Class Guard G9)**: During `emit push` / `sync_push`, Preflight Guard **G9 (`MODIFIED_OPAQUE_BLOCK`)** inspects every `<!--ec:block ... -->` fence against `base_snapshots` via `inspectOpaqueBlockChanges()`:
+  - **Class 1 (Safe `image` attribute edits)**: Editing `alignment`, `displayWidth`, `displayHeight`, `caption`, `title`, or `alt` on `_type === 'image'` blocks (with structural keys unchanged and Zod type validation passing) is automatically permitted with a warning.
+  - **Class 2 (Pure removal / reordering)**: Removing existing blocks or reordering matched blocks emits a warning and is permitted.
+  - **Class 3 (Tampering / invalid references)**: Invalid JSON, altering structural keys (`_key`, `asset`, `crop`, `hotspot`, etc.), editing unknown custom blocks, or adding an `image` block with a relative/`media/drafts/` `asset.url` blocks the push unless `--allow-modified-opaque-blocks` (`allowModifiedOpaqueBlocks: true`) is explicitly passed.
 - **Allowed Operations on Preserved Blocks**:
-  - **Adding a new image**: Always write standard Markdown `![alt](../../media/drafts/new-image.png)`. Never hand-craft `<!--ec:block ... -->` lines.
-  - **Reordering a preserved block**: Cut and paste the entire single-line `<!--ec:block ... -->` comment to a new line.
-  - **Removing a preserved block**: Delete the entire `<!--ec:block ... -->` line (or pass `--force` if G9 flags an intentional attribute edit).
+  - **Adding a new image**: Always write standard Markdown `![alt](../../media/drafts/new-image.png)`. If you hand-craft an `<!--ec:block {"_type":"image",...} -->` fence, `asset.url` must be a canonical `/_emdash/api/media/file/<storageKey>` or `http(s)://` URL (local relative paths are blocked because `media_stage` skips opaque fences).
+  - **Reordering a preserved block**: Cut and paste the entire single-line `<!--ec:block ... -->` comment to a new line (emits a reordering warning).
+  - **Removing a preserved block**: Delete the entire `<!--ec:block ... -->` line (emits a removal warning). Pass `--allow-modified-opaque-blocks` only when intentionally bypassing Class 3 structural tampering checks.
 - **Referenced Media Mirroring Inside Opaque Fences**: Even though Track B images keep canonical `/_emdash/api/media/file/<storageKey>` URLs inside their JSON payload, `collectArticleStorageKeys()` (`src/sync/media/body_scan.ts`) scans inside `<!--ec:block ... -->` fences as well, so their binary assets are still mirrored into `media/` and protected from media pruning.

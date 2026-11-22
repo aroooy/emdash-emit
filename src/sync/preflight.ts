@@ -29,7 +29,7 @@ import { toRootRelativeMediaUrl } from '../client/media.js';
 import { probeLocalImageFile } from './preflight/image_probe.js';
 import {
   stripCodeBlocks,
-  verifyOpaqueBlocksUntampered,
+  inspectOpaqueBlockChanges,
   detectUnsupportedMarkdownSyntax,
   detectCodeFenceIssues,
 } from '../client/portable-text.js';
@@ -53,6 +53,7 @@ import type { CacheDatabase } from '../db/cache.js';
 
 export interface PreflightOptions {
   allowPublish?: boolean;
+  allowModifiedOpaqueBlocks?: boolean;
   knownTaxonomies?: Record<string, string[]>;
   baseMarkdown?: string;
   previousStatus?: 'draft' | 'published';
@@ -778,17 +779,45 @@ export function runPreflightChecks(
     }
   }
 
-  // G9: Opaque fence tampered check
+  // G9: Opaque fence tampered check (3-class classification)
   if (options?.baseMarkdown) {
-    const isUntampered = verifyOpaqueBlocksUntampered(options.baseMarkdown, cleanedBody);
-    if (!isUntampered) {
-      errors.push({
-        code: 'MODIFIED_OPAQUE_BLOCK',
-        message:
-          'One or more <!--ec:block ... --> opaque custom block fences were modified or deleted.',
-        suggestion:
-          'Restore the exact <!--ec:block ... --> comment fence from the base version. Custom blocks cannot be edited directly in Markdown.',
-      });
+    const inspection = inspectOpaqueBlockChanges(options.baseMarkdown, cleanedBody);
+
+    if (inspection.tampered.length > 0) {
+      const reasons = inspection.tampered.map((t) => t.reason).join(' ');
+      if (options.allowModifiedOpaqueBlocks) {
+        warnings.push(
+          `Bypassed Guard G9 (--allow-modified-opaque-blocks) for ${inspection.tampered.length} <!--ec:block ... --> opaque block(s): ${reasons}`,
+        );
+      } else {
+        errors.push({
+          code: 'MODIFIED_OPAQUE_BLOCK',
+          message: `One or more <!--ec:block ... --> opaque custom block fences were tampered with or contain invalid references: ${reasons}`,
+          suggestion:
+            'Only safe image attributes (alignment, displayWidth, displayHeight, caption, title, alt), block removal, and reordering are allowed by default. Restore structural keys (_key, asset, etc.) or pass --allow-modified-opaque-blocks (allowModifiedOpaqueBlocks: true) to bypass.',
+        });
+      }
+    }
+
+    if (inspection.removedCount > 0) {
+      warnings.push(
+        `Removed ${inspection.removedCount} <!--ec:block ... --> opaque block(s) from body.`,
+      );
+    }
+
+    if (inspection.reorderedCount > 0) {
+      warnings.push(
+        `Reordered ${inspection.reorderedCount} <!--ec:block ... --> opaque block(s) in body.`,
+      );
+    }
+
+    if (inspection.safeImageEdits.length > 0) {
+      const editedKeys = Array.from(
+        new Set(inspection.safeImageEdits.flatMap((e) => e.changedKeys)),
+      ).join(', ');
+      warnings.push(
+        `Updated safe image attributes (${editedKeys}) on ${inspection.safeImageEdits.length} <!--ec:block ... --> block(s).`,
+      );
     }
   }
 

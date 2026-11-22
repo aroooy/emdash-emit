@@ -1041,4 +1041,100 @@ Inline body
     expect(cleared.action).toBe('clear');
     expect(cache.getSnapshotMeta('posts')).toBeNull();
   });
+
+  it('sync_push forwards allowModifiedOpaqueBlocks to bypass Guard G9 (v0.1.51)', async () => {
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+            ) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const id = '01M8MCPOPAQUE0000000000001';
+    const relPath = `posts/draft/20261122_${id}-mcp-opaque.md`;
+    const absPath = path.join(tempDir, relPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(
+      absPath,
+      `---\nid: ${id}\nslug: mcp-opaque\ntitle: "MCP Opaque"\ncollection: posts\nlocale: ja\nstatus: draft\ntaxonomies: {}\nbylines: []\n---\n\n<!--ec:block {"_type":"core:gallery","_key":"tampered"} -->\n\nBody\n`,
+      'utf8',
+    );
+    cache.saveBaseSnapshot({
+      id,
+      rev: '1',
+      frontmatterYaml: JSON.stringify({
+        id,
+        slug: 'mcp-opaque',
+        title: 'MCP Opaque',
+        collection: 'posts',
+        locale: 'ja',
+        status: 'draft',
+        taxonomies: {},
+        bylines: [],
+      }),
+      bodyMarkdown: '<!--ec:block {"_type":"core:gallery","_key":"k1"} -->\n\nBody',
+      hash: 'base-hash',
+      savedAt: Date.now(),
+    });
+    cache.saveSyncState({
+      id,
+      localFilePath: relPath,
+      localHash: 'modified-hash',
+      remoteRev: '1',
+      status: 'draft',
+      slug: 'mcp-opaque',
+      lastSyncedAt: Date.now(),
+    });
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation(async (urlStr: string) => {
+      if (urlStr.includes('/lock')) {
+        return { ok: true, status: 200, json: async () => ({ locked: true, token: 'l1' }) };
+      }
+      if (urlStr.includes('/_emdash/api/taxonomies')) {
+        return { ok: true, status: 200, json: async () => ({ data: { items: [] } }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            id,
+            slug: 'mcp-opaque',
+            title: 'MCP Opaque',
+            status: 'draft',
+            version: 2,
+            rev: '2',
+            draftRevisionId: 'd2',
+          },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    try {
+      const blocked = await registered['sync_push'].handler({ filePath: relPath });
+      expect(blocked.isError).toBe(true);
+      expect(blocked.content[0].text).toContain('MODIFIED_OPAQUE_BLOCK');
+
+      const bypassed = await registered['sync_push'].handler({
+        filePath: relPath,
+        allowModifiedOpaqueBlocks: true,
+      });
+      expect(bypassed.isError).toBeUndefined();
+      expect(bypassed.content[0].text).toContain('Bypassed Guard G9');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });

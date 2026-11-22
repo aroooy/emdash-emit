@@ -262,7 +262,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
     expect(res.warnings.some((w) => w.includes('Setext headings'))).toBe(true);
   });
 
-  it('G9: blocks push when an opaque block fence is modified or removed', () => {
+  it('G9: blocks push when an opaque block fence is structurally modified', () => {
     const baseMd = '<!--ec:block {"_type":"core:gallery","_key":"1"} -->\nSome text';
     const modifiedParsed: ParsedMarkdown = {
       ...validParsed,
@@ -275,6 +275,52 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
 
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.code === 'MODIFIED_OPAQUE_BLOCK')).toBe(true);
+  });
+
+  it('G9 (v0.1.51): allows pure opaque block removal and reordering with warnings, safe image edits, and explicit bypass', () => {
+    const baseImg =
+      '<!--ec:block {"_type":"image","_key":"img1","asset":{"url":"/_emdash/api/media/file/01KEY1.png"},"alignment":"center"} -->';
+    const baseGallery = '<!--ec:block {"_type":"core:gallery","_key":"g1"} -->';
+    const baseMd = `${baseImg}\n\n${baseGallery}\n\nSome text`;
+
+    // Pure removal -> valid with warning (no emoji)
+    const removedRes = runPreflightChecks(
+      filePath,
+      { ...validParsed, body: `${baseImg}\n\nSome text` },
+      { baseMarkdown: baseMd },
+    );
+    expect(removedRes.valid).toBe(true);
+    expect(removedRes.warnings.some((w) => w.startsWith('Removed 1 <!--ec:block'))).toBe(true);
+
+    // Safe image attribute edit + reorder -> valid with warnings
+    const editedImg =
+      '<!--ec:block {"_type":"image","_key":"img1","asset":{"url":"/_emdash/api/media/file/01KEY1.png"},"alignment":"left","caption":"Updated"} -->';
+    const editReorderRes = runPreflightChecks(
+      filePath,
+      { ...validParsed, body: `${baseGallery}\n\n${editedImg}\n\nSome text` },
+      { baseMarkdown: baseMd },
+    );
+    expect(editReorderRes.valid).toBe(true);
+    expect(
+      editReorderRes.warnings.some((w) =>
+        w.startsWith('Updated safe image attributes (alignment, caption)'),
+      ),
+    ).toBe(true);
+    expect(editReorderRes.warnings.some((w) => w.startsWith('Reordered 1 <!--ec:block'))).toBe(
+      true,
+    );
+
+    // Structural tampering with allowModifiedOpaqueBlocks: true -> downgraded to warning
+    const tamperedRes = runPreflightChecks(
+      filePath,
+      {
+        ...validParsed,
+        body: '<!--ec:block {"_type":"core:gallery","_key":"tampered"} -->\nSome text',
+      },
+      { baseMarkdown: baseMd, allowModifiedOpaqueBlocks: true },
+    );
+    expect(tamperedRes.valid).toBe(true);
+    expect(tamperedRes.warnings.some((w) => w.startsWith('Bypassed Guard G9'))).toBe(true);
   });
 
   it('G10: validates featuredImage frontmatter format and blocks invalid values', () => {

@@ -530,6 +530,7 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
       token: options.token,
       refreshToken: options.refreshToken,
       allowPublish: options.allowPublish,
+      allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
       fetchFn: options.fetchFn,
       // Batch push must honor the same setting single push does, or a workspace that spells mirrored images as
       // local references gets every one of them rewritten to canonical URLs on disk.

@@ -29,7 +29,7 @@ import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 export function registerSyncDiffTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_diff',
-    'Display line-by-line differences between local article edits and the baseline snapshot/remote version before pushing. Useful for reviewing changes or diagnosing unpushed modifications. Note: Differences in <!--ec:block ... --> comment fences indicate modifications to preserved custom blocks or styled images. Keep these comment lines intact unless intentionally changing their placement.',
+    'Display line-by-line differences between local article edits and the baseline snapshot/remote version before pushing. Useful for reviewing changes or diagnosing unpushed modifications. Note: Differences in <!--ec:block ... --> comment fences indicate modifications to preserved custom blocks or styled images. Safe image attribute edits, block removals, and reordering are permitted, while structural key changes (_key, asset, etc.) are blocked by Guard G9 unless bypassed.',
     {
       filePath: z
         .string()

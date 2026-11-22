@@ -185,8 +185,9 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     codes: ['MODIFIED_OPAQUE_BLOCK'],
     stage: 'preflight',
     severity: 'error',
-    source: 'src/sync/preflight.ts:672',
-    description: '<!--ec:block--> 保護ブロック改ざん検知',
+    source: 'src/sync/preflight.ts:794',
+    description:
+      '<!--ec:block--> 保護ブロック改ざん検知（安全画像属性・削除・並び替えは許可、構造改変は --allow-modified-opaque-blocks でバイパス可）',
   },
   {
     id: 10,
@@ -312,7 +313,7 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Resolve all 3-way merge conflict markers (<<<<<<<, =======, >>>>>>>) in the article body before pushing.',
   // G9
   MODIFIED_OPAQUE_BLOCK:
-    'Preserve <!--ec:block ... --> opaque extension blocks verbatim without editing their contents or tags.',
+    'Restore structural keys (_key, asset, etc.) in <!--ec:block ... --> fences (safe image layout edits, block removal, and reordering are permitted), or pass --allow-modified-opaque-blocks to bypass.',
   // G10
   INVALID_FEATURED_IMAGE:
     'Set featuredImage to a 26-character media record ULID, a local image relative path inside "media/drafts/", or null. Local paths outside "media/" and raw URL strings are rejected.',

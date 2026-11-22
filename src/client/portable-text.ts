@@ -31,6 +31,8 @@
  *   Tier 3: Unknown blocks <-> opaque HTML comment fences (preserved, not editable)
  */
 
+import { z } from 'zod';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1144,4 +1146,344 @@ export function verifyOpaqueBlocksUntampered(baseMarkdown: string, localMarkdown
   if (baseFences.length !== localFences.length) return false;
 
   return baseFences.every((fence, idx) => fence === localFences[idx]);
+}
+
+export const SAFE_IMAGE_EDIT_KEYS = [
+  'alignment',
+  'displayWidth',
+  'displayHeight',
+  'caption',
+  'title',
+  'alt',
+] as const;
+
+export type SafeImageEditKey = (typeof SAFE_IMAGE_EDIT_KEYS)[number];
+
+const SAFE_IMAGE_EDIT_KEY_SET = new Set<string>(SAFE_IMAGE_EDIT_KEYS);
+
+const SAFE_IMAGE_ATTRIBUTE_SCHEMAS: Record<SafeImageEditKey, z.ZodTypeAny> = {
+  alignment: z.string().nullable().optional(),
+  displayWidth: z.union([z.number(), z.string()]).nullable().optional(),
+  displayHeight: z.union([z.number(), z.string()]).nullable().optional(),
+  caption: z
+    .union([z.string(), z.array(z.unknown())])
+    .nullable()
+    .optional(),
+  title: z.string().nullable().optional(),
+  alt: z.string().nullable().optional(),
+};
+
+export interface OpaqueBlockSafeImageEdit {
+  index: number;
+  changedKeys: SafeImageEditKey[];
+}
+
+export interface OpaqueBlockTamperDetail {
+  index: number;
+  rawFence: string;
+  reason: string;
+}
+
+export interface OpaqueBlockInspection {
+  removedCount: number;
+  reorderedCount: number;
+  safeImageEdits: OpaqueBlockSafeImageEdit[];
+  tampered: OpaqueBlockTamperDetail[];
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseOpaqueFencePayload(rawFence: string): Record<string, unknown> | null {
+  const match = rawFence.trim().match(OPAQUE_FENCE_PATTERN);
+  if (!match) return null;
+  try {
+    const parsed: unknown = JSON.parse(match[1]);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function stableEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, idx) => stableEqual(item, b[idx]));
+  }
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(
+    (key) => Object.prototype.hasOwnProperty.call(b, key) && stableEqual(a[key], b[key]),
+  );
+}
+
+function computeLisLength(nums: number[]): number {
+  const tails: number[] = [];
+  for (const num of nums) {
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tails[mid]! < num) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    tails[lo] = num;
+  }
+  return tails.length;
+}
+
+function validateAddedImageBlock(payload: Record<string, unknown>): string | null {
+  if (!isPlainObject(payload.asset) || typeof payload.asset.url !== 'string') {
+    return 'Added image opaque block must specify asset.url as a canonical "/_emdash/api/media/file/..." or http(s) URL.';
+  }
+  const url = payload.asset.url.trim();
+  const isCanonicalOrHttp =
+    url.startsWith('/_emdash/api/media/file/') ||
+    url.startsWith('https://') ||
+    url.startsWith('http://');
+  if (!isCanonicalOrHttp) {
+    return `Added image opaque block cannot use local or relative asset.url ("${url}"). Use standard Markdown ![alt](../../media/drafts/...) for local draft images or a canonical "/_emdash/api/media/file/..." URL.`;
+  }
+  if (
+    typeof payload.asset.storageKey === 'string' &&
+    payload.asset.storageKey.length > 0 &&
+    url.startsWith('/_emdash/api/media/file/') &&
+    !url.startsWith(`/_emdash/api/media/file/${payload.asset.storageKey}`)
+  ) {
+    return `Added image opaque block asset.url ("${url}") does not match asset.storageKey ("${payload.asset.storageKey}").`;
+  }
+  for (const key of SAFE_IMAGE_EDIT_KEYS) {
+    if (key in payload && !SAFE_IMAGE_ATTRIBUTE_SCHEMAS[key].safeParse(payload[key]).success) {
+      return `Added image opaque block has invalid type for attribute "${key}".`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Inspects changes to `<!--ec:block ... -->` opaque fences between baseMarkdown and localMarkdown.
+ * Classifies edits into:
+ *   - Class 1: Safe layout/caption attribute edits on `_type === 'image'` blocks
+ *   - Class 2: Pure removals (`removedCount`) or relative order changes (`reorderedCount`)
+ *   - Class 3: Tampered JSON/structure, unknown block edits, or invalid added image asset.url (`tampered`)
+ */
+export function inspectOpaqueBlockChanges(
+  baseMarkdown: string,
+  localMarkdown: string,
+): OpaqueBlockInspection {
+  const baseFences = extractOpaqueBlockLines(stripCodeBlocks(baseMarkdown));
+  const localFences = extractOpaqueBlockLines(stripCodeBlocks(localMarkdown));
+
+  const basePayloads = baseFences.map((fence) => parseOpaqueFencePayload(fence));
+  const localPayloads = localFences.map((fence) => parseOpaqueFencePayload(fence));
+
+  const tampered: OpaqueBlockTamperDetail[] = [];
+  const safeImageEdits: OpaqueBlockSafeImageEdit[] = [];
+  const matchedBase = new Set<number>();
+  const matchedLocal = new Set<number>();
+  const matchedPairs: Array<{ baseIndex: number; localIndex: number }> = [];
+
+  for (let i = 0; i < localFences.length; i++) {
+    if (localPayloads[i] === null) {
+      tampered.push({
+        index: i,
+        rawFence: localFences[i]!,
+        reason: 'Invalid JSON payload in <!--ec:block ... --> fence.',
+      });
+      matchedLocal.add(i);
+    }
+  }
+
+  // Pass 1: Match by non-empty _key
+  const baseByKey = new Map<string, number>();
+  for (let b = 0; b < basePayloads.length; b++) {
+    const payload = basePayloads[b];
+    if (
+      payload &&
+      typeof payload._key === 'string' &&
+      payload._key.length > 0 &&
+      !baseByKey.has(payload._key)
+    ) {
+      baseByKey.set(payload._key, b);
+    }
+  }
+  for (let l = 0; l < localPayloads.length; l++) {
+    if (matchedLocal.has(l)) continue;
+    const payload = localPayloads[l];
+    if (payload && typeof payload._key === 'string' && payload._key.length > 0) {
+      const b = baseByKey.get(payload._key);
+      if (b !== undefined && !matchedBase.has(b)) {
+        matchedBase.add(b);
+        matchedLocal.add(l);
+        matchedPairs.push({ baseIndex: b, localIndex: l });
+      }
+    }
+  }
+
+  // Pass 2: Multiset exact rawFence match
+  const baseBucketsByRaw = new Map<string, number[]>();
+  for (let b = 0; b < baseFences.length; b++) {
+    if (matchedBase.has(b)) continue;
+    const key = baseFences[b]!.trim();
+    const bucket = baseBucketsByRaw.get(key) ?? [];
+    bucket.push(b);
+    baseBucketsByRaw.set(key, bucket);
+  }
+  for (let l = 0; l < localFences.length; l++) {
+    if (matchedLocal.has(l)) continue;
+    const key = localFences[l]!.trim();
+    const bucket = baseBucketsByRaw.get(key);
+    if (bucket && bucket.length > 0) {
+      const b = bucket.shift()!;
+      matchedBase.add(b);
+      matchedLocal.add(l);
+      matchedPairs.push({ baseIndex: b, localIndex: l });
+    }
+  }
+
+  // Pass 3: Positional match by identical _type (handles blocks without _key)
+  const baseBucketsByType = new Map<string, number[]>();
+  for (let b = 0; b < basePayloads.length; b++) {
+    if (matchedBase.has(b)) continue;
+    const payload = basePayloads[b];
+    if (payload && typeof payload._type === 'string' && payload._type.length > 0) {
+      const bucket = baseBucketsByType.get(payload._type) ?? [];
+      bucket.push(b);
+      baseBucketsByType.set(payload._type, bucket);
+    }
+  }
+  for (let l = 0; l < localPayloads.length; l++) {
+    if (matchedLocal.has(l)) continue;
+    const payload = localPayloads[l];
+    if (payload && typeof payload._type === 'string' && payload._type.length > 0) {
+      const bucket = baseBucketsByType.get(payload._type);
+      if (bucket && bucket.length > 0) {
+        const b = bucket.shift()!;
+        matchedBase.add(b);
+        matchedLocal.add(l);
+        matchedPairs.push({ baseIndex: b, localIndex: l });
+      }
+    }
+  }
+
+  // Evaluate matched pairs
+  for (const { baseIndex, localIndex } of matchedPairs) {
+    const baseFence = baseFences[baseIndex]!.trim();
+    const localFence = localFences[localIndex]!.trim();
+    if (baseFence === localFence) continue;
+
+    const basePayload = basePayloads[baseIndex];
+    const localPayload = localPayloads[localIndex]!;
+    if (!basePayload) {
+      tampered.push({
+        index: localIndex,
+        rawFence: localFences[localIndex]!,
+        reason: 'Base opaque block payload could not be parsed.',
+      });
+      continue;
+    }
+
+    if (basePayload._type !== localPayload._type) {
+      tampered.push({
+        index: localIndex,
+        rawFence: localFences[localIndex]!,
+        reason: `Opaque block _type changed from "${String(basePayload._type)}" to "${String(localPayload._type)}".`,
+      });
+      continue;
+    }
+
+    const baseHasKey = typeof basePayload._key === 'string' && basePayload._key.length > 0;
+    if (baseHasKey && localPayload._key !== basePayload._key) {
+      tampered.push({
+        index: localIndex,
+        rawFence: localFences[localIndex]!,
+        reason: `Opaque block _key was modified or removed (expected "${String(basePayload._key)}").`,
+      });
+      continue;
+    }
+
+    if (localPayload._type !== 'image') {
+      tampered.push({
+        index: localIndex,
+        rawFence: localFences[localIndex]!,
+        reason: `Opaque block of type "${String(localPayload._type)}" cannot be edited in Markdown.`,
+      });
+      continue;
+    }
+
+    const allKeys = new Set([...Object.keys(basePayload), ...Object.keys(localPayload)]);
+    const changedKeys: SafeImageEditKey[] = [];
+    let pairInvalidReason: string | null = null;
+
+    for (const key of allKeys) {
+      if (stableEqual(basePayload[key], localPayload[key])) continue;
+      // If base had no _key, allow adding a non-empty string _key on local
+      if (
+        key === '_key' &&
+        !baseHasKey &&
+        typeof localPayload._key === 'string' &&
+        localPayload._key.length > 0
+      ) {
+        continue;
+      }
+      if (!SAFE_IMAGE_EDIT_KEY_SET.has(key)) {
+        pairInvalidReason = `Structural key "${key}" on image opaque block cannot be modified.`;
+        break;
+      }
+      const safeKey = key as SafeImageEditKey;
+      const schemaResult = SAFE_IMAGE_ATTRIBUTE_SCHEMAS[safeKey].safeParse(localPayload[safeKey]);
+      if (!schemaResult.success) {
+        pairInvalidReason = `Invalid value for safe image attribute "${safeKey}".`;
+        break;
+      }
+      changedKeys.push(safeKey);
+    }
+
+    if (pairInvalidReason) {
+      tampered.push({
+        index: localIndex,
+        rawFence: localFences[localIndex]!,
+        reason: pairInvalidReason,
+      });
+    } else if (changedKeys.length > 0) {
+      safeImageEdits.push({ index: localIndex, changedKeys });
+    }
+  }
+
+  // Check unmatched local blocks (added)
+  for (let l = 0; l < localFences.length; l++) {
+    if (matchedLocal.has(l)) continue;
+    const payload = localPayloads[l];
+    if (payload && payload._type === 'image') {
+      const invalidReason = validateAddedImageBlock(payload);
+      if (invalidReason) {
+        tampered.push({
+          index: l,
+          rawFence: localFences[l]!,
+          reason: invalidReason,
+        });
+      }
+    }
+  }
+
+  const removedCount = baseFences.length - matchedBase.size;
+
+  const sortedByLocal = [...matchedPairs].sort((a, b) => a.localIndex - b.localIndex);
+  const baseIndices = sortedByLocal.map((p) => p.baseIndex);
+  const reorderedCount = sortedByLocal.length - computeLisLength(baseIndices);
+
+  return {
+    removedCount,
+    reorderedCount,
+    safeImageEdits,
+    tampered,
+  };
 }

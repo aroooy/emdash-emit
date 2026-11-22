@@ -84,6 +84,10 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
       'Push local markdown article(s) to remote EmDash (auto-uploads media/drafts/* images)',
     )
     .option('--allow-publish', 'Confirm publishing live to remote')
+    .option(
+      '--allow-modified-opaque-blocks',
+      'Bypass Guard G9 when <!--ec:block ... --> opaque block JSON/structure was modified',
+    )
     .option('--all', 'Push all modified files in workspace')
     .option('-y, --yes', 'Skip confirmation prompt when auto-targeting a single modified article')
     .option(
@@ -120,6 +124,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             token: ctx.auth.token,
             refreshToken: ctx.auth.refreshToken,
             allowPublish: options.allowPublish,
+            allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
             localMediaRefs,
           });
 
@@ -159,6 +164,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             options.allowUnappliedTaxonomies ? '--allow-unapplied-taxonomies' : null,
             options.resolveTaxonomy ? '--resolve-taxonomy' : null,
             options.force ? '--force' : null,
+            options.allowModifiedOpaqueBlocks ? '--allow-modified-opaque-blocks' : null,
           ].filter((flag): flag is string => flag !== null);
 
           if (disallowedInAutoTarget.length > 0) {
@@ -231,6 +237,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
           allowPublish: options.allowPublish,
+          allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
           resolveTaxonomy: options.resolveTaxonomy,
           allowWipeTaxonomies: options.allowWipeTaxonomies,
           allowUnappliedTaxonomies: options.allowUnappliedTaxonomies,

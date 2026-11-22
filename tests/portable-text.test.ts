@@ -26,6 +26,7 @@ import {
   detectUnsupportedMarkdownSyntax,
   detectCodeFenceIssues,
   extractOpaqueBlockLines,
+  inspectOpaqueBlockChanges,
   isPlainBreakBlock,
   isPlainImageBlock,
   isPlainTableBlock,
@@ -283,6 +284,110 @@ describe('Portable Text <-> Markdown Conversion', () => {
 
       expect(verifyOpaqueBlocksUntampered(baseMd, modifiedMd)).toBe(false);
       expect(verifyOpaqueBlocksUntampered(baseMd, deletedMd)).toBe(false);
+    });
+
+    it('inspectOpaqueBlockChanges classifies safe image edits, removals, reorderings, multiset matches, and tampering (v0.1.51)', () => {
+      const img1 =
+        '<!--ec:block {"_type":"image","_key":"img1","asset":{"url":"/_emdash/api/media/file/01KEY1.png","storageKey":"01KEY1"},"alignment":"center","displayWidth":800,"caption":"Old"} -->';
+      const img2 =
+        '<!--ec:block {"_type":"image","_key":"img2","asset":{"url":"/_emdash/api/media/file/01KEY2.png"},"alt":"two"} -->';
+      const dupGallery = '<!--ec:block {"_type":"core:gallery","items":["a"]} -->';
+      const base = [img1, dupGallery, dupGallery, img2].join('\n\n');
+
+      // Class 1: Safe image attribute edits (alignment, displayWidth, displayHeight, caption, title, alt)
+      const img1SafeEdited =
+        '<!--ec:block {"_type":"image","_key":"img1","asset":{"url":"/_emdash/api/media/file/01KEY1.png","storageKey":"01KEY1"},"alignment":"left","displayWidth":600,"displayHeight":400,"caption":"New","title":"Hero","alt":"Alt"} -->';
+      const safeRes = inspectOpaqueBlockChanges(
+        base,
+        [img1SafeEdited, dupGallery, dupGallery, img2].join('\n\n'),
+      );
+      expect(safeRes.tampered).toHaveLength(0);
+      expect(safeRes.removedCount).toBe(0);
+      expect(safeRes.reorderedCount).toBe(0);
+      expect(safeRes.safeImageEdits).toEqual([
+        {
+          index: 0,
+          changedKeys: ['alignment', 'displayWidth', 'caption', 'displayHeight', 'title', 'alt'],
+        },
+      ]);
+
+      // Class 2: Multiset duplicate match + pure removal (removing one of two identical fences)
+      const removeOneDup = inspectOpaqueBlockChanges(base, [img1, dupGallery, img2].join('\n\n'));
+      expect(removeOneDup.tampered).toHaveLength(0);
+      expect(removeOneDup.removedCount).toBe(1);
+      expect(removeOneDup.reorderedCount).toBe(0);
+
+      // Class 2: Reordering (swapping img1 and img2) reports reorderedCount > 0 via LIS
+      const reordered = inspectOpaqueBlockChanges(
+        [img1, img2].join('\n\n'),
+        [img2, img1].join('\n\n'),
+      );
+      expect(reordered.tampered).toHaveLength(0);
+      expect(reordered.removedCount).toBe(0);
+      expect(reordered.reorderedCount).toBe(1);
+
+      // Class 3: Structural key change (asset modified) or _key modified when base has _key
+      const assetTampered =
+        '<!--ec:block {"_type":"image","_key":"img1","asset":{"url":"/_emdash/api/media/file/01OTHER.png"},"alignment":"center"} -->';
+      expect(inspectOpaqueBlockChanges(img1, assetTampered).tampered).toHaveLength(1);
+
+      const keyRemoved =
+        '<!--ec:block {"_type":"image","asset":{"url":"/_emdash/api/media/file/01KEY1.png","storageKey":"01KEY1"},"alignment":"center","displayWidth":800,"caption":"Old"} -->';
+      expect(inspectOpaqueBlockChanges(img1, keyRemoved).tampered).toHaveLength(1);
+
+      // Base has 2 _keyed images, local deletes _key on one of them -> still caught as tampered
+      expect(
+        inspectOpaqueBlockChanges([img1, img2].join('\n\n'), [keyRemoved, img2].join('\n\n'))
+          .tampered,
+      ).toHaveLength(1);
+
+      // Pass 3: Base without _key allows adding a non-empty _key + safe edit
+      const baseNoKey =
+        '<!--ec:block {"_type":"image","asset":{"url":"/_emdash/api/media/file/01KEY3.png"},"alignment":"center"} -->';
+      const localWithKey =
+        '<!--ec:block {"_type":"image","_key":"newk","asset":{"url":"/_emdash/api/media/file/01KEY3.png"},"alignment":"right"} -->';
+      const pass3Res = inspectOpaqueBlockChanges(baseNoKey, localWithKey);
+      expect(pass3Res.tampered).toHaveLength(0);
+      expect(pass3Res.safeImageEdits).toEqual([{ index: 0, changedKeys: ['alignment'] }]);
+
+      // Class 3: Invalid JSON or unknown block modification
+      expect(
+        inspectOpaqueBlockChanges(dupGallery, '<!--ec:block {broken -->').tampered,
+      ).toHaveLength(1);
+      expect(
+        inspectOpaqueBlockChanges(
+          dupGallery,
+          '<!--ec:block {"_type":"core:gallery","items":["b"]} -->',
+        ).tampered,
+      ).toHaveLength(1);
+
+      // Class 3: Added image block with relative/drafts path or asset.src fallback or storageKey mismatch is rejected
+      expect(
+        inspectOpaqueBlockChanges(
+          '',
+          '<!--ec:block {"_type":"image","asset":{"url":"../../media/drafts/pic.png"}} -->',
+        ).tampered,
+      ).toHaveLength(1);
+      expect(
+        inspectOpaqueBlockChanges(
+          '',
+          '<!--ec:block {"_type":"image","asset":{"src":"/_emdash/api/media/file/01KEY1.png"}} -->',
+        ).tampered,
+      ).toHaveLength(1);
+      expect(
+        inspectOpaqueBlockChanges(
+          '',
+          '<!--ec:block {"_type":"image","asset":{"url":"/_emdash/api/media/file/01OTHER.png","storageKey":"01KEY1"}} -->',
+        ).tampered,
+      ).toHaveLength(1);
+
+      // Added image block with canonical asset.url passes
+      expect(
+        inspectOpaqueBlockChanges(
+          '',
+          '<!--ec:block {"_type":"image","asset":{"url":"/_emdash/api/media/file/01KEY1.png","storageKey":"01KEY1"}} -->',
+        ).tampered,
+      ).toHaveLength(0);
     });
   });
 

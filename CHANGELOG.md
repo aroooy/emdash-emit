@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.51] - 2026-11-22
+
+### Changed
+
+- **Guard G9 (`MODIFIED_OPAQUE_BLOCK`) 3-Class Relaxation & Bypass Flag (`src/client/portable-text.ts`, `src/sync/preflight.ts`, `src/cli/commands/push.ts`, `src/mcp/tools/sync-push.ts`)**:
+  - Replaced strict index-by-index `verifyOpaqueBlocksUntampered()` check in preflight with `inspectOpaqueBlockChanges()` (3-pass multiset 1:1 matching: `_key` → exact fence → `_type` positional), keeping `verifyOpaqueBlocksUntampered()` strict for existing callers.
+  - **Class 1 (Safe `image` attribute edits)**: Automatically permits editing `alignment`, `displayWidth`, `displayHeight`, `caption`, `title`, and `alt` on `_type === 'image'` blocks with Zod validation when structural keys (`_key`, `asset`, `crop`, `hotspot`, etc.) are unchanged, emitting a preflight warning.
+  - **Class 2 (Pure removals / reordering)**: Permits removing existing blocks (`removedCount`) or reordering matched blocks (`reorderedCount` via LIS) with preflight warnings.
+  - **Class 3 (Tampering / invalid references)**: Blocks invalid JSON, structural key edits, unknown custom block edits, and added `image` blocks with non-canonical/relative `asset.url` (or `asset.storageKey` mismatch) unless `--allow-modified-opaque-blocks` (CLI, including `--all`, disallowed in auto-target) or `allowModifiedOpaqueBlocks: true` (MCP `sync_push`) is passed.
+
 ## [0.1.50] - 2026-11-22
 
 ### Fixed

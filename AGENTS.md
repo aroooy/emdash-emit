@@ -129,7 +129,7 @@ When drafting, reviewing, or updating blog articles, AI agents must follow the *
    • Edit posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
    • New local images: place in media/drafts/<file> & reference as ![alt](../../media/drafts/<file>)
    • Existing remote images: discover via sync_media_search(query, since, offline)
-   • Preserved blocks: keep <!--ec:block {...} --> lines intact (protected by Guard G9)
+   • Preserved blocks: keep structural keys intact on <!--ec:block {...} --> lines; safe image layout/caption edits, block removal, and reordering are permitted (Guard G9)
                                  │
                                  ▼
   [3. DIFF & 2-STAGE PUSH (Draft Staging ──► Live Publish)]
@@ -153,7 +153,7 @@ When drafting, reviewing, or updating blog articles, AI agents must follow the *
 4. **Frontmatter & Body Rules (Guards G3, G4, G5, G7, G9, G10, G11)**:
    - **Always nest `categories` and `tags` under `taxonomies:`** (top-level `categories:` / `tags:` are stripped by Zod). Use existing slugs or term ULIDs from `categories/*.yaml` and `tags/*.yaml`.
    - **Do not repeat `# Title` at the top of the body** (Guard G7).
-   - **Do not modify or delete `<!--ec:block ... -->` lines** unless intentionally moving or removing that element (Guard G9).
+   - **Do not tamper with structural keys (`_key`, `asset`, etc.) on `<!--ec:block ... -->` lines** (safe `image` layout/caption edits, block removal, and reordering are permitted with warnings; structural tampering requires `--allow-modified-opaque-blocks`, Guard G9).
    - **Offline Draft Images**: Place new local images in `media/drafts/<filename>` and reference them on a standalone line (`![alt](../../media/drafts/<filename>)` or in `featuredImage`). `sync_push` uploads them, rewrites the URL, and moves the file to `media/<markdownRef>.<ext>`.
    - **Staging Protection (Guard G3)**: Keep `status: draft` unless explicitly asked to publish (`allowPublish: true`).
 5. **Quarantine & Conflict Resolution (`posts/conflicts/`, Guards G6, G12–G17, G19)**:

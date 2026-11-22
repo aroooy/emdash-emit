@@ -36,6 +36,7 @@ export function executePreflightStage(
 ): PreflightResult {
   const preflight = runPreflightChecks(targetFilePath, parsed, {
     allowPublish: options.allowPublish,
+    allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
     knownTaxonomies,
     baseMarkdown: baseSnapshot?.bodyMarkdown,
     previousStatus: (syncState?.status as 'draft' | 'published') || 'draft',

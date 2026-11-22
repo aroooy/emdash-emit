@@ -1678,11 +1678,143 @@ describe('Emit CLI (Commander)', () => {
         await expect(program.parseAsync(['node', 'emit', 'push'])).rejects.toThrow(EXIT_SENTINEL);
         expect(exitCode).toBe(1);
         expect(errLines.join('\n')).toContain('Found 2 push-ready articles');
+
+        // --allow-modified-opaque-blocks is disallowed in auto-target mode
+        errLines.length = 0;
+        exitCode = undefined;
+        await expect(
+          program.parseAsync(['node', 'emit', 'push', '--allow-modified-opaque-blocks']),
+        ).rejects.toThrow(EXIT_SENTINEL);
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain(
+          '--allow-modified-opaque-blocks cannot be used without specifying a target file path',
+        );
       } finally {
         process.chdir(prevCwd);
         console.log = origLog;
         console.error = origError;
         process.exit = origExit;
+      }
+    });
+
+    it('forwards --allow-modified-opaque-blocks in both explicit <file> and --all push paths (v0.1.51)', async () => {
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+
+      const logLines: string[] = [];
+      const errLines: string[] = [];
+      const origLog = console.log;
+      const origError = console.error;
+      const origFetch = globalThis.fetch;
+      const origToken = process.env.EMDASH_TOKEN;
+      const origOrigin = process.env.EMDASH_ORIGIN;
+
+      console.log = (...args: unknown[]) => {
+        logLines.push(args.map(String).join(' '));
+      };
+      console.error = (...args: unknown[]) => {
+        errLines.push(args.map(String).join(' '));
+      };
+      process.env.EMDASH_TOKEN = 'test-token';
+      process.env.EMDASH_ORIGIN = 'https://example.com';
+
+      try {
+        const id1 = '01M8OPAQUE0000000000000001';
+        const relPath = `posts/draft/20261122_${id1}-opaque.md`;
+        const absPath = path.join(tempDir, relPath);
+        fs.mkdirSync(path.dirname(absPath), { recursive: true });
+        const baseBody = '<!--ec:block {"_type":"core:gallery","_key":"k1"} -->\n\nBody';
+        const tamperedBody = '<!--ec:block {"_type":"core:gallery","_key":"tampered"} -->\n\nBody';
+        const fm = `---\nid: ${id1}\nslug: opaque\ntitle: "Opaque"\ncollection: posts\nlocale: ja\nstatus: draft\ntaxonomies: {}\nbylines: []\n---\n\n`;
+        fs.writeFileSync(absPath, `${fm}${tamperedBody}\n`, 'utf8');
+
+        const testCache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+        try {
+          testCache.saveBaseSnapshot({
+            id: id1,
+            rev: '1',
+            frontmatterYaml: JSON.stringify({
+              id: id1,
+              slug: 'opaque',
+              title: 'Opaque',
+              collection: 'posts',
+              locale: 'ja',
+              status: 'draft',
+              taxonomies: {},
+              bylines: [],
+            }),
+            bodyMarkdown: baseBody,
+            hash: 'base-hash',
+            savedAt: Date.now(),
+          });
+          testCache.saveSyncState({
+            id: id1,
+            localFilePath: relPath,
+            localHash: 'modified-local-hash',
+            remoteRev: '1',
+            status: 'draft',
+            slug: 'opaque',
+            lastSyncedAt: Date.now(),
+          });
+        } finally {
+          testCache.close();
+        }
+
+        globalThis.fetch = vi.fn().mockImplementation(async (urlStr: string) => {
+          if (urlStr.includes('/lock')) {
+            return { ok: true, status: 200, json: async () => ({ locked: true, token: 'l1' }) };
+          }
+          if (urlStr.includes('/_emdash/api/taxonomies')) {
+            return { ok: true, status: 200, json: async () => ({ data: { items: [] } }) };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                id: id1,
+                slug: 'opaque',
+                title: 'Opaque',
+                status: 'draft',
+                version: 2,
+                rev: '2',
+                draftRevisionId: 'd2',
+              },
+            }),
+          };
+        }) as unknown as typeof fetch;
+
+        // Explicit <file> path
+        await program.parseAsync([
+          'node',
+          'emit',
+          'push',
+          relPath,
+          '--allow-modified-opaque-blocks',
+        ]);
+        expect(logLines.join('\n')).toContain(`Successfully pushed ${id1}`);
+
+        // Re-dirty for --all path
+        fs.writeFileSync(absPath, `${fm}${tamperedBody}\n`, 'utf8');
+        logLines.length = 0;
+        await program.parseAsync([
+          'node',
+          'emit',
+          'push',
+          '--all',
+          '--allow-modified-opaque-blocks',
+        ]);
+        expect(logLines.join('\n')).toContain(`Pushed ${id1}`);
+        expect(errLines).toHaveLength(0);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;
+        else delete process.env.EMDASH_TOKEN;
+        if (origOrigin !== undefined) process.env.EMDASH_ORIGIN = origOrigin;
+        else delete process.env.EMDASH_ORIGIN;
+        process.chdir(prevCwd);
+        console.log = origLog;
+        console.error = origError;
       }
     });
   });

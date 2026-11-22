@@ -29,7 +29,7 @@ import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_push',
-    'Push local Markdown article modifications or new articles to remote EmDash CMS. Automatically uploads standalone draft images in media/drafts/<file>, rewrites body URLs to /_emdash/api/media/file/<storageKey>, and promotes (moves) files to media/ (the original file in media/drafts/ is removed upon promotion). Performs 3-way merge to protect remote edits. Requires allowPublish=true when transitioning status from draft to published. If conflict markers are inserted, resolve them locally before re-pushing. Paths under posts/conflicts/ are preserved rescue copies and are refused with QUARANTINED_COPY_NOT_PUSHABLE: merge their content into the canonical article first. Note: Keep <!--ec:block ... --> comment fences intact to preserve custom blocks or styled images; modifying or removing them without intent is rejected by Guard G9.',
+    'Push local Markdown article modifications or new articles to remote EmDash CMS. Automatically uploads standalone draft images in media/drafts/<file>, rewrites body URLs to /_emdash/api/media/file/<storageKey>, and promotes (moves) files to media/ (the original file in media/drafts/ is removed upon promotion). Performs 3-way merge to protect remote edits. Requires allowPublish=true when transitioning status from draft to published. If conflict markers are inserted, resolve them locally before re-pushing. Paths under posts/conflicts/ are preserved rescue copies and are refused with QUARANTINED_COPY_NOT_PUSHABLE: merge their content into the canonical article first. Note: On <!--ec:block ... --> opaque fences, safe image layout/caption attributes (alignment, displayWidth, displayHeight, caption, title, alt), block removal, and reordering are permitted, while modifying structural keys (_key, asset, etc.) or unknown blocks is rejected by Guard G9 unless allowModifiedOpaqueBlocks=true.',
     {
       filePath: z
         .string()
@@ -40,6 +40,12 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .boolean()
         .optional()
         .describe('Explicit confirmation required to change status from draft to published'),
+      allowModifiedOpaqueBlocks: z
+        .boolean()
+        .optional()
+        .describe(
+          'Bypass Guard G9 when <!--ec:block ... --> opaque block JSON or structural keys were modified',
+        ),
       resolveTaxonomy: z
         .enum(['union', 'local', 'remote'])
         .optional()
@@ -87,6 +93,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
           allowPublish: args.allowPublish,
+          allowModifiedOpaqueBlocks: args.allowModifiedOpaqueBlocks,
           resolveTaxonomy: args.resolveTaxonomy,
           allowWipeTaxonomies: args.allowWipeTaxonomies,
           allowUnappliedTaxonomies: args.allowUnappliedTaxonomies,
