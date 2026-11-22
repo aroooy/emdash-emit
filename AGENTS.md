@@ -47,6 +47,10 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
 - **Axis 3 (Layer 3 Intra-Layer Isolation)**: `src/mcp/` must never import from `src/cli/commands/`. Shared formatting belongs in `src/presentation/`.
 - **Axis 4 (Lower Layers → Layer 3 Prohibition)**: Layers 0, 1, and 2 must never import from Layer 3.
 - **Axis 5 (Non-CLI Logging Isolation)**: Non-CLI modules (`src/sync/`, `src/utils/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`) must **never** call `console.log()` or `console.debug()` (which corrupts MCP JSON-RPC stdio transport). Only `src/cli/` may invoke `console.log()`.
+- **Axis 6 (`saveSyncState` Call-Site Isolation)**: `.saveSyncState(` may only be invoked inside `db/baseline.ts` (`retrackLocalHashOnly`), `sync/workspace/commit.ts` (`commitArticleSnapshot`), and `sync/conflicts.ts`.
+- **Axis 7 (Lenient Frontmatter Parse Isolation)**: `gray-matter` may only be imported in `src/utils/frontmatter.ts`, and all inspector/deletion/diff modules (`status`, `doctor`, `conflicts`, `delete`, `diff`, `article_search/local`, `media/body_scan`) must import and use `parseMarkdownLenient()`.
+- **Axis 8 (CLI Failure Presenter Isolation)**: Every `src/cli/commands/*.ts` module must route action failures through `reportActionFailure()` (`src/cli/report-failure.ts`) or `reportProfileFailure()`.
+- **Axis 9 (MCP Tool Error & `_meta` Wrapper Isolation)**: Every `src/mcp/tools/*.ts` module must import and use `withResolvedContext()` or `formatToolError()` from `src/mcp/tool-errors.ts`.
 - **Layer 2 Sibling Snapshot & Public Barrel Rule**:
   - Layer 2 modules must not import sibling Layer 2 modules beyond the explicit snapshot in `tests/layering.test.ts` (`orchestrator` → `pull/index.js`, `push/index.js`, `media/index.js`; `doctor` → `conflicts`, `media/index.js`; `push/media_stage` → `sync/media/index.js`; `pull/media_stage` → `sync/media/index.js`; `snapshot/index.ts` → `media/index.js`, `pull/index.js`).
   - The thin barrels `src/sync/{pull,push,media}.ts` are reserved exclusively for the public npm façade (`src/index.ts`). **No internal module across `src/` or `tests/` may import those barrels**; always import `src/sync/{pull,push,media}/index.js`.
@@ -85,6 +89,22 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
    - Target `origin` is resolved exclusively by `resolveOriginPriority()` (`--profile` > `EMDASH_ORIGIN` > auto-resolved profile > auth origin > `.emit/config.json` > `DEFAULT_ORIGIN`), surfacing every override as a warning naming the true source.
    - CLI actions route all errors through `reportActionFailure()` (`❌ <message>` + `process.exit(1)`, zero raw stack traces).
    - MCP tool handlers wrap all execution (including `resolveContext()`) in `try/catch`, returning `formatToolError(error)` and attaching `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`).
+
+### Invariant ⇔ Enforcer Mapping Table (`pstack` `/correct` Discipline)
+
+Every core invariant is paired with the structural mechanism (Architecture, Type, Static Gate, or Behavioral Suite) that enforces it. When a mistake recurs, promote its enforcement up the hierarchy (Architecture → Types → Static Axis/Guard → Behavior Test → Docs) using `.agents/skills/correct/SKILL.md`:
+
+| Invariant / Principle | Enforcement Level | Enforced By (Source of Truth) |
+| --- | --- | --- |
+| **4-Tier Layering & Sibling Isolation** | Architecture / Static Test | `tests/layering.test.ts` (Axes 0–4, Sibling Snapshot, Public Barrel Check) & `npm run check:cycles` |
+| **Non-CLI Stdio Logging Prohibition** | Static Test | `tests/layering.test.ts` (Axis 5: prohibits `console.log`/`console.debug` outside `src/cli/`) |
+| **1. Two-Track Revision (`revForTransport` vs `revForComparison`)** | Runtime & Unit Test | `src/client/api.ts` (`extractRev`, `extractComparisonRev`, `isSameRev`), `tests/api_rev.test.ts`, `tests/push_transport_rev.test.ts`, `tests/commit_symmetry.test.ts` |
+| **2. Two-Layer Representation (Canonical Layer A vs Disk Layer B)** | Architecture & Unit Test | `src/sync/baseline-reconstruction.ts`, `src/utils/disk-spelling.ts`, `tests/taxonomies_two_layer.test.ts`, `tests/local_media_refs.test.ts` |
+| **3. Two Media ID Spaces (`MediaRecordId` vs `StorageKey`)** | Type System (Branded Types) | `src/utils/media-id.ts` (`MediaRecordId`, `StorageKey`), `tests/media_id.test.ts` |
+| **4. Dual-Track Image & AST Fidelity (Tier 1 vs Tier 3 `ec:block`)** | Guard Registry & Static Test | `src/sync/guards.ts` (G5, G8, G9, G11), `tests/guards.test.ts` (Rules 1–5), `tests/portable-text.test.ts` |
+| **5. Diagnostic Lenient Parse & `retrackLocalHashOnly`** | Static Test & Unit Test | • `parseMarkdownLenient` & `gray-matter` isolation: `tests/layering.test.ts` (Axis 7)<br>• `saveSyncState` / `retrackLocalHashOnly` isolation: `tests/layering.test.ts` (Axis 6) & `tests/baseline_reconstruction.test.ts`<br>• `reconstructBaseline` / `isLocalFileUnmodified` parity: `tests/baseline_reconstruction.test.ts` & `tests/diagnostic_draft_alignment.test.ts` |
+| **6. Epistemic Search (`[WALK_INCOMPLETE]`) & Offline Doctor** | Runtime & Unit Test | `tests/article_search.test.ts`, `tests/media_search.test.ts`, `tests/doctor.test.ts` |
+| **7. CLI / MCP Presentation & Error Handling Symmetry** | Static Test & Unit Test | • File-level presenter/wrapper gates: `tests/layering.test.ts` (Axes 8 & 9)<br>• Behavioral & symmetry verification: `tests/presentation_symmetry.test.ts`, `tests/mcp_tool_errors.test.ts`, `tests/cli.test.ts` |
 
 ---
 

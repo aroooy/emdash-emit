@@ -531,5 +531,43 @@ describe('deleteArticle & sync_delete (§4)', () => {
       expect(fs.existsSync(art.fullPath)).toBe(false);
       expect(cache.getSyncState(articleId)).toBeNull();
     });
+
+    it('T3-4: deleteArticle leniently parses healable frontmatter (unquoted % slug) without throwing YAMLException (v0.1.48)', async () => {
+      const art = setupArticle({ status: 'draft', isModified: false });
+      // Write a file with an unquoted percent-encoded taxonomy slug (healable by parseMarkdownLenient)
+      const healableContent = [
+        '---',
+        `id: ${articleId}`,
+        'slug: test-article',
+        'title: "Test Article"',
+        'status: draft',
+        'taxonomies:',
+        '  categories:',
+        '    - %e6%9c%aa%e5%88%86%e9%a1%9e',
+        '---',
+        '',
+        'Initial content',
+      ].join('\n');
+      fs.writeFileSync(art.fullPath, healableContent, 'utf8');
+
+      const mockFetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.includes('/lock')) return { ok: true, status: 200, json: async () => ({}) };
+        if (init?.method === 'DELETE') return { ok: true, status: 204, text: async () => '' };
+        return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'Not Found' };
+      });
+
+      const res = await deleteArticle({
+        workspaceRoot: tempDir,
+        cache,
+        filePath: art.relPath,
+        origin: 'https://example.com',
+        token: 'token',
+        discardLocalEdits: true,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(res.success).toBe(true);
+      expect(fs.existsSync(art.fullPath)).toBe(false);
+    });
   });
 });

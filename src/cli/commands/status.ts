@@ -26,6 +26,7 @@ import { inspectArticleDiff } from '../../sync/diff.js';
 import { formatSnapshotAge, formatSnapshotTimestamp } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
 import { sameOrigin } from '../context.js';
+import { reportActionFailure } from '../report-failure.js';
 import type { ResolveProfileResult, WorkspaceLinkDrift } from '../../utils/profile.js';
 
 export interface InitPlanResult {
@@ -108,131 +109,137 @@ export function registerStatusInitCommands(
     .option('--sync-status <status>', 'Filter by sync state (synced, modified, untracked, invalid)')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action((options) => {
-      const ctx = resolveContext(options.profile);
-      const collection = options.collection || ctx.config.defaultCollection;
-      const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
+      try {
+        const ctx = resolveContext(options.profile);
+        const collection = options.collection || ctx.config.defaultCollection;
+        const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
 
-      const isFiltered = Boolean(
-        options.search || options.slug || options.status || options.syncStatus,
-      );
-      const displayItems = isFiltered
-        ? filterStatusItems(status.items, {
-            search: options.search,
-            slugFilter: options.slug,
-            status: options.status,
-            syncStatus: options.syncStatus,
-          })
-        : status.items;
+        const isFiltered = Boolean(
+          options.search || options.slug || options.status || options.syncStatus,
+        );
+        const displayItems = isFiltered
+          ? filterStatusItems(status.items, {
+              search: options.search,
+              slugFilter: options.slug,
+              status: options.status,
+              syncStatus: options.syncStatus,
+            })
+          : status.items;
 
-      console.log(`\n--- Workspace Status (${collection} | origin: ${ctx.origin}) ---`);
-      if (isFiltered) {
-        console.log(
-          `   (Filtered: showing ${displayItems.length} of ${status.items.length} articles)\n`,
-        );
-      }
-      for (const item of displayItems) {
-        let icon = '🟢';
-        let label = 'synced  ';
-        if (item.conflictPending) {
-          icon = '⚠️ ';
-          label = 'conflict';
-        } else if (item.syncStatus === 'modified') {
-          icon = '🟡';
-          label = 'modified';
-        } else if (item.syncStatus === 'untracked') {
-          icon = '⚪';
-          label = 'untracked';
-        } else if (item.syncStatus === 'invalid') {
-          icon = item.healable ? '🟠' : '🔴';
-          label = item.healable ? 'healable' : 'invalid ';
-        } else if (item.hasUnpublishedDraft) {
-          icon = '🟣';
-        }
-
-        const titleDisplay = item.title ? ` (${item.title})` : '';
-        const cacheTag =
-          item.syncStatus === 'invalid' && item.cached === false ? ' [uncached]' : '';
-        const draftTag = item.hasUnpublishedDraft ? ' [has unpublished draft]' : '';
-        const errorDisplay = item.error ? ` — ${item.error}` : '';
-        const statusDisplay = item.hasUnpublishedDraft ? 'published*' : item.status || '';
-        const paddedStatus = statusDisplay.padEnd(9, ' ');
-        console.log(
-          `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${cacheTag}${draftTag}${errorDisplay}`,
-        );
-      }
-
-      const invalidSuffix = status.summary.invalid > 0 ? `, ${status.summary.invalid} invalid` : '';
-      const healableSuffix =
-        status.summary.healableInvalid > 0 ? ` (${status.summary.healableInvalid} healable)` : '';
-      console.log(
-        `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix}${healableSuffix})\n`,
-      );
-      if (
-        status.summary.flags &&
-        (status.summary.flags.conflictPending > 0 ||
-          status.summary.flags.orphan > 0 ||
-          status.summary.flags.deletePending > 0 ||
-          status.summary.flags.taxonomyApplyPending > 0)
-      ) {
-        const parts: string[] = [];
-        if (status.summary.flags.conflictPending > 0) {
-          parts.push(`${status.summary.flags.conflictPending} conflict pending`);
-        }
-        if (status.summary.flags.orphan > 0) {
-          parts.push(`${status.summary.flags.orphan} orphan`);
-        }
-        if (status.summary.flags.deletePending > 0) {
-          parts.push(`${status.summary.flags.deletePending} delete pending`);
-        }
-        if (status.summary.flags.taxonomyApplyPending > 0) {
-          parts.push(`${status.summary.flags.taxonomyApplyPending} taxonomy apply pending`);
-        }
-        console.log(`Flags: ${parts.join(', ')}\n`);
-      }
-      if (status.summary.invalid > 0) {
-        const uncachedInvalid = status.items.filter(
-          (i) => i.syncStatus === 'invalid' && i.cached === false,
-        );
-        const unrecoverableInvalid = status.items.filter(
-          (i) => i.syncStatus === 'invalid' && !i.healable,
-        );
-        if (uncachedInvalid.length > 0) {
-          const exampleId = uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
+        console.log(`\n--- Workspace Status (${collection} | origin: ${ctx.origin}) ---`);
+        if (isFiltered) {
           console.log(
-            `💡 Hint: Run "emit pull" to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
-          );
-        } else if (unrecoverableInvalid.length > 0) {
-          console.log(
-            `💡 Hint: ${status.summary.healableInvalid} invalid file(s) will be repaired automatically by "emit pull" (syntax-only re-quoting; local body is strictly preserved). ` +
-              `${unrecoverableInvalid.length} file(s) need manual frontmatter editing — "emit pull" cannot fix them.\n`,
-          );
-        } else {
-          console.log(
-            '💡 Hint: Run "emit pull" to automatically repair invalid frontmatter syntax (syntax-only re-quoting; local body is strictly preserved). No network access is needed for cached articles whose remote revision is unchanged.\n',
+            `   (Filtered: showing ${displayItems.length} of ${status.items.length} articles)\n`,
           );
         }
-      }
-      if (status.summary.conflicts > 0) {
-        console.log(
-          `🩹 ${status.summary.conflicts} preserved local copy(ies) in ${collection}/conflicts/ ` +
-            `(rescue copies created when a pull found divergent content).`,
-        );
-        console.log(
-          '   Review each copy, merge any valuable content into the canonical article, then delete it. ' +
-            'They are never pushed or pruned; pushing one directly is refused (QUARANTINED_COPY_NOT_PUSHABLE).\n',
-        );
-      }
+        for (const item of displayItems) {
+          let icon = '🟢';
+          let label = 'synced  ';
+          if (item.conflictPending) {
+            icon = '⚠️ ';
+            label = 'conflict';
+          } else if (item.syncStatus === 'modified') {
+            icon = '🟡';
+            label = 'modified';
+          } else if (item.syncStatus === 'untracked') {
+            icon = '⚪';
+            label = 'untracked';
+          } else if (item.syncStatus === 'invalid') {
+            icon = item.healable ? '🟠' : '🔴';
+            label = item.healable ? 'healable' : 'invalid ';
+          } else if (item.hasUnpublishedDraft) {
+            icon = '🟣';
+          }
 
-      const snapMeta = ctx.cache.getSnapshotMeta(collection);
-      if (snapMeta) {
-        const snapIso = new Date(snapMeta.capturedAt).toISOString();
-        const snapStale =
-          Date.now() - snapMeta.capturedAt >= 7 * 86_400_000
-            ? ' ⚠️ [STALE_SNAPSHOT: >7d old — run "emit snapshot"]'
-            : '';
+          const titleDisplay = item.title ? ` (${item.title})` : '';
+          const cacheTag =
+            item.syncStatus === 'invalid' && item.cached === false ? ' [uncached]' : '';
+          const draftTag = item.hasUnpublishedDraft ? ' [has unpublished draft]' : '';
+          const errorDisplay = item.error ? ` — ${item.error}` : '';
+          const statusDisplay = item.hasUnpublishedDraft ? 'published*' : item.status || '';
+          const paddedStatus = statusDisplay.padEnd(9, ' ');
+          console.log(
+            `  ${icon} [${label}] ${paddedStatus} ${item.filePath}${titleDisplay}${cacheTag}${draftTag}${errorDisplay}`,
+          );
+        }
+
+        const invalidSuffix =
+          status.summary.invalid > 0 ? `, ${status.summary.invalid} invalid` : '';
+        const healableSuffix =
+          status.summary.healableInvalid > 0 ? ` (${status.summary.healableInvalid} healable)` : '';
         console.log(
-          `📸 Snapshot: ${formatSnapshotTimestamp(snapIso)} (${formatSnapshotAge(snapIso)}) · ${snapMeta.articleCount} articles · ${snapMeta.mediaCount} media${snapStale}\n`,
+          `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix}${healableSuffix})\n`,
         );
+        if (
+          status.summary.flags &&
+          (status.summary.flags.conflictPending > 0 ||
+            status.summary.flags.orphan > 0 ||
+            status.summary.flags.deletePending > 0 ||
+            status.summary.flags.taxonomyApplyPending > 0)
+        ) {
+          const parts: string[] = [];
+          if (status.summary.flags.conflictPending > 0) {
+            parts.push(`${status.summary.flags.conflictPending} conflict pending`);
+          }
+          if (status.summary.flags.orphan > 0) {
+            parts.push(`${status.summary.flags.orphan} orphan`);
+          }
+          if (status.summary.flags.deletePending > 0) {
+            parts.push(`${status.summary.flags.deletePending} delete pending`);
+          }
+          if (status.summary.flags.taxonomyApplyPending > 0) {
+            parts.push(`${status.summary.flags.taxonomyApplyPending} taxonomy apply pending`);
+          }
+          console.log(`Flags: ${parts.join(', ')}\n`);
+        }
+        if (status.summary.invalid > 0) {
+          const uncachedInvalid = status.items.filter(
+            (i) => i.syncStatus === 'invalid' && i.cached === false,
+          );
+          const unrecoverableInvalid = status.items.filter(
+            (i) => i.syncStatus === 'invalid' && !i.healable,
+          );
+          if (uncachedInvalid.length > 0) {
+            const exampleId =
+              uncachedInvalid.find((i) => i.id && i.id !== 'unknown')?.id || '<ULID>';
+            console.log(
+              `💡 Hint: Run "emit pull" to automatically repair cached invalid frontmatter (local body is strictly preserved). For ${uncachedInvalid.length} uncached file(s) outside the sync window, run "emit pull ${exampleId}".\n`,
+            );
+          } else if (unrecoverableInvalid.length > 0) {
+            console.log(
+              `💡 Hint: ${status.summary.healableInvalid} invalid file(s) will be repaired automatically by "emit pull" (syntax-only re-quoting; local body is strictly preserved). ` +
+                `${unrecoverableInvalid.length} file(s) need manual frontmatter editing — "emit pull" cannot fix them.\n`,
+            );
+          } else {
+            console.log(
+              '💡 Hint: Run "emit pull" to automatically repair invalid frontmatter syntax (syntax-only re-quoting; local body is strictly preserved). No network access is needed for cached articles whose remote revision is unchanged.\n',
+            );
+          }
+        }
+        if (status.summary.conflicts > 0) {
+          console.log(
+            `🩹 ${status.summary.conflicts} preserved local copy(ies) in ${collection}/conflicts/ ` +
+              `(rescue copies created when a pull found divergent content).`,
+          );
+          console.log(
+            '   Review each copy, merge any valuable content into the canonical article, then delete it. ' +
+              'They are never pushed or pruned; pushing one directly is refused (QUARANTINED_COPY_NOT_PUSHABLE).\n',
+          );
+        }
+
+        const snapMeta = ctx.cache.getSnapshotMeta(collection);
+        if (snapMeta) {
+          const snapIso = new Date(snapMeta.capturedAt).toISOString();
+          const snapStale =
+            Date.now() - snapMeta.capturedAt >= 7 * 86_400_000
+              ? ' ⚠️ [STALE_SNAPSHOT: >7d old — run "emit snapshot"]'
+              : '';
+          console.log(
+            `📸 Snapshot: ${formatSnapshotTimestamp(snapIso)} (${formatSnapshotAge(snapIso)}) · ${snapMeta.articleCount} articles · ${snapMeta.mediaCount} media${snapStale}\n`,
+          );
+        }
+      } catch (err) {
+        reportActionFailure(err);
       }
     });
 
@@ -243,20 +250,24 @@ export function registerStatusInitCommands(
     .option('-i, --id <id>', 'Article ID (ULID) to inspect')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action((filePath: string | undefined, options: { id?: string; profile?: string }) => {
-      const ctx = resolveContext(options.profile);
-      const inspection = inspectArticleDiff({
-        workspaceRoot: ctx.root,
-        cache: ctx.cache,
-        filePath,
-        id: options.id,
-      });
+      try {
+        const ctx = resolveContext(options.profile);
+        const inspection = inspectArticleDiff({
+          workspaceRoot: ctx.root,
+          cache: ctx.cache,
+          filePath,
+          id: options.id,
+        });
 
-      if (!inspection.ok) {
-        console.error(inspection.formattedOutput);
-        process.exit(1);
+        if (!inspection.ok) {
+          console.error(inspection.formattedOutput);
+          process.exit(1);
+        }
+
+        console.log(inspection.formattedOutput);
+      } catch (err) {
+        reportActionFailure(err);
       }
-
-      console.log(inspection.formattedOutput);
     });
 
   // emit guide
@@ -317,82 +328,86 @@ export function registerStatusInitCommands(
       'Initialize against this named profile, re-pointing its workspace here if it has moved',
     )
     .action(async (options: { origin?: string; link?: boolean; profile?: string }) => {
-      const root = process.cwd();
-      const { initWorkspace } = await import('../../utils/config.js');
-      const { getWorkspacePaths } = await import('../../utils/workspace.js');
-      const { resolveTargetProfile, setProfile, detectWorkspaceLinkDrift } =
-        await import('../../utils/profile.js');
-
-      let resolvedProfile = null;
       try {
-        // An explicit --profile pins the resolution: it must not lose to a current-directory match, since
-        // the profile being repaired is precisely the one whose registered path no longer contains here.
-        resolvedProfile = resolveTargetProfile({ cwd: root, profile: options.profile });
-      } catch {
-        // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
-      }
+        const root = process.cwd();
+        const { initWorkspace } = await import('../../utils/config.js');
+        const { getWorkspacePaths } = await import('../../utils/workspace.js');
+        const { resolveTargetProfile, setProfile, detectWorkspaceLinkDrift } =
+          await import('../../utils/profile.js');
 
-      const { effectiveOrigin, shouldLinkProfile, warning } = resolveInitPlan(
-        options,
-        resolvedProfile,
-        process.env.EMDASH_ORIGIN,
-      );
+        let resolvedProfile = null;
+        try {
+          // An explicit --profile pins the resolution: it must not lose to a current-directory match, since
+          // the profile being repaired is precisely the one whose registered path no longer contains here.
+          resolvedProfile = resolveTargetProfile({ cwd: root, profile: options.profile });
+        } catch {
+          // Ignore AmbiguousProfileError during init; user can pass --origin explicitly
+        }
 
-      if (warning) {
-        console.warn(warning);
-      }
-
-      const drift = detectWorkspaceLinkDrift(
-        resolvedProfile?.name,
-        resolvedProfile?.config.workspace,
-        root,
-      );
-      const shouldRelinkProfile = resolveInitRelink(options, resolvedProfile, drift);
-
-      const gitignore = initWorkspace(
-        root,
-        effectiveOrigin ? { origin: effectiveOrigin } : undefined,
-      );
-      const paths = getWorkspacePaths(root);
-
-      console.log(`✅ Initialized Emit workspace at: ${root}`);
-      console.log(`   Config: ${paths.configPath}`);
-      console.log(`   Database: ${paths.dbPath}`);
-      /**
-       * v0.1.38 P3: the cache database is machine-local SQLite, and first-time users commit it because
-       * nothing told them not to. Report what this run did, and point at README §6 for the repository-level
-       * rules Emit deliberately does not own (whether `media/` is tracked is the user's call).
-       */
-      if (gitignore.gitignoreCreated) {
-        console.log(
-          '   Git:      .emit/.gitignore created (excludes the local SQLite cache)\n' +
-            '             If this workspace is a Git repo, see README §6 "Recommended .gitignore".',
+        const { effectiveOrigin, shouldLinkProfile, warning } = resolveInitPlan(
+          options,
+          resolvedProfile,
+          process.env.EMDASH_ORIGIN,
         );
-      } else {
-        console.log('   Git:      .emit/.gitignore already exists — left untouched');
-      }
-      /**
-       * v0.1.38 P4-B discoverability: a freshly initialized workspace is where a wrong or missing PAT first
-       * bites, and the fix is one flag on a command the user already knows. No `profile verify` verb is added.
-       */
-      console.log(
-        '\nTip: verify credentials with "emit doctor --check-auth" before the first push.',
-      );
 
-      if (shouldLinkProfile && resolvedProfile) {
-        setProfile(resolvedProfile.name, {
-          ...resolvedProfile.config,
-          workspace: root,
-        });
-        console.log(`🔗 Linked profile "${resolvedProfile.name}" -> workspace ${root}`);
-      } else if (shouldRelinkProfile && resolvedProfile && drift) {
-        setProfile(resolvedProfile.name, {
-          ...resolvedProfile.config,
-          workspace: root,
-        });
-        console.log(
-          `🔗 Re-linked profile "${resolvedProfile.name}": ${drift.registeredWorkspace} -> ${root}`,
+        if (warning) {
+          console.warn(warning);
+        }
+
+        const drift = detectWorkspaceLinkDrift(
+          resolvedProfile?.name,
+          resolvedProfile?.config.workspace,
+          root,
         );
+        const shouldRelinkProfile = resolveInitRelink(options, resolvedProfile, drift);
+
+        const gitignore = initWorkspace(
+          root,
+          effectiveOrigin ? { origin: effectiveOrigin } : undefined,
+        );
+        const paths = getWorkspacePaths(root);
+
+        console.log(`✅ Initialized Emit workspace at: ${root}`);
+        console.log(`   Config: ${paths.configPath}`);
+        console.log(`   Database: ${paths.dbPath}`);
+        /**
+         * v0.1.38 P3: the cache database is machine-local SQLite, and first-time users commit it because
+         * nothing told them not to. Report what this run did, and point at README §6 for the repository-level
+         * rules Emit deliberately does not own (whether `media/` is tracked is the user's call).
+         */
+        if (gitignore.gitignoreCreated) {
+          console.log(
+            '   Git:      .emit/.gitignore created (excludes the local SQLite cache)\n' +
+              '             If this workspace is a Git repo, see README §6 "Recommended .gitignore".',
+          );
+        } else {
+          console.log('   Git:      .emit/.gitignore already exists — left untouched');
+        }
+        /**
+         * v0.1.38 P4-B discoverability: a freshly initialized workspace is where a wrong or missing PAT first
+         * bites, and the fix is one flag on a command the user already knows. No `profile verify` verb is added.
+         */
+        console.log(
+          '\nTip: verify credentials with "emit doctor --check-auth" before the first push.',
+        );
+
+        if (shouldLinkProfile && resolvedProfile) {
+          setProfile(resolvedProfile.name, {
+            ...resolvedProfile.config,
+            workspace: root,
+          });
+          console.log(`🔗 Linked profile "${resolvedProfile.name}" -> workspace ${root}`);
+        } else if (shouldRelinkProfile && resolvedProfile && drift) {
+          setProfile(resolvedProfile.name, {
+            ...resolvedProfile.config,
+            workspace: root,
+          });
+          console.log(
+            `🔗 Re-linked profile "${resolvedProfile.name}": ${drift.registeredWorkspace} -> ${root}`,
+          );
+        }
+      } catch (err) {
+        reportActionFailure(err);
       }
     });
 }

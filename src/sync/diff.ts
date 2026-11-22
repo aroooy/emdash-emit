@@ -26,7 +26,7 @@ import { diffPatch } from 'node-diff3';
 import type { CacheDatabase } from '../db/cache.js';
 import { retrackLocalHashOnly } from '../db/baseline.js';
 import { extractUlidFromFilename } from '../utils/naming.js';
-import { parseMarkdown } from '../utils/frontmatter.js';
+import { parseMarkdownLenient } from '../utils/frontmatter.js';
 import { calculateHash } from './workspace/index.js';
 import { reconstructBaseline } from './baseline-reconstruction.js';
 import { formatRevForDisplay } from '../client/api.js';
@@ -71,8 +71,8 @@ export function resolveArticleTarget(options: ResolveArticleTargetOptions): Reso
       if (fs.existsSync(fullPath)) {
         try {
           const content = fs.readFileSync(fullPath, 'utf8');
-          const parsed = parseMarkdown(content);
-          if (parsed.frontmatter.id) {
+          const parsed = parseMarkdownLenient(content, fullPath);
+          if (parsed?.frontmatter.id) {
             targetId = parsed.frontmatter.id;
           }
         } catch {}

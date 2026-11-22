@@ -1435,4 +1435,43 @@ describe('Emit CLI (Commander)', () => {
       }
     });
   });
+
+  describe('status and diff failure presentation (v0.1.48 Axis 8)', () => {
+    it('routes status and diff profile resolution errors through reportActionFailure without raw stack traces', async () => {
+      const errLines: string[] = [];
+      let exitCode: number | undefined;
+      const EXIT_SENTINEL = new Error('PROCESS_EXIT');
+      const origError = console.error;
+      const origExit = process.exit;
+      console.error = (...args: unknown[]) => errLines.push(args.map(String).join(' '));
+      process.exit = ((code?: number) => {
+        exitCode = code ?? 0;
+        throw EXIT_SENTINEL;
+      }) as never;
+
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        await expect(
+          program.parseAsync(['node', 'emit', 'status', '--profile', 'nonexistent-profile-xyz']),
+        ).rejects.toThrow(EXIT_SENTINEL);
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain('nonexistent-profile-xyz');
+        expect(errLines.join('\n')).not.toContain('    at ');
+
+        errLines.length = 0;
+        exitCode = undefined;
+        await expect(
+          program.parseAsync(['node', 'emit', 'diff', '--profile', 'nonexistent-profile-xyz']),
+        ).rejects.toThrow(EXIT_SENTINEL);
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain('nonexistent-profile-xyz');
+        expect(errLines.join('\n')).not.toContain('    at ');
+      } finally {
+        process.chdir(prevCwd);
+        console.error = origError;
+        process.exit = origExit;
+      }
+    });
+  });
 });

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.48] - 2026-11-22
+
+### Fixed
+
+- **Lenient Frontmatter Parsing in `deleteArticle` and `resolveArticleTarget` (`src/sync/delete.ts`, `src/sync/diff.ts`, v0.1.48)**:
+  - `deleteArticle()` and `resolveArticleTarget()` previously invoked strict `parseMarkdown()`, causing `emit delete` (and `emit diff` fallback ID resolution on files without a filename ULID) to fail with a `YAMLException` on articles with syntax-repairable frontmatter (e.g., unquoted percent-encoded taxonomy slugs). Both paths now parse through `parseMarkdownLenient()` first, aligning all inspector/deletion/diff commands with `AGENTS.md` Invariant 5.
+- **CLI Failure Presentation in `status`, `diff`, and `init` (`src/cli/commands/status.ts`, v0.1.48)**:
+  - Wrapped the `.action(...)` handlers for `emit status`, `emit diff`, and `emit init` in `try / catch (err) { reportActionFailure(err); }` so invalid `--profile` flags or `[CACHE_SCHEMA_MISMATCH]` errors exit cleanly with `❌ <message>` instead of exposing raw stack traces.
+
+### Added
+
+- **Structural Invariant Enforcer Gates — Axes 6–9 & Rule ⇔ Enforcer Table (`tests/layering.test.ts`, `AGENTS.md`, `docs/architecture-and-layers.md`, v0.1.48)**:
+  - Added 4 static enforcement gates to `tests/layering.test.ts` (bringing the suite to 11 tests across Axes 0–9 + Layer 2 Sibling Isolation) with actionable error messages naming the canonical replacement function:
+    - **Axis 6 (`saveSyncState` Call-Site Isolation)**: Restricts `.saveSyncState(` calls to `db/baseline.ts` (`retrackLocalHashOnly`), `sync/workspace/commit.ts` (`commitArticleSnapshot`), and `sync/conflicts.ts`.
+    - **Axis 7 (Lenient Frontmatter Parse Isolation)**: Restricts `gray-matter` imports to `utils/frontmatter.ts` and requires all 7 inspector/deletion/diff modules (`status`, `doctor`, `conflicts`, `delete`, `diff`, `article_search/local`, `media/body_scan`) to import and use `parseMarkdownLenient()`.
+    - **Axis 8 (CLI Failure Presenter Isolation)**: Requires every `src/cli/commands/*.ts` module to route failures through `reportActionFailure()` or `reportProfileFailure()`.
+    - **Axis 9 (MCP Tool Error & `_meta` Wrapper Isolation)**: Requires every `src/mcp/tools/*.ts` module to wrap tool execution via `withResolvedContext()` / `formatToolError()` from `src/mcp/tool-errors.ts`.
+  - Added the **Invariant ⇔ Enforcer Mapping Table** to `AGENTS.md` §3 pairing all core invariants with their enforcing types, static gates, and test suites.
+- **`pstack`-Inspired Verification & Structural Quality Skills (`.agents/skills/{interrogate,correct,blast-radius}/SKILL.md`, v0.1.48)**:
+  - Bundled three workspace skills under `.agents/skills/` for AI coding agents (Antigravity, Claude Code, Cursor):
+    - `interrogate`: Execution-proven adversarial review for code diffs and implementation plans (automatically drops speculative findings lacking a runnable reproduction or `file:line` proof).
+    - `correct`: 5-level mistake-class encoder (Architecture → Types → Structural Gate → Behavior Test → Docs) with mandatory Fail-First verification.
+    - `blast-radius`: Impact and safety proof across SQLite `cache.db` migrations, Two-Layer Representation, Two-Track Revisions, and CLI/MCP symmetry.
+
 ## [0.1.47] - 2026-11-22
 
 ### Added

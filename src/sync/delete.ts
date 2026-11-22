@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CacheDatabase } from '../db/cache.js';
-import { parseMarkdown } from '../utils/frontmatter.js';
+import { parseMarkdown, parseMarkdownLenient } from '../utils/frontmatter.js';
 import { calculateHash, CONFLICTS_SUBDIR } from './workspace/index.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { resolveArticleTarget } from './diff.js';
@@ -131,7 +131,8 @@ export async function deleteArticle(options: DeleteArticleOptions): Promise<Dele
   }
 
   const rawContent = fs.readFileSync(fullLocalPath, 'utf8');
-  const parsed = parseMarkdown(rawContent);
+  const parsed =
+    parseMarkdownLenient(rawContent, targetFile) ?? parseMarkdown(rawContent, targetFile);
   const articleId = parsed.frontmatter.id || targetId || 'unknown';
   const articleStatus = parsed.frontmatter.status || 'draft';
   const articleSlug = parsed.frontmatter.slug || '';

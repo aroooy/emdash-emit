@@ -458,4 +458,147 @@ describe('Architectural Layering Invariants', () => {
         violations.map((v) => `  ${v.file}:${v.line}: ${v.code}`).join('\n'),
     ).toHaveLength(0);
   });
+
+  it('Axis 6: saveSyncState call-site isolation - only commitArticleSnapshot, retrackLocalHashOnly, and conflict resolution may call saveSyncState', () => {
+    const ALLOWED_SAVE_SYNC_STATE_CALLERS = new Set([
+      'db/baseline.ts',
+      'sync/workspace/commit.ts',
+      'sync/conflicts.ts',
+    ]);
+
+    const allFiles = collectSourceFiles(SRC_ROOT);
+    const callPattern = /\.saveSyncState\s*\(/;
+    const violations: { file: string; line: number; code: string }[] = [];
+
+    for (const file of allFiles) {
+      const relFile = path.relative(SRC_ROOT, file).split(path.sep).join('/');
+      if (relFile === 'db/cache.ts' || ALLOWED_SAVE_SYNC_STATE_CALLERS.has(relFile)) {
+        continue;
+      }
+      const content = fs.readFileSync(file, 'utf8');
+      const lines = content.split('\n');
+      lines.forEach((lineText, idx) => {
+        const stripped = lineText.replace(/\/\/.*$/, '');
+        if (callPattern.test(stripped)) {
+          violations.push({ file: relFile, line: idx + 1, code: lineText.trim() });
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `Direct cache.saveSyncState() violations found:\n` +
+        violations
+          .map(
+            (v) =>
+              `  Direct cache.saveSyncState() call in ${v.file}:${v.line}. Use commitArticleSnapshot() (src/sync/workspace/commit.ts) for full sync commits or retrackLocalHashOnly() (src/db/baseline.ts) to advance local_hash alone.`,
+          )
+          .join('\n'),
+    ).toHaveLength(0);
+  });
+
+  it('Axis 7: Lenient frontmatter parse isolation - gray-matter restricted to utils/frontmatter.ts and inspector modules must use parseMarkdownLenient', () => {
+    const allFiles = collectSourceFiles(SRC_ROOT);
+    const grayMatterViolations: string[] = [];
+
+    for (const file of allFiles) {
+      const relFile = path.relative(SRC_ROOT, file).split(path.sep).join('/');
+      if (relFile === 'utils/frontmatter.ts') continue;
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+      for (const imp of imports) {
+        if (imp.source === 'gray-matter') {
+          grayMatterViolations.push(
+            `  Direct gray-matter import in ${relFile}:${imp.line}. Use parseMarkdownLenient() or parseMarkdown() from src/utils/frontmatter.ts.`,
+          );
+        }
+      }
+    }
+
+    expect(grayMatterViolations, grayMatterViolations.join('\n')).toHaveLength(0);
+
+    const REQUIRED_LENIENT_PARSE_MODULES = [
+      'sync/status.ts',
+      'sync/doctor.ts',
+      'sync/conflicts.ts',
+      'sync/delete.ts',
+      'sync/diff.ts',
+      'sync/article_search/local.ts',
+      'sync/media/body_scan.ts',
+    ];
+
+    const lenientViolations: string[] = [];
+    for (const relFile of REQUIRED_LENIENT_PARSE_MODULES) {
+      const fullPath = path.join(SRC_ROOT, relFile);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      const imports = parseImports(content);
+      const importsLenient = imports.some((imp) => imp.specifiers.includes('parseMarkdownLenient'));
+      const callsLenient = /\bparseMarkdownLenient\s*\(/.test(content);
+      if (!importsLenient || !callsLenient) {
+        lenientViolations.push(
+          `  Inspector module ${relFile} must use parseMarkdownLenient() from src/utils/frontmatter.ts to align with lenient frontmatter repair.`,
+        );
+      }
+    }
+
+    expect(lenientViolations, lenientViolations.join('\n')).toHaveLength(0);
+  });
+
+  it('Axis 8: CLI failure presenter isolation - every src/cli/commands/*.ts module routes failures through reportActionFailure / reportProfileFailure', () => {
+    const cliCommandsDir = path.join(SRC_ROOT, 'cli', 'commands');
+    const commandFiles = collectSourceFiles(cliCommandsDir);
+    const violations: string[] = [];
+
+    for (const file of commandFiles) {
+      const relFile = path.relative(SRC_ROOT, file).split(path.sep).join('/');
+      const content = fs.readFileSync(file, 'utf8');
+      if (relFile === 'cli/commands/profile.ts') {
+        if (!/\breportProfileFailure\s*\(/.test(content)) {
+          violations.push(
+            `  CLI command file ${relFile} must route profile failures through reportProfileFailure().`,
+          );
+        }
+        continue;
+      }
+      const imports = parseImports(content);
+      const importsReporter = imports.some(
+        (imp) =>
+          imp.source === '../report-failure.js' && imp.specifiers.includes('reportActionFailure'),
+      );
+      const callsReporter = /\breportActionFailure\s*\(/.test(content);
+      if (!importsReporter || !callsReporter) {
+        violations.push(
+          `  CLI command file ${relFile} must route action failures through reportActionFailure() (src/cli/report-failure.ts).`,
+        );
+      }
+    }
+
+    expect(violations, violations.join('\n')).toHaveLength(0);
+  });
+
+  it('Axis 9: MCP tool error & _meta wrapper isolation - every src/mcp/tools/*.ts module wraps execution via tool-errors.ts', () => {
+    const mcpToolsDir = path.join(SRC_ROOT, 'mcp', 'tools');
+    const toolFiles = collectSourceFiles(mcpToolsDir);
+    const violations: string[] = [];
+
+    for (const file of toolFiles) {
+      const relFile = path.relative(SRC_ROOT, file).split(path.sep).join('/');
+      const content = fs.readFileSync(file, 'utf8');
+      const imports = parseImports(content);
+      const importsToolErrors = imports.some(
+        (imp) =>
+          imp.source === '../tool-errors.js' &&
+          (imp.specifiers.includes('withResolvedContext') ||
+            imp.specifiers.includes('formatToolError')),
+      );
+      const usesWrapper = /\b(?:withResolvedContext|formatToolError)\s*\(/.test(content);
+      if (!importsToolErrors || !usesWrapper) {
+        violations.push(
+          `  MCP tool file ${relFile} must wrap tool execution with withResolvedContext() / formatToolError() (src/mcp/tool-errors.ts).`,
+        );
+      }
+    }
+
+    expect(violations, violations.join('\n')).toHaveLength(0);
+  });
 });

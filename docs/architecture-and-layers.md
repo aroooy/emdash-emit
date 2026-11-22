@@ -53,18 +53,22 @@ flowchart TD
 | --- | --- | --- | --- | --- |
 | **Layer 0: Primitives & Infra** | `src/utils/`, `src/db/`, `src/client/` — Core types, SQLite cache (`cache.db`, schema migrations in `src/db/migrations.ts`, baseline snapshot reconstruction & `retrackLocalHashOnly` via `src/db/baseline.ts`), HTTP clients, centralized endpoint URL builders (`src/client/endpoints.ts`), media ID branded types (`MediaRecordId`, `StorageKey` in `src/utils/media-id.ts`), taxonomy key helpers (`src/utils/taxonomy-key.ts`), media ref precedence resolver (`src/utils/media-ref-precedence.ts`), search option/date resolvers (`src/utils/search-options.ts`, `src/utils/search-date.ts`), MCP heartbeat (`src/utils/mcp-heartbeat.ts`), and canonical ULID helpers (`src/utils/ulid.ts`). | Layer 0 internals only | Layers 1, 2, 3 | Never imports Layer 1, 2, or 3. |
 | **Layer 1: Sync Upstream** | `src/sync/{baseline-reconstruction, status, diff, merge, preflight, guards, taxonomies, terms, bylines}` — Pure computation, baseline spelling reconstruction, status calculation, diff inspection, taxonomy term matching, and preflight safety verification (`src/sync/preflight/image_probe.ts`). | Layer 0 only | Layers 2, 3 | **NEVER imports Layer 2 or Layer 3.** |
-| **Layer 2: Sync Downstream** | `src/sync/{orchestrator, push, pull, new, delete, conflicts, doctor, media, article_search, workspace}` — Orchestration, remote sync execution, 3-way merge conflict handling, search execution, and local file mutations. | Layers 0 and 1 | Layer 3 (strictly restricted to `ALLOWED_LAYER_2_SYMBOLS`) | Never imports Layer 3. |
+| **Layer 2: Sync Downstream** | `src/sync/{orchestrator, push, pull, new, delete, conflicts, doctor, media, article_search, snapshot, workspace}` — Orchestration, remote sync execution, 3-way merge conflict handling, search execution, full-library metadata snapshots, and local file mutations. | Layers 0 and 1 | Layer 3 (strictly restricted to `ALLOWED_LAYER_2_SYMBOLS`) | Never imports Layer 3. |
 | **Layer 3: Consumers & Presentation** | `src/cli/`, `src/mcp/`, `src/presentation/` — User interfaces, CLI commands, centralized CLI failure presenter (`src/cli/report-failure.ts`), MCP tools (`withResolvedContext`, `formatToolTextWithMeta` in `src/mcp/tool-errors.ts`), and unified report formatters (`src/presentation/{article_report, media_report, pull_report}.ts`). | Layers 0, 1, and Layer 2 public API symbols | Top-level entry points (`src/bin/emit.ts`, `src/index.ts`) only | Never imported by Layer 0, 1, or 2. |
 
-### Static Enforcement Axes (Axes 0–5)
+### Static Enforcement Axes (Axes 0–9)
 
 - **Axis 0 — Layer 0 Outbound Isolation**: Layer 0 (`src/utils/`, `src/db/`, `src/client/`) must never import from Layer 1, Layer 2, or Layer 3.
   - *Layer 0 `node:fs` Scope Exception*: `node:fs` is permitted in Layer 0 for file-based configuration (`utils/config.ts`, `utils/profile.ts`) and article media reference detection (`utils/media-body-refs.ts` via `shouldPreferLegacyRef`), which read workspace files without domain logic.
-- **Axis 1 — Layer 1 → Layer 2 Prohibition**: Layer 1 modules must remain side-effect-free and upstream-focused. They must never import Layer 2 modules (`pull`, `push`, `orchestrator`, `delete`, `doctor`, `conflicts`, `new`, `media`, `article_search`).
+- **Axis 1 — Layer 1 → Layer 2 Prohibition**: Layer 1 modules must remain side-effect-free and upstream-focused. They must never import Layer 2 modules (`pull`, `push`, `orchestrator`, `delete`, `doctor`, `conflicts`, `new`, `media`, `article_search`, `snapshot`).
 - **Axis 2 — Layer 3 → Layer 2 Controlled Access**: Consumers in Layer 3 may only import public API symbols explicitly declared in the `ALLOWED_LAYER_2_SYMBOLS` allowlist in `tests/layering.test.ts`.
 - **Axis 3 — Layer 3 Intra-Layer Isolation**: MCP tools (`src/mcp/`) must never import from CLI command modules (`src/cli/commands/`). Shared formatting logic must reside in `src/presentation/`.
 - **Axis 4 — Lower Layers → Layer 3 Prohibition**: Layers 0, 1, and 2 (`src/utils/`, `src/db/`, `src/client/`, `src/sync/**`) must never import from Layer 3 (`src/cli/`, `src/mcp/`, `src/presentation/`).
 - **Axis 5 — Non-CLI Logging Isolation**: Non-CLI modules (`src/sync/`, `src/utils/`, `src/db/`, `src/client/`, `src/mcp/`, `src/presentation/`) must never write to standard output via `console.log()` or `console.debug()`, preventing JSON-RPC stdio stream corruption for MCP clients. Standard error output (`console.error()`, `console.warn()`) is permitted for diagnostics and warnings. Only `src/cli/` may invoke `console.log()`.
+- **Axis 6 — `saveSyncState` Call-Site Isolation**: `.saveSyncState(` may only be called in `src/db/baseline.ts` (`retrackLocalHashOnly`), `src/sync/workspace/commit.ts` (`commitArticleSnapshot`), and `src/sync/conflicts.ts` (`resolveConflict`).
+- **Axis 7 — Lenient Frontmatter Parse Isolation**: `gray-matter` may only be imported in `src/utils/frontmatter.ts`, and all inspector/deletion/diff modules (`sync/status.ts`, `sync/doctor.ts`, `sync/conflicts.ts`, `sync/delete.ts`, `sync/diff.ts`, `sync/article_search/local.ts`, `sync/media/body_scan.ts`) must import and use `parseMarkdownLenient()`.
+- **Axis 8 — CLI Failure Presenter Isolation**: Every `src/cli/commands/*.ts` module must route action failures through `reportActionFailure()` (`src/cli/report-failure.ts`) or `reportProfileFailure()`.
+- **Axis 9 — MCP Tool Error & `_meta` Wrapper Isolation**: Every `src/mcp/tools/*.ts` module must import and use `withResolvedContext()` or `formatToolError()` from `src/mcp/tool-errors.ts`.
 
 ### Layer 2 Sibling Coupling & Public Barrel Rules
 
@@ -73,6 +77,7 @@ flowchart TD
   - `doctor` → `conflicts`, `media/index.js`
   - `push/media_stage` → `sync/media/index.js`
   - `pull/media_stage` → `sync/media/index.js`
+  - `snapshot/index.ts` → `media/index.js`, `pull/index.js`
 - **Public npm Façade Barrels (`src/sync/{pull,push,media}.ts`)**: The top-level thin barrel files `src/sync/pull.ts`, `src/sync/push.ts`, and `src/sync/media.ts` exist strictly for backward compatibility of the public npm façade (`src/index.ts`). **No repository-internal module (across `src/` or `tests/`) may import those barrels**; internal consumers must import directly from `src/sync/pull/index.js`, `src/sync/push/index.js`, or `src/sync/media/index.js`.
 - **Governance Rule (Ask First)**: Expanding `ALLOWED_LAYER_2_SYMBOLS` or adding a new Layer 2 sibling coupling edge in `tests/layering.test.ts` requires explicit project owner approval under the Ask First policy.
 
