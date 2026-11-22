@@ -257,3 +257,39 @@ export function getWorkspaceStatus(
 
   return { items, summary };
 }
+
+export interface PushCandidateSelection {
+  toPush: ArticleStatusItem[];
+  skipped: Array<{
+    slug: string;
+    filePath: string;
+    reason: 'conflict_pending' | 'delete_pending' | 'taxonomy_apply_pending';
+  }>;
+}
+
+/**
+ * Filters workspace status items into push-eligible articles and pending-flag skips.
+ * Shared between `pushAll` (Layer 2) and CLI argument-less `emit push` (Layer 3).
+ */
+export function selectPushCandidates(status: WorkspaceStatusResult): PushCandidateSelection {
+  const eligibleItems = status.items.filter(
+    (i) => i.syncStatus === 'modified' || i.syncStatus === 'untracked',
+  );
+  const skipped: PushCandidateSelection['skipped'] = [];
+  const toPush = eligibleItems.filter((i) => {
+    if (i.deletePending) {
+      skipped.push({ slug: i.slug, filePath: i.filePath, reason: 'delete_pending' });
+      return false;
+    }
+    if (i.conflictPending) {
+      skipped.push({ slug: i.slug, filePath: i.filePath, reason: 'conflict_pending' });
+      return false;
+    }
+    if (i.taxonomyApplyPending) {
+      skipped.push({ slug: i.slug, filePath: i.filePath, reason: 'taxonomy_apply_pending' });
+      return false;
+    }
+    return true;
+  });
+  return { toPush, skipped };
+}

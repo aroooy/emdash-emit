@@ -101,8 +101,9 @@ Validates and pushes local Markdown article changes to the remote EmDash instanc
 emit push [file] [options]
 ```
 
-- `[file]`: Relative or absolute path to the Markdown file (required unless `--all` is passed).
+- `[file]`: Relative or absolute path to the Markdown file. When omitted without `--all`, Emit checks workspace status: 0 push-ready files exits cleanly, 1 push-ready file prompts for TTY confirmation (or proceeds with `-y, --yes`; override flags like `--force` / `--allow-publish` are rejected without an explicit file path), and >= 2 files lists candidates and exits.
 - `--all`: Push all `modified` and `untracked` articles in the workspace (skips `invalid` files and `conflicts/` copies).
+- `-y, --yes`: Skip the interactive TTY confirmation prompt when auto-targeting a single push-ready article.
 - `--allow-publish`: Required by Guard **G3** when promoting an article to `status: published` (or publishing a remote draft revision live on a `published*` article).
 - `--no-taxonomy-audit`: Skip pre-PUT remote taxonomy divergence audit.
 - `--allow-unapplied-taxonomies`: Bypass Guard **G17 (`TAXONOMY_APPLY_PENDING`)**.
@@ -137,11 +138,12 @@ emit status [-c, --collection <collection>] [--status <draft|published|all>] [-s
 Displays a unified line-by-line diff between the local working Markdown file and the reconstructed baseline snapshot.
 
 ```bash
-emit diff [filePath] [-i, --id <ulid>] [-p, --profile <name>]
+emit diff [filePath] [-i, --id <ulid>] [-c, --collection <collection>] [-p, --profile <name>]
 ```
 
-- `[filePath]`: Relative or absolute path to the local Markdown file.
+- `[filePath]`: Relative or absolute path to the local Markdown file. When both `[filePath]` and `--id` are omitted, diffs all `modified` articles in the collection (untracked files have no base snapshot to diff against and are noted in summary, whereas `emit push` includes both `modified` and `untracked` candidates).
 - `-i, --id <ulid>`: Target article by 26-character ULID instead of file path.
+- `-c, --collection <collection>`: Collection to inspect when omitting `[filePath]` and `--id` (default: `posts`).
 
 ---
 
@@ -232,6 +234,7 @@ emit article-search [query] [-t, --tag <slug>] [-c, --category <slug>] [--status
 ```
 
 - `--since` / `--until`: Accepts `today`, `yesterday`, or `YYYY-MM-DD`. Malformed values fail with `DATE_BOUNDARY_INVALID`.
+- `--status <draft|published>`: Filters by status and routes to scan mode (even when a keyword query is given) so scan `maxScan` and `[WALK_INCOMPLETE]` rules apply.
 - `-l, --limit <n>`: Max hits to return (default: `20`, max: `50`). Stops the walk immediately once reached; scan-path `[WALK_INCOMPLETE]` notices append `Hit limit reached at N; raise --limit to see more matches from the same walk.`.
 - `--max-scan <n>`: Max records to inspect (default: `300`, or `50` with `--tag`/`--category`; `0` = unbounded). Uses 0-GET local baseline/snapshot fast-path for cached articles when filtering by taxonomy.
 - `--offline`: Search local Markdown files and cached `snapshot_articles` (when captured) with zero network requests. When a snapshot exists, remote 0-hit/truncated hints display the snapshot count, capture date, and `>=7d` stale warning; FTS hits also enrich missing date/status fields from `snapshot_articles` (`[enriched: snapshot (unverified)]` when rev cannot be verified).

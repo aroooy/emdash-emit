@@ -116,7 +116,8 @@ export async function searchRemoteArticles(
   const limit = clampSearchLimit(options.limit);
 
   // Determine path:
-  const mustUseScan = hasTaxonomyFilter || hasDateFilter || !normalizedQuery;
+  const mustUseScan =
+    hasTaxonomyFilter || hasDateFilter || Boolean(options.status) || !normalizedQuery;
 
   if (!mustUseScan && normalizedQuery) {
     // Attempt FTS path first

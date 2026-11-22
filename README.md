@@ -296,9 +296,9 @@ Emit provides **17 top-level CLI commands** (plus **10 subcommands** under `prof
 | `emit profile` | Manage site profiles (`list`, `add`, `current`, `set-token`, `remove`, `use`) | `emit profile add blog --origin <url> --workspace .` |
 | `emit new <slug>` | Scaffold a new draft offline with ULID, one-shot frontmatter & G18 duplicate-slug guard | `emit new my-post -t "Title" -C tech -T ai` |
 | `emit pull [target]` | Pull sliding window (articles + taxonomies + referenced media) or a single article by ULID/path | `emit pull` / `emit pull 01M6ABCDEF...` |
-| `emit push [file]` | Validate (G1–G19), upload `media/drafts/*`, acquire lock, 3-way merge, and push to EmDash | `emit push posts/draft/20261104_01M6...md` |
+| `emit push [file]` | Validate (G1–G19), upload `media/drafts/*`, acquire lock, 3-way merge, and push to EmDash (auto-targets a single modified article with TTY confirmation or `-y`) | `emit push` / `emit push posts/draft/20261104_01M6...md` |
 | `emit status` | Inspect workspace sync status (`synced`, `published*`, `modified`, `untracked`, `invalid`) | `emit status` / `emit status --search "AI"` |
-| `emit diff [file]` | Show unified diff between local working file and reconstructed baseline snapshot | `emit diff posts/draft/20261104_01M6...md` |
+| `emit diff [file]` | Show unified diff between local working file(s) and reconstructed baseline snapshot (omit `[file]` to diff all modified articles) | `emit diff` / `emit diff posts/draft/20261104_01M6...md` |
 | `emit delete <target>` | Delete article locally & remotely after creating a `.deleted.md` backup in `posts/conflicts/` | `emit delete <file> --allow-delete-published` |
 | `emit conflicts` | Inspect and resolve rescue copies in `posts/conflicts/` (`list`, `diff`, `resolve`, `prune`) | `emit conflicts list` / `emit conflicts resolve <path> --accept-local` |
 | `emit doctor` | Run offline workspace health checks + opt-in probes (`--check-auth`, `--check-media-library`, `--check-media-urls`) | `emit doctor` / `emit doctor --check-auth` |

@@ -26,7 +26,7 @@ import type { CacheDatabase } from '../db/cache.js';
 import { parseMarkdown, parseMarkdownLenient } from '../utils/frontmatter.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { computeContextDiff } from './diff.js';
-import { calculateHash, iterWorkspaceArticles } from './workspace/index.js';
+import { iterWorkspaceArticles } from './workspace/index.js';
 
 export type ConflictFileType = 'conflict' | 'dropped' | 'deleted' | 'unknown';
 
@@ -482,25 +482,35 @@ export function resolveConflict(options: {
 
   // Update cache sync state if id is valid
   if (id && id !== 'unknown') {
-    const newHash = calculateHash(conflictContent);
     const existingSync = options.cache.getSyncState(id);
-    options.cache.saveSyncState({
-      id,
-      localFilePath: canonicalRel,
-      localHash: newHash,
-      remoteRev: existingSync?.remoteRev || 'local-restored',
-      status,
-      slug,
-      lastSyncedAt: existingSync?.lastSyncedAt || Math.floor(Date.now() / 1000),
-      conflictPending: 0,
-      bodyConflictPending: 0,
-      taxonomyConflictPending: 0,
-      conflictCopyHash: null,
-      conflictCopyPath: null,
-      conflictAt: null,
-      remoteTaxonomyHash: existingSync?.remoteTaxonomyHash ?? null,
-      taxonomyApplyPending: existingSync?.taxonomyApplyPending ?? 0,
-    });
+    const baseSnapshot = options.cache.getBaseSnapshot(id);
+    const preservedHash = baseSnapshot?.hash ?? existingSync?.localHash ?? null;
+    if (preservedHash) {
+      options.cache.saveSyncState({
+        ...(existingSync ?? {
+          id,
+          localFilePath: canonicalRel,
+          localHash: preservedHash,
+          remoteRev: 'local-restored',
+          status,
+          slug,
+          lastSyncedAt: Math.floor(Date.now() / 1000),
+        }),
+        id,
+        localFilePath: canonicalRel,
+        localHash: preservedHash,
+        status,
+        slug,
+        conflictPending: 0,
+        bodyConflictPending: 0,
+        taxonomyConflictPending: 0,
+        conflictCopyHash: null,
+        conflictCopyPath: null,
+        conflictAt: null,
+        remoteTaxonomyHash: existingSync?.remoteTaxonomyHash ?? null,
+        taxonomyApplyPending: existingSync?.taxonomyApplyPending ?? 0,
+      });
+    }
   }
 
   // Safe deletion of conflict file now that canonical is written

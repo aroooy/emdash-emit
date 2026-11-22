@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.50] - 2026-11-22
+
+### Fixed
+
+- **Conflict Resolution Status & Diff Alignment (`src/sync/conflicts.ts`, v0.1.50 #2)**:
+  - `resolveConflict(..., { strategy: 'accept-local' })` previously overwrote `sync_state.local_hash` with the restored file's hash, causing `emit status` to falsely report `🟢 [synced]`, `emit diff` to print `🟢 In Sync with base snapshot` above a non-empty diff, and `emit push --all` to skip pushed-pending articles. It now preserves `baseSnapshot.hash` (or `existingSync.localHash`, keeping all existing `sync_state` columns intact and skipping `saveSyncState()` when neither exists) so substantial local edits remain `modified` until pushed.
+  - Because the restored canonical file is now accurately tracked as `modified`, running a second `emit conflicts resolve --accept-local` on the same article before pushing requires `--force` (`CanonicalHasUnpushedEditsError` protection).
+
+### Changed
+
+- **Status-Filtered Article Search Routing (`src/sync/article_search/remote.ts`, v0.1.50 #3)**:
+  - Added `Boolean(options.status)` to `mustUseScan` in `searchRemoteArticles()` so `query` + `--status <draft|published>` routes to `executeScanSearch()` rather than EmDash's FTS endpoint (which ignores `status` and omits it from items). Scan-mode limits (`defaultMaxScan = 300`, or `50` with taxonomy filters when no snapshot exists) and `[WALK_INCOMPLETE]` rules now apply when `--status` is specified.
+- **Smart Argument-Less `emit diff` and `emit push` (`src/cli/commands/status.ts`, `src/cli/commands/push.ts`, `src/sync/status.ts`, `src/sync/orchestrator.ts`, v0.1.50 #4)**:
+  - Extracted shared `selectPushCandidates()` in Layer 1 (`src/sync/status.ts`) used by both `pushAll()` and CLI `emit push`.
+  - `emit diff` (with `-c, --collection`) now diffs all `modified` articles when invoked without `[filePath]` or `--id` (printing a note if untracked/invalid files exist).
+  - `emit push` (with `-y, --yes`) now auto-targets when exactly 1 push-ready article exists (prompting on TTY via `readConfirmLine`, requiring `-y` on non-TTY, listing candidates when >= 2, and rejecting override flags like `--force` / `--allow-publish` unless a file path is explicitly provided).
+
 ## [0.1.49] - 2026-11-22
 
 ### Added

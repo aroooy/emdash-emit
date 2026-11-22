@@ -32,7 +32,7 @@ import {
 } from './pull/index.js';
 import { findLocalFilesByUlid } from './workspace/index.js';
 import { pushArticle, type PushResult, type PushOptions } from './push/index.js';
-import { getWorkspaceStatus } from './status.js';
+import { getWorkspaceStatus, selectPushCandidates } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
 import { syncRemoteBylines } from './bylines.js';
 import {
@@ -517,30 +517,7 @@ export interface PushAllResult {
  */
 export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
   const status = getWorkspaceStatus(options.workspaceRoot, options.cache, options.collection);
-  const eligibleItems = status.items.filter(
-    (i) => i.syncStatus === 'modified' || i.syncStatus === 'untracked',
-  );
-
-  const skippedItems: Array<{
-    slug: string;
-    filePath: string;
-    reason: 'conflict_pending' | 'delete_pending' | 'taxonomy_apply_pending';
-  }> = [];
-  const toPush = eligibleItems.filter((i) => {
-    if (i.deletePending) {
-      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'delete_pending' });
-      return false;
-    }
-    if (i.conflictPending) {
-      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'conflict_pending' });
-      return false;
-    }
-    if (i.taxonomyApplyPending) {
-      skippedItems.push({ slug: i.slug, filePath: i.filePath, reason: 'taxonomy_apply_pending' });
-      return false;
-    }
-    return true;
-  });
+  const { toPush, skipped: skippedItems } = selectPushCandidates(status);
 
   const results: PushResult[] = [];
   let pushed = 0;

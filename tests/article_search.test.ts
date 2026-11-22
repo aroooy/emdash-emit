@@ -2792,5 +2792,60 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
         ),
       ).toBeNull();
     });
+
+    it('v0.1.50 (#3): routes query + status to scan path so --status draft never returns published articles', async () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-status-scan-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const requestedUrls: string[] = [];
+        const mockFetch = vi.fn().mockImplementation(async (urlStr: string) => {
+          requestedUrls.push(urlStr);
+          if (urlStr.includes('/_emdash/api/search')) {
+            throw new Error('FTS endpoint must NOT be called when status is specified');
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                items: [
+                  {
+                    id: '01KNGD5W934R00000000000201',
+                    slug: 'ai-draft-post',
+                    title: 'AI執筆の下書きメモ',
+                    status: 'draft',
+                    createdAt: '2026-05-01T00:00:00.000Z',
+                    updatedAt: '2026-05-01T00:00:00.000Z',
+                    publishedAt: null,
+                    data: { title: 'AI執筆の下書きメモ', content: [] },
+                  },
+                ],
+                nextCursor: null,
+              },
+            }),
+          };
+        });
+
+        const res = await searchRemoteArticles({
+          query: 'AI執筆',
+          status: 'draft',
+          origin: 'https://example.com',
+          token: 'tok',
+          fetchFn: mockFetch as unknown as typeof fetch,
+          workspaceRoot: wsDir,
+          cache: wsCache,
+        });
+
+        expect(res.searchMode).toBe('scan');
+        expect(requestedUrls.some((u) => u.includes('/_emdash/api/search'))).toBe(false);
+        expect(requestedUrls.every((u) => u.includes('status=draft'))).toBe(true);
+        expect(res.hits).toHaveLength(1);
+        expect(res.hits[0].status).toBe('draft');
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
   });
 });

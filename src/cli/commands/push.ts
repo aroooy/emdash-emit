@@ -20,11 +20,32 @@
  * SOFTWARE.
  */
 
+import readline from 'node:readline/promises';
 import type { Command } from 'commander';
 import { pushArticle, type PushResult } from '../../sync/push/index.js';
 import { pushAll } from '../../sync/orchestrator.js';
+import { getWorkspaceStatus, selectPushCandidates } from '../../sync/status.js';
 import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
+
+/**
+ * Prompts for a single-line confirmation answer on the given stdin/stdout streams.
+ * Mirrors `readSecretLine` (`profile.ts`) I/O injection so CLI tests can mock TTY prompts cleanly.
+ */
+export async function readConfirmLine(
+  prompt: string,
+  io: { stdin?: NodeJS.ReadStream; stdout?: NodeJS.WriteStream } = {},
+): Promise<string> {
+  const stdin = io.stdin ?? process.stdin;
+  const stdout = io.stdout ?? process.stdout;
+  const rl = readline.createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = await rl.question(prompt);
+    return answer.trim();
+  } finally {
+    rl.close();
+  }
+}
 
 function printPushArticleDetails(
   res: PushResult,
@@ -64,6 +85,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     )
     .option('--allow-publish', 'Confirm publishing live to remote')
     .option('--all', 'Push all modified files in workspace')
+    .option('-y, --yes', 'Skip confirmation prompt when auto-targeting a single modified article')
     .option(
       '--resolve-taxonomy <strategy>',
       'Resolve taxonomy conflict during 3-way merge: "union", "local", or "remote"',
@@ -128,14 +150,81 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           return;
         }
 
-        if (!file) {
-          console.error('❌ Error: Please specify a file to push, or use --all.');
-          console.error('   Example: emit push posts/draft/20261103_01M67...-my-article.md');
-          process.exit(1);
+        let targetFile: string | undefined = file;
+        if (!targetFile) {
+          const disallowedInAutoTarget = [
+            options.allowPublish ? '--allow-publish' : null,
+            options.revive ? '--revive' : null,
+            options.allowWipeTaxonomies ? '--allow-wipe-taxonomies' : null,
+            options.allowUnappliedTaxonomies ? '--allow-unapplied-taxonomies' : null,
+            options.resolveTaxonomy ? '--resolve-taxonomy' : null,
+            options.force ? '--force' : null,
+          ].filter((flag): flag is string => flag !== null);
+
+          if (disallowedInAutoTarget.length > 0) {
+            console.error(
+              `❌ Error: ${disallowedInAutoTarget.join(', ')} cannot be used without specifying a target file path.`,
+            );
+            console.error('   Pass the target file explicitly: emit push <file> ...');
+            process.exit(1);
+          }
+
+          const status = getWorkspaceStatus(ctx.root, ctx.cache, ctx.config.defaultCollection);
+          const { toPush, skipped } = selectPushCandidates(status);
+
+          if (toPush.length === 0) {
+            if (skipped.length > 0) {
+              console.warn(
+                `⚠️ Skipped ${skipped.length} article(s) with pending flags (conflict_pending, delete_pending, or taxonomy_apply_pending):`,
+              );
+              for (const item of skipped) {
+                console.warn(`   - ${item.filePath} (${item.reason})`);
+              }
+            }
+            console.log('✨ All valid articles are already in sync. Nothing to push.');
+            return;
+          }
+
+          if (toPush.length > 1) {
+            console.error(
+              `❌ Found ${toPush.length} push-ready articles in workspace. Please specify a file path or use --all:`,
+            );
+            for (const item of toPush.slice(0, 10)) {
+              console.error(`   - ${item.filePath}`);
+            }
+            if (toPush.length > 10) {
+              console.error(`   ... and ${toPush.length - 10} more`);
+            }
+            process.exit(1);
+          }
+
+          const singleTarget = toPush[0]!.filePath;
+          if (!options.yes) {
+            const isTty = Boolean(
+              (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY &&
+              (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY,
+            );
+            if (!isTty) {
+              console.error(
+                `❌ Found 1 push-ready article (${singleTarget}), but stdin/stdout is not an interactive TTY.`,
+              );
+              console.error(
+                `   Re-run with "emit push ${singleTarget}" or "emit push --yes" to confirm.`,
+              );
+              process.exit(1);
+            }
+            const answer = await readConfirmLine(`Push "${singleTarget}"? [y/N] `);
+            if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+              console.log('Push cancelled.');
+              return;
+            }
+          }
+
+          targetFile = singleTarget;
         }
 
-        console.log(`Pushing ${file}...`);
-        const res = await pushArticle(file, {
+        console.log(`Pushing ${targetFile}...`);
+        const res = await pushArticle(targetFile, {
           workspaceRoot: ctx.root,
           cache: ctx.cache,
           origin: ctx.origin,
@@ -168,13 +257,13 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             );
             console.warn(`   💡 To resolve and push, choose a resolution strategy:`);
             console.warn(
-              `      emit push ${file} --resolve-taxonomy=union    (clean union of all terms)`,
+              `      emit push ${targetFile} --resolve-taxonomy=union    (clean union of all terms)`,
             );
             console.warn(
-              `      emit push ${file} --resolve-taxonomy=local    (accept your local terms)`,
+              `      emit push ${targetFile} --resolve-taxonomy=local    (accept your local terms)`,
             );
             console.warn(
-              `      emit push ${file} --resolve-taxonomy=remote   (accept remote terms)`,
+              `      emit push ${targetFile} --resolve-taxonomy=remote   (accept remote terms)`,
             );
           } else {
             console.warn(`   Conflict markers have been written to ${res.filePath}.`);

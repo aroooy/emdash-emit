@@ -1474,4 +1474,216 @@ describe('Emit CLI (Commander)', () => {
       }
     });
   });
+
+  describe('argument-less emit diff and emit push (v0.1.50 #4)', () => {
+    it('supports argument-less emit diff for 0 (with untracked/invalid note), 1, and multiple modified articles', async () => {
+      const logLines: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => logLines.push(args.map(String).join(' '));
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        // 0 modified + 1 untracked -> reports in sync + note
+        const untrackedPath = path.join(
+          tempDir,
+          'posts',
+          'draft',
+          '20261122_01M8UNTRACKED0000000000001-u.md',
+        );
+        fs.mkdirSync(path.dirname(untrackedPath), { recursive: true });
+        fs.writeFileSync(
+          untrackedPath,
+          '---\nid: 01M8UNTRACKED0000000000001\nslug: u\ntitle: "U"\ncollection: posts\nlocale: ja\nstatus: draft\n---\n\nBody\n',
+          'utf8',
+        );
+        await program.parseAsync(['node', 'emit', 'diff']);
+        expect(logLines.join('\n')).toContain('Nothing to diff');
+        expect(logLines.join('\n')).toContain('1 untracked, 0 invalid');
+
+        // Seed 2 modified articles
+        fs.rmSync(untrackedPath);
+        const localCache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+        try {
+          for (const [idx, id] of [
+            '01M8DIFFMOD000000000000001',
+            '01M8DIFFMOD000000000000002',
+          ].entries()) {
+            const rel = `posts/draft/20261122_${id}-mod-${idx + 1}.md`;
+            const full = path.join(tempDir, rel);
+            const mod = `---\nid: ${id}\nslug: mod-${idx + 1}\ntitle: "Mod ${idx + 1}"\nstatus: draft\n---\n\nEdited ${idx + 1}\n`;
+            fs.writeFileSync(full, mod, 'utf8');
+            localCache.saveBaseSnapshot({
+              id,
+              rev: '1',
+              bodyMarkdown: 'Base\n',
+              frontmatterYaml: JSON.stringify({
+                id,
+                slug: `mod-${idx + 1}`,
+                title: `Mod ${idx + 1}`,
+                collection: 'posts',
+                status: 'draft',
+                locale: 'ja',
+                taxonomies: {},
+                bylines: [],
+              }),
+              hash: 'old-hash',
+              savedAt: Math.floor(Date.now() / 1000),
+            });
+            localCache.saveSyncState({
+              id,
+              localFilePath: rel,
+              localHash: 'old-hash',
+              remoteRev: '1@draft:d1',
+              status: 'draft',
+              slug: `mod-${idx + 1}`,
+              lastSyncedAt: Math.floor(Date.now() / 1000),
+            });
+          }
+        } finally {
+          localCache.close();
+        }
+
+        logLines.length = 0;
+        await program.parseAsync(['node', 'emit', 'diff']);
+        const out = logLines.join('\n');
+        expect(out).toContain('Diffing 2 modified article(s)');
+        expect(out).toContain('Edited 1');
+        expect(out).toContain('Edited 2');
+      } finally {
+        process.chdir(prevCwd);
+        console.log = origLog;
+      }
+    });
+
+    it('supports readConfirmLine I/O injection and enforces auto-target safety guards on argument-less emit push', async () => {
+      const { readConfirmLine } = await import('../src/cli/commands/push.js');
+      const stdin = Readable.from(['y\n']) as unknown as NodeJS.ReadStream;
+      const stdout = new Writable({
+        write(_c, _e, cb) {
+          cb();
+        },
+      }) as unknown as NodeJS.WriteStream;
+      expect(await readConfirmLine('Push? ', { stdin, stdout })).toBe('y');
+
+      const diffCmd = program.commands.find((c) => c.name() === 'diff');
+      expect(diffCmd?.options.some((o) => o.long === '--collection')).toBe(true);
+      const pushCmd = program.commands.find((c) => c.name() === 'push');
+      expect(pushCmd?.options.some((o) => o.long === '--yes')).toBe(true);
+
+      const logLines: string[] = [];
+      const errLines: string[] = [];
+      let exitCode: number | undefined;
+      const EXIT_SENTINEL = new Error('PROCESS_EXIT');
+      const origLog = console.log;
+      const origError = console.error;
+      const origExit = process.exit;
+      console.log = (...args: unknown[]) => logLines.push(args.map(String).join(' '));
+      console.error = (...args: unknown[]) => errLines.push(args.map(String).join(' '));
+      process.exit = ((code?: number) => {
+        exitCode = code ?? 0;
+        throw EXIT_SENTINEL;
+      }) as never;
+
+      const prevCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        // 0 candidates -> clean exit 0
+        await program.parseAsync(['node', 'emit', 'push']);
+        expect(logLines.join('\n')).toContain('Nothing to push');
+
+        // Disallowed override flags in auto-target -> exit 1
+        await expect(program.parseAsync(['node', 'emit', 'push', '--force'])).rejects.toThrow(
+          EXIT_SENTINEL,
+        );
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain(
+          '--force cannot be used without specifying a target file path',
+        );
+
+        // 1 candidate in non-TTY without --yes -> exit 1
+        const id1 = '01M8PUSHONE000000000000001';
+        const p1 = path.join(tempDir, 'posts', 'draft', `20261122_${id1}-one.md`);
+        fs.mkdirSync(path.dirname(p1), { recursive: true });
+        fs.writeFileSync(
+          p1,
+          `---\nid: ${id1}\nslug: one\ntitle: "One"\ncollection: posts\nlocale: ja\nstatus: draft\ntaxonomies: {}\nbylines: []\n---\n\nBody\n`,
+          'utf8',
+        );
+
+        errLines.length = 0;
+        exitCode = undefined;
+        await expect(program.parseAsync(['node', 'emit', 'push'])).rejects.toThrow(EXIT_SENTINEL);
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain('not an interactive TTY');
+
+        // 1 candidate with --yes -> auto-targets and calls pushArticle()
+        const origFetch = globalThis.fetch;
+        const origToken = process.env.EMDASH_TOKEN;
+        const origOrigin = process.env.EMDASH_ORIGIN;
+        process.env.EMDASH_TOKEN = 'test-token';
+        process.env.EMDASH_ORIGIN = 'https://example.com';
+        globalThis.fetch = vi.fn().mockImplementation(async (urlStr: string) => {
+          if (urlStr.includes('/lock')) {
+            return { ok: true, status: 200, json: async () => ({ locked: true, token: 'l1' }) };
+          }
+          if (urlStr.includes('/_emdash/api/taxonomies')) {
+            return { ok: true, status: 200, json: async () => ({ data: { items: [] } }) };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                id: id1,
+                slug: 'one',
+                title: 'One',
+                status: 'draft',
+                version: 1,
+                rev: '1',
+                draftRevisionId: 'd1',
+              },
+            }),
+          };
+        }) as unknown as typeof fetch;
+
+        try {
+          logLines.length = 0;
+          await program.parseAsync(['node', 'emit', 'push', '--yes']);
+          expect(logLines.join('\n')).toContain(`Pushing posts/draft/20261122_${id1}-one.md...`);
+          expect(logLines.join('\n')).toContain(`Successfully pushed ${id1}`);
+        } finally {
+          globalThis.fetch = origFetch;
+          if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;
+          else delete process.env.EMDASH_TOKEN;
+          if (origOrigin !== undefined) process.env.EMDASH_ORIGIN = origOrigin;
+          else delete process.env.EMDASH_ORIGIN;
+        }
+
+        // 2 candidates (re-edit p1 + add p2) -> lists and exits 1
+        fs.writeFileSync(
+          p1,
+          `---\nid: ${id1}\nslug: one\ntitle: "One"\ncollection: posts\nlocale: ja\nstatus: draft\ntaxonomies: {}\nbylines: []\n---\n\nEdited Body\n`,
+          'utf8',
+        );
+        const id2 = '01M8PUSHTWO000000000000002';
+        const p2 = path.join(tempDir, 'posts', 'draft', `20261122_${id2}-two.md`);
+        fs.writeFileSync(
+          p2,
+          `---\nid: ${id2}\nslug: two\ntitle: "Two"\nstatus: draft\n---\n\nBody\n`,
+          'utf8',
+        );
+
+        errLines.length = 0;
+        exitCode = undefined;
+        await expect(program.parseAsync(['node', 'emit', 'push'])).rejects.toThrow(EXIT_SENTINEL);
+        expect(exitCode).toBe(1);
+        expect(errLines.join('\n')).toContain('Found 2 push-ready articles');
+      } finally {
+        process.chdir(prevCwd);
+        console.log = origLog;
+        console.error = origError;
+        process.exit = origExit;
+      }
+    });
+  });
 });

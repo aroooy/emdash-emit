@@ -262,9 +262,11 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(fs.existsSync(conflictFullPath)).toBe(false);
     expect(fs.readFileSync(fullCanonical, 'utf8')).toBe(conflictContent);
 
-    // Cache sync state hash must match the new local content
+    // Cache sync state must retain baseline/prior hash (not the unpushed local content hash)
+    // so status/diff report modified until pushed (v0.1.50 #2).
     const updatedSync = cache.getSyncState(articleId);
-    expect(updatedSync?.localHash).toBe(calculateHash(conflictContent));
+    expect(updatedSync?.localHash).not.toBe(calculateHash(conflictContent));
+    expect(updatedSync?.conflictPending).toBe(0);
   });
 
   it('resolves .deleted.md rescue copy by restoring to draft/published directory', () => {
@@ -823,5 +825,97 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     expect(syncState?.localHash).toBe(calculateHash(diskContent));
     expect(syncState?.bodyConflictPending).toBe(1);
     expect(syncState?.conflictCopyPath).toBeTruthy();
+  });
+
+  it('v0.1.50 (#2): resolveConflict(accept-local) preserves baseSnapshot.hash so status/diff report modified and protects 2nd resolve without --force', async () => {
+    const { getWorkspaceStatus } = await import('../src/sync/status.js');
+    const { inspectArticleDiff } = await import('../src/sync/diff.js');
+    const { CanonicalHasUnpushedEditsError } = await import('../src/sync/conflicts.js');
+
+    const articleId = '01M6RESOLVEMODIFIED0000001';
+    const relCanonical = `posts/draft/20261115_${articleId}-Resolve-Modified.md`;
+    const fullCanonical = path.join(tempDir, relCanonical);
+    const conflictRel = `posts/conflicts/20261115_${articleId}-Resolve-Modified.20261115100000.conflict.md`;
+    const conflictFull = path.join(tempDir, conflictRel);
+    const conflictRel2 = `posts/conflicts/20261115_${articleId}-Resolve-Modified.20261115100100.conflict.md`;
+    const conflictFull2 = path.join(tempDir, conflictRel2);
+
+    const fm = {
+      id: articleId,
+      slug: 'resolve-modified',
+      title: 'Resolve Modified',
+      collection: 'posts',
+      status: 'draft' as const,
+      locale: 'ja',
+      taxonomies: {},
+      bylines: [],
+    };
+    const baseContent = serializeMarkdown(fm, 'Remote baseline paragraph.\n');
+    const localDivergentContent = serializeMarkdown(fm, 'Local rescued paragraph with edits.\n');
+    const baseHash = calculateHash(baseContent);
+
+    fs.mkdirSync(path.dirname(fullCanonical), { recursive: true });
+    fs.mkdirSync(path.dirname(conflictFull), { recursive: true });
+    fs.writeFileSync(fullCanonical, baseContent, 'utf8');
+    fs.writeFileSync(conflictFull, localDivergentContent, 'utf8');
+    fs.writeFileSync(conflictFull2, localDivergentContent, 'utf8');
+
+    cache.saveBaseSnapshot({
+      id: articleId,
+      rev: '2',
+      bodyMarkdown: 'Remote baseline paragraph.\n',
+      frontmatterYaml: JSON.stringify(fm),
+      hash: baseHash,
+      savedAt: Math.floor(Date.now() / 1000),
+    });
+    cache.saveSyncState({
+      id: articleId,
+      localFilePath: relCanonical,
+      localHash: baseHash,
+      remoteRev: '2@draft:d2',
+      status: 'draft',
+      slug: 'resolve-modified',
+      lastSyncedAt: Math.floor(Date.now() / 1000),
+      conflictPending: 1,
+      bodyConflictPending: 1,
+      conflictCopyPath: conflictRel,
+    });
+
+    const res = resolveConflict({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: conflictRel,
+      strategy: 'accept-local',
+    });
+    expect(res.success).toBe(true);
+
+    // base_snapshots must remain completely untouched
+    const snapAfter = cache.getBaseSnapshot(articleId);
+    expect(snapAfter?.hash).toBe(baseHash);
+
+    // Status and diff must report modified (not synced!)
+    const statusAfter = getWorkspaceStatus(tempDir, cache, 'posts');
+    const item = statusAfter.items.find((i) => i.id === articleId);
+    expect(item?.syncStatus).toBe('modified');
+    expect(item?.conflictPending).toBeUndefined();
+
+    const diffAfter = inspectArticleDiff({
+      workspaceRoot: tempDir,
+      cache,
+      filePath: relCanonical,
+    });
+    expect(diffAfter.ok).toBe(true);
+    expect(diffAfter.status).toBe('modified');
+    expect(diffAfter.formattedOutput).toContain('🟡 Modified');
+
+    // Second --accept-local without --force must be protected by CanonicalHasUnpushedEditsError
+    expect(() =>
+      resolveConflict({
+        workspaceRoot: tempDir,
+        cache,
+        filePath: conflictRel2,
+        strategy: 'accept-local',
+      }),
+    ).toThrow(CanonicalHasUnpushedEditsError);
   });
 });

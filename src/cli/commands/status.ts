@@ -248,27 +248,72 @@ export function registerStatusInitCommands(
     .command('diff [filePath]')
     .description('Display line-by-line differences between local edits and baseline snapshot')
     .option('-i, --id <id>', 'Article ID (ULID) to inspect')
+    .option(
+      '-c, --collection <collection>',
+      'Collection to check when omitting filePath (default: posts)',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action((filePath: string | undefined, options: { id?: string; profile?: string }) => {
-      try {
-        const ctx = resolveContext(options.profile);
-        const inspection = inspectArticleDiff({
-          workspaceRoot: ctx.root,
-          cache: ctx.cache,
-          filePath,
-          id: options.id,
-        });
+    .action(
+      (
+        filePath: string | undefined,
+        options: { id?: string; collection?: string; profile?: string },
+      ) => {
+        try {
+          const ctx = resolveContext(options.profile);
 
-        if (!inspection.ok) {
-          console.error(inspection.formattedOutput);
-          process.exit(1);
+          if (!filePath && !options.id) {
+            const collection = options.collection || ctx.config.defaultCollection;
+            const status = getWorkspaceStatus(ctx.root, ctx.cache, collection);
+            const modifiedItems = status.items.filter((i) => i.syncStatus === 'modified');
+
+            if (modifiedItems.length === 0) {
+              console.log(
+                '✨ All tracked articles are in sync with base snapshots. Nothing to diff.',
+              );
+              if (status.summary.untracked > 0 || status.summary.invalid > 0) {
+                console.log(
+                  `ℹ️ Note: ${status.summary.untracked} untracked, ${status.summary.invalid} invalid file(s) exist — run "emit status" for details.`,
+                );
+              }
+              return;
+            }
+
+            if (modifiedItems.length > 1) {
+              console.log(`Diffing ${modifiedItems.length} modified article(s):\n`);
+            }
+            for (const item of modifiedItems) {
+              const inspection = inspectArticleDiff({
+                workspaceRoot: ctx.root,
+                cache: ctx.cache,
+                filePath: item.filePath,
+              });
+              if (inspection.ok) {
+                console.log(inspection.formattedOutput);
+              } else {
+                console.error(inspection.formattedOutput);
+              }
+            }
+            return;
+          }
+
+          const inspection = inspectArticleDiff({
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            filePath,
+            id: options.id,
+          });
+
+          if (!inspection.ok) {
+            console.error(inspection.formattedOutput);
+            process.exit(1);
+          }
+
+          console.log(inspection.formattedOutput);
+        } catch (err) {
+          reportActionFailure(err);
         }
-
-        console.log(inspection.formattedOutput);
-      } catch (err) {
-        reportActionFailure(err);
-      }
-    });
+      },
+    );
 
   // emit guide
   program
