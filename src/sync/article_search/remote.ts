@@ -60,6 +60,23 @@ interface RawSearchItem {
   title?: string;
   snippet?: string;
   score?: number;
+  _rev?: string;
+  version?: string;
+}
+
+function buildArticleSnapshotInfo(
+  cache: CacheDatabase | undefined,
+  collection: string,
+): ArticleSearchResult['snapshot'] {
+  const meta = cache?.getSnapshotMeta(collection) ?? null;
+  if (!meta) return undefined;
+  const ageDays = Math.max(0, Math.floor((Date.now() - meta.capturedAt) / 86_400_000));
+  return {
+    capturedAt: new Date(meta.capturedAt).toISOString(),
+    ageDays: Number.isFinite(ageDays) ? ageDays : 0,
+    stale: Number.isFinite(ageDays) ? ageDays >= 7 : false,
+    articleCount: meta.articleCount,
+  };
 }
 
 interface RawSearchResponse {
@@ -158,6 +175,26 @@ export async function searchRemoteArticles(
             continue;
           }
 
+          const snap = options.cache?.getSnapshotArticle(item.id) ?? null;
+          let enrichment: Partial<ArticleSearchHit> = {};
+          if (snap) {
+            let revVerified = false;
+            if (item._rev || item.version) {
+              const rawItemObj = item as unknown as Record<string, unknown>;
+              const rawRev = extractRev(rawItemObj, '');
+              const compRev = rawRev ? extractComparisonRev(rawItemObj, rawRev) : '';
+              revVerified = Boolean(compRev && isSameRev(snap.comparisonRev, compRev));
+            }
+            enrichment = {
+              status: snap.status,
+              createdAt: snap.createdAt ?? undefined,
+              publishedAt: snap.publishedAt,
+              updatedAt: snap.updatedAt ?? undefined,
+              enrichedFromSnapshot: true,
+              ...(!revVerified ? { enrichmentStale: true } : {}),
+            };
+          }
+
           hits.push({
             id: item.id,
             slug: item.slug || null,
@@ -166,16 +203,20 @@ export async function searchRemoteArticles(
             score: item.score,
             isLocal,
             localPath,
+            ...enrichment,
             matchedOn: ['title'],
           });
         }
 
         const nextCursor = data.nextCursor;
+        const finalHits = hits.slice(0, limit);
         const truncated = Boolean(nextCursor && hits.length >= limit);
         const walkComplete = !nextCursor;
+        const snapshotInfo = buildArticleSnapshotInfo(options.cache, collection);
+        const finalEnrichedCount = finalHits.filter((h) => h.enrichedFromSnapshot).length;
 
         return {
-          hits: hits.slice(0, limit),
+          hits: finalHits,
           searchMode: 'fts',
           scannedCount: hits.length,
           totalCount: null,
@@ -184,6 +225,8 @@ export async function searchRemoteArticles(
           normalizedQuery,
           taxonomyFetchCount: 0,
           taxonomyCacheHitCount: 0,
+          ...(snapshotInfo ? { snapshot: snapshotInfo } : {}),
+          ...(finalEnrichedCount > 0 ? { snapshotEnrichedCount: finalEnrichedCount } : {}),
         };
       }
 
@@ -671,6 +714,7 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
 
   const truncated = hitLimitReached || hits.length > limit;
   const walkComplete = allSeriesComplete && !hitLimitReached;
+  const snapshotInfo = buildArticleSnapshotInfo(options.cache, collection);
 
   return {
     hits: hits.slice(0, limit),
@@ -683,5 +727,6 @@ async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSear
     taxonomyFetchCount,
     taxonomyCacheHitCount,
     fallbackReason,
+    ...(snapshotInfo ? { snapshot: snapshotInfo } : {}),
   };
 }

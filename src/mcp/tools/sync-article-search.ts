@@ -26,7 +26,9 @@ import { searchRemoteArticles } from '../../sync/article_search/index.js';
 import {
   buildOfflineArticleSearchFraming,
   formatArticleSearchOfflineHint,
+  formatArticleSearchWalkIncompleteNotice,
 } from '../../presentation/article_report.js';
+import { clampSearchLimit } from '../../utils/search-options.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
@@ -116,10 +118,12 @@ export function registerSyncArticleSearchTool(
           cache: ctx.cache,
         });
 
-        let note: string | undefined = undefined;
-        if (!result.walkComplete && !args.offline) {
-          note = `[WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at maxScan; absence is not proven. Narrow the query or raise maxScan (0 walks the whole library).`;
-        }
+        let note: string | undefined = !args.offline
+          ? (formatArticleSearchWalkIncompleteNotice(result, {
+              limit: clampSearchLimit(args.limit),
+              isMcp: true,
+            }) ?? undefined)
+          : undefined;
 
         const offlineHint = formatArticleSearchOfflineHint(result, {
           offline: args.offline,
@@ -144,6 +148,10 @@ export function registerSyncArticleSearchTool(
         if (result.taxonomyCacheHitCount > 0)
           payload.taxonomyCacheHitCount = result.taxonomyCacheHitCount;
         if (result.fallbackReason) payload.fallbackReason = result.fallbackReason;
+        if (result.snapshot && !args.offline) payload.snapshot = result.snapshot;
+        if (typeof result.snapshotEnrichedCount === 'number') {
+          payload.snapshotEnrichedCount = result.snapshotEnrichedCount;
+        }
         if (args.since) payload.since = args.since;
         if (args.until) payload.until = args.until;
         if (args.tag) payload.tag = args.tag;
@@ -154,6 +162,7 @@ export function registerSyncArticleSearchTool(
           payload.hint = {
             offlineSearch: true,
             reason: result.hits.length === 0 ? 'no-hits' : 'walk-truncated',
+            ...(result.snapshot ? { snapshotArticles: result.snapshot.articleCount } : {}),
           };
         }
         if (note) payload.note = note;

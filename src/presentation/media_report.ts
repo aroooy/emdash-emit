@@ -22,6 +22,7 @@
 
 import {
   formatOfflineSearchHeader,
+  formatSearchHitLimitNotice,
   OFFLINE_SEARCH_EMPTY_NOTICE,
   type MediaSearchSnapshotView,
 } from './article_report.js';
@@ -121,8 +122,7 @@ export function formatMediaSearchHitLimitNotice(
   hitCount: number,
   options?: { isMcp?: boolean },
 ): string {
-  const limitSyntax = options?.isMcp ? 'limit' : '--limit';
-  return `Hit limit reached at ${hitCount}; raise ${limitSyntax} to see more matches from the same walk.`;
+  return formatSearchHitLimitNotice(hitCount, options);
 }
 
 /**

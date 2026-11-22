@@ -1880,6 +1880,30 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
       expect(payloadTruncated.note).toContain(
         '💡 Hint: workspace-synced articles can be searched instantly with --offline',
       );
+
+      // v0.1.49 P1: When a snapshot exists, MCP hint attaches snapshotArticles and payload.snapshot
+      cache.saveSnapshotMeta({
+        collection: 'posts',
+        capturedAt: Date.now(),
+        articleCount: 763,
+        mediaCount: 0,
+        taxonomyFetchedCount: 0,
+        taxonomyReusedCount: 0,
+        articleSingleGetCount: 0,
+        durationMs: 10,
+      });
+      const resWithSnap = await registered['sync_article_search'].handler({
+        status: 'published',
+        maxScan: 1,
+      });
+      const payloadWithSnap = JSON.parse(resWithSnap.content[0].text);
+      expect(payloadWithSnap.snapshot?.articleCount).toBe(763);
+      expect(payloadWithSnap.hint).toMatchObject({
+        offlineSearch: true,
+        reason: 'walk-truncated',
+        snapshotArticles: 763,
+      });
+      expect(payloadWithSnap.note).toContain('the full library snapshot (763 articles @');
     });
 
     // H-4: includes taxonomy verification clause only when local taxonomy definitions exist
@@ -2483,6 +2507,290 @@ describe('Article Search & Targeting Engine (v0.1.43)', () => {
         wsCache.close();
         fs.rmSync(wsDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('v0.1.49: FTS snapshot enrichment, offline hint, and hit-limit notice', () => {
+    it('E-1, E-1b, E-2, E-3, E-4, E-5: enriches FTS hits from snapshot with rev verification and preserves backward compatibility without snapshot', async () => {
+      const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-fts-enrich-'));
+      fs.mkdirSync(path.join(wsDir, '.emit'), { recursive: true });
+      const wsCache = new CacheDatabase(path.join(wsDir, '.emit', 'cache.db'));
+      try {
+        const hitSnapNoRevId = '01KNGD5W934R00000000000101';
+        const hitNoSnapId = '01KNGD5W934R00000000000102';
+        const hitRevMatchId = '01KNGD5W934R00000000000103';
+        const hitRevMismatchId = '01KNGD5W934R00000000000104';
+
+        const mockFetch = vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [
+                { id: hitSnapNoRevId, slug: 'a', title: 'Alpha', snippet: 's1' },
+                { id: hitNoSnapId, slug: 'b', title: 'Beta', snippet: 's2' },
+                {
+                  id: hitRevMatchId,
+                  slug: 'c',
+                  title: 'Gamma',
+                  snippet: 's3',
+                  _rev: '2@live:live2',
+                },
+                {
+                  id: hitRevMismatchId,
+                  slug: 'd',
+                  title: 'Delta',
+                  snippet: 's4',
+                  _rev: '9@live:live9',
+                },
+              ],
+              nextCursor: 'cursor-2',
+            },
+          }),
+        });
+
+        // E-2 & E-3: No snapshot -> no enrichment, no result.snapshot key
+        const noSnapRes = await searchRemoteArticles({
+          query: 'Alpha',
+          origin: 'https://example.com',
+          token: 'tok',
+          fetchFn: mockFetch as unknown as typeof fetch,
+          workspaceRoot: wsDir,
+          cache: wsCache,
+          limit: 4,
+        });
+        expect('snapshot' in noSnapRes).toBe(false);
+        expect(noSnapRes.snapshotEnrichedCount).toBeUndefined();
+        const { formatArticleSearchHit } = await import('../src/presentation/article_report.js');
+        expect(formatArticleSearchHit(noSnapRes.hits[0], 0)).toContain(
+          '---- [unknown] Alpha (id: 01KNGD5W934R00000000000101) [remote only]',
+        );
+
+        // Populate snapshot_meta + snapshot_articles
+        const now = Date.now();
+        wsCache.saveSnapshotMeta({
+          collection: 'posts',
+          capturedAt: now,
+          articleCount: 763,
+          mediaCount: 0,
+          taxonomyFetchedCount: 0,
+          taxonomyReusedCount: 0,
+          articleSingleGetCount: 0,
+          durationMs: 15,
+        });
+        wsCache.upsertSnapshotArticlesBatch({
+          collection: 'posts',
+          walkComplete: true,
+          records: [
+            {
+              id: hitSnapNoRevId,
+              collection: 'posts',
+              slug: 'a',
+              title: 'Alpha',
+              status: 'published',
+              excerpt: null,
+              bodyMarkdown: 'body',
+              bodySource: 'list-live',
+              taxonomyVerified: 1,
+              categoriesJson: '[]',
+              tagsJson: '[]',
+              publishedAt: '2023-03-09T10:00:00.000Z',
+              createdAt: '2023-03-08T10:00:00.000Z',
+              updatedAt: '2023-03-09T10:00:00.000Z',
+              comparisonRev: '1@live:live1',
+              capturedAt: now,
+            },
+            {
+              id: hitRevMatchId,
+              collection: 'posts',
+              slug: 'c',
+              title: 'Gamma',
+              status: 'published',
+              excerpt: null,
+              bodyMarkdown: 'body',
+              bodySource: 'list-live',
+              taxonomyVerified: 1,
+              categoriesJson: '[]',
+              tagsJson: '[]',
+              publishedAt: '2024-05-01T10:00:00.000Z',
+              createdAt: '2024-05-01T10:00:00.000Z',
+              updatedAt: '2024-05-01T10:00:00.000Z',
+              comparisonRev: '2@live:live2',
+              capturedAt: now,
+            },
+            {
+              id: hitRevMismatchId,
+              collection: 'posts',
+              slug: 'd',
+              title: 'Delta',
+              status: 'draft',
+              excerpt: null,
+              bodyMarkdown: 'body',
+              bodySource: 'single-get',
+              taxonomyVerified: 1,
+              categoriesJson: '[]',
+              tagsJson: '[]',
+              publishedAt: null,
+              createdAt: '2025-01-15T10:00:00.000Z',
+              updatedAt: '2025-01-15T10:00:00.000Z',
+              comparisonRev: '1@draft:d1',
+              capturedAt: now,
+            },
+          ],
+        });
+
+        mockFetch.mockClear();
+        const enrichedRes = await searchRemoteArticles({
+          query: 'Alpha',
+          origin: 'https://example.com',
+          token: 'tok',
+          fetchFn: mockFetch as unknown as typeof fetch,
+          workspaceRoot: wsDir,
+          cache: wsCache,
+          limit: 4,
+        });
+
+        // E-3: Zero extra HTTP calls
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(enrichedRes.snapshotEnrichedCount).toBe(3);
+        expect(enrichedRes.snapshot?.articleCount).toBe(763);
+
+        // L-3: FTS nextCursor + limit keeps walkComplete: false (because nextCursor is set) & truncated: true
+        expect(enrichedRes.truncated).toBe(true);
+        expect(enrichedRes.walkComplete).toBe(false);
+
+        // E-1: no rev candidate -> unverified
+        expect(enrichedRes.hits[0].enrichedFromSnapshot).toBe(true);
+        expect(enrichedRes.hits[0].enrichmentStale).toBe(true);
+        expect(formatArticleSearchHit(enrichedRes.hits[0], 0)).toContain(
+          '2023-03-09 [published] Alpha (id: 01KNGD5W934R00000000000101) [remote only] [enriched: snapshot (unverified)]',
+        );
+
+        // E-2: no snapshot row -> unchanged
+        expect(enrichedRes.hits[1].enrichedFromSnapshot).toBeUndefined();
+        expect(formatArticleSearchHit(enrichedRes.hits[1], 1)).toContain(
+          '---- [unknown] Beta (id: 01KNGD5W934R00000000000102) [remote only]',
+        );
+
+        // E-1b: matching rev -> verified (no unverified suffix)
+        expect(enrichedRes.hits[2].enrichedFromSnapshot).toBe(true);
+        expect(enrichedRes.hits[2].enrichmentStale).toBeUndefined();
+        expect(formatArticleSearchHit(enrichedRes.hits[2], 2)).toContain(
+          '2024-05-01 [published] Gamma (id: 01KNGD5W934R00000000000103) [remote only] [enriched: snapshot]',
+        );
+        expect(formatArticleSearchHit(enrichedRes.hits[2], 2)).not.toContain('(unverified)');
+
+        // E-1b / E-3: mismatched rev -> unverified
+        expect(enrichedRes.hits[3].enrichedFromSnapshot).toBe(true);
+        expect(enrichedRes.hits[3].enrichmentStale).toBe(true);
+
+        // E-5: read-only enrichment never mutates sync_state or base_snapshots
+        expect(wsCache.getSyncState(hitSnapNoRevId)).toBeNull();
+        expect(wsCache.getBaseSnapshot(hitSnapNoRevId)).toBeNull();
+      } finally {
+        wsCache.close();
+        fs.rmSync(wsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('H-1, H-2, L-1, L-2, L-3: formats snapshot-aware offline hint and scan hit-limit notice', async () => {
+      const { formatArticleSearchOfflineHint, formatArticleSearchWalkIncompleteNotice } =
+        await import('../src/presentation/article_report.js');
+
+      const freshSnap = {
+        capturedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        ageDays: 2,
+        stale: false,
+        articleCount: 763,
+      };
+      const staleSnap = {
+        capturedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+        ageDays: 10,
+        stale: true,
+        articleCount: 763,
+      };
+
+      const baseEmptyResult = {
+        hits: [],
+        searchMode: 'scan' as const,
+        scannedCount: 50,
+        totalCount: null,
+        walkComplete: false,
+        truncated: false,
+        normalizedQuery: 'q',
+        taxonomyFetchCount: 0,
+        taxonomyCacheHitCount: 0,
+      };
+
+      // H-1 & H-2
+      const freshHint = formatArticleSearchOfflineHint({
+        ...baseEmptyResult,
+        snapshot: freshSnap,
+      });
+      expect(freshHint).toContain('the full library snapshot (763 articles @');
+      expect(freshHint).not.toContain('stale snapshot');
+
+      const staleHint = formatArticleSearchOfflineHint({
+        ...baseEmptyResult,
+        snapshot: staleSnap,
+      });
+      expect(staleHint).toContain('⚠️ stale snapshot (>7d): run emit snapshot first.');
+
+      // L-1: scan path hit-limit at limit=3
+      const hitLimitRes = {
+        ...baseEmptyResult,
+        hits: [
+          {
+            id: '1',
+            slug: '1',
+            title: '1',
+            isLocal: false,
+            localPath: null,
+            matchedOn: ['recency' as const],
+          },
+          {
+            id: '2',
+            slug: '2',
+            title: '2',
+            isLocal: false,
+            localPath: null,
+            matchedOn: ['recency' as const],
+          },
+          {
+            id: '3',
+            slug: '3',
+            title: '3',
+            isLocal: false,
+            localPath: null,
+            matchedOn: ['recency' as const],
+          },
+        ],
+        truncated: true,
+      };
+      const cliNotice = formatArticleSearchWalkIncompleteNotice(hitLimitRes, {
+        limit: 3,
+        isMcp: false,
+      });
+      expect(cliNotice).toContain('[WALK_INCOMPLETE]');
+      expect(cliNotice).toContain(
+        'Hit limit reached at 3; raise --limit to see more matches from the same walk.',
+      );
+
+      // L-2: stopped at maxScan without hitting limit -> no hit-limit line
+      const maxScanOnlyNotice = formatArticleSearchWalkIncompleteNotice(baseEmptyResult, {
+        limit: 20,
+        isMcp: false,
+      });
+      expect(maxScanOnlyNotice).toContain('[WALK_INCOMPLETE]');
+      expect(maxScanOnlyNotice).not.toContain('Hit limit reached');
+
+      // L-3: complete walk -> null notice
+      expect(
+        formatArticleSearchWalkIncompleteNotice(
+          { ...hitLimitRes, walkComplete: true, searchMode: 'fts' },
+          { limit: 3, isMcp: false },
+        ),
+      ).toBeNull();
     });
   });
 });

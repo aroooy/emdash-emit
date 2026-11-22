@@ -51,7 +51,7 @@ All safety guardrails are centrally registered in `GUARD_REGISTRY` (`src/sync/gu
 3. **Check 3 — Frontmatter Integrity**: Parses all workspace articles. Files failing strict parse but recoverable via `parseMarkdownLenient()` are reported as `warning` (`healable: true` via `emit pull`); unrecoverable files are reported as `error`.
 4. **Check 4 — Conflicts & Quarantine**: Reports `.conflict.md` and `.deleted.md` rescue copies in `<collection>/conflicts/`.
 5. **Check 5 — Sync Status**: Verifies baseline snapshot presence and local hash tracking.
-6. **Check 6 — Referenced Media Existence**: Scans article bodies (`scanClassifiedMediaReferences` in `src/utils/media-refs.ts`) and frontmatter `featuredImage`, matching references against local `media/` mirrors by storageKey stem (`storageKeyToMarkdownRef`).
+6. **Check 6 — Referenced Media Existence**: Scans article bodies (`scanClassifiedMediaReferences` in `src/utils/media-refs.ts`) and frontmatter `featuredImage`, matching references against local `media/` mirrors by storageKey stem (`storageKeyToMarkdownRef`). Unreferenced items (`media_isolated`, `status: 'ok'`) prioritize binary-backed assets in examples and label companion-only entries (`hasBinary: false`) as `media metadata entries (YAML companion only, no mirrored binary file)` without suggesting deletion.
    - *Opt-in `--check-media-urls` (`checkMediaUrls: true`)*: Probes `HEAD /_emdash/api/media/file/<storageKey>` for locally unresolved references, downgrading assets still served by R2 to informational notes.
    - *Opt-in `--check-media-library` (`checkMediaLibrary: true`)*: Walks the remote media library via metadata only (no binary downloads) and compares remote record count against local mirror count.
 

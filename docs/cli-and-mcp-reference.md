@@ -232,9 +232,9 @@ emit article-search [query] [-t, --tag <slug>] [-c, --category <slug>] [--status
 ```
 
 - `--since` / `--until`: Accepts `today`, `yesterday`, or `YYYY-MM-DD`. Malformed values fail with `DATE_BOUNDARY_INVALID`.
-- `-l, --limit <n>`: Max hits to return (default: `20`, max: `50`). Stops the walk immediately once reached.
-- `--max-scan <n>`: Max records to inspect (default: `300`, or `50` with `--tag`/`--category`; `0` = unbounded). Uses 0-GET local baseline fast-path for cached articles when filtering by taxonomy.
-- `--offline`: Search local Markdown files (including body text) with zero network requests.
+- `-l, --limit <n>`: Max hits to return (default: `20`, max: `50`). Stops the walk immediately once reached; scan-path `[WALK_INCOMPLETE]` notices append `Hit limit reached at N; raise --limit to see more matches from the same walk.`.
+- `--max-scan <n>`: Max records to inspect (default: `300`, or `50` with `--tag`/`--category`; `0` = unbounded). Uses 0-GET local baseline/snapshot fast-path for cached articles when filtering by taxonomy.
+- `--offline`: Search local Markdown files and cached `snapshot_articles` (when captured) with zero network requests. When a snapshot exists, remote 0-hit/truncated hints display the snapshot count, capture date, and `>=7d` stale warning; FTS hits also enrich missing date/status fields from `snapshot_articles` (`[enriched: snapshot (unverified)]` when rev cannot be verified).
 
 ---
 

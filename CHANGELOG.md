@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.49] - 2026-11-22
+
+### Added
+
+- **FTS Snapshot Enrichment & Snapshot-Aware Offline Hint (`src/sync/article_search/remote.ts`, `src/sync/article_search/types.ts`, `src/presentation/article_report.ts`, `src/mcp/tools/sync-article-search.ts`, v0.1.49 P0–P1)**:
+  - Remote FTS hits now look up `cache.getSnapshotArticle(item.id)` (0 HTTP) to populate missing `status`, `createdAt`, `publishedAt`, and `updatedAt` fields instead of falling back to `---- [unknown]`.
+  - Attaches `enrichedFromSnapshot: true` and `enrichmentStale: true` (`[enriched: snapshot (unverified)]`) whenever live rev verification is unavailable or mismatches, upgrading to `[enriched: snapshot]` only when a rev candidate matches `isSameRev()`.
+  - Remote searches attach `snapshot` metadata only when a snapshot exists (preserving byte-identical outputs without snapshots), upgrading `formatArticleSearchOfflineHint()` to report `the full library snapshot (N articles @ YYYY-MM-DD, <age>)` and `>= 7d` stale warnings.
+- **Article Search Hit-Limit Notice & CLI/MCP Symmetry (`src/presentation/article_report.ts`, `src/presentation/media_report.ts`, `src/cli/commands/article-search.ts`, `src/mcp/tools/sync-article-search.ts`, v0.1.49 P2)**:
+  - Extracted shared `formatSearchHitLimitNotice()` in `src/presentation/article_report.ts` (delegated to by `formatMediaSearchHitLimitNotice()`), extended `formatArticleSearchWalkIncompleteNotice()` with `{ limit, isMcp }`, and replaced the hardcoded MCP `[WALK_INCOMPLETE]` string in `sync_article_search` with the shared formatter.
+
+### Changed
+
+- **Doctor `media_isolated` Metadata-Only Label Alignment (`src/sync/doctor.ts`, v0.1.49 P3)**:
+  - Added `hasBinary: boolean` to `details.unreferenced[]`, sorted binary-backed assets ahead of companion-only entries in representative file lists, and rendered `media metadata entry/entries (YAML companion only, no mirrored binary file)` when all unreferenced items lack binaries, while preserving `status: 'ok'` and zero deletion suggestions.
+
 ## [0.1.48] - 2026-11-22
 
 ### Fixed

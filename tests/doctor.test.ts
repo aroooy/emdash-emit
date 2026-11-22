@@ -1463,5 +1463,59 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       // Overall status remains healthy
       expect(report.overallStatus).toBe('healthy');
     });
+
+    it('D-1, D-2, D-3 (v0.1.49): distinguishes metadata-only companions from binaries in media_isolated while keeping status ok', async () => {
+      const mediaDir = path.join(tempDir, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+
+      // D-1: Only metadata-only companion YAML (no binary file)
+      fs.writeFileSync(
+        path.join(mediaDir, '01M6ONLYYAML00000000000001.yaml'),
+        'id: 01M6REC0000000000000000001\nstorageKey: 01M6ONLYYAML00000000000001.png\n',
+        'utf8',
+      );
+      setupHealthyArticle({ body: 'No media references.\n' });
+
+      const reportOnlyYaml = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+      const checkOnlyYaml = reportOnlyYaml.checks.find((c) => c.id === 'media_isolated');
+      expect(checkOnlyYaml?.status).toBe('ok');
+      expect(reportOnlyYaml.overallStatus).toBe('healthy');
+      expect(checkOnlyYaml?.message).toContain(
+        '1 media metadata entry (YAML companion only, no mirrored binary file) in media/ (01M6ONLYYAML00000000000001.yaml) is not referenced',
+      );
+      expect(checkOnlyYaml?.suggestion).not.toContain('delete');
+      const detailsOnly = checkOnlyYaml?.details as {
+        unreferenced: Array<{ filePath: string; hasBinary: boolean }>;
+      };
+      expect(detailsOnly.unreferenced[0].hasBinary).toBe(false);
+
+      // D-2: Mixed (metadata-only YAML listed first in directory, plus binary-backed asset) -> binary listed first
+      fs.writeFileSync(
+        path.join(mediaDir, '01M6ZBINARY000000000000002.yaml'),
+        'id: 01M6REC0000000000000000002\nstorageKey: 01M6ZBINARY000000000000002.jpg\n',
+        'utf8',
+      );
+      fs.writeFileSync(path.join(mediaDir, '01M6ZBINARY000000000000002.jpg'), 'jpg-bytes', 'utf8');
+
+      const reportMixed = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+      const checkMixed = reportMixed.checks.find((c) => c.id === 'media_isolated');
+      expect(checkMixed?.status).toBe('ok');
+      expect(checkMixed?.message).toContain(
+        '2 local media file(s) in media/ (01M6ZBINARY000000000000002.jpg, 01M6ONLYYAML00000000000001.yaml)',
+      );
+      const detailsMixed = checkMixed?.details as {
+        unreferenced: Array<{ filePath: string; hasBinary: boolean }>;
+      };
+      expect(detailsMixed.unreferenced.some((u) => u.hasBinary === true)).toBe(true);
+      expect(detailsMixed.unreferenced.some((u) => u.hasBinary === false)).toBe(true);
+    });
   });
 });

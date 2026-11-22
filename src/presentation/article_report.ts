@@ -323,8 +323,15 @@ export function formatArticleSearchHit(hit: ArticleSearchHit, index?: number): s
     : hit.fromSnapshot
       ? `[snapshot]${hit.bodyUnverified ? ' [body unverified]' : ''}`
       : '[remote only]';
+  const enrichedStr = hit.enrichedFromSnapshot
+    ? hit.enrichmentStale
+      ? ' [enriched: snapshot (unverified)]'
+      : ' [enriched: snapshot]'
+    : '';
 
-  const lines = [`  ${num}${dateStr} ${statusStr} ${hit.title} (id: ${hit.id})${qStr} ${localStr}`];
+  const lines = [
+    `  ${num}${dateStr} ${statusStr} ${hit.title} (id: ${hit.id})${qStr} ${localStr}${enrichedStr}`,
+  ];
 
   if (hit.snippet) {
     lines.push(`     ${hit.snippet}`);
@@ -353,15 +360,39 @@ export function formatArticleSearchEmptyNotice(
 }
 
 /**
+ * Formats supplementary hit-limit notice for search walks stopped early.
+ * Shared across article and media search (CLI and MCP).
+ */
+export function formatSearchHitLimitNotice(
+  hitCount: number,
+  options?: { isMcp?: boolean },
+): string {
+  const limitSyntax = options?.isMcp ? 'limit' : '--limit';
+  return `Hit limit reached at ${hitCount}; raise ${limitSyntax} to see more matches from the same walk.`;
+}
+
+/**
  * Formats walk incomplete notice.
  */
 export function formatArticleSearchWalkIncompleteNotice(
   result: ArticleSearchResult,
+  options?: { limit?: number; isMcp?: boolean },
 ): string | null {
   if (result.walkComplete) return null;
-  return (
-    `⚠️ [WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at --max-scan; absence is not proven.\n` +
-    `   Narrow the query or raise --max-scan (0 walks the whole library).`
+  const isMcp = Boolean(options?.isMcp);
+  const maxScanSyntax = isMcp ? 'maxScan' : '--max-scan';
+  const headline = `[WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at ${maxScanSyntax}; absence is not proven.`;
+  const hitLimitLine =
+    result.truncated && result.hits.length >= (options?.limit ?? 20)
+      ? formatSearchHitLimitNotice(result.hits.length, { isMcp })
+      : null;
+  const guidance = `Narrow the query or raise ${maxScanSyntax} (0 walks the whole library).`;
+
+  if (isMcp) {
+    return [headline, hitLimitLine, guidance].filter(Boolean).join(' ');
+  }
+  return [`⚠️ ${headline}`, ...(hitLimitLine ? [`   ${hitLimitLine}`] : []), `   ${guidance}`].join(
+    '\n',
   );
 }
 
@@ -389,6 +420,17 @@ export function formatArticleSearchOfflineHint(
     } catch {
       // ignore
     }
+  }
+
+  if (result.snapshot) {
+    const snap = result.snapshot;
+    const datePart = formatSnapshotTimestamp(snap.capturedAt).slice(0, 10);
+    const agePart = formatSnapshotAge(snap.capturedAt);
+    const staleSuffix = snap.stale ? ' ⚠️ stale snapshot (>7d): run emit snapshot first.' : '';
+    return (
+      `💡 Hint: the full library snapshot (${snap.articleCount} articles @ ${datePart}, ${agePart}) can be searched\n` +
+      `   instantly with --offline (zero HTTP).${staleSuffix}${taxonomyClause}`
+    );
   }
 
   return (

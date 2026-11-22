@@ -997,7 +997,12 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   }
 
   // Check: Unreferenced / Isolated Media (v0.1.39 P3)
-  const isolatedMedia: Array<{ filePath: string; storageKey?: string; id?: string }> = [];
+  const isolatedMedia: Array<{
+    filePath: string;
+    storageKey?: string;
+    id?: string;
+    hasBinary: boolean;
+  }> = [];
   for (const [stem, comp] of localCompanions.entries()) {
     const isReferenced =
       (comp.mediaId && referencedMediaIds.has(comp.mediaId.toUpperCase())) ||
@@ -1009,6 +1014,7 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
         filePath: comp.binaryFile || comp.yamlPath,
         storageKey: comp.storageKey,
         id: comp.mediaId,
+        hasBinary: comp.binaryFile != null,
       });
     }
   }
@@ -1032,14 +1038,26 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
   if (isolatedMedia.length > 0 || unreferencedDraftFiles.length > 0) {
     const messages: string[] = [];
     if (isolatedMedia.length > 0) {
-      const fileNames = isolatedMedia.map((m) => path.basename(m.filePath));
+      const metadataOnlyCount = isolatedMedia.filter((m) => !m.hasBinary).length;
+      const sortedForDisplay = [...isolatedMedia].sort(
+        (a, b) => Number(b.hasBinary) - Number(a.hasBinary),
+      );
+      const fileNames = sortedForDisplay.map((m) => path.basename(m.filePath));
       const fileListStr =
         fileNames.length <= 3
           ? fileNames.join(', ')
           : `${fileNames.slice(0, 3).join(', ')} and ${fileNames.length - 3} more`;
-      messages.push(
-        `${isolatedMedia.length} local media file(s) in media/ (${fileListStr}) are not referenced by any article or featuredImage.`,
-      );
+      if (metadataOnlyCount === isolatedMedia.length) {
+        const noun = isolatedMedia.length === 1 ? 'entry' : 'entries';
+        const verb = isolatedMedia.length === 1 ? 'is' : 'are';
+        messages.push(
+          `${isolatedMedia.length} media metadata ${noun} (YAML companion only, no mirrored binary file) in media/ (${fileListStr}) ${verb} not referenced by any article or featuredImage.`,
+        );
+      } else {
+        messages.push(
+          `${isolatedMedia.length} local media file(s) in media/ (${fileListStr}) are not referenced by any article or featuredImage.`,
+        );
+      }
     }
     if (unreferencedDraftFiles.length > 0) {
       const fileNames = unreferencedDraftFiles.map((f) => path.basename(f));

@@ -49,6 +49,10 @@ export interface ArticleSearchHit {
   quarantined?: boolean;
   fromSnapshot?: boolean;
   bodyUnverified?: boolean;
+  /** True when date/status were filled from the local snapshot catalog (FTS returns neither). */
+  enrichedFromSnapshot?: boolean;
+  /** True when enrichment could not be rev-verified against the live remote revision. */
+  enrichmentStale?: boolean;
   score?: number;
   matchedOn: Array<'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'>;
 }
@@ -65,6 +69,7 @@ export interface ArticleSearchResult {
   taxonomyCacheHitCount: number;
   fallbackReason?: string;
   snapshot?: ArticleSearchSnapshotInfo;
+  snapshotEnrichedCount?: number;
 }
 
 export interface ArticleSearchOptions {

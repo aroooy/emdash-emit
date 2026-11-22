@@ -301,4 +301,72 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     expect(mcpSource).toContain('formatMediaSearchWalkIncompleteNotice');
     expect(mcpSource).toMatch(/formatMediaSearchWalkIncompleteNotice\s*\(/);
   });
+
+  it('S-3 (v0.1.49 H-3): article-search CLI and MCP share formatArticleSearchWalkIncompleteNotice and identical hit-limit wording', async () => {
+    const { formatArticleSearchWalkIncompleteNotice } =
+      await import('../src/presentation/article_report.js');
+    const { formatMediaSearchHitLimitNotice } = await import('../src/presentation/media_report.js');
+
+    const hitLimitResult = {
+      hits: [
+        {
+          id: '1',
+          slug: '1',
+          title: '1',
+          isLocal: false,
+          localPath: null,
+          matchedOn: ['recency' as const],
+        },
+        {
+          id: '2',
+          slug: '2',
+          title: '2',
+          isLocal: false,
+          localPath: null,
+          matchedOn: ['recency' as const],
+        },
+        {
+          id: '3',
+          slug: '3',
+          title: '3',
+          isLocal: false,
+          localPath: null,
+          matchedOn: ['recency' as const],
+        },
+      ],
+      searchMode: 'scan' as const,
+      scannedCount: 15,
+      totalCount: null,
+      walkComplete: false,
+      truncated: true,
+      normalizedQuery: '',
+      taxonomyFetchCount: 0,
+      taxonomyCacheHitCount: 0,
+    };
+
+    const cliNotice = formatArticleSearchWalkIncompleteNotice(hitLimitResult, {
+      limit: 3,
+      isMcp: false,
+    });
+    const mcpNotice = formatArticleSearchWalkIncompleteNotice(hitLimitResult, {
+      limit: 3,
+      isMcp: true,
+    });
+
+    expect(cliNotice).toContain(formatMediaSearchHitLimitNotice(3, { isMcp: false }));
+    expect(mcpNotice).toContain(formatMediaSearchHitLimitNotice(3, { isMcp: true }));
+
+    const normalizedCli = cliNotice!
+      .replace(/^⚠️\s+/, '')
+      .replace(/\n\s+/g, ' ')
+      .replace(/--max-scan/g, 'maxScan')
+      .replace(/--limit/g, 'limit');
+    expect(normalizedCli).toBe(mcpNotice);
+
+    const mcpArticleSearchSrc = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-article-search.ts'),
+      'utf-8',
+    );
+    expect(mcpArticleSearchSrc).toContain('formatArticleSearchWalkIncompleteNotice');
+  });
 });

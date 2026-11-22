@@ -31,6 +31,7 @@ import {
 } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
+import { clampSearchLimit } from '../../utils/search-options.js';
 
 export function registerArticleSearchCommand(
   program: Command,
@@ -115,7 +116,10 @@ export function registerArticleSearchCommand(
           });
         }
 
-        const incompleteNotice = formatArticleSearchWalkIncompleteNotice(result);
+        const incompleteNotice = formatArticleSearchWalkIncompleteNotice(result, {
+          limit: clampSearchLimit(limit),
+          isMcp: false,
+        });
         if (incompleteNotice && !options.offline) {
           console.log(`\n${incompleteNotice}`);
         }
