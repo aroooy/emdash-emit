@@ -135,3 +135,22 @@ export function formatPreservedBlocksHint(count: number | undefined, indent = ''
   if (!count || count <= 0) return '';
   return `${indent}💡 Preserved ${count} styled/custom block(s) (<!--ec:block ... -->) retaining alignment/layout.`;
 }
+
+export interface SnapshotFallbackNoticeOptions {
+  snapshotCapturedAt: number;
+  warnings: string[];
+  degradedFields?: string[];
+}
+
+/**
+ * Formats epistemic and staleness warnings for `--from-snapshot` / `fromSnapshot` offline restores.
+ */
+export function formatSnapshotFallbackNotice(options: SnapshotFallbackNoticeOptions): string {
+  const lines = [...options.warnings];
+  if (options.degradedFields && options.degradedFields.length > 0) {
+    lines.push(
+      `⚠️ Degraded snapshot fields (${options.degradedFields.join(', ')}): run "emit snapshot capture" online to upgrade.`,
+    );
+  }
+  return lines.join('\n');
+}

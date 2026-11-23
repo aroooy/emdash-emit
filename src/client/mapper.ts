@@ -169,51 +169,39 @@ export function localToApiPayload(
 }
 
 /**
- * Converts remote EmDash content API response item into local frontmatter & markdown body.
+ * Extracts SEO metadata from a raw EmDash content item.
  */
-export function apiResponseToLocal(
-  raw: Record<string, unknown>,
-  options?: MapperOptions,
-): { frontmatter: Frontmatter; body: string; rev: string } {
+export function extractSeoFromRaw(raw: Record<string, unknown>): Frontmatter['seo'] {
   const item = unwrapItem<Record<string, unknown>>(raw);
-  const rev = extractRev(raw);
-
-  const id = String(item.id || '');
-  const slug = String(item.slug || '');
-  const collection = String(item.collection || item.type || 'posts');
-  const status = (item.status === 'published' ? 'published' : 'draft') as 'draft' | 'published';
-  const locale = String(item.locale || 'ja');
-  const publishedAt = item.publishedAt ? String(item.publishedAt) : null;
-
-  const data = (item.data || {}) as Record<string, unknown>;
-  const title = String(data.title || item.title || 'Untitled');
-
-  const rawBody = data.content ?? data.body;
-  let body = '';
-  if (Array.isArray(rawBody)) {
-    body = portableTextToMarkdown(rawBody as PortableTextBlock[]);
-  } else if (typeof rawBody === 'string') {
-    body = rawBody;
-  }
-
-  // Taxonomies
-  const taxonomies = (item.taxonomies || {}) as Record<string, string[]>;
-
-  // SEO
   const rawSeo = (item.seo || {}) as Record<string, unknown>;
-  const seo =
-    Object.keys(rawSeo).length > 0
-      ? {
-          title: rawSeo.title ? String(rawSeo.title) : null,
-          description: rawSeo.description ? String(rawSeo.description) : null,
-          canonical: rawSeo.canonical ? String(rawSeo.canonical) : null,
-          noIndex: Boolean(rawSeo.noIndex),
-          image: rawSeo.image ? String(rawSeo.image) : null,
-        }
-      : undefined;
+  return Object.keys(rawSeo).length > 0
+    ? {
+        title: rawSeo.title ? String(rawSeo.title) : null,
+        description: rawSeo.description ? String(rawSeo.description) : null,
+        canonical: rawSeo.canonical ? String(rawSeo.canonical) : null,
+        noIndex: Boolean(rawSeo.noIndex),
+        image: rawSeo.image ? String(rawSeo.image) : null,
+      }
+    : undefined;
+}
 
-  // Bylines (support nested byline.slug, byline.id, or bylineId)
-  const idMap = options?.bylineIdToSlug || {};
+/**
+ * Extracts locale from a raw EmDash content item (defaults to 'ja').
+ */
+export function extractLocaleFromRaw(raw: Record<string, unknown>): string {
+  const item = unwrapItem<Record<string, unknown>>(raw);
+  return String(item.locale || 'ja');
+}
+
+/**
+ * Extracts byline slugs (or IDs when unmapped) from a raw EmDash content item.
+ */
+export function extractBylinesFromRaw(
+  raw: Record<string, unknown>,
+  bylineIdToSlug?: Record<string, string>,
+): string[] {
+  const item = unwrapItem<Record<string, unknown>>(raw);
+  const idMap = bylineIdToSlug || {};
   const rawBylines = (item.bylines || []) as Array<{
     bylineId?: string;
     byline?: { id?: string; slug?: string };
@@ -236,6 +224,17 @@ export function apiResponseToLocal(
     bylines = [idMap[slugOrId] || slugOrId];
   }
 
+  return bylines;
+}
+
+/**
+ * Extracts canonical 26-char D1 media ULID (or null / undefined) for featuredImage from a raw EmDash content item.
+ */
+export function extractFeaturedImageFromRaw(
+  raw: Record<string, unknown>,
+): string | null | undefined {
+  const item = unwrapItem<Record<string, unknown>>(raw);
+  const data = (item.data || {}) as Record<string, unknown>;
   const rawFeaturedImage =
     data.featured_image !== undefined
       ? data.featured_image
@@ -244,12 +243,49 @@ export function apiResponseToLocal(
         : item.featured_image !== undefined
           ? item.featured_image
           : item.featuredImage;
-  const featuredImage =
-    rawFeaturedImage === null
-      ? null
-      : rawFeaturedImage !== undefined
-        ? (extractMediaUlid(rawFeaturedImage) ?? undefined)
-        : undefined;
+  if (rawFeaturedImage === null) return null;
+  if (rawFeaturedImage !== undefined) return extractMediaUlid(rawFeaturedImage) ?? undefined;
+  return undefined;
+}
+
+/**
+ * Converts remote EmDash content API response item into local frontmatter & markdown body.
+ */
+export function apiResponseToLocal(
+  raw: Record<string, unknown>,
+  options?: MapperOptions,
+): { frontmatter: Frontmatter; body: string; rev: string } {
+  const item = unwrapItem<Record<string, unknown>>(raw);
+  const rev = extractRev(raw);
+
+  const id = String(item.id || '');
+  const slug = String(item.slug || '');
+  const collection = String(item.collection || item.type || 'posts');
+  const status = (item.status === 'published' ? 'published' : 'draft') as 'draft' | 'published';
+  const locale = extractLocaleFromRaw(item);
+  const publishedAt = item.publishedAt ? String(item.publishedAt) : null;
+
+  const data = (item.data || {}) as Record<string, unknown>;
+  const title = String(data.title || item.title || 'Untitled');
+
+  const rawBody = data.content ?? data.body;
+  let body = '';
+  if (Array.isArray(rawBody)) {
+    body = portableTextToMarkdown(rawBody as PortableTextBlock[]);
+  } else if (typeof rawBody === 'string') {
+    body = rawBody;
+  }
+
+  // Taxonomies
+  const taxonomies = (item.taxonomies || {}) as Record<string, string[]>;
+
+  // SEO
+  const seo = extractSeoFromRaw(item);
+
+  // Bylines (support nested byline.slug, byline.id, or bylineId)
+  const bylines = extractBylinesFromRaw(item, options?.bylineIdToSlug);
+
+  const featuredImage = extractFeaturedImageFromRaw(item);
 
   const frontmatter: Frontmatter = {
     id,

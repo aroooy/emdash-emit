@@ -21,7 +21,7 @@
  */
 
 import { ApiError } from '../../client/error.js';
-import type { SyncState } from '../../db/cache.js';
+import type { BaseSnapshot, SyncState } from '../../db/cache.js';
 import { CONFLICTS_SUBDIR, isQuarantinedRelativePath } from '../workspace/index.js';
 import type { PreflightError } from '../preflight.js';
 import type { PushOptions } from './types.js';
@@ -129,7 +129,30 @@ export function checkTaxonomyApplyGuard(
 }
 
 /**
- * Declarative pipeline: evaluates pre-preflight guards (G15).
+ * Rejects pushing an article whose baseline was restored from a local snapshot
+ * (`base_snapshots.rev` starts with `'snapshot:'`) until an online pull promotes
+ * the baseline to a live Track 1 `_rev` token.
+ */
+export function checkSnapshotBaselineGuard(
+  baseSnapshot: BaseSnapshot | null | undefined,
+  collection: string,
+  id: string,
+  targetFilePath: string,
+): void {
+  if (baseSnapshot?.rev.startsWith('snapshot:')) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'PULL_REQUIRED_BEFORE_PUSH',
+      status: 409,
+      message: `Article ${id} (${targetFilePath}) was restored from a local snapshot and lacks a live server _rev token.`,
+      suggestion:
+        'Run "emit pull" (online) to upgrade the baseline with the live server _rev token (your local edits will be preserved), then run "emit push".',
+    });
+  }
+}
+
+/**
+ * Declarative pipeline: evaluates pre-preflight guards (G15 + snapshot sentinel check).
  */
 export function evaluatePrePreflightGuards(
   syncState: SyncState | null | undefined,
@@ -137,7 +160,9 @@ export function evaluatePrePreflightGuards(
   collection: string,
   id: string,
   targetFilePath: string,
+  baseSnapshot?: BaseSnapshot | null,
 ): void {
+  checkSnapshotBaselineGuard(baseSnapshot, collection, id, targetFilePath);
   checkDeletePendingGuard(syncState, options, collection, id, targetFilePath);
 }
 

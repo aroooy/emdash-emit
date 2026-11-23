@@ -117,8 +117,8 @@ export async function pushArticle(
     }
   }
 
-  // 1. Guard against blind re-push when article is marked delete_pending (G15)
-  evaluatePrePreflightGuards(syncState, options, collection, id, targetFilePath);
+  // 1. Guard against snapshot-derived baselines lacking live Track 1 _rev and delete_pending (G15)
+  evaluatePrePreflightGuards(syncState, options, collection, id, targetFilePath, baseSnapshot);
 
   // 2. Preflight Guards (including G6: UNRESOLVED_CONFLICT_MARKERS - T2-1 invariant)
   const preflight = executePreflightStage(

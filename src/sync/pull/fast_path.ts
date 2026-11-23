@@ -51,6 +51,20 @@ import { extractCanonicalRemoteTitle } from './list.js';
 import { mirrorArticleReferencedMedia } from './media_stage.js';
 import type { FastPathContext, PullOptions, PullResult } from './types.js';
 
+function promoteSnapshotBaselineIfNeeded(
+  cache: PullOptions['cache'],
+  id: string,
+  remoteRev: string,
+): void {
+  const existingBase = cache.getBaseSnapshot(id);
+  if (existingBase?.rev.startsWith('snapshot:')) {
+    cache.saveBaseSnapshot({
+      ...existingBase,
+      rev: remoteRev,
+    });
+  }
+}
+
 /**
  * Tests the fast-path for an article pull:
  * - Unmodified differential skip (0-GET when rawItem is provided and remote _rev matches cached rev)
@@ -139,6 +153,7 @@ export async function tryFastPathOrHeal(
               diskContent: respelled,
               touchSyncedAt: true,
             });
+            promoteSnapshotBaselineIfNeeded(options.cache, id, remoteRev);
             return {
               id,
               slug: existingSync.slug,
@@ -193,6 +208,7 @@ export async function tryFastPathOrHeal(
                 diskContent: localized,
                 touchSyncedAt: true,
               });
+              promoteSnapshotBaselineIfNeeded(options.cache, id, remoteRev);
               return {
                 id,
                 slug: existingSync.slug,
@@ -275,7 +291,9 @@ export async function tryFastPathOrHeal(
                   canonicalContent: respelledCanon,
                   frontmatter: baselineFrontmatter,
                   bodyMarkdown: parsedCurrent.body,
-                  revForTransport: existingSync.remoteRev,
+                  revForTransport: existingSync.remoteRev.startsWith('snapshot:')
+                    ? remoteRev
+                    : existingSync.remoteRev,
                   revForComparison: existingSync.remoteRev,
                   bumpBaselineHashOnly: !hasPrunedTax,
                   flags: hasPrunedTax
@@ -321,6 +339,8 @@ export async function tryFastPathOrHeal(
               touchSyncedAt: true,
             });
           }
+
+          promoteSnapshotBaselineIfNeeded(options.cache, id, remoteRev);
 
           return {
             id,
@@ -382,6 +402,7 @@ export async function tryFastPathOrHeal(
       // Local file has unpushed edits. Check if frontmatter parses cleanly.
       try {
         parseMarkdown(currentDiskContent);
+        promoteSnapshotBaselineIfNeeded(options.cache, id, remoteRev);
         return {
           id,
           slug: existingSync.slug,

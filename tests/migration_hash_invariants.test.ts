@@ -237,4 +237,54 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
     expect(calculateHash(reconstructed)).toBe(diskHash);
     expect(calculateHash(reconstructed)).toBe(retrieved!.hash);
   });
+
+  it('preserves local_hash and base_snapshots.hash across Schema v6 -> v7 migration', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const v6DbPath = path.join(tempDir, 'v6-upgrade.db');
+    const rawDb = new DatabaseSync(v6DbPath);
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY, local_file_path TEXT NOT NULL, local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL, status TEXT NOT NULL, slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL, remote_taxonomy_hash TEXT,
+        conflict_pending INTEGER NOT NULL DEFAULT 0, body_conflict_pending INTEGER NOT NULL DEFAULT 0,
+        taxonomy_conflict_pending INTEGER NOT NULL DEFAULT 0, conflict_copy_path TEXT,
+        conflict_copy_hash TEXT, conflict_at INTEGER, delete_pending INTEGER NOT NULL DEFAULT 0,
+        taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE base_snapshots (
+        id TEXT PRIMARY KEY, rev TEXT NOT NULL, body_markdown TEXT NOT NULL,
+        frontmatter_yaml TEXT NOT NULL, hash TEXT NOT NULL, saved_at INTEGER NOT NULL
+      );
+      CREATE TABLE snapshot_articles (
+        id TEXT PRIMARY KEY, collection TEXT NOT NULL, slug TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT, updated_at TEXT, published_at TEXT,
+        comparison_rev TEXT NOT NULL, excerpt TEXT, body_markdown TEXT NOT NULL DEFAULT '',
+        body_source TEXT NOT NULL DEFAULT 'list-live', categories_json TEXT NOT NULL DEFAULT '[]',
+        tags_json TEXT NOT NULL DEFAULT '[]', taxonomy_verified INTEGER NOT NULL DEFAULT 1,
+        captured_at INTEGER NOT NULL
+      );
+      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
+      VALUES ('01M7MIG1', 'posts/published/20261101_01M7MIG1-test.md', 'hash_abc', '3@live:01L1', 'published', 'test', 1700000000);
+      INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at)
+      VALUES ('01M7MIG1', '3', 'body', '{}', 'hash_abc', 1700000000);
+      INSERT INTO snapshot_articles (id, collection, slug, title, status, comparison_rev, body_markdown, body_source, captured_at)
+      VALUES ('01M7MIG1', 'posts', 'test', 'Test', 'published', '3@live:01L1', 'body', 'list-live', 1700000000);
+      PRAGMA user_version = 6;
+    `);
+    rawDb.close();
+
+    const upgraded = new CacheDatabase(v6DbPath);
+    try {
+      expect(upgraded.getSyncState('01M7MIG1')?.localHash).toBe('hash_abc');
+      expect(upgraded.getBaseSnapshot('01M7MIG1')?.hash).toBe('hash_abc');
+      const legacyRow = upgraded.getSnapshotArticle('01M7MIG1');
+      expect(legacyRow?.locale).toBeNull();
+      expect(legacyRow?.featuredImage).toBeNull();
+      expect(legacyRow?.seoJson).toBe('{}');
+      expect(legacyRow?.bylinesJson).toBe('[]');
+    } finally {
+      upgraded.close();
+    }
+  });
 });

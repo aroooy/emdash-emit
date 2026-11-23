@@ -22,7 +22,11 @@
 
 import path from 'node:path';
 import type { Command } from 'commander';
-import { formatQuarantineNotice, type PullResult } from '../../sync/pull/index.js';
+import {
+  formatQuarantineNotice,
+  pullFromSnapshot,
+  type PullResult,
+} from '../../sync/pull/index.js';
 import { pullBatch, pullSingleArticle } from '../../sync/orchestrator.js';
 import { resolveArticleTarget } from '../../sync/diff.js';
 import { ApiError } from '../../client/error.js';
@@ -57,6 +61,7 @@ import {
   formatPreservedBlocksHint,
   formatPullStatusBreakdown,
   formatPullWindowLabel,
+  formatSnapshotFallbackNotice,
   formatTaxonomySyncFailure,
   formatTaxonomySyncSuccess,
 } from '../../presentation/pull_report.js';
@@ -351,9 +356,18 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       '--no-local-media-refs',
       'Disable a remembered local-media-ref preference and store canonical EmDash URLs on disk again.',
     )
+    .option(
+      '--from-snapshot',
+      'Restore article(s) offline from the local .emit/cache.db snapshot catalog (no network calls)',
+    )
+    .option(
+      '--stale-threshold-days <days>',
+      'Snapshot staleness warning threshold in days when using --from-snapshot (default: 30)',
+    )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (target, options, command) => {
-      const ctx = resolveContext(options.profile);
+      const fromSnapshot = Boolean(options.fromSnapshot);
+      const ctx = resolveContext(options.profile, { optionalAuth: fromSnapshot });
       const collection = options.collection || ctx.config.defaultCollection;
       const postsOnly = options.postsOnly === true;
 
@@ -395,6 +409,98 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             });
           }
           targetId = resolved.id;
+        }
+
+        if (fromSnapshot) {
+          const staleThresholdDays =
+            options.staleThresholdDays !== undefined
+              ? Number(options.staleThresholdDays)
+              : undefined;
+          if (
+            staleThresholdDays !== undefined &&
+            (!Number.isFinite(staleThresholdDays) || staleThresholdDays < 0)
+          ) {
+            throw new ApiError({
+              message: `Invalid --stale-threshold-days value: "${options.staleThresholdDays}"`,
+              code: 'ARTICLE_PULL_FAILED',
+              status: 400,
+              suggestion: 'Provide a non-negative integer for --stale-threshold-days.',
+            });
+          }
+
+          if (targetId) {
+            const res = pullFromSnapshot({
+              workspaceRoot: ctx.root,
+              cache: ctx.cache,
+              collection,
+              id: targetId,
+              force: options.force,
+              localMediaRefs,
+              staleThresholdDays,
+            });
+
+            if (res.localEditsPreserved) {
+              console.log(
+                `🛡️ Kept local edits for ${res.slug} (${res.filePath}; snapshot changes NOT applied).`,
+              );
+            } else if (res.skipped) {
+              console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);
+            } else {
+              console.log(`✅ Restored from snapshot: ${res.slug} -> ${res.filePath}`);
+            }
+
+            const notice = formatSnapshotFallbackNotice({
+              snapshotCapturedAt: res.snapshotCapturedAt,
+              warnings: res.warnings,
+              degradedFields: res.degradedFields,
+            });
+            if (notice) console.log(notice);
+
+            const hint = formatPreservedBlocksHint(res.preservedBlocks, '  ');
+            if (hint) console.log(hint);
+
+            const quarantineNotice = formatQuarantineNotice(res.quarantined);
+            if (quarantineNotice) console.log(`\n${quarantineNotice}`);
+            return;
+          }
+
+          const limit = resolvePostsSyncLimit(ctx.config);
+          const batchRes = pullFromSnapshot({
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            collection,
+            status: options.status,
+            limit,
+            force: options.force,
+            localMediaRefs,
+            staleThresholdDays,
+          });
+
+          const statusBreakdown = formatPullStatusBreakdown(options.status, batchRes.items);
+          console.log(
+            `\n🎉 Snapshot restore (${collection}): ${batchRes.total} total${statusBreakdown} (${batchRes.updated} updated, ${batchRes.skipped} skipped/up-to-date)`,
+          );
+          if (batchRes.preserved > 0) {
+            console.log(
+              `🛡️  ${batchRes.preserved} article(s) had unpushed local edits: Emit kept your local version.`,
+            );
+          }
+
+          const degradedUnion = Array.from(
+            new Set(batchRes.items.flatMap((i) => i.degradedFields)),
+          );
+          const notice = formatSnapshotFallbackNotice({
+            snapshotCapturedAt: batchRes.snapshotCapturedAt,
+            warnings: batchRes.warnings,
+            degradedFields: degradedUnion,
+          });
+          if (notice) console.log(`\n${notice}`);
+
+          for (const item of batchRes.items) {
+            const qNotice = formatQuarantineNotice(item.quarantined);
+            if (qNotice) console.log(`\n${qNotice}`);
+          }
+          return;
         }
 
         if (!targetId) {

@@ -337,4 +337,89 @@ describe('Workspace Metadata Snapshot Engine (v0.1.47 Phase 2)', () => {
     expect(healedRow?.taxonomyVerified).toBe(1);
     expect(JSON.parse(healedRow!.categoriesJson)).toEqual(['news']);
   });
+
+  it('refuses 0-GET reuse for v6 legacy snapshot rows (locale === null) and upgrades them to v7 via single GET', async () => {
+    const draftId = '01M7V6UPG00000000000000001';
+    cache.upsertSnapshotArticlesBatch({
+      collection: 'posts',
+      walkComplete: true,
+      records: [
+        {
+          id: draftId,
+          collection: 'posts',
+          slug: 'legacy-draft',
+          title: 'Legacy Draft',
+          status: 'draft',
+          comparisonRev: '1@draft:01M7D1',
+          bodyMarkdown: 'Old v6 body',
+          bodySource: 'single-get',
+          categoriesJson: '[]',
+          tagsJson: '[]',
+          taxonomyVerified: 1,
+          locale: null,
+          capturedAt: Date.now() - 1000,
+        },
+      ],
+    });
+
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/_emdash/api/openapi.json'))
+        return new Response(JSON.stringify({ paths: {} }), { status: 200 });
+      if (url.includes('/_emdash/api/taxonomies/'))
+        return new Response(JSON.stringify({ data: { terms: [] } }), { status: 200 });
+      if (url.includes('/_emdash/api/bylines'))
+        return new Response(JSON.stringify({ data: { items: [] } }), { status: 200 });
+      if (url.includes('/_emdash/api/content/posts?status=published'))
+        return new Response(JSON.stringify({ data: { items: [] } }), { status: 200 });
+      if (url.includes('/_emdash/api/content/posts?status=draft')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: draftId,
+                  slug: 'legacy-draft',
+                  status: 'draft',
+                  _rev: '1',
+                  version: 1,
+                  draftRevisionId: '01M7D1',
+                  data: { title: 'Legacy Draft', content: [] },
+                },
+              ],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(`/_emdash/api/content/posts/${draftId}`)) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: draftId,
+              locale: 'en',
+              data: { title: 'Legacy Draft', content: [] },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/terms/'))
+        return new Response(JSON.stringify({ data: { terms: [] } }), { status: 200 });
+      if (url.includes('/_emdash/api/media'))
+        return new Response(JSON.stringify({ data: { items: [] } }), { status: 200 });
+      throw new Error(`Unexpected: ${url}`);
+    });
+
+    const res = await captureWorkspaceSnapshot({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'tok',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(res.articleSingleGetCount).toBe(1);
+    expect(cache.getSnapshotArticle(draftId)?.locale).toBe('en');
+  });
 });

@@ -61,6 +61,12 @@ import {
 } from './quarantine.js';
 import { tryFastPathOrHeal } from './fast_path.js';
 import { mirrorArticleReferencedMedia, createMediaMirrorSession } from './media_stage.js';
+import {
+  pullFromSnapshot,
+  type PullFromSnapshotBatchResult,
+  type PullFromSnapshotOptions,
+  type PullFromSnapshotResult,
+} from './snapshot_pull.js';
 import type {
   FastPathContext,
   ListRemoteArticlesOptions,
@@ -87,6 +93,7 @@ export {
   formatQuarantineNotice,
   mirrorArticleReferencedMedia,
   createMediaMirrorSession,
+  pullFromSnapshot,
 };
 
 export type {
@@ -98,6 +105,9 @@ export type {
   PullResult,
   QuarantinedLocalCopy,
   RemoteArticleItem,
+  PullFromSnapshotOptions,
+  PullFromSnapshotResult,
+  PullFromSnapshotBatchResult,
 };
 
 /**

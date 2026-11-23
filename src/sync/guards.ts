@@ -96,6 +96,10 @@ export const OPERATIONAL_ERROR_CODES = [
   'MEDIA_LIST_FAILED',
   'MEDIA_SEARCH_QUERY_REQUIRED',
   'NETWORK_ERROR',
+  // snapshot fallback pull
+  'SNAPSHOT_NOT_AVAILABLE',
+  'SNAPSHOT_MISS',
+  'PULL_REQUIRED_BEFORE_PUSH',
   // delete transport (sync/delete.ts)
   'REMOTE_DELETE_FAILED',
   'REMOTE_DELETE_UNCONFIRMED',
@@ -376,6 +380,12 @@ const REMEDIATION_MAP: Record<string, string> = {
   FRONTMATTER_PARSE_ERROR:
     'Fix YAML frontmatter syntax errors between the opening and closing --- fences.',
   // Operational errors
+  SNAPSHOT_NOT_AVAILABLE:
+    'No captured snapshot exists for this collection. Run "emit snapshot capture" while online before using --from-snapshot.',
+  SNAPSHOT_MISS:
+    'The requested article was not found in the local snapshot. Connect to the network and run "emit pull <id>", or refresh with "emit snapshot capture".',
+  PULL_REQUIRED_BEFORE_PUSH:
+    'This article was restored from an offline snapshot and lacks a live Track 1 _rev token. Run "emit pull" online first (local edits will be preserved), then push.',
   PUSH_CREATE_FAILED:
     'Remote article creation failed. Check network connectivity, permissions, and verify that the slug is not taken on remote.',
   PUSH_FAILED:

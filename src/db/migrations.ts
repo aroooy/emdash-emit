@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPackageVersion } from '../utils/version.js';
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 6;
+export const CURRENT_CACHE_SCHEMA_VERSION = 7;
 
 function pruneBackups(dbPath: string): void {
   if (dbPath === ':memory:') return;
@@ -180,7 +180,7 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
     );
   `);
 
-  // 7. snapshot_articles table: full-library article metadata & verified body catalog (Schema v6)
+  // 7. snapshot_articles table: full-library article metadata & verified body catalog (Schema v6 / v7)
   db.exec(`
     CREATE TABLE IF NOT EXISTS snapshot_articles (
       id TEXT PRIMARY KEY,
@@ -198,6 +198,10 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
       categories_json TEXT NOT NULL DEFAULT '[]',
       tags_json TEXT NOT NULL DEFAULT '[]',
       taxonomy_verified INTEGER NOT NULL DEFAULT 1,
+      featured_image TEXT,
+      seo_json TEXT NOT NULL DEFAULT '{}',
+      locale TEXT,
+      bylines_json TEXT NOT NULL DEFAULT '[]',
       captured_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_snapshot_articles_collection ON snapshot_articles (collection);
@@ -406,6 +410,24 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
           throw err;
         }
       }
+    }
+
+    // Migration 7 (v7): extend snapshot_articles with featured_image, seo_json, locale, bylines_json
+    const snapshotArtCols = db.prepare("PRAGMA table_info('snapshot_articles');").all() as Array<
+      Record<string, unknown>
+    >;
+    const snapshotArtColNames = new Set(snapshotArtCols.map((c) => String(c.name)));
+    if (!snapshotArtColNames.has('featured_image')) {
+      db.exec('ALTER TABLE snapshot_articles ADD COLUMN featured_image TEXT;');
+    }
+    if (!snapshotArtColNames.has('seo_json')) {
+      db.exec("ALTER TABLE snapshot_articles ADD COLUMN seo_json TEXT NOT NULL DEFAULT '{}';");
+    }
+    if (!snapshotArtColNames.has('locale')) {
+      db.exec('ALTER TABLE snapshot_articles ADD COLUMN locale TEXT;');
+    }
+    if (!snapshotArtColNames.has('bylines_json')) {
+      db.exec("ALTER TABLE snapshot_articles ADD COLUMN bylines_json TEXT NOT NULL DEFAULT '[]';");
     }
 
     db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);

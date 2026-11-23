@@ -74,7 +74,15 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'SyncPruneConflictError',
   ]),
   push: new Set(['pushArticle', 'PushValidationError', 'PushResult']),
-  pull: new Set(['pullArticle', 'formatQuarantineNotice', 'PullResult']),
+  pull: new Set([
+    'pullArticle',
+    'formatQuarantineNotice',
+    'PullResult',
+    'pullFromSnapshot',
+    'PullFromSnapshotOptions',
+    'PullFromSnapshotResult',
+    'PullFromSnapshotBatchResult',
+  ]),
   new: new Set(['createArticleScaffold', 'DuplicateSlugError']),
   delete: new Set([
     'deleteArticle',

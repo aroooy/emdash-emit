@@ -23,7 +23,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
-import { formatQuarantineNotice } from '../../sync/pull/index.js';
+import { formatQuarantineNotice, pullFromSnapshot } from '../../sync/pull/index.js';
 import {
   pullBatch,
   pullSingleArticle,
@@ -43,6 +43,7 @@ import {
 } from '../../presentation/article_report.js';
 import {
   formatPreservedBlocksHint,
+  formatSnapshotFallbackNotice,
   formatTaxonomySyncFailure,
   formatTaxonomySyncSuccess,
 } from '../../presentation/pull_report.js';
@@ -107,6 +108,20 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .boolean()
         .optional()
         .describe('With includeMedia: download only metadata YAML, skip binary file downloads.'),
+      fromSnapshot: z
+        .boolean()
+        .optional()
+        .describe(
+          'Restore article(s) offline from the local .emit/cache.db snapshot catalog (no network calls)',
+        ),
+      staleThresholdDays: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Snapshot staleness warning threshold in days when using fromSnapshot (default: 30)',
+        ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) =>
@@ -121,6 +136,67 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
           filePath: args.filePath,
           id: args.id,
         });
+
+        if (args.fromSnapshot) {
+          if (targetId) {
+            const res = pullFromSnapshot({
+              workspaceRoot: ctx.root,
+              cache: ctx.cache,
+              collection,
+              id: targetId,
+              force: args.force,
+              localMediaRefs,
+              staleThresholdDays: args.staleThresholdDays,
+            });
+            const actionText = res.localEditsPreserved
+              ? 'ℹ️ Local edits preserved (snapshot changes were NOT applied)'
+              : res.skipped
+                ? 'ℹ️ Article is already up-to-date'
+                : '✅ Successfully restored article from snapshot';
+            const titleText = res.title ? ` "${res.title}"` : '';
+            const notice = formatSnapshotFallbackNotice({
+              snapshotCapturedAt: res.snapshotCapturedAt,
+              warnings: res.warnings,
+              degradedFields: res.degradedFields,
+            });
+            const quarantineNotice = formatQuarantineNotice(res.quarantined);
+            return formatToolTextWithMeta(
+              `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}\n\n${notice}${quarantineNotice ? `\n\n${quarantineNotice}` : ''}`,
+              ctx.meta,
+              'Offline snapshot restore complete. Run sync_pull when back online before pushing.',
+            );
+          }
+
+          const limit = resolvePostsSyncLimit(ctx.config);
+          const batchRes = pullFromSnapshot({
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            collection,
+            status: args.status,
+            limit,
+            force: args.force,
+            localMediaRefs,
+            staleThresholdDays: args.staleThresholdDays,
+          });
+          const degradedUnion = Array.from(
+            new Set(batchRes.items.flatMap((i) => i.degradedFields)),
+          );
+          const notice = formatSnapshotFallbackNotice({
+            snapshotCapturedAt: batchRes.snapshotCapturedAt,
+            warnings: batchRes.warnings,
+            degradedFields: degradedUnion,
+          });
+          const sampleLines = batchRes.items
+            .slice(0, 10)
+            .map((i) => `  - [${i.status}] ${i.filePath}${i.title ? ` (${i.title})` : ''}`);
+          const detailBlock =
+            sampleLines.length > 0 ? `\n\nRestored Articles:\n${sampleLines.join('\n')}` : '';
+          return formatToolTextWithMeta(
+            `✅ Restored ${batchRes.total} article(s) from snapshot (${batchRes.updated} updated, ${batchRes.skipped} skipped/up-to-date, ${batchRes.preserved} preserved).\n\n${notice}${detailBlock}`,
+            ctx.meta,
+            'Offline snapshot restore complete. Run sync_pull when back online before pushing.',
+          );
+        }
 
         if (targetId) {
           let singlePull: PullSingleArticleResult;

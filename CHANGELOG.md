@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.54] - 2026-11-23
+
+### Added
+
+- **Offline Snapshot Fallback Pull (`--from-snapshot` / `fromSnapshot`, `src/sync/pull/snapshot_pull.ts`, `src/presentation/pull_report.ts`)**:
+  - Added `emit pull [target] --from-snapshot [--stale-threshold-days <n>]` (works without an auth token via `optionalAuth: true`) and MCP `sync_pull(fromSnapshot?: true, staleThresholdDays?)` to restore articles from `.emit/cache.db` when offline with zero network calls.
+  - Supports both targeted single-article restore (throws epistemic `SNAPSHOT_MISS` when absent, never claiming remote absence) and batch 30+30 newest-first restore (with zero disk pruning, `[SNAPSHOT_FALLBACK captured_at=...]`, `[MEDIA_NOT_GUARANTEED]`, and `[SNAPSHOT_STALE]` warnings).
+  - Commits restored baselines through `commitArticleSnapshot()` using an explicit `snapshot:<comparisonRev>` sentinel in `base_snapshots.rev` (Track 1) and `comparisonRev` in `sync_state.remote_rev` (Track 2), so offline `emit status` and `emit diff` work out of the box.
+- **Push Sentinel Guard & Seamless Online Promotion (`src/sync/push/guards.ts`, `src/sync/pull/fast_path.ts`, `src/sync/guards.ts`)**:
+  - `evaluatePrePreflightGuards()` blocks pushing snapshot-restored baselines with `PULL_REQUIRED_BEFORE_PUSH` so `snapshot:...` never leaks into `PUT { _rev }`.
+  - Returning online and running `emit pull` confirms `isSameRev` in `tryFastPathOrHeal()` and upgrades `base_snapshots.rev` in-place to the live Track 1 `remoteRev` while preserving any offline local edits (`localEditsPreserved: true`), unblocking `emit push` without `--force`.
+- **Schema v7 (`snapshot_articles` Extension, `src/db/migrations.ts`, `src/db/cache.ts`, `src/client/mapper.ts`, `src/sync/snapshot/index.ts`)**:
+  - Extended `snapshot_articles` with `featured_image`, `seo_json`, `locale`, and `bylines_json` via conditional `ALTER TABLE` migration (preserving all `sync_state.local_hash` and `base_snapshots.hash` invariants).
+  - Updated `captureWorkspaceSnapshot()` to refresh bylines (`syncRemoteBylines()`), extract the 4 new columns (including from `baseFm` on 0-GET reuse), and require a single `GET` instead of 0-GET reuse on pre-v7 rows (`locale === null`). Uses `row.locale === null` to accurately distinguish v6 degraded rows from v7 empty fields.
+
 ## [0.1.53] - 2026-11-23
 
 ### Added

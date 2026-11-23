@@ -135,6 +135,10 @@ export interface SnapshotArticleRecord {
   categoriesJson: string;
   tagsJson: string;
   taxonomyVerified: number;
+  featuredImage?: string | null;
+  seoJson?: string;
+  locale?: string | null;
+  bylinesJson?: string;
   capturedAt: number;
 }
 
@@ -830,9 +834,11 @@ export class CacheDatabase {
           id, collection, slug, title, status,
           created_at, updated_at, published_at, comparison_rev,
           excerpt, body_markdown, body_source,
-          categories_json, tags_json, taxonomy_verified, captured_at
+          categories_json, tags_json, taxonomy_verified,
+          featured_image, seo_json, locale, bylines_json,
+          captured_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const keepIds = new Set<string>();
@@ -854,6 +860,10 @@ export class CacheDatabase {
           rec.categoriesJson,
           rec.tagsJson,
           rec.taxonomyVerified,
+          rec.featuredImage ?? null,
+          rec.seoJson ?? '{}',
+          rec.locale ?? null,
+          rec.bylinesJson ?? '[]',
           rec.capturedAt,
         );
       }
@@ -998,6 +1008,13 @@ export class CacheDatabase {
       categoriesJson: String(row.categories_json ?? '[]'),
       tagsJson: String(row.tags_json ?? '[]'),
       taxonomyVerified: Number(row.taxonomy_verified ?? 1),
+      featuredImage:
+        row.featured_image !== null && row.featured_image !== undefined
+          ? String(row.featured_image)
+          : null,
+      seoJson: String(row.seo_json ?? '{}'),
+      locale: row.locale !== null && row.locale !== undefined ? String(row.locale) : null,
+      bylinesJson: String(row.bylines_json ?? '[]'),
       capturedAt: Number(row.captured_at),
     };
   }

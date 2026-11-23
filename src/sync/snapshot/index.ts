@@ -23,6 +23,12 @@
 import { extractComparisonRev, isSameRev, unwrapEnvelope } from '../../client/api.js';
 import { articleContentEndpoint } from '../../client/endpoints.js';
 import { createAuthedFetch } from '../../client/http.js';
+import {
+  extractBylinesFromRaw,
+  extractFeaturedImageFromRaw,
+  extractLocaleFromRaw,
+  extractSeoFromRaw,
+} from '../../client/mapper.js';
 import { portableTextToMarkdown, type PortableTextBlock } from '../../client/portable-text.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type {
@@ -41,6 +47,7 @@ import {
   pullTaxonomies,
 } from '../taxonomies.js';
 import { fetchAssignedTaxonomies } from '../terms.js';
+import { syncRemoteBylines } from '../bylines.js';
 import type {
   SnapshotCaptureOptions,
   SnapshotCaptureResult,
@@ -124,6 +131,21 @@ export async function captureWorkspaceSnapshot(
 
   const localTaxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
 
+  // Also refresh bylines table in cache.db (1 GET, non-fatal fallback to cached maps)
+  let bylineIdToSlug: Record<string, string> = {};
+  try {
+    const bylineMaps = await syncRemoteBylines({
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      cache: options.cache,
+      fetchFn,
+    });
+    bylineIdToSlug = bylineMaps.idToSlug;
+  } catch {
+    bylineIdToSlug = options.cache.getBylineMaps().idToSlug;
+  }
+
   // Stage 2: Walk all remote articles (published + draft)
   const remoteItems = await listRemoteArticles(collection, {
     origin: options.origin,
@@ -175,9 +197,15 @@ export async function captureWorkspaceSnapshot(
         syncState!.taxonomyConflictPending !== 1 &&
         isSameRev(syncState!.remoteRev, comparisonRev);
 
-      // (a) Resolve verified bodyMarkdown & bodySource (A-1: Draft Selective Single GET Invariant)
+      const baseFm = syncStateClean && baseSnapshot ? readBaselineFrontmatter(baseSnapshot) : null;
+
+      // (a) Resolve verified bodyMarkdown, bodySource & v7 metadata columns (A-1: Draft Selective Single GET Invariant)
       let bodyMarkdown = '';
       let bodySource: SnapshotBodySource = 'list-live';
+      let featuredImage: string | null = extractFeaturedImageFromRaw(rawObj) ?? null;
+      let seoJson = JSON.stringify(extractSeoFromRaw(rawObj) ?? {});
+      let locale = extractLocaleFromRaw(rawObj);
+      let bylinesJson = JSON.stringify(extractBylinesFromRaw(rawObj, bylineIdToSlug));
 
       if (!needsSingleGetForBody) {
         bodyMarkdown = extractBodyMarkdownFromRaw(rawObj);
@@ -185,13 +213,25 @@ export async function captureWorkspaceSnapshot(
       } else if (syncStateClean && baseSnapshot) {
         bodyMarkdown = baseSnapshot.bodyMarkdown;
         bodySource = 'single-get';
+        if (baseFm) {
+          featuredImage = baseFm.featuredImage ?? null;
+          seoJson = JSON.stringify(baseFm.seo ?? {});
+          locale = baseFm.locale || locale;
+          bylinesJson = JSON.stringify(baseFm.bylines ?? []);
+        }
       } else if (
         prevSnapshot &&
+        prevSnapshot.locale !== null &&
+        prevSnapshot.locale !== undefined &&
         isSameRev(prevSnapshot.comparisonRev, comparisonRev) &&
         prevSnapshot.bodySource === 'single-get'
       ) {
         bodyMarkdown = prevSnapshot.bodyMarkdown;
         bodySource = 'single-get';
+        featuredImage = prevSnapshot.featuredImage ?? null;
+        seoJson = prevSnapshot.seoJson ?? '{}';
+        locale = prevSnapshot.locale;
+        bylinesJson = prevSnapshot.bylinesJson ?? '[]';
       } else {
         try {
           articleSingleGetCount++;
@@ -209,6 +249,10 @@ export async function captureWorkspaceSnapshot(
             const detailJson = unwrapEnvelope<Record<string, unknown>>(await detailRes.json());
             bodyMarkdown = extractBodyMarkdownFromRaw(detailJson);
             bodySource = 'single-get';
+            featuredImage = extractFeaturedImageFromRaw(detailJson) ?? null;
+            seoJson = JSON.stringify(extractSeoFromRaw(detailJson) ?? {});
+            locale = extractLocaleFromRaw(detailJson);
+            bylinesJson = JSON.stringify(extractBylinesFromRaw(detailJson, bylineIdToSlug));
           } else {
             bodyMarkdown = extractBodyMarkdownFromRaw(rawObj);
             bodySource = 'list-stale';
@@ -224,7 +268,6 @@ export async function captureWorkspaceSnapshot(
       let tags: string[] = [];
       let taxonomyVerified = 1;
 
-      const baseFm = syncStateClean && baseSnapshot ? readBaselineFrontmatter(baseSnapshot) : null;
       const baseHasTax =
         baseFm?.taxonomies &&
         typeof baseFm.taxonomies === 'object' &&
@@ -300,6 +343,10 @@ export async function captureWorkspaceSnapshot(
         categoriesJson: JSON.stringify(categories),
         tagsJson: JSON.stringify(tags),
         taxonomyVerified,
+        featuredImage,
+        seoJson,
+        locale,
+        bylinesJson,
         capturedAt,
       };
     }
