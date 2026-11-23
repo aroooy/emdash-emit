@@ -89,7 +89,7 @@ emit pull [target] [options]
 - `--media`: Also run a bounded media library pass (`mediaSyncLimit`, default `100`).
 - `--metadata-only`: With `--media` or on-demand media mirroring, write companion `.yaml` metadata only without downloading binary image files.
 - `--local-media-refs` / `--no-local-media-refs`: Enable (default-ON) or disable rewriting mirrored body image URLs on disk to article-relative `../../media/<storageKey>` paths, persisting the choice to `.emit/config.json`.
-- `--from-snapshot`: Restore article(s) offline from the local `.emit/cache.db` snapshot catalog with zero network calls (works without an auth token). Stores a `snapshot:<comparisonRev>` sentinel in `base_snapshots.rev` so offline `status`/`diff` work while `push` is blocked (`PULL_REQUIRED_BEFORE_PUSH`) until the next online `pull`.
+- `--from-snapshot`: Restore article(s) offline from the local `.emit/cache.db` snapshot catalog with zero network calls (works without an auth token). Stores a `snapshot:<comparisonRev>` sentinel in `base_snapshots.rev` so offline `status`/`diff` work while `push` is blocked (`PULL_REQUIRED_BEFORE_PUSH`) until the next online `pull`. Unlike online `emit pull`, batch snapshot restore intentionally performs **no disk pruning** so local files outside the snapshot window remain untouched.
 - `--stale-threshold-days <days>`: Snapshot staleness warning threshold in days when using `--from-snapshot` (default: `30`).
 - `-p, --profile <name>`: Explicitly select a connection profile.
 
