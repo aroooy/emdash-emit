@@ -99,6 +99,7 @@ describe('Emit MCP Server', () => {
       'sync_doctor',
       'sync_media_search',
       'sync_push_media',
+      'sync_delete_media',
     ];
 
     const registered = (
@@ -1193,6 +1194,21 @@ Inline body
         caption: 'MCP YAML Caption',
       });
       expect(putPayloads).toEqual([{ alt: 'MCP YAML Alt', caption: 'MCP YAML Caption' }]);
+
+      // v0.1.53: sync_delete_media dryRun and execution
+      const delDry = await registered['sync_delete_media'].handler({
+        targets: [`media/${stem}.yaml`],
+        dryRun: true,
+      });
+      expect(delDry.isError).toBeUndefined();
+      const delParsed = JSON.parse(delDry.content[0].text) as {
+        dryRun: boolean;
+        total: number;
+        report: string;
+      };
+      expect(delParsed.dryRun).toBe(true);
+      expect(delParsed.total).toBe(1);
+      expect(delParsed.report).toContain('would delete:');
     } finally {
       globalThis.fetch = origFetch;
     }

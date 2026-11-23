@@ -339,3 +339,41 @@ export interface PushMediaItemResult {
 export interface PushMediaResult {
   items: PushMediaItemResult[];
 }
+
+export const LOCAL_REFERENCE_SCAN_ONLY_WARNING =
+  '[LOCAL_REFERENCE_SCAN_ONLY] references from articles outside this workspace are NOT checked';
+
+export interface DeleteMediaOptions {
+  workspaceRoot: string;
+  origin: string;
+  token?: string;
+  refreshToken?: string;
+  targets: string[];
+  collection?: string;
+  dryRun?: boolean;
+  noBackup?: boolean;
+  cache?: CacheDatabase;
+  fetchFn?: typeof fetch;
+}
+
+export interface DeleteMediaItemResult {
+  target: string;
+  action: 'deleted' | 'already-deleted' | 'refused' | 'error';
+  mediaId?: string;
+  storageKey?: string;
+  filePath?: string;
+  yamlPath?: string;
+  backupPaths?: string[];
+  size?: number | null;
+  referencedBy?: string[];
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export interface DeleteMediaResult {
+  dryRun: boolean;
+  items: DeleteMediaItemResult[];
+  warnings: string[];
+}

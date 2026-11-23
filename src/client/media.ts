@@ -350,6 +350,54 @@ export async function updateRemoteMediaMetadata(
 }
 
 /**
+ * Deletes a single media record on remote via `DELETE /_emdash/api/media/{mediaId}`.
+ * Returns `{ deleted: true, notFound: false }` on 2xx, `{ deleted: false, notFound: true }` on 404,
+ * and throws `ApiError` (`REMOTE_MEDIA_DELETE_FAILED`) on other HTTP errors.
+ */
+export async function deleteRemoteMedia(
+  mediaId: MediaRecordId | string,
+  options: {
+    origin: string;
+    token: string;
+    refreshToken?: string;
+    fetchFn?: typeof fetch;
+  },
+): Promise<{ deleted: boolean; notFound: boolean }> {
+  const fetchFn = createAuthedFetch(options);
+  const itemUrl = mediaDetailEndpoint(options.origin, mediaId);
+  const res = await fetchFn(itemUrl, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      Accept: 'application/json',
+    },
+  });
+
+  if (res.status === 404) {
+    return { deleted: false, notFound: true };
+  }
+
+  if (!res.ok) {
+    let errText = '';
+    try {
+      errText = await res.text();
+    } catch {
+      errText = res.statusText;
+    }
+    throw new ApiError({
+      message:
+        `Failed to delete media "${mediaId}" on remote: HTTP ${res.status} ${errText}`.trim(),
+      code: 'REMOTE_MEDIA_DELETE_FAILED',
+      status: res.status,
+      endpoint: `/_emdash/api/media/${mediaId}`,
+      suggestion: 'Check network connectivity and token permissions, then retry.',
+    });
+  }
+
+  return { deleted: true, notFound: false };
+}
+
+/**
  * Compensating transaction for failed uploads after `POST /_emdash/api/media/upload-url`
  * has created a pending record on the server.
  *

@@ -1,10 +1,10 @@
-# Safety Guardrails (G1–G19), Diagnostics, Search & Troubleshooting
+# Safety Guardrails (G1–G20), Diagnostics, Search & Troubleshooting
 
-This document is the authoritative specification for Emit's 19 safety guardrails (`src/sync/guards.ts`, `src/sync/preflight.ts`), static guard registry verification rules (`tests/guards.test.ts`), `emit doctor` diagnostic vectors (`src/sync/doctor.ts`), epistemic search invariants (`src/sync/article_search/`, `src/sync/media/`), and troubleshooting FAQ.
+This document is the authoritative specification for Emit's 20 safety guardrails (`src/sync/guards.ts`, `src/sync/preflight.ts`, `src/sync/media/delete_media.ts`), static guard registry verification rules (`tests/guards.test.ts`), `emit doctor` diagnostic vectors (`src/sync/doctor.ts`), epistemic search invariants (`src/sync/article_search/`, `src/sync/media/`), and troubleshooting FAQ.
 
 ---
 
-## 1. Safety Guardrails Registry (G1–G19)
+## 1. Safety Guardrails Registry (G1–G20)
 
 All safety guardrails are centrally registered in `GUARD_REGISTRY` (`src/sync/guards.ts`) with remediation guidance:
 
@@ -29,14 +29,15 @@ All safety guardrails are centrally registered in `GUARD_REGISTRY` (`src/sync/gu
 | **G17** | `TAXONOMY_APPLY_PENDING` | Blocks bare re-push when a prior push succeeded on body PUT but failed on taxonomy POST (`taxonomy_apply_pending = 1`); requires `--allow-unapplied-taxonomies` or `--force`. | Error |
 | **G18** | `DUPLICATE_SLUG_CONFLICT` | Offline pre-check during `emit new` / `sync_new` that blocks creating a scaffold whose slug already exists in local `draft/`, `published/`, or SQLite cache index. | Error |
 | **G19** | `DESTRUCTIVE_TAXONOMY_WIPE` | Blocks pushing empty taxonomy arrays (`categories: []` / `tags: []`) that would wipe existing remote assignments; requires `--allow-wipe-taxonomies`, `--resolve-taxonomy`, or `--force` (auto-bypassed when pre-PUT remote audit confirms `remoteCount === 0`). | Error |
+| **G20** | `MEDIA_IN_USE_PROTECTION` | Blocks `emit delete-media` / `sync_delete_media` before any network request when a target media asset is referenced by any local workspace article (`draft/`, `published/`, or `conflicts/`, excluding `.deleted.md` backups). Has no bypass flag; remove the reference from the article first. Always reports `[LOCAL_REFERENCE_SCAN_ONLY]`. | Error |
 
 ### Guard Registry Static Verification Invariants (`tests/guards.test.ts` Rules 1–5)
 
 1. **Rule 1 (Inclusion Check)**: Every guard code declared in `GUARD_REGISTRY` must appear in `src/`.
 2. **Rule 2 (Rogue Code Exclusion)**: Every error code emitted anywhere in `src/` must be classified in `GUARD_REGISTRY`, `OPERATIONAL_ERROR_CODES`, or `PROTECTION_ERROR_CODES`.
-3. **Rule 3 (Mutual Exclusivity & Sequential IDs)**: Guard error codes must not overlap across sets, and Guard IDs (`1..19`) must be strictly sequential without gaps.
+3. **Rule 3 (Mutual Exclusivity & Sequential IDs)**: Guard error codes must not overlap across sets, and Guard IDs (`1..20`) must be strictly sequential without gaps.
 4. **Rule 4 (Code-less Guard Validation)**: Validates runtime behavior for informational/auto-trim guards (`G1`, `G7`, `G8`, `G11` label).
-5. **Rule 5 (Test Coverage Enforcement)**: Every one of the 20 unique guard error codes must appear as an explicit string literal in `tests/` (excluding dynamic registry tests `tests/guards.test.ts` and `tests/presentation_symmetry.test.ts`).
+5. **Rule 5 (Test Coverage Enforcement)**: Every one of the 21 unique guard error codes across 17 active guards must appear as an explicit string literal in `tests/` (excluding dynamic registry tests `tests/guards.test.ts` and `tests/presentation_symmetry.test.ts`).
 
 ---
 

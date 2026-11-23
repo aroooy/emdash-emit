@@ -36,6 +36,25 @@ export interface PruneProtectionSets {
   protectedStems: Set<string>;
   /** Record ULIDs named by frontmatter `featuredImage` or a body ULID, already upper-cased. */
   protectedRecordIds: Set<string>;
+  /**
+   * Maps each protected stem to the sorted, deduplicated list of workspace-relative article paths
+   * referencing that stem (used by Guard G20 `MEDIA_IN_USE_PROTECTION`).
+   */
+  referencingFilesByStem: Map<string, string[]>;
+  /**
+   * Maps each protected D1 media record ID (uppercase) to the sorted, deduplicated list of
+   * workspace-relative article paths referencing that record ID.
+   */
+  referencingFilesByRecordId: Map<string, string[]>;
+}
+
+function addReferencingFile(map: Map<string, Set<string>>, key: string, relPath: string): void {
+  let set = map.get(key);
+  if (!set) {
+    set = new Set<string>();
+    map.set(key, set);
+  }
+  set.add(relPath);
 }
 
 /**
@@ -64,8 +83,10 @@ export function collectPruneProtectionSets(
 ): PruneProtectionSets {
   const protectedStems = new Set<string>();
   const protectedRecordIds = new Set<string>();
+  const stemFileSets = new Map<string, Set<string>>();
+  const recordIdFileSets = new Map<string, Set<string>>();
 
-  for (const { fullPath } of iterWorkspaceArticles(workspaceRoot, collection, {
+  for (const { relPath, fullPath } of iterWorkspaceArticles(workspaceRoot, collection, {
     includeConflicts: true,
   })) {
     let content: string;
@@ -79,18 +100,40 @@ export function collectPruneProtectionSets(
 
     for (const descriptor of collectArticleStorageKeys(content)) {
       const stem = storageKeyToMarkdownRef(descriptor.storageKey);
-      if (stem) protectedStems.add(stem);
+      if (stem) {
+        protectedStems.add(stem);
+        addReferencingFile(stemFileSets, stem, relPath);
+      }
       // The article-relative spelling (`../../media/<storageKey>`) names the mirror outright, so its
       // extension-stripped basename is a second accepted stem for the same asset.
       const key = descriptor.storageKey;
       const withoutExt = key.replace(/\.[A-Za-z0-9]{1,11}$/, '');
-      if (withoutExt && withoutExt !== key) protectedStems.add(withoutExt);
+      if (withoutExt && withoutExt !== key) {
+        protectedStems.add(withoutExt);
+        addReferencingFile(stemFileSets, withoutExt, relPath);
+      }
     }
 
     for (const mediaId of collectArticleReferencedMediaIds(content)) {
-      protectedRecordIds.add(mediaId.toUpperCase());
+      const upper = mediaId.toUpperCase();
+      protectedRecordIds.add(upper);
+      addReferencingFile(recordIdFileSets, upper, relPath);
     }
   }
 
-  return { protectedStems, protectedRecordIds };
+  const referencingFilesByStem = new Map<string, string[]>();
+  for (const [k, set] of stemFileSets.entries()) {
+    referencingFilesByStem.set(k, Array.from(set).sort());
+  }
+  const referencingFilesByRecordId = new Map<string, string[]>();
+  for (const [k, set] of recordIdFileSets.entries()) {
+    referencingFilesByRecordId.set(k, Array.from(set).sort());
+  }
+
+  return {
+    protectedStems,
+    protectedRecordIds,
+    referencingFilesByStem,
+    referencingFilesByRecordId,
+  };
 }

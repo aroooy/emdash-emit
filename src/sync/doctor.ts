@@ -681,7 +681,7 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
           // ignore corrupted individual yaml
         }
       } else if (!f.startsWith('.')) {
-        if (f !== 'drafts') {
+        if (f !== 'drafts' && f !== '_trash') {
           nonYamlMediaFiles.add(f);
         }
         // media/<markdownRef>.<ext>: the stem is the sanitized storageKey, so it is recorded whole and

@@ -33,6 +33,8 @@ import {
   PublishedArticleDeletionForbiddenError,
 } from '../sync/delete.js';
 import { CanonicalHasUnpushedEditsError, QuarantinedPathRequiredError } from '../sync/conflicts.js';
+import { MediaInUseDeletionForbiddenError } from '../sync/media/index.js';
+import { formatMediaDeleteReport } from '../presentation/media_report.js';
 
 function toolError(text: string): CallToolResult {
   return {
@@ -212,6 +214,30 @@ export function formatToolError(error: unknown, meta?: McpMeta): CallToolResult 
           message: error.message,
           filePath: error.filePath,
           collection: error.collection,
+          suggestion: error.suggestion,
+          ...(meta ? { _meta: meta } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (error instanceof MediaInUseDeletionForbiddenError) {
+    return toolError(
+      JSON.stringify(
+        {
+          error: error.code,
+          message: error.message,
+          referencedBy: error.referencedBy,
+          items: error.items,
+          report: formatMediaDeleteReport({
+            dryRun: false,
+            items: error.items,
+            warnings: [
+              '[LOCAL_REFERENCE_SCAN_ONLY] references from articles outside this workspace are NOT checked',
+            ],
+          }),
           suggestion: error.suggestion,
           ...(meta ? { _meta: meta } : {}),
         },

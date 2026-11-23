@@ -8,7 +8,7 @@ This document specifies Emit's Local-First media pipeline (`src/sync/media/`, `s
 
 ## 1. Architecture of `src/sync/media/`
 
-`src/sync/media/` is organized into 11 focused modules (imported internally via `src/sync/media/index.js`; `src/sync/media.ts` is reserved strictly for the public `src/index.ts` npm façade):
+`src/sync/media/` is organized into 13 focused modules (imported internally via `src/sync/media/index.js`; `src/sync/media.ts` is reserved strictly for the public `src/index.ts` npm façade):
 
 1. **`types.ts`**: Shared interfaces, constants (`MEDIA_BINARY_EXTENSIONS`, `MEDIA_LIST_PAGE_SIZE`, `MEDIA_SEARCH_MAX_LIMIT`), and result shapes (zero runtime functions).
 2. **`naming_mirror.ts`**: `mediaMirrorNames()`, `resolveMarkdownRefCollision()`, `mediaRecordIdForStem()`, and duplicate cleanup (`cleanupDuplicateMediaFilesForId`).
@@ -19,8 +19,10 @@ This document specifies Emit's Local-First media pipeline (`src/sync/media/`, `s
 7. **`body_scan.ts`**: `collectArticleStorageKeys()` — extracts referenced `storageKey`s from Markdown bodies (both standard image links and `<!--ec:block ... -->` opaque fences) and resolves local mirrors.
 8. **`pull_article.ts`**: `pullArticleMedia()` — targeted on-demand mirroring for a single article's `featuredImage` and body images.
 9. **`pull_library.ts`**: `pullMediaLibrary()` — batch/full media library synchronization, targeted `--storage-key` pulls, and index-based orphan pruning.
-10. **`prune_protect.ts`**: Scans workspace articles (`draft/`, `published/`, and `conflicts/`, excluding `.deleted.md` backups) to protect any media asset still referenced locally from being pruned.
-11. **`push_media.ts`**: `pushMedia()` — unified standalone image upload (`media/drafts/*` move promotion or external path copy promotion) and remote metadata synchronization (`PUT /_emdash/api/media/{mediaId}` from flags or editable companion `media/<stem>.yaml`).
+10. **`prune_protect.ts`**: Scans workspace articles (`draft/`, `published/`, and `conflicts/`, excluding `.deleted.md` backups) to protect any media asset still referenced locally from being pruned or deleted (`referencingFilesByStem`, `referencingFilesByRecordId`).
+11. **`target_resolve.ts`**: Shared target resolution helpers (`expandHomePath`, `isExplicitLocalPathTarget`, companion YAML and `media_state` lookups) used by `push_media.ts` and `delete_media.ts`.
+12. **`push_media.ts`**: `pushMedia()` — unified standalone image upload (`media/drafts/*` move promotion or external path copy promotion) and remote metadata synchronization (`PUT /_emdash/api/media/{mediaId}` from flags or editable companion `media/<stem>.yaml`).
+13. **`delete_media.ts`**: `deleteMedia()` — standalone remote and local media deletion with Guard **G20 (`MEDIA_IN_USE_PROTECTION`)**, offline `--dry-run`, status precondition check, and post-DELETE rescue backup move into `media/_trash/<stem>.deleted.*`.
 
 ---
 
@@ -114,6 +116,13 @@ A `storageKey`-derived stem frequently starts with a 26-character ULID (the stor
 - **Editable Working Copy (`media/<stem>.yaml`)**: Companion `.yaml` files under `media/` serve as editable working copies for `alt` and `caption`. Running `emit push-media media/<stem>.yaml` (or passing `media/<stem>.<ext>` when its companion `.yaml` has a valid 26-char `id:`) reads `alt` and `caption` from the YAML (or from `--alt` / `--caption` override flags, including `""` empty-string clearing) and sends `PUT /_emdash/api/media/{mediaId}`, preserving all other companion fields (`id`, `filename`, `mimeType`, `size`, `width`, `height`, `storageKey`, `contentHash`, `status`, `url`, `createdAt`).
 - **Source File Protection on Standalone Upload**: When uploading a new image via `emit push-media <path>`, files under `media/drafts/` are **moved** into `media/<markdownRef>.<ext>`, whereas files outside `media/drafts/` (such as `~/Pictures/photo.jpg`) are **copied** into `media/<markdownRef>.<ext>` so the user's original file is preserved.
 - **Deduplication Metadata Sync (Last-Writer-Wins)**: When an upload hits local `media_state` cache reuse or server-side `sha1:<hex>` deduplication (`existing: true`), non-empty `alt` / `caption` values are synced to `PUT /_emdash/api/media/{mediaId}` following a **last-writer-wins** rule for shared media records. When `alt` and `caption` are omitted or empty during automatic deduplication, zero `PUT` requests are sent.
+- **Server-Authoritative `createdAt` & Non-Scope of EXIF Ordering**: `createdAt` is assigned by the EmDash server when the D1 media record ULID is issued (= upload order). Emit never parses EXIF metadata and exposes no client-side upload sorting options.
+
+### 3.4 Standalone Media Deletion & Guard G20 (`emit delete-media` / `sync_delete_media`)
+
+- **Target Resolution (`src/sync/media/delete_media.ts`)**: Accepts `media/<stem>.yaml`, `media/<stem>.<ext>` (resolved strictly via companion `.yaml` `id:`), a 26-character D1 `mediaId`, or an R2 `storageKey` (resolved to its D1 `mediaId` before calling `DELETE /_emdash/api/media/{mediaId}`).
+- **Guard G20 (`MEDIA_IN_USE_PROTECTION`)**: Before any network request, `collectPruneProtectionSets()` scans all local workspace articles (`draft/`, `published/`, `conflicts/`, excluding `.deleted.md` backups). Any target referenced in an article body or `featuredImage` is refused with `MEDIA_IN_USE_PROTECTION` and its `referencedBy` list (no `--force` bypass). Every report carries `[LOCAL_REFERENCE_SCAN_ONLY] references from articles outside this workspace are NOT checked`.
+- **Atomicity & Post-DELETE Rescue Backup (`media/_trash/`)**: Only after `DELETE /_emdash/api/media/{mediaId}` succeeds (or `GET` confirms 404 `already-deleted`) does Emit move local mirror files into `media/_trash/<stem>.deleted.yaml` and `media/_trash/<stem>.deleted.<ext>` (skipped when `--no-backup` is passed) and delete the `media_state` cache row. If remote `DELETE` fails, local files and `media/_trash/` remain completely untouched.
 
 ---
 

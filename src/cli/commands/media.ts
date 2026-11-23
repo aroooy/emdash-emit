@@ -23,12 +23,14 @@
 import type { Command } from 'commander';
 import {
   collectLocalMirrorIndex,
+  deleteMedia,
   pushMedia,
   searchLocalMirrorMedia,
   searchRemoteMedia,
 } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
 import {
+  formatMediaDeleteReport,
   formatMediaSearchEmptyNotice,
   formatMediaSearchHeader,
   formatMediaSearchHit,
@@ -169,7 +171,7 @@ export function registerPushMediaCommand(
   program
     .command('push-media <targets...>')
     .description(
-      'Upload local image file(s) to remote EmDash media library and/or sync alt/caption metadata from flags or local media/<stem>.yaml',
+      'Upload local image file(s) to remote EmDash media library and/or sync alt/caption metadata from flags or local media/<stem>.yaml (Note: createdAt is server-assigned at upload time; Emit does not parse EXIF or sort uploads)',
     )
     .option(
       '--alt <text>',
@@ -210,6 +212,60 @@ export function registerPushMediaCommand(
               );
             }
           }
+        } catch (err) {
+          reportActionFailure(err);
+        }
+      },
+    );
+}
+
+export function registerDeleteMediaCommand(
+  program: Command,
+  resolveContext: CliContextResolver,
+): void {
+  program
+    .command('delete-media <targets...>')
+    .description(
+      'Safely delete media asset(s) from remote EmDash and local media/ mirror (enforces Guard G20 reference protection and backs up local mirror to media/_trash/)',
+    )
+    .option('--dry-run', 'Preview deletion and local reference checks without deleting anything')
+    .option(
+      '--no-backup',
+      'Skip moving local mirror files into media/_trash/ after remote deletion',
+    )
+    .option(
+      '-c, --collection <collection>',
+      'Target collection to scan for references (defaults to "posts")',
+    )
+    .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
+    .action(
+      async (
+        targets: string[],
+        options: {
+          dryRun?: boolean;
+          backup?: boolean;
+          noBackup?: boolean;
+          collection?: string;
+          profile?: string;
+        },
+      ) => {
+        try {
+          const isDryRun = Boolean(options.dryRun);
+          const ctx = resolveContext(options.profile, { optionalAuth: isDryRun });
+          const noBackup = options.backup === false || Boolean(options.noBackup);
+          const result = await deleteMedia({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth?.token,
+            refreshToken: ctx.auth?.refreshToken,
+            targets,
+            collection: options.collection || ctx.config.defaultCollection,
+            dryRun: isDryRun,
+            noBackup,
+            cache: ctx.cache,
+          });
+
+          console.log(formatMediaDeleteReport(result));
         } catch (err) {
           reportActionFailure(err);
         }

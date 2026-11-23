@@ -23,8 +23,8 @@ Before modifying any subsystem or debugging domain behavior, consult the corresp
 | **Two Media Identifier Spaces (`id` vs `storageKey`)** | **[docs/media-id-spaces.md](docs/media-id-spaces.md)** | **Mandatory reading before debugging any missing or 404 image.** Defines D1 record `id` vs R2 `storageKey`, endpoint matrices, and migrated-corpus behavior. |
 | **Local-First Media Pipeline, Mirror Naming & Pruning** | **[docs/media-pipeline.md](docs/media-pipeline.md)** | Modifying `src/sync/media/*`, `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path rewriting, `storageKeyToMarkdownRef` naming, or media pruning. |
 | **Taxonomies (Two-Layer Representation) & Bylines** | **[docs/taxonomies-and-bylines.md](docs/taxonomies-and-bylines.md)** | Modifying category/tag sync, percent-encoded (Layer A) vs decoded CJK (Layer B) slugs, collision resolution, 0-GET deleted term auto-healing, or remote taxonomy audit. |
-| **Safety Guardrails (G1–G19), Doctor, Search & FAQ** | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` epistemic rules (`[WALK_INCOMPLETE]`). |
-| **CLI Commands & MCP Tools Complete Reference** | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** | Inspecting or updating CLI flags (18 top-level commands + 10 subcommands) or MCP tool schemas (16 tools). |
+| **Safety Guardrails (G1–G20), Doctor, Search & FAQ** | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` epistemic rules (`[WALK_INCOMPLETE]`). |
+| **CLI Commands & MCP Tools Complete Reference** | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** | Inspecting or updating CLI flags (19 top-level commands + 10 subcommands) or MCP tool schemas (17 tools). |
 
 ---
 
@@ -73,7 +73,8 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
 3. **Two Media ID Spaces & Mirror Naming Invariant (`docs/media-id-spaces.md`, `docs/media-pipeline.md`)**:
    - EmDash assets have two unrelated 26-char ULIDs: D1 record `id` (used by `featuredImage` and `GET /_emdash/api/media/{id}`) and R2 `storageKey` (used by `/_emdash/api/media/file/{storageKey}` and `media_state` PK). Never interchange them.
    - Local mirrors are named strictly from `storageKeyToMarkdownRef(storageKey)` (`media/<markdownRef>.<ext>` + `.yaml`), with `<stem>--<mediaId>` only on confirmed stem collision. Ownership (`mediaRecordIdForStem`) is read exclusively from companion YAML `id:`, never parsed from filenames.
-   - Media pruning seeds active IDs solely from remote records when `walkComplete === true`, protecting any mirror still referenced in `draft/`, `published/`, or `conflicts/`.
+   - Media pruning seeds active IDs solely from remote records when `walkComplete === true`, protecting any mirror still referenced in `draft/`, `published/`, or `conflicts/`. Standalone media deletion (`emit delete-media` / `sync_delete_media`) enforces Guard **G20 (`MEDIA_IN_USE_PROTECTION`)** against local workspace articles (`[LOCAL_REFERENCE_SCAN_ONLY]`, no bypass flag) and moves deleted local mirrors into `media/_trash/<stem>.deleted.*` only after remote `DELETE` succeeds.
+   - **Media Ordering Is Server-Authoritative (Declared Non-Scope)**: Emit never parses image metadata (EXIF), never sorts uploads to influence `createdAt`, and never attempts to rewrite or re-sort remote media records. List order derives from EmDash's ULID-keyed record IDs (`ORDER BY id DESC` = newest-first).
    - **Epistemic Media Rule**: A 404 from `GET /_emdash/api/media/{id}` proves only that an ID-space lookup failed. Emit must **never** assert that a D1 record is missing and must **never** recommend a SQL `INSERT`.
 4. **Dual-Track Image & AST Fidelity Invariant (`docs/markdown-and-ast.md`)**:
    - **Track A (Tier 1 Plain Images)**: Standard images without layout attributes serialize as `![alt](../../media/<storageKey>.<ext>)` for offline editor preview.
@@ -100,7 +101,7 @@ Every core invariant is paired with the structural mechanism (Architecture, Type
 | **Non-CLI Stdio Logging Prohibition** | Static Test | `tests/layering.test.ts` (Axis 5: prohibits `console.log`/`console.debug` outside `src/cli/`) |
 | **1. Two-Track Revision (`revForTransport` vs `revForComparison`)** | Runtime & Unit Test | `src/client/api.ts` (`extractRev`, `extractComparisonRev`, `isSameRev`), `tests/api_rev.test.ts`, `tests/push_transport_rev.test.ts`, `tests/commit_symmetry.test.ts` |
 | **2. Two-Layer Representation (Canonical Layer A vs Disk Layer B)** | Architecture & Unit Test | `src/sync/baseline-reconstruction.ts`, `src/utils/disk-spelling.ts`, `tests/taxonomies_two_layer.test.ts`, `tests/local_media_refs.test.ts` |
-| **3. Two Media ID Spaces (`MediaRecordId` vs `StorageKey`)** | Type System (Branded Types) | `src/utils/media-id.ts` (`MediaRecordId`, `StorageKey`), `tests/media_id.test.ts` |
+| **3. Two Media ID Spaces (`MediaRecordId` vs `StorageKey`), G20 & Server-Authoritative Ordering** | Type System & Guard Registry | `src/utils/media-id.ts` (`MediaRecordId`, `StorageKey`), `src/sync/media/delete_media.ts` (G20 `MEDIA_IN_USE_PROTECTION`), `tests/media_id.test.ts`, `tests/delete_media.test.ts`, `tests/media_upload.test.ts` (declared non-scope: zero EXIF / sort payload fields) |
 | **4. Dual-Track Image & AST Fidelity (Tier 1 vs Tier 3 `ec:block`)** | Guard Registry & Static Test | `src/sync/guards.ts` (G5, G8, G9, G11), `tests/guards.test.ts` (Rules 1–5), `tests/portable-text.test.ts` |
 | **5. Diagnostic Lenient Parse & `retrackLocalHashOnly`** | Static Test & Unit Test | • `parseMarkdownLenient` & `gray-matter` isolation: `tests/layering.test.ts` (Axis 7)<br>• `saveSyncState` / `retrackLocalHashOnly` isolation: `tests/layering.test.ts` (Axis 6) & `tests/baseline_reconstruction.test.ts`<br>• `reconstructBaseline` / `isLocalFileUnmodified` parity: `tests/baseline_reconstruction.test.ts` & `tests/diagnostic_draft_alignment.test.ts` |
 | **6. Epistemic Search (`[WALK_INCOMPLETE]`) & Offline Doctor** | Runtime & Unit Test | `tests/article_search.test.ts`, `tests/media_search.test.ts`, `tests/doctor.test.ts` |
@@ -158,7 +159,7 @@ When drafting, reviewing, or updating blog articles, AI agents must follow the *
    - **Staging Protection (Guard G3)**: Keep `status: draft` unless explicitly asked to publish (`allowPublish: true`).
 5. **Quarantine & Conflict Resolution (`posts/conflicts/`, Guards G6, G12–G17, G19)**:
    - Never push a rescue copy under `posts/conflicts/` (blocked by Guard G12). Use `sync_conflicts` (`list`, `diff`, `resolve`, `prune`) to inspect or resolve quarantined copies.
-   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G19 specification and remediation flags.
+   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G20 specification and remediation flags.
 
 ---
 

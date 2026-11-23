@@ -31,7 +31,7 @@
  * Verified against src/ via tests/guards.test.ts to guarantee zero drift.
  */
 
-export type GuardStage = 'cli-mcp' | 'preflight' | 'push' | 'conflicts' | 'new';
+export type GuardStage = 'cli-mcp' | 'preflight' | 'push' | 'conflicts' | 'new' | 'media-delete';
 export type GuardSeverity = 'error' | 'warning' | 'info';
 
 export interface GuardMeta {
@@ -84,6 +84,8 @@ export const OPERATIONAL_ERROR_CODES = [
   'MEDIA_METADATA_UPDATE_REQUIRED',
   'INVALID_MEDIA_COMPANION',
   'MEDIA_COMPANION_NOT_FOUND',
+  'REMOTE_MEDIA_DELETE_FAILED',
+  'MEDIA_DELETE_PRECONDITION_FAILED',
   // list / fetch failures
   'ARTICLE_LIST_FAILED',
   'ARTICLE_PULL_FAILED',
@@ -290,6 +292,15 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     source: 'src/sync/push/taxonomy_plan.ts:155-186, src/sync/push/merge_stage.ts:181-195',
     description: 'タクソノミー全削除等の破壊的操作抑止',
   },
+  {
+    id: 20,
+    name: 'MEDIA_IN_USE_PROTECTION',
+    codes: ['MEDIA_IN_USE_PROTECTION'],
+    stage: 'media-delete',
+    severity: 'error',
+    source: 'src/sync/media/delete_media.ts:39',
+    description: 'ローカル記事から参照中のメディア削除を拒否（バイパスなし・ローカルスキャンのみ）',
+  },
 ] as const;
 
 /**
@@ -354,6 +365,9 @@ const REMEDIATION_MAP: Record<string, string> = {
   // G19
   DESTRUCTIVE_TAXONOMY_WIPE:
     'Pushing with an empty taxonomy set would wipe all remote categories/tags. Verify taxonomy assignments or specify explicit terms.',
+  // G20
+  MEDIA_IN_USE_PROTECTION:
+    'Remove the image reference(s) from the referencing local article(s) and push the article changes before deleting this media asset.',
   // Standing protections
   UNPUSHED_CHANGES_PROTECTION:
     'The article has unpushed modifications. Push changes first with "emit push" or specify force if deletion is intentional.',
@@ -382,6 +396,10 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Ensure the target is a valid media/<stem>.yaml companion file containing a 26-character D1 media record ID ("id:").',
   MEDIA_COMPANION_NOT_FOUND:
     'Verify the companion YAML path under media/<stem>.yaml or run "emit pull-media" to mirror remote media metadata.',
+  REMOTE_MEDIA_DELETE_FAILED:
+    'Remote media deletion failed. Verify network connectivity, token permissions, and remote media service status.',
+  MEDIA_DELETE_PRECONDITION_FAILED:
+    'Only "ready" media records can be deleted via delete-media. Pending or failed upload records are managed automatically by upload compensation.',
 };
 
 /**

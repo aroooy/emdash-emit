@@ -21,7 +21,12 @@
  */
 
 import { ApiError } from '../client/error.js';
+import { formatMediaDeleteReport } from '../presentation/media_report.js';
 import { CanonicalHasUnpushedEditsError, QuarantinedPathRequiredError } from '../sync/conflicts.js';
+import {
+  LOCAL_REFERENCE_SCAN_ONLY_WARNING,
+  MediaInUseDeletionForbiddenError,
+} from '../sync/media/index.js';
 import { SyncPruneConflictError } from '../sync/orchestrator.js';
 import { PushValidationError } from '../sync/push/index.js';
 import { FrontmatterParseError } from '../utils/frontmatter.js';
@@ -48,6 +53,16 @@ export function reportActionFailure(error: unknown): never {
     }
   } else if (error instanceof ApiError) {
     console.error(error.toActionableString());
+  } else if (error instanceof MediaInUseDeletionForbiddenError) {
+    console.error(
+      formatMediaDeleteReport({
+        dryRun: false,
+        items: error.items,
+        warnings: [LOCAL_REFERENCE_SCAN_ONLY_WARNING],
+      }),
+    );
+    console.error(error.message);
+    console.error(`💡 Suggestion: ${error.suggestion}`);
   } else if (error instanceof CanonicalHasUnpushedEditsError) {
     console.error(`❌ ${error.message}`);
     console.error(`💡 Suggestion: ${error.suggestion}`);

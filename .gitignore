@@ -8,6 +8,7 @@ bin/
 
 # Emit Workspace & SQLite Cache
 .emit/
+media/_trash/
 *.db
 *.db-wal
 *.db-shm

@@ -26,6 +26,7 @@ import {
   OFFLINE_SEARCH_EMPTY_NOTICE,
   type MediaSearchSnapshotView,
 } from './article_report.js';
+import type { DeleteMediaItemResult, DeleteMediaResult } from '../sync/media/index.js';
 
 export interface MediaSearchHitView {
   mediaId: string;
@@ -167,4 +168,70 @@ export function formatTagSearchHints(tags: Array<{ slug: string }>): string | nu
   if (tags.length === 0) return null;
   const topTags = tags.slice(0, 10).map((t) => `#${t.slug}`);
   return `Tag search hints: ${topTags.join(', ')}`;
+}
+
+/**
+ * Formats a single media deletion item line for CLI / MCP reports.
+ */
+function formatMediaDeleteItemLines(item: DeleteMediaItemResult, dryRun: boolean): string[] {
+  const sizeStr = formatSize(item.size);
+  const metaParts: string[] = [];
+  if (item.storageKey) metaParts.push(`storageKey ${item.storageKey}`);
+  if (sizeStr) metaParts.push(sizeStr);
+  const metaSuffix = metaParts.length > 0 ? ` (${metaParts.join(', ')})` : '';
+  const idPart = item.mediaId ? ` -> mediaId ${item.mediaId}` : '';
+
+  if (item.action === 'refused') {
+    const refs = (item.referencedBy ?? []).join(', ');
+    return [
+      `   ⛔ refused [MEDIA_IN_USE_PROTECTION]: ${item.target}${idPart} -> referenced by ${refs}`,
+    ];
+  }
+
+  if (item.action === 'error') {
+    const code = item.error?.code ?? 'ERROR';
+    const msg = item.error?.message ?? 'Unknown error';
+    return [`   ❌ error [${code}]: ${item.target}${idPart} -> ${msg}`];
+  }
+
+  if (item.action === 'already-deleted') {
+    const backupNote =
+      item.backupPaths && item.backupPaths.length > 0
+        ? ` (backed up to ${item.backupPaths.join(', ')})`
+        : '';
+    return [`   ⚠️ already deleted on remote: ${item.target}${idPart}${metaSuffix}${backupNote}`];
+  }
+
+  if (dryRun) {
+    return [
+      `   ✔ would delete: ${item.target}${idPart}${metaSuffix}`,
+      `     refs: none (local workspace scan only)`,
+    ];
+  }
+
+  const backupNote =
+    item.backupPaths && item.backupPaths.length > 0
+      ? ` (backed up to ${item.backupPaths.join(', ')})`
+      : '';
+  return [`   ✔ deleted: ${item.target}${idPart}${metaSuffix}${backupNote}`];
+}
+
+/**
+ * Formats the unified media deletion report shared by CLI (`emit delete-media`) and MCP (`sync_delete_media`).
+ */
+export function formatMediaDeleteReport(result: DeleteMediaResult): string {
+  const count = result.items.length;
+  const noun = count === 1 ? '1 target' : `${count} targets`;
+  const drySuffix = result.dryRun ? ' — DRY RUN' : '';
+  const lines: string[] = [`🗑️  Media Deletion (${noun})${drySuffix}`];
+
+  for (const item of result.items) {
+    lines.push(...formatMediaDeleteItemLines(item, result.dryRun));
+  }
+
+  for (const w of result.warnings) {
+    lines.push(`   ${w}`);
+  }
+
+  return lines.join('\n');
 }

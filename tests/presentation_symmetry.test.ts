@@ -368,5 +368,6 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
       'utf-8',
     );
     expect(mcpArticleSearchSrc).toContain('formatArticleSearchWalkIncompleteNotice');
+    expect(remediationFor('MEDIA_IN_USE_PROTECTION')).toContain('referencing local article');
   });
 });

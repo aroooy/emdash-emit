@@ -1,6 +1,6 @@
 # CLI Command & MCP Tool Complete Reference
 
-This document provides the complete reference for all **18 top-level CLI commands** (plus **10 subcommands**) and all **16 Model Context Protocol (MCP) tools** in Emit (`emdash-emit`).
+This document provides the complete reference for all **19 top-level CLI commands** (plus **10 subcommands**) and all **17 Model Context Protocol (MCP) tools** in Emit (`emdash-emit`).
 
 ---
 
@@ -239,6 +239,22 @@ emit push-media <targets...> [--alt <text>] [--caption <text>] [-p, --profile <n
   - **Mode B (local image file)**: If the image is an already-mirrored `media/<stem>.<ext>` with a valid companion `media/<stem>.yaml` `id:`, deterministically routes to Mode A metadata update. Otherwise validates via `probeLocalImageFile()`, uploads via the 4-phase upload contract (or dedup), and mirrors into `media/<markdownRef>.<ext>` + `.yaml` (moving files from `media/drafts/*` and copying external paths so originals are preserved).
   - **Mode C (`<mediaId>` or `<storageKey>`)**: Resolves `storageKey` to its 26-character D1 `mediaId` (never passing `storageKey` directly to `PUT /_emdash/api/media/{mediaId}`) and updates remote metadata.
 - `--alt <text>` / `--caption <text>`: Explicit metadata values to set (pass `""` to clear an existing value).
+- **Note on Media Ordering**: `createdAt` is server-assigned when the D1 record ULID is issued (= upload order). Emit never parses EXIF metadata and exposes no upload sorting flags.
+
+---
+
+### 12c. `emit delete-media`
+
+Safely deletes one or more media records from the remote EmDash server and local `media/` mirror, enforcing Guard **G20 (`MEDIA_IN_USE_PROTECTION`)** and moving deleted local files into `media/_trash/<stem>.deleted.*`.
+
+```bash
+emit delete-media <targets...> [--dry-run] [--no-backup] [-c, --collection <collection>] [-p, --profile <name>]
+```
+
+- `<targets...>`: One or more local mirror files (`media/<stem>.<ext>` or `media/<stem>.yaml`), R2 `storageKey`s, or 26-character D1 `mediaId`s. (`storageKey` is resolved to its D1 `mediaId` before `DELETE /_emdash/api/media/{mediaId}`).
+- `--dry-run`: Offline preview of target resolution and Guard G20 local reference checks (`0` network calls; works without an auth token in CLI).
+- `--no-backup`: Unlink local mirror files directly after remote `DELETE` instead of moving them to `media/_trash/<stem>.deleted.*`.
+- `-c, --collection <collection>`: Collection to scan for local references (defaults to `"posts"`). Every report includes `[LOCAL_REFERENCE_SCAN_ONLY] references from articles outside this workspace are NOT checked`.
 
 ---
 
@@ -306,7 +322,7 @@ emit mcp [-w, --workspace <path>]
 
 ## Part 2: Model Context Protocol (MCP) Tool Reference
 
-All 16 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
+All 17 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) to every response and format errors via `formatToolError()` with error codes and remediation suggestions.
 
 | # | MCP Tool Name | CLI Equivalent | Key Parameters (Zod Schema) | Description |
 | --- | --- | --- | --- | --- |
@@ -321,8 +337,9 @@ All 16 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 9 | `sync_pull_taxonomies` | `emit pull-taxonomies` | `profile?` | Standalone sync of remote categories and tags into `categories/*.yaml` and `tags/*.yaml`. |
 | 10 | `sync_pull_media` | `emit pull-media` | `article?`, `storageKey?`, `limit?`, `all?`, `noPrune?`, `downloadFiles?`, `profile?` | Mirror media assets by article (`article`), specific key (`storageKey`), or bounded library window (`mediaSyncLimit`). |
 | 11 | `sync_push_media` | `emit push-media` | `targets` *(required, `string[]`)*, `alt?`, `caption?`, `profile?` | Upload standalone local image file(s) (`media/drafts/*` move or external copy) and/or sync `alt`/`caption` metadata from flags or local `media/<stem>.yaml`. |
-| 12 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
-| 13 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
-| 14 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
-| 15 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
-| 16 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |
+| 12 | `sync_delete_media` | `emit delete-media` | `targets` *(required, `string[]`)*, `dryRun?`, `noBackup?`, `collection?`, `profile?` | Delete unreferenced media asset(s) from remote and local `media/` with Guard G20 (`MEDIA_IN_USE_PROTECTION`) and rescue backup to `media/_trash/` (MCP requires an authenticated profile even for `dryRun`). |
+| 13 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
+| 14 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
+| 15 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
+| 16 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
+| 17 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |

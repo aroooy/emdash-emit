@@ -1516,6 +1516,19 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       };
       expect(detailsMixed.unreferenced.some((u) => u.hasBinary === true)).toBe(true);
       expect(detailsMixed.unreferenced.some((u) => u.hasBinary === false)).toBe(true);
+
+      // v0.1.53: media/_trash/ rescue directory must NOT trigger unattributable media warning
+      const trashDir = path.join(mediaDir, '_trash');
+      fs.mkdirSync(trashDir, { recursive: true });
+      fs.writeFileSync(path.join(trashDir, '01M6TRASH.deleted.yaml'), 'id: 01M6TRASH\n', 'utf8');
+      const reportWithTrash = await runWorkspaceDoctor({
+        workspaceRoot: tempDir,
+        cache,
+        config: loadConfig(tempDir),
+      });
+      const checkWithTrash = reportWithTrash.checks.find((c) => c.id === 'media_isolated');
+      expect(checkWithTrash?.status).toBe('ok');
+      expect(JSON.stringify(checkWithTrash?.details ?? '')).not.toContain('_trash');
     });
   });
 });

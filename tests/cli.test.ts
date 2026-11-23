@@ -70,6 +70,7 @@ describe('Emit CLI (Commander)', () => {
     expect(commandNames).toContain('profile');
     expect(commandNames).toContain('media-search');
     expect(commandNames).toContain('push-media');
+    expect(commandNames).toContain('delete-media');
   });
 
   it('delete command exposes safety options', () => {
@@ -1863,6 +1864,20 @@ describe('Emit CLI (Commander)', () => {
         ]);
         expect(logLines.join('\n')).toContain(`Updated metadata for media/${stem}.yaml`);
         expect(logLines.join('\n')).toContain(`mediaId: ${mediaId}`);
+
+        // v0.1.53: emit delete-media --dry-run works without token
+        delete process.env.EMDASH_TOKEN;
+        logLines.length = 0;
+        await program.parseAsync([
+          'node',
+          'emit',
+          'delete-media',
+          `media/${stem}.yaml`,
+          '--dry-run',
+        ]);
+        expect(logLines.join('\n')).toContain('Media Deletion (1 target) — DRY RUN');
+        expect(logLines.join('\n')).toContain('would delete:');
+        expect(logLines.join('\n')).toContain('[LOCAL_REFERENCE_SCAN_ONLY]');
       } finally {
         globalThis.fetch = origFetch;
         if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;

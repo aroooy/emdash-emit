@@ -43,6 +43,7 @@ import { registerSyncDeleteTool } from './tools/sync-delete.js';
 import { registerSyncConflictsTool } from './tools/sync-conflicts.js';
 import { registerSyncDoctorTool } from './tools/sync-doctor.js';
 import { registerSyncMediaSearchTool } from './tools/sync-media-search.js';
+import { registerSyncDeleteMediaTool } from './tools/sync-delete-media.js';
 import { registerSyncArticleSearchTool } from './tools/sync-article-search.js';
 import { registerSyncSnapshotTool } from './tools/sync-snapshot.js';
 import { getPackageVersion } from '../utils/version.js';
@@ -97,7 +98,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
 7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical'). Overwriting canonical files with unpushed edits requires force: true (G13).
 8. [DOCTOR]: Use sync_doctor to diagnose workspace health (version compatibility, origin consistency, frontmatter integrity, conflicts/quarantine, and media references). For a revoked or mis-scoped token, pass checkAuth: true — it makes exactly one authenticated request and reports whether the origin accepts your credentials (remediation: emit profile set-token).
-9. [MEDIA]: Referenced media in articles is mirrored on-demand automatically by sync_pull. To upload standalone local images before writing an article or to update alt/caption metadata on existing media records (via flags or after editing media/<stem>.yaml), use sync_push_media. If targeted media pull is needed for an article, use sync_pull_media with article: <ULID>. Do NOT use sync_pull_media with all: true in routine workflows (it downloads all binary files from remote and can overwhelm disk and bandwidth). If diagnosing unresolved media references, check sync_doctor with checkMediaLibrary: true first, and read docs/media-id-spaces.md before chasing a missing image.
+9. [MEDIA]: Referenced media in articles is mirrored on-demand automatically by sync_pull. To upload standalone local images before writing an article or to update alt/caption metadata on existing media records (via flags or after editing media/<stem>.yaml), use sync_push_media (Note: createdAt is server-assigned at upload time; Emit never parses EXIF or sorts uploads). To delete an unreferenced media asset from remote and local media/ (with Guard G20 local reference protection and automatic rescue backup to media/_trash/), use sync_delete_media. If targeted media pull is needed for an article, use sync_pull_media with article: <ULID>. Do NOT use sync_pull_media with all: true in routine workflows (it downloads all binary files from remote and can overwhelm disk and bandwidth). If diagnosing unresolved media references, check sync_doctor with checkMediaLibrary: true first, and read docs/media-id-spaces.md before chasing a missing image.
 10. [ARTICLE SEARCH]: Use sync_article_search to search remote articles by keyword, date range (since/until), status, slug, category, or tag. Returns matching articles with ULID and local mirror state. Use this to find and target past articles outside the default sync window before pulling with sync_pull(id: "..."). Set offline: true to search local Markdown files only.
 All tool responses include "_meta" context describing profile, workspace directory, origin, and resolution mechanism.
 `.trim();
@@ -243,6 +244,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   registerSyncConflictsTool(server, resolveContext);
   registerSyncDoctorTool(server, resolveContext);
   registerSyncMediaSearchTool(server, resolveContext);
+  registerSyncDeleteMediaTool(server, resolveContext);
   registerSyncArticleSearchTool(server, resolveContext);
   registerSyncSnapshotTool(server, resolveContext);
 

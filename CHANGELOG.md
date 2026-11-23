@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.53] - 2026-11-23
+
+### Added
+
+- **Standalone Media Deletion & Guard G20 (`emit delete-media` / `sync_delete_media`, `src/sync/media/delete_media.ts`, `src/sync/media/target_resolve.ts`, `src/client/media.ts`, `src/cli/commands/media.ts`, `src/mcp/tools/sync-delete-media.ts`, `src/presentation/media_report.ts`)**:
+  - Added `emit delete-media <targets...> [--dry-run] [--no-backup] [-c, --collection <collection>] [-p, --profile <name>]` and MCP tool `sync_delete_media(targets, dryRun?, noBackup?, collection?, profile?)` to complete the media lifecycle alongside `pull-media` and `push-media`.
+  - **Shared Target Resolution (`src/sync/media/target_resolve.ts`)**: Resolves `media/<stem>.yaml`, `media/<stem>.<ext>` (strictly via companion `.yaml` `id:`), 26-character D1 `mediaId`, or R2 `storageKey` (reverse-resolved to D1 `mediaId` before calling `DELETE /_emdash/api/media/{mediaId}`).
+  - **Guard G20 (`MEDIA_IN_USE_PROTECTION`, `MediaInUseDeletionForbiddenError`)**: Evaluates `collectPruneProtectionSets()` (extended with `referencingFilesByStem` and `referencingFilesByRecordId`) before any network request, refusing deletion of any asset referenced in local workspace articles (`draft/`, `published/`, `conflicts/`, excluding `.deleted.md` backups) with no bypass flag and `[LOCAL_REFERENCE_SCAN_ONLY]` epistemic notice.
+  - **Offline `--dry-run` & Post-DELETE Rescue Backup (`media/_trash/`)**: `--dry-run` performs 0 network requests (and runs without an auth token in CLI). In execution mode, local mirror files are moved into `media/_trash/<stem>.deleted.yaml` and `media/_trash/<stem>.deleted.<ext>` (excluded from `emit doctor` unattributable media warnings) only after remote `DELETE` succeeds.
+
+### Changed
+
+- **Server-Authoritative Media Ordering Policy (`AGENTS.md`, `docs/media-pipeline.md`, `docs/cli-and-mcp-reference.md`)**:
+  - Codified as an architectural invariant (Invariant 3) that media `createdAt` and list order derive exclusively from EmDash's server-issued ULIDs (= upload order); Emit never parses EXIF metadata and exposes no client-side upload sorting flags.
+
 ## [0.1.52] - 2026-11-23
 
 ### Added
