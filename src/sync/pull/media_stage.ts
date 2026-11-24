@@ -781,7 +781,10 @@ export function restoreSnapshotReferencedMedia(options: {
   const mirrorIndex = collectLocalMirrorIndex(workspaceRoot, cache);
 
   for (const storageKey of storageKeys) {
-    if (mirrorIndex.has(storageKey)) {
+    // Only skip when the physical mirror binary actually exists on disk. A
+    // `media_state` record alone (e.g. after the user accidentally deleted
+    // `media/<file>` by hand) must not block re-materialization from cache.
+    if (mirrorIndex.get(storageKey)?.localPath) {
       skipped++;
       continue;
     }

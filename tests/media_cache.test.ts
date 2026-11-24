@@ -300,6 +300,60 @@ describe('Offline Media Cache & Materialize (v0.1.56)', () => {
     expect(formatMediaCacheSummary(byBytes)).toContain('[MEDIA_CACHE_BUDGET');
   });
 
+  it('selects budgeted cache candidates newest-first (created_at DESC) on mixed-age libraries', async () => {
+    // buildOnlineMock stamps createdAt '2026-11-20T00:00:00.000Z'; override the
+    // mock locally so item 3 is the newest and items 1/2 are ancient.
+    const oldDate = '2013-01-01T00:00:00.000Z';
+    const newDate = '2026-11-24T00:00:00.000Z';
+    const items = [1, 2, 3].map((i) => ({
+      id: `01M8MED00000000000000000${10 + i}`,
+      storageKey: `01M8KEY00000000000000000${10 + i}.png`,
+      filename: `img${i}.png`,
+      mimeType: 'image/png',
+      bytes: Buffer.alloc(50, i),
+    }));
+    const counts = { fileGets: 0 };
+    const baseFetch = buildOnlineMock([], items, counts);
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/_emdash/api/media?')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: items.map((m, idx) => ({
+                id: m.id,
+                storageKey: m.storageKey,
+                filename: m.filename,
+                mimeType: m.mimeType,
+                size: m.bytes.byteLength,
+                createdAt: idx === 2 ? newDate : oldDate,
+              })),
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+
+    const res = await captureWorkspaceSnapshot({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'tok',
+      includeMedia: true,
+      mediaCacheLimit: 1,
+      fetchFn,
+    });
+    expect(res.mediaCached).toBe(1);
+    expect(res.mediaCacheBudgetHit).toBe(true);
+
+    // The newest asset (item 3) must own the single budget slot.
+    expect(cache.getSnapshotMediaByStorageKey(items[2].storageKey)?.cachedAt).toBeTypeOf('number');
+    expect(cache.getSnapshotMediaByStorageKey(items[0].storageKey)?.cachedAt).toBeNull();
+    expect(cache.getSnapshotMediaByStorageKey(items[1].storageKey)?.cachedAt).toBeNull();
+  });
+
   it('falls back to copyFileSync when linkSync fails, detects corrupt cache, and respects restoreMedia: false', async () => {
     const postId = '01M8POST000000000000000002';
     const mediaId = '01M8MED0000000000000000002';
@@ -394,6 +448,62 @@ describe('Offline Media Cache & Materialize (v0.1.56)', () => {
     expect(corruptRes.mediaMissing).toBe(1);
     expect(corruptRes.warnings.some((w) => w.includes('[MEDIA_CACHE_CORRUPT'))).toBe(true);
     expect(corruptRes.warnings.some((w) => w.includes('[MEDIA_NOT_GUARANTEED]'))).toBe(true);
+  });
+
+  it('re-materializes from cache when the mirror binary was deleted but media_state persists', async () => {
+    const postId = '01M8POST000000000000000006';
+    const mediaId = '01M8MED0000000000000000006';
+    const storageKey = '01M8KEY0000000000000000006.png';
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 11, 12, 13, 14]);
+
+    await captureWorkspaceSnapshot({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'tok',
+      includeMedia: true,
+      fetchFn: buildOnlineMock(
+        [
+          {
+            id: postId,
+            slug: 'deleted-mirror-post',
+            title: 'Deleted Mirror',
+            status: 'published',
+            storageKey,
+          },
+        ],
+        [
+          {
+            id: mediaId,
+            storageKey,
+            filename: 'deleted.png',
+            mimeType: 'image/png',
+            bytes: pngBytes,
+          },
+        ],
+        { fileGets: 0 },
+      ),
+    });
+
+    // Simulate a prior pull (media_state record + mirror exist), then the user
+    // accidentally deletes the physical binary from media/.
+    const firstRes = pullFromSnapshot({ workspaceRoot: tempDir, cache, id: postId });
+    expect(firstRes.mediaRestored).toBe(1);
+    const mirrorPath = path.join(tempDir, 'media', storageKey);
+    expect(fs.existsSync(mirrorPath)).toBe(true);
+    fs.rmSync(mirrorPath, { force: true });
+
+    // Second offline pull must restore from media/_cache/, not skip on the
+    // stale media_state record alone.
+    const secondRes = pullFromSnapshot({ workspaceRoot: tempDir, cache, id: postId });
+    expect(secondRes.mediaRestored).toBe(1);
+    expect(secondRes.mediaMissing).toBe(0);
+    expect(fs.existsSync(mirrorPath)).toBe(true);
+    expect(sha256(fs.readFileSync(mirrorPath))).toBe(sha256(pngBytes));
+
+    // With the binary present again, a third pull skips (no wasteful rewrite).
+    const thirdRes = pullFromSnapshot({ workspaceRoot: tempDir, cache, id: postId });
+    expect(thirdRes.mediaRestored).toBe(0);
   });
 
   it('isolates media/_cache/ from doctor, local search, pullMedia prune, and deleteMedia', async () => {

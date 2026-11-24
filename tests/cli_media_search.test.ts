@@ -393,7 +393,9 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
       expect(mcpPayload.absenceGuaranteed).toBe(true);
       expect(mcpPayload.hits).toHaveLength(2);
       const mcpKeys = mcpPayload.hits.map((h: { storageKey: string }) => h.storageKey);
-      expect(mcpKeys).toEqual(['01M6KEY000000000000000001.jpg', '01M6KEY000000000000000002.png']);
+      // Snapshot rows are listed newest-first (ORDER BY created_at DESC), so the
+      // newer mountain.png precedes the older landscape.jpg.
+      expect(mcpKeys).toEqual(['01M6KEY000000000000000002.png', '01M6KEY000000000000000001.jpg']);
 
       // Cross-check: CLI output contains every storageKey from MCP payload
       for (const key of mcpKeys) {

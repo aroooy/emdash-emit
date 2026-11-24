@@ -660,6 +660,71 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     migrated.close();
   });
 
+  it('lists snapshot_media newest-first (created_at DESC) so budgeted cache picks newest assets', () => {
+    const ts1 = 1730000000000;
+    // Insert deliberately oldest-first to prove the query orders, not insertion order.
+    cache.upsertSnapshotMediaBatch({
+      walkComplete: true,
+      records: [
+        {
+          mediaId: '01M6OLD0000000000000000001',
+          storageKey: '01M6OLD0000000000000000001.jpg',
+          filename: 'ancient-2013.jpg',
+          mimeType: 'image/jpeg',
+          size: 10,
+          alt: null,
+          caption: null,
+          createdAt: '2013-01-01T00:00:00.000Z',
+          capturedAt: ts1,
+        },
+        {
+          mediaId: '01M6MED0000000000000000002',
+          storageKey: '01M6MED0000000000000000002.jpg',
+          filename: 'recent.jpg',
+          mimeType: 'image/jpeg',
+          size: 20,
+          alt: null,
+          caption: null,
+          createdAt: '2026-11-20T00:00:00.000Z',
+          capturedAt: ts1,
+        },
+        {
+          mediaId: '01M6NEW0000000000000000003',
+          storageKey: '01M6NEW0000000000000000003.jpg',
+          filename: 'newest.png',
+          mimeType: 'image/png',
+          size: 30,
+          alt: null,
+          caption: null,
+          createdAt: '2026-11-24T00:00:00.000Z',
+          capturedAt: ts1,
+        },
+        {
+          mediaId: '01M6NULL0000000000000000004',
+          storageKey: '01M6NULL0000000000000000004.jpg',
+          filename: 'migrated-no-meta.jpg',
+          mimeType: 'image/jpeg',
+          size: 40,
+          alt: null,
+          caption: null,
+          createdAt: null,
+          capturedAt: ts1,
+        },
+      ],
+    });
+
+    const listed = cache.listSnapshotMedia();
+    expect(listed.map((r) => r.mediaId)).toEqual([
+      '01M6NEW0000000000000000003',
+      '01M6MED0000000000000000002',
+      '01M6OLD0000000000000000001',
+      // NULL created_at sorts last in DESC — unknown-age migrated records fall
+      // to the back of the budget instead of masquerading as newest.
+      '01M6NULL0000000000000000004',
+    ]);
+    cache.close();
+  });
+
   it('v0.1.47 Phase 1: upserts snapshot articles/media (including null storageKey) and prunes only when walkComplete is true', () => {
     const ts1 = 1730000000000;
     const res1 = cache.upsertSnapshotArticlesBatch({

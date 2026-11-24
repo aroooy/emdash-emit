@@ -453,7 +453,10 @@ export async function captureWorkspaceSnapshot(
       if (!rec.storageKey) continue;
       const fileName = toMediaCacheFileName(rec.storageKey);
       if (!fileName) continue;
-      if (mirrorIndex.has(rec.storageKey)) {
+      // Physical-presence criterion only: a `media_state` record without an
+      // on-disk mirror binary (user deleted `media/<file>` by hand) must NOT
+      // exempt the key from re-caching — same invariant as restoreSnapshotReferencedMedia.
+      if (mirrorIndex.get(rec.storageKey)?.localPath) {
         mediaCacheSkipped++;
         continue;
       }
@@ -467,6 +470,15 @@ export async function captureWorkspaceSnapshot(
     }
 
     mediaCacheTotalCandidates = candidates.length;
+
+    // Deterministic newest-first budget consumption (mirrors listSnapshotMedia's
+    // ORDER BY created_at DESC; guards against a single point of failure on the
+    // DB query order). NULL createdAt normalizes to '' and sorts last.
+    candidates.sort(
+      (a, b) =>
+        (b.rec.createdAt ?? '').localeCompare(a.rec.createdAt ?? '') ||
+        b.rec.mediaId.localeCompare(a.rec.mediaId),
+    );
 
     const toDownload: typeof candidates = [];
     let plannedBytes = 0;

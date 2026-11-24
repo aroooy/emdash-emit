@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.60] - 2026-11-24
+
+### Fixed
+
+- **Offline Media Re-Materialization After Manual Mirror Deletion (End-User Feedback ②)**: `restoreSnapshotReferencedMedia()` (`src/sync/pull/media_stage.ts`) now skips a storageKey only when the physical mirror binary exists on disk (`mirrorIndex.get(key)?.localPath`), instead of any `mirrorIndex.has()` entry backed solely by a historical `media_state` record. Users who free disk space by deleting `media/<file>` binaries now get them re-linked from `media/_cache/` (0 HTTP) on the next `emit pull --from-snapshot` instead of `[MEDIA_CACHE ... skipped=N]`. Stage 3b cache-candidate selection (`src/sync/snapshot/index.ts`) applies the same physical-presence criterion, so hand-deleted mirrors no longer permanently exempt their keys from re-caching.
+
+### Changed
+
+- **Deterministic Newest-First Media Cache Budget Selection (End-User Feedback ①)**: `listSnapshotMedia()` now orders by `created_at DESC` (indexed via `idx_snapshot_media_created_at`; NULL timestamps sort last), and Stage 3b re-sorts candidates by `createdAt`/`mediaId` before consuming the `snapshotMediaLimit` / `snapshotMediaMaxBytes` budget. On multi-thousand-asset libraries, the freshest uploads now win the cache budget instead of an unspecified SQLite scan order. Side effect: snapshot-origin hits in `emit media-search` / `sync_media_search` are now deterministically newest-first (JSON schema unchanged, element order only).
+
 ## [0.1.59] - 2026-11-24
 
 ### Added
@@ -24,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Declare `js-yaml@^4.1.0` in `dependencies` (fixes #1)** *(re-released as `0.1.58` due to npm registry version lock on `0.1.56`/`0.1.57`)*:
+- **Declare `js-yaml@^4.1.0` in `dependencies` (fixes #1)** _(re-released as `0.1.58` due to npm registry version lock on `0.1.56`/`0.1.57`)_:
   - Added `js-yaml` (`^4.1.0`, matching `@types/js-yaml@^4.0.9`) to runtime `dependencies` in `package.json` so non-hoisted / linked installs (`pnpm`, `npm --install-strategy=linked`) no longer fail with `ERR_MODULE_NOT_FOUND` and runtime YAML parsing/dumping uses v4 rather than `gray-matter`'s transitive `js-yaml` v3.
 
 ## [0.1.56] - 2026-11-24

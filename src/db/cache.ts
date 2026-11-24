@@ -909,9 +909,14 @@ export class CacheDatabase {
   }
 
   public listSnapshotMedia(): SnapshotMediaRecord[] {
-    const rows = this.db.prepare('SELECT * FROM snapshot_media').all() as Array<
-      Record<string, unknown>
-    >;
+    // Deterministic newest-first order. `created_at` is the server-assigned upload
+    // time (ISO-8601, lexicographically sortable) and already carries
+    // idx_snapshot_media_created_at; NULLs sort first in ASC, so DESC puts them last.
+    // Budgeted Stage 3b cache downloads consume this list head-first, so the newest
+    // assets win the mediaCacheLimit / mediaCacheMaxBytes budget on large libraries.
+    const rows = this.db
+      .prepare('SELECT * FROM snapshot_media ORDER BY created_at DESC')
+      .all() as Array<Record<string, unknown>>;
     return rows.map((r) => this.mapSnapshotMediaRow(r));
   }
 
