@@ -11,6 +11,8 @@
 
 ## 📑 Table of Contents
 
+- [Why Emit?](#-why-emit)
+- [1-Minute Daily Workflow](#-1-minute-daily-workflow)
 - [Overview & Architecture Philosophy](#-overview--architecture-philosophy)
 - [Key Features](#-key-features)
 - [Installation](#-installation)
@@ -25,24 +27,59 @@
 
 ---
 
+## 💡 Why Emit?
+
+- **🛡️ Zero-Cost AI Iteration (Defend Cloudflare D1 Limits)**:
+  When AI agents (like Google Antigravity, Cursor, or Claude Code) interact directly with a remote CMS, their rapid, iterative read/search/edit loops can quickly exhaust API quotas (such as Cloudflare D1 daily read/write limits). Emit trades a **one-time upfront sync cost** (an initial `emit pull` or full-library `emit snapshot` performs a batch read to populate `.emit/cache.db` via `node:sqlite`) for **zero-cost local iteration**—agents can search (`snapshot`-first), diff, validate guards, and iterate thousands of times locally with **zero network requests**, syncing only the final delta via a distributed lock and 3-way merge.
+- **✈️ True Offline Authoring & Media Staging**:
+  Web editors struggle on flights or unstable Wi-Fi, especially with image uploads. With Emit, place new images in `media/drafts/`, write Markdown in VS Code or Obsidian with relative image preview (`../../media/...`), and push when back online—Emit handles the 4-stage R2 upload and URL rewrite automatically. You can even cache existing remote media binaries (`emit snapshot --include-media`) for full offline restoration via `emit pull --from-snapshot`.
+- **🔒 20 Code-Level Guardrails for AI Agents (G1–G20)**:
+  Autonomous agents can accidentally publish unfinished drafts or hallucinate taxonomy slugs if given raw CMS APIs. Emit enforces 20 physical preflight guardrails before any write—blocking unapproved live publishing without `--allow-publish` / `allowPublish: true` (**G3**), invalid taxonomy terms (**G4**), manual `mv` corruption (**G2**), and deleting in-use media (**G20**).
+
+---
+
+## 🚀 1-Minute Daily Workflow
+
+Your day-to-day writing workflow takes just 4 steps:
+
+1. **Initialize once**: `emit profile add <name> --origin https://your-site.example --token <token>` and `emit init`
+2. **Pull latest state**: `emit pull` (syncs recent posts, taxonomies, and referenced media)
+3. **Write & iterate offline**: Edit Markdown in VS Code / Obsidian or let your AI agent work via CLI / MCP (`0 network / 0 D1 reads`)
+4. **Push safely**: `emit push` (uploads `media/drafts/*`, acquires a distributed lock, and 3-way merges)
+
+> **Using Cursor, Claude Desktop/Code, or Antigravity via MCP?** Copy-paste the 6-line stdio config in [MCP Client Configuration](#mcp-client-configuration-claude_desktop_configjson--cursormcpjson--mcp_configjson).
+
+---
+
 ## 💡 Overview & Architecture Philosophy
 
 EmDash is a modern serverless headless CMS built on Cloudflare Workers, D1, and R2. **Emit** turns any local directory into a Git-like local authoring workbench, allowing you and AI coding agents to draft, inspect, diff, and publish Markdown articles with strict safety guardrails.
 
 ```text
-┌───────────────────────┐                      ┌─────────────────────────┐
-│    Local Workspace    │   emit push / pull   │   Remote EmDash Server  │
-│  posts/draft/*.md     │ ◄──────────────────► │   Cloudflare Workers    │
-│  posts/published/*.md │  (AST + Frontmatter) │   Cloudflare D1 SQL     │
-│  media/* + cache.db   │                      │   Cloudflare R2 Media   │
-└───────────────────────┘                      └─────────────────────────┘
+  ┌─────────────────── Local Workspace (0 Network / 0 D1) ───────────────────┐
+  │                                                                          │
+  │   AI Agents (Google Antigravity / Cursor / Claude Code)                  │
+  │        ▲                                                                 │
+  │        │ MCP (17 tools) / CLI                                            │
+  │        ▼                                                                 │
+  │   Emit Engine + Local SQLite (.emit/cache.db Staging Desk)               │
+  │        ▲                                                                 │
+  │        │ Markdown + media/ (VS Code / Obsidian)                          │
+  └────────┼─────────────────────────────────────────────────────────────────┘
+           │
+           │  emit pull / snapshot  (Batch Read)
+           │  emit push             (Lock + 3-Way Merge Delta)
+           ▼
+  ┌────────────────────── Cloudflare (Online Remote) ────────────────────────┐
+  │   EmDash CMS  (Cloudflare Workers  +  D1 SQL  +  R2 Media)               │
+  └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### The "Staging Desk" Philosophy & Non-Goals
 
 - **What Emit IS (Core Goal)**:
   - An **active authoring and editing workbench (Staging Desk)** where human authors and AI agents collaborate safely.
-  - A Local-First workflow with **automatic offline draft image upload** (`media/drafts/`), **article-relative image preview** (`../../media/<storageKey>`), **distributed mutex locks**, **Hybrid 3-Way Merge**, and **19 preflight safety guards (G1–G19)**.
+  - A Local-First workflow with **automatic offline draft image upload** (`media/drafts/`), **article-relative image preview** (`../../media/<storageKey>`), **distributed mutex locks**, **Hybrid 3-Way Merge**, and **20 preflight safety guards (G1–G20)**.
 - **What Emit is NOT (Deliberate Non-Goals)**:
   - **Not a full-site database dumper**: Emit maintains a bounded sliding window of recent articles on disk (default: **latest 30 published + 30 drafts**, configurable via `postsSyncLimit` in `.emit/config.json`), pruning older clean files to keep local searches and AI context windows fast.
   - **Every historical article remains 100% reachable on demand**: Use `emit article-search` to find any past post by keyword, tag, category, or date range, then pull it on demand via `emit pull <ULID>`. If an out-of-window article has unpushed local edits, Emit's **Unpushed Edits Safeguard** aborts pruning immediately (`SyncPruneConflictError`) to guarantee zero data loss.
@@ -53,7 +90,7 @@ Emit and the [Official EmDash MCP server](https://github.com/aroooy/emdash) are 
 
 | Operation | Right Tool |
 | --- | --- |
-| Drafting, reviewing, diffing, and publishing articles with safety guards (G1–G19), locks & 3-way merge | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools) |
+| Drafting, reviewing, diffing, and publishing articles with safety guards (G1–G20), locks & 3-way merge | **Emit** (`emit pull` / `emit push`, MCP `sync_*` tools) |
 | Finding and targeting past articles or media assets (with local mirror status & offline body search) | **Emit** (`emit article-search` / `emit media-search`) |
 | On-demand retrieval of any single historical article by ULID | **Emit** (`emit pull <id>`) |
 | Bulk media library management (mass upload, mass delete) or arbitrary site-wide collection queries | **Official EmDash MCP** / EmDash Admin Dashboard |
@@ -90,9 +127,9 @@ Emit separates **Layer A (canonical server & baseline data)** from **Layer B (hu
 - **Uncommitted Draft Revisions on Published Articles (`published*`)**: When a live published article is edited and saved as an unpublished draft in the EmDash Web Admin, Emit detects it via **Two-Track Revisions** (separating raw transport `_rev` from composite comparison keys `${version}@draft:${draftRevisionId}`). The file stays in `posts/published/` with `status: published # draft revision` (`published* [has unpublished draft]` in `emit status`): a normal `emit push` updates the remote draft, while `--allow-publish` publishes it live.
 - **Structure-Aware Hybrid 3-Way Merge & Distributed Locks**: Acquires a 7-minute mutual exclusion lease (`POST /lock`) before writing. If concurrent edits occur, Emit performs a 3-way merge across three distinct structural dimensions—**(1) YAML Frontmatter key-by-key**, **(2) Taxonomy categories/tags as mathematical sets** (with pre-PUT remote taxonomy auditing), and **(3) Markdown body line-by-line via `node-diff3`**—while rescuing divergent local files to `posts/conflicts/`.
 
-### 4. Hardened for Autonomous AI Agents (19 Guardrails & Epistemic Search)
+### 4. Hardened for Autonomous AI Agents (20 Guardrails & Epistemic Search)
 
-- **19 Code-Level Preflight & Sync Guardrails (G1–G19)**: Physically blocks AI agent accidents before any network request—preventing unapproved live publishing (**G3**), hallucinated category/tag names (**G4**), manual `mv` filename corruption (**G2**), pushing quarantined conflict copies (**G12**), or accidental taxonomy wipes (**G19**).
+- **20 Code-Level Preflight & Sync Guardrails (G1–G20)**: Physically blocks AI agent accidents before any network request—preventing unapproved live publishing (**G3**), hallucinated category/tag names (**G4**), manual `mv` filename corruption (**G2**), pushing quarantined conflict copies (**G12**), accidental taxonomy wipes (**G19**), or deleting in-use media (**G20**).
 - **Snapshot-First Exhaustive Search (`snapshotStatus` Framing) & 0-GET Self-Healing**: `emit article-search` and `emit media-search` search 100% of the local workspace + `.emit/cache.db` snapshot with zero network calls (with explicit `fresh` / `stale` / `missing` coverage framing and optional `--live` keyword-only FTS for articles). On pull, untouched local articles self-heal deleted remote taxonomy terms and legacy spellings on the **0-GET fast path**.
 - **Zero-Friction Multi-Site Profiles & Zero Native Dependencies**: Auto-detects the target EmDash site from your current working directory (`~/.config/emit/profiles.yaml`) and runs on Node.js 22+ built-in `node:sqlite` (`DatabaseSync`) with zero C++ `node-gyp` dependencies.
 
@@ -282,7 +319,7 @@ Write your Markdown body here (do not repeat `# Building AI-Powered CMS Tools` a
 4. **Dual-Track Images & Preserved Blocks (`<!--ec:block ... -->`)**: Plain images render as standard Markdown (`Track A`), while styled images (`alignment`, `displayWidth`) and custom blocks are wrapped in `<!--ec:block ... -->` comment fences (`Track B`) protected by Guard **G9**. Do not tamper with opaque comment fences.
 5. **Publishing Live (Guard G3)**: Promoting to `status: published` (or publishing a draft revision on a `published*` article) requires `--allow-publish`.
 
-> For the complete table of **Safety Guardrails (G1–G19)** and AST conversion rules, see **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** and **[docs/markdown-and-ast.md](docs/markdown-and-ast.md)**.
+> For the complete table of **Safety Guardrails (G1–G20)** and AST conversion rules, see **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** and **[docs/markdown-and-ast.md](docs/markdown-and-ast.md)**.
 
 ---
 
@@ -296,7 +333,7 @@ Emit provides **17 top-level CLI commands** (plus **10 subcommands** under `prof
 | `emit profile` | Manage site profiles (`list`, `add`, `current`, `set-token`, `remove`, `use`) | `emit profile add blog --origin <url> --workspace .` |
 | `emit new <slug>` | Scaffold a new draft offline with ULID, one-shot frontmatter & G18 duplicate-slug guard | `emit new my-post -t "Title" -C tech -T ai` |
 | `emit pull [target]` | Pull sliding window (articles + taxonomies + referenced media) or a single article by ULID/path | `emit pull` / `emit pull 01M6ABCDEF...` |
-| `emit push [file]` | Validate (G1–G19), upload `media/drafts/*`, acquire lock, 3-way merge, and push to EmDash (auto-targets a single modified article with TTY confirmation or `-y`) | `emit push` / `emit push posts/draft/20261104_01M6...md` |
+| `emit push [file]` | Validate (G1–G20), upload `media/drafts/*`, acquire lock, 3-way merge, and push to EmDash (auto-targets a single modified article with TTY confirmation or `-y`) | `emit push` / `emit push posts/draft/20261104_01M6...md` |
 | `emit status` | Inspect workspace sync status (`synced`, `published*`, `modified`, `untracked`, `invalid`) | `emit status` / `emit status --search "AI"` |
 | `emit diff [file]` | Show unified diff between local working file(s) and reconstructed baseline snapshot (omit `[file]` to diff all modified articles) | `emit diff` / `emit diff posts/draft/20261104_01M6...md` |
 | `emit delete <target>` | Delete article locally & remotely after creating a `.deleted.md` backup in `posts/conflicts/` | `emit delete <file> --allow-delete-published` |
@@ -331,7 +368,7 @@ Emit includes a first-class stdio MCP server so AI coding agents (**Google Antig
 
 *(If Emit is not installed globally, use `"command": "npx", "args": ["-y", "emdash-emit", "mcp"]`.)*
 
-### Available MCP Tools (15 Tools)
+### Available MCP Tools (17 Tools)
 
 Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resolvedBy`) and returns actionable error codes and remediation hints. See **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)** for full parameter schemas.
 
@@ -340,16 +377,18 @@ Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resol
 | `sync_status` | Inspect local workspace tracking status, summary counts, and `actionRequired` files |
 | `sync_diff` | View unified diff between local working file and baseline snapshot |
 | `sync_new` | Scaffold new draft article offline with canonical ULID, one-shot metadata, and taxonomy hints |
-| `sync_pull` | Pull batch sliding window (articles + taxonomies + referenced media) or a targeted single article by `id`/`filePath` |
-| `sync_push` | Push local article changes with preflight guards (G1–G19), distributed lock, 3-way merge, and `media/drafts/*` auto-upload |
+| `sync_pull` | Pull batch sliding window (articles + taxonomies + referenced media), single article by `id`/`filePath`, or offline `fromSnapshot: true` |
+| `sync_push` | Push local article changes with preflight guards (G1–G20), distributed lock, 3-way merge, and `media/drafts/*` auto-upload |
 | `sync_delete` | Safely delete an article locally and remotely with `.deleted.md` rescue backup |
 | `sync_conflicts` | `list`, `diff`, `resolve`, or `prune` quarantined rescue copies in `posts/conflicts/` |
 | `sync_doctor` | Run workspace diagnostics (offline by default; opt-in `checkAuth`, `checkMediaLibrary`, `checkMediaUrls`) |
-| `sync_article_search` | Search remote EmDash articles or local Markdown bodies (`offline: true`) by keyword, taxonomy, status, slug, or date range |
-| `sync_media_search` | Search remote media library or local mirrors (`offline: true`) by keyword and date range |
+| `sync_article_search` | Exhaustive 0-HTTP search across local Markdown and `snapshot_articles` (`snapshotStatus` framing), or keyword-only remote FTS with `live: true` |
+| `sync_media_search` | Exhaustive 0-HTTP search across local mirrors and `snapshot_media` (`snapshotStatus` framing) by keyword and date range |
 | `sync_pull_taxonomies` | Standalone sync of remote category and tag YAML definitions |
 | `sync_pull_media` | Mirror media assets by `article`, `storageKey`, or bounded library window |
-| `sync_snapshot` | Capture, inspect (`status`), or `clear` full-library metadata snapshot in `cache.db` |
+| `sync_push_media` | Upload standalone local image files (`media/drafts/*` or external) and/or sync `alt`/`caption` metadata |
+| `sync_delete_media` | Delete unreferenced media assets with Guard G20 (`MEDIA_IN_USE_PROTECTION`) and `media/_trash/` backup |
+| `sync_snapshot` | `capture`, `status`, `clear`, or `prune-cache` for full-library metadata snapshots and opt-in `media/_cache/` binaries in `cache.db` |
 | `profile_list` | List all configured EmDash connection profiles and resolution rationale |
 | `profile_switch` | Switch active session/default profile for multi-site environments |
 
@@ -359,7 +398,7 @@ Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resol
 
 Detailed specifications, subsystem designs, and troubleshooting guides are organized by domain boundary under **[docs/](docs/README.md)**:
 
-1. **[Architecture, Layering & Infrastructure (`docs/architecture-and-layers.md`)](docs/architecture-and-layers.md)** — 4-tier layering rules (Axes 0–5), Workspace Contracts, Profile/Auth/Origin resolution precedence, SQLite `cache.db` schema (v6), and CLI/MCP presentation symmetry.
+1. **[Architecture, Layering & Infrastructure (`docs/architecture-and-layers.md`)](docs/architecture-and-layers.md)** — 4-tier layering rules (Axes 0–5), Workspace Contracts, Profile/Auth/Origin resolution precedence, SQLite `cache.db` schema (v8), and CLI/MCP presentation symmetry.
 2. **[Sync Engine, Revisions & 3-Way Merge (`docs/sync-engine-and-revisions.md`)](docs/sync-engine-and-revisions.md)** — Modular Pull (6 stages) & Push (10 modules), Two-Track Revision model (`revForTransport` vs `revForComparison`), `published*` draft revisions, distributed locks, Hybrid 3-Way Merge, and `posts/conflicts/` quarantine lifecycle.
 3. **[Markdown, Frontmatter & Portable Text AST (`docs/markdown-and-ast.md`)](docs/markdown-and-ast.md)** — `FrontmatterSchema`, `parseMarkdownLenient` self-healing, YAML scalar quoting, baseline reconstruction, Portable Text conversion, and Dual-Track Image Model (Tier 1 vs Tier 3 `<!--ec:block ... -->`).
 4. **[Local-First Media Pipeline (`docs/media-pipeline.md`)](docs/media-pipeline.md)** — `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path localization, `storageKeyToMarkdownRef` mirror naming, and remote-authoritative media pruning.
