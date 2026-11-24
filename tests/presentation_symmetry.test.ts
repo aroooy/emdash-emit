@@ -320,4 +320,41 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     expect(remediationFor('MEDIA_IN_USE_PROTECTION')).toContain('referencing local article');
     expect(remediationFor('LIVE_SEARCH_UNSUPPORTED_FILTER')).toContain('Omit --live');
   });
+
+  it('S-3: CLI and MCP pull modules share formatPruneSkippedArticlesNotice from presentation/article_report.js', async () => {
+    const { formatPruneSkippedArticlesNotice } =
+      await import('../src/presentation/article_report.js');
+    const cliPullSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/cli/commands/pull.ts'),
+      'utf-8',
+    );
+    const mcpPullSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-pull.ts'),
+      'utf-8',
+    );
+
+    for (const src of [cliPullSource, mcpPullSource]) {
+      expect(src).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/article_report(?:\.js)?['"]/);
+      expect(src).toContain('formatPruneSkippedArticlesNotice');
+      expect(src).toMatch(/formatPruneSkippedArticlesNotice\s*\(/);
+    }
+
+    const rendered = formatPruneSkippedArticlesNotice(
+      [
+        {
+          id: '01M67N0TNFS6F3PJX4T96NKPKT',
+          slug: 'legacy-copy',
+          filePath: 'posts/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy.md',
+        },
+        {
+          id: '01M67N0TNFS6F3PJX4T96NKPKT',
+          slug: 'legacy-copy',
+          filePath: 'posts/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy-2.md',
+        },
+      ],
+      30,
+    );
+    expect(rendered).toContain('2 file(s) belonging to 1 article(s) outside the sync window');
+    expect(rendered).toContain('(currently: 30)');
+  });
 });

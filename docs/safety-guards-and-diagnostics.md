@@ -80,9 +80,9 @@ Emit provides exhaustive 0-HTTP search across both articles (`src/sync/article_s
 
 ## 4. Troubleshooting & FAQ
 
-### Q1: `SyncPruneConflictError`: Pull aborted due to unpushed modifications
-- **Cause**: An article that fell outside the active sliding window (default: latest 30 posts per status) has unpushed local edits. Emit aborts pruning to guarantee zero data loss.
-- **Solution**: Push the changes first (`emit push <file>`), revert/delete the local edits, or run `emit pull --no-prune` to temporarily suppress window pruning.
+### Q1: Pruning skipped for out-of-window article(s) with unpushed modifications
+- **Cause**: An article that fell outside the active sliding window (default: latest 30 posts per status) has unpushed local edits. Emit excludes that ULID from pruning and keeps the local file and `cache.db` entry untouched while completing the rest of the sync, surfacing a warning (`pruneSkipped`). *(Historically, versions prior to v0.1.61 aborted the pull by throwing `SyncPruneConflictError`.)*
+- **Solution**: Push the changes first (`emit push <file>`), revert/delete the local edits, raise `postsSyncLimit` in `.emit/config.json`, or run `emit pull --no-prune` to suppress window pruning.
 
 ### Q2: How do I edit or reference an older article from years ago outside the 30-post window?
 - **Solution**: Use `emit article-search <query>` (or filter by `--tag`, `--category`, `--since`, `--until`) to find the article's 26-character ULID, then pull it on demand:

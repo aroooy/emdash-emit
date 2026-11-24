@@ -265,7 +265,7 @@ describe('CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C)', (
     expect({ ...captured }).toMatchSnapshot();
   });
 
-  it('batch pull halts on SyncPruneConflictError when a windowed-out article has unpushed edits', async () => {
+  it('batch pull skips pruning and warns when a windowed-out article has unpushed edits (non-blocking)', async () => {
     stubBatchFetch({
       taxonomiesFail: true,
       publishedPosts: [publishedPost('01M67P0MBMJQQXH2K95HHCYRYA', 'alpha')],
@@ -273,8 +273,8 @@ describe('CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C)', (
       mediaLibrary: [],
     });
 
-    // A tracked article outside the sync window with a non-matching local hash drives the
-    // prune-conflict halt (SyncPruneConflictError -> reportActionFailure -> exit 1).
+    // A tracked article outside the sync window with a non-matching local hash is kept untouched
+    // and reported as a warning without aborting the rest of the batch pull.
     const relPath = 'posts/published/20260101_01M67OLDARTICLE0000000000-gamma.md';
     fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
     fs.writeFileSync(
@@ -305,7 +305,7 @@ describe('CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C)', (
 
     const captured = await runPullCapture(['pull']);
 
-    expect(captured.exitCode).toBe(1);
+    expect(captured.exitCode).toBeUndefined();
     expect({ ...captured }).toMatchSnapshot();
   });
 

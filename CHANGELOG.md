@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.61] - 2026-11-24
+
+### Changed
+
+- **Non-Blocking Window Prune (`emit pull` / `sync_pull`)**:
+  - Out-of-window articles (or ULID-sharing duplicates) with unpushed local edits no longer abort `pullBatch()`. Affected ULIDs are excluded from pruning (`PullBatchResult.pruneSkipped` + `windowLimit`), keeping their local files and `cache.db` entries untouched while clean pruning and remote updates complete normally.
+  - Added shared Layer 3 formatter `formatPruneSkippedArticlesNotice()` in `src/presentation/article_report.ts`, used by both `emit pull` and MCP `sync_pull` (`isError: false`).
+
+### Deprecated
+
+- `SyncPruneConflictError` is no longer thrown by `pullBatch()` (the class export and error-handler branches remain intact for backwards compatibility; removal is planned for `v0.2.0`).
+
 ## [0.1.60] - 2026-11-24
 
 ### Fixed

@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { CacheDatabase } from '../src/db/cache.js';
-import { pullBatch, SyncPruneConflictError } from '../src/sync/orchestrator.js';
+import { pullBatch } from '../src/sync/orchestrator.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
 import { computeArticleRelativePath } from '../src/utils/naming.js';
 
@@ -172,11 +172,12 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(cache.getSyncState('01M6ART03')).toBeNull();
   });
 
-  it('aborts pull with SyncPruneConflictError if pushed-out article has unpushed edits', async () => {
-    // art1 and art2 are clean, art3 has local edits
+  it('skips pruning out-of-window article with unpushed edits and warns via pruneSkipped without aborting pull', async () => {
+    // art1 and art2 are clean, art3 has local edits, art4 is clean & out-of-window (should still prune!)
     setupLocalArticle('01M6ART01', 'article-1', 'published', '# Article 1');
     setupLocalArticle('01M6ART02', 'article-2', 'published', '# Article 2');
     const art3 = setupLocalArticle('01M6ART03', 'article-3', 'published', '# Article 3', true);
+    const art4 = setupLocalArticle('01M6ART04', 'article-4', 'published', '# Article 4', false);
 
     const mockFetch = vi.fn().mockImplementation((urlStr: string) => {
       const url = new URL(urlStr);
@@ -227,41 +228,22 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
       });
     });
 
-    await expect(
-      pullBatch({
-        collection: 'posts',
-        workspaceRoot: tempDir,
-        cache,
-        origin: 'https://example.com',
-        token: 'fake-token',
-        limit: 2,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow(SyncPruneConflictError);
+    const result = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
 
-    // Verify error message details and suggestions
-    try {
-      await pullBatch({
-        collection: 'posts',
-        workspaceRoot: tempDir,
-        cache,
-        origin: 'https://example.com',
-        token: 'fake-token',
-        limit: 2,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-    } catch (err: unknown) {
-      const conflictError = err as SyncPruneConflictError;
-      expect(conflictError.conflictItems).toHaveLength(1);
-      expect(conflictError.conflictItems[0].id).toBe('01M6ART03');
-      expect(conflictError.message).toContain(
-        'Pull aborted: 1 file(s) belonging to 1 article(s) outside the sync window',
-      );
-      expect(conflictError.message).toContain('emit push <filePath>');
-      expect(conflictError.message).toContain('postsSyncLimit');
-      expect(conflictError.message).toContain('emit pull --no-prune');
-    }
-
+    expect(result.windowLimit).toBe(2);
+    expect(result.pruneSkipped).toHaveLength(1);
+    expect(result.pruneSkipped?.[0]?.id).toBe('01M6ART03');
+    // Clean out-of-window art4 must still be pruned normally
+    expect(result.deleted).toBe(1);
+    expect(fs.existsSync(art4.fullPath)).toBe(false);
     // art3 must NOT be deleted
     expect(fs.existsSync(art3.fullPath)).toBe(true);
     expect(cache.getSyncState('01M6ART03')).not.toBeNull();
@@ -416,7 +398,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(fs.existsSync(legacyDuplicatePath)).toBe(false);
   });
 
-  it('aborts with SyncPruneConflictError if a duplicate filename for the same 26-char ULID has unpushed edits', async () => {
+  it('skips pruning for the entire ULID if a duplicate filename sharing the 26-char ULID has unpushed edits', async () => {
     const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
     const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
     // Canonical file is clean, but a duplicate file sharing the ULID has unpushed local modifications
@@ -448,24 +430,25 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
       });
     });
 
-    await expect(
-      pullBatch({
-        collection: 'posts',
-        workspaceRoot: tempDir,
-        cache,
-        origin: 'https://example.com',
-        token: 'fake-token',
-        limit: 2,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow(SyncPruneConflictError);
+    const result = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
 
+    expect(result.deleted).toBe(0);
+    expect(result.pruneSkipped).toHaveLength(1);
+    expect(result.pruneSkipped?.[0]?.filePath).toBe(editedDuplicateRelPath);
     // Neither the canonical file nor the edited duplicate file may be deleted
     expect(fs.existsSync(canonical.fullPath)).toBe(true);
     expect(fs.existsSync(editedDuplicateFullPath)).toBe(true);
   });
 
-  it('reports conflict counts as files and deduplicated articles when several files share one ULID', async () => {
+  it('reports pruneSkipped counts as files and deduplicated articles when several files share one ULID', async () => {
     const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
     const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
     fs.writeFileSync(canonical.fullPath, '# Canonical\n\nLocal canonical edits.', 'utf8');
@@ -493,26 +476,19 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
       });
     });
 
-    let conflict: SyncPruneConflictError | undefined;
-    try {
-      await pullBatch({
-        collection: 'posts',
-        workspaceRoot: tempDir,
-        cache,
-        origin: 'https://example.com',
-        token: 'fake-token',
-        limit: 2,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-    } catch (err: unknown) {
-      expect(err).toBeInstanceOf(SyncPruneConflictError);
-      conflict = err as SyncPruneConflictError;
-    }
+    const result = await pullBatch({
+      collection: 'posts',
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'fake-token',
+      limit: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
 
-    expect(conflict).toBeDefined();
-    expect(conflict?.conflictItems).toHaveLength(2);
-    // Two files belong to a single article: the message must not read as "2 articles"
-    expect(conflict?.message).toContain('2 file(s) belonging to 1 article(s)');
+    expect(result.deleted).toBe(0);
+    expect(result.pruneSkipped).toHaveLength(2);
+    expect(new Set(result.pruneSkipped?.map((i) => i.id)).size).toBe(1);
     expect(fs.existsSync(canonical.fullPath)).toBe(true);
     expect(fs.existsSync(duplicateFullPath)).toBe(true);
   });

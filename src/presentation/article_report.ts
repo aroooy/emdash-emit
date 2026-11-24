@@ -117,6 +117,29 @@ export function formatPruneSkippedNotice(limit: number | null | undefined): stri
 }
 
 /**
+ * Explains why window pruning kept specific out-of-window article files on disk instead of deleting them.
+ *
+ * Symmetric to `formatPruneSkippedNotice()`: unpushed local edits must never be silently discarded, nor
+ * should they block clean articles and remote updates from syncing. Shared by CLI and MCP (Axis 3).
+ */
+export function formatPruneSkippedArticlesNotice(
+  items: ReadonlyArray<{ id: string; slug: string; filePath: string }>,
+  limit?: number | null,
+): string {
+  const affectedArticles = new Set(items.map((i) => i.id)).size;
+  const windowMsg = typeof limit === 'number' && limit > 0 ? ` (currently: ${limit})` : '';
+  const filesList = items.map((i) => `  - ${i.filePath} (${i.slug})`).join('\n');
+  return (
+    `🛡️ Pruning skipped for ${items.length} file(s) belonging to ${affectedArticles} article(s) outside the sync window${windowMsg} ` +
+    `because they have unpushed local edits. Their local files and cache entries were kept untouched.\n` +
+    `${filesList}\n` +
+    `Recommended actions:\n` +
+    `  1. Push local changes:   emit push <filePath>\n` +
+    `  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed`
+  );
+}
+
+/**
  * Frames an offline media search as what it is: a view of this workspace's mirrors and nothing else.
  *
  * The failure mode this guards against is inference — an agent that reads a local-only list as the library's

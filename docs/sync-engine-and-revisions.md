@@ -44,7 +44,7 @@ flowchart TD
   1. Synchronizes remote taxonomies (`categories` and `tags`) in a `try/catch` block so taxonomy endpoint errors are contained and reported without aborting article pulls.
   2. Derives `canPruneTaxonomies = !postsOnly && !categoriesFailed && !tagsFailed` (Epistemic Pruning Rule: never auto-prune article frontmatter terms if taxonomy sync was skipped or partially failed).
   3. Fetches the active sliding window of articles (default `postsSyncLimit: 30` per status; when `status: 'all'`, fetches up to 30 `published` + 30 `draft` articles in parallel) and executes `pullArticle()` over a concurrency pool sharing one `MediaMirrorSession`.
-  4. Prunes local tracked articles that fell outside the sliding window—aborting with `SyncPruneConflictError` before deleting any file if an out-of-window article (or a duplicate file sharing its ULID) contains unpushed local modifications.
+  4. Prunes clean local tracked articles that fell outside the sliding window; articles (or duplicate files sharing a ULID) with unpushed local modifications are excluded from pruning (kept untouched on disk and in `cache.db`) and reported via `pruneSkipped` warnings without aborting the pull.
 - **`pullSingleArticle()`**:
   1. Optionally refreshes remote taxonomy definitions (preventing stale `INVALID_TAXONOMY_ERROR` or `NOT_FOUND` on newly created terms).
   2. Pulls the targeted article by ULID or file path (even if outside the 30-post sliding window) with on-demand referenced media mirroring.

@@ -38,6 +38,7 @@ import { pullMedia } from '../../sync/media/index.js';
 import {
   formatMediaCoverageLine,
   formatOrphanMediaWarning,
+  formatPruneSkippedArticlesNotice,
   formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
@@ -89,7 +90,9 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
       prune: z
         .boolean()
         .optional()
-        .describe('Explicitly control whether to prune articles outside the sync window'),
+        .describe(
+          'Explicitly control whether to prune articles outside the sync window (unpushed-edit candidates are kept and reported as a warning, not an error)',
+        ),
       postsOnly: z
         .boolean()
         .optional()
@@ -361,6 +364,11 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             ? `\n🛡️ ${batchResult.preserved} article(s) had unpushed local edits; Emit kept your local version (remote changes were NOT applied). Push them with sync_push, or re-run with force: true to accept the remote version instead.`
             : '';
 
+        const pruneSkippedMsg =
+          batchResult.pruneSkipped && batchResult.pruneSkipped.length > 0
+            ? `\n${formatPruneSkippedArticlesNotice(batchResult.pruneSkipped, batchResult.windowLimit)}`
+            : '';
+
         const quarantineNotices = sortedItems
           .map((item) => formatQuarantineNotice(item.quarantined))
           .filter((notice) => notice.length > 0);
@@ -395,7 +403,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
 
         const warnLine = ctx.originWarning ? `\n\n${ctx.originWarning}` : '';
         return formatToolTextWithMeta(
-          `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${quarantineMsg}${detailBlock}${warnLine}`,
+          `✅ Synced ${batchResult.total} articles (${batchResult.updated} updated, ${batchResult.skipped} up-to-date/skipped${deletedMsg}).${taxonomiesMsg}${mediaMsg}${preservedMsg}${pruneSkippedMsg}${quarantineMsg}${detailBlock}${warnLine}`,
           ctx.meta,
           'You can now read or edit these local Markdown files directly.',
         );

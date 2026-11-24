@@ -99,6 +99,10 @@ export interface PullBatchResult {
   deleted?: number;
   /** Articles whose unpushed local edits were kept instead of applying remote changes. */
   preserved?: number;
+  /** Window-out prune candidates kept on disk because they (or a ULID-sharing duplicate) have unpushed local edits. */
+  pruneSkipped?: UnpushedConflictItem[];
+  /** Effective sliding window limit resolved for this batch pull. */
+  windowLimit?: number;
   /** Total number of divergent local copies preserved under `<collection>/conflicts/`. */
   quarantined?: number;
   /**
@@ -222,7 +226,7 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
   // R-2 (v0.1.37): the batch window is resolved through the shared Layer 0 precedence helper so
   // CLI, MCP, and this orchestrator can never drift apart. `options.all` intentionally keeps an
   // unbounded window: transport receives undefined limit with all:true below, while pruning
-  // diagnostics (windowMsg / SyncPruneConflictError) report the DEFAULT_CONFIG fallback that a
+  // diagnostics (windowLimit / formatPruneSkippedArticlesNotice) report the DEFAULT_CONFIG fallback that a
   // non-all run would use — matching listRemoteArticles' own ?? 100 transport fallback is out
   // of scope here; only the presentation value changes.
   const limit = resolvePostsSyncLimit({}, { postsSyncLimit: options.limit });
@@ -296,7 +300,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
   });
 
   const shouldPrune = options.prune !== false;
-  const candidatesToPrune: SyncState[] = [];
+  let candidatesToPrune: SyncState[] = [];
+  const pruneSkippedArticles: UnpushedConflictItem[] = [];
 
   if (shouldPrune) {
     const remoteIdSet = new Set(remoteList.map((r) => r.id));
@@ -360,21 +365,16 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     }
 
     if (unpushedConflicts.length > 0) {
-      const affectedArticles = new Set(unpushedConflicts.map((i) => i.id)).size;
-      const filesList = unpushedConflicts.map((i) => `  - ${i.filePath} (${i.slug})`).join('\n');
-      const windowMsg = limit ? ` (currently: ${limit})` : '';
-      const message =
-        `Pull aborted: ${unpushedConflicts.length} file(s) belonging to ${affectedArticles} article(s) outside the sync window have unpushed local edits!\n\n` +
-        `The following file(s) would be pruned from local cache, but contain unpushed changes` +
-        ` (both the canonical file and any duplicate copy sharing its ULID are inspected):\n${filesList}\n\n` +
-        `💡 Why did this happen?\n` +
-        `The modified article(s) are older than the workspace sync window${windowMsg}.\n\n` +
-        `Recommended actions:\n` +
-        `  1. Push local changes:   emit push <filePath>\n` +
-        `  2. Adjust sync window:   update "postsSyncLimit" in .emit/config.json if a larger window is needed\n` +
-        `  3. Keep them for now:    emit pull --no-prune (skips window pruning; local files stay untouched)\n`;
+      const skippedUlids = new Set(unpushedConflicts.map((i) => i.id));
+      candidatesToPrune = candidatesToPrune.filter((c) => !skippedUlids.has(c.id));
 
-      throw new SyncPruneConflictError(message, unpushedConflicts, limit);
+      const seenFiles = new Set<string>();
+      for (const item of unpushedConflicts) {
+        if (!seenFiles.has(item.filePath)) {
+          seenFiles.add(item.filePath);
+          pruneSkippedArticles.push(item);
+        }
+      }
     }
   }
 
@@ -484,6 +484,8 @@ export async function pullBatch(options: PullBatchOptions): Promise<PullBatchRes
     skipped,
     deleted,
     preserved,
+    pruneSkipped: pruneSkippedArticles.length > 0 ? pruneSkippedArticles : undefined,
+    windowLimit: limit,
     quarantined,
     media: mediaResult,
     items: results,

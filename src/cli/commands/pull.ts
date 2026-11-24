@@ -53,6 +53,7 @@ import { reportActionFailure } from '../report-failure.js';
 import {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
+  formatPruneSkippedArticlesNotice,
   formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
@@ -70,6 +71,7 @@ import {
 export {
   formatOrphanMediaWarning,
   formatMediaCoverageLine,
+  formatPruneSkippedArticlesNotice,
   formatPruneSkippedNotice,
   formatPrunedTaxonomiesNotice,
 } from '../../presentation/article_report.js';
@@ -131,6 +133,8 @@ interface BatchPullSummary {
   skipped: number;
   deleted?: number;
   preserved?: number;
+  pruneSkipped?: Array<{ id: string; slug: string; filePath: string }>;
+  windowLimit?: number;
   items: PullResult[];
   media?: {
     walkedCount: number;
@@ -208,6 +212,10 @@ function printBatchPullSummary(
       `🛡️  ${result.preserved} article(s) had unpushed local edits: Emit kept your local version (remote changes were NOT applied). ` +
         `Push them with "emit push <filePath>", or re-run with --force to accept the remote version.`,
     );
+  }
+
+  if (result.pruneSkipped && result.pruneSkipped.length > 0) {
+    console.log(formatPruneSkippedArticlesNotice(result.pruneSkipped, result.windowLimit));
   }
 
   for (const item of result.items) {

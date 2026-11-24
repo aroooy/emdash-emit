@@ -82,7 +82,7 @@ EmDash is a modern serverless headless CMS built on Cloudflare Workers, D1, and 
   - A Local-First workflow with **automatic offline draft image upload** (`media/drafts/`), **article-relative image preview** (`../../media/<storageKey>`), **distributed mutex locks**, **Hybrid 3-Way Merge**, and **20 preflight safety guards (G1–G20)**.
 - **What Emit is NOT (Deliberate Non-Goals)**:
   - **Not a full-site database dumper**: Emit maintains a bounded sliding window of recent articles on disk (default: **latest 30 published + 30 drafts**, configurable via `postsSyncLimit` in `.emit/config.json`), pruning older clean files to keep local searches and AI context windows fast.
-  - **Every historical article remains 100% reachable on demand**: Use `emit article-search` to find any past post by keyword, tag, category, or date range, then pull it on demand via `emit pull <ULID>`. If an out-of-window article has unpushed local edits, Emit's **Unpushed Edits Safeguard** aborts pruning immediately (`SyncPruneConflictError`) to guarantee zero data loss.
+  - **Every historical article remains 100% reachable on demand**: Use `emit article-search` to find any past post by keyword, tag, category, or date range, then pull it on demand via `emit pull <ULID>`. If an out-of-window article has unpushed local edits, Emit's **Unpushed Edits Safeguard** keeps those files untouched and reports them as a warning while the rest of the sync completes.
 
 ### Division of Labor with the Official EmDash MCP
 
