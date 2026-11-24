@@ -631,7 +631,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
   });
 
   it('v0.1.47 Phase 1: initializes fresh DB directly at current schema (v7) with snapshot tables', () => {
-    expect(cache.getSchemaVersion()).toBe(7);
+    expect(cache.getSchemaVersion()).toBe(8);
     expect(cache.getSnapshotMeta('posts')).toBeNull();
     expect(cache.listSnapshotArticles('posts')).toEqual([]);
     expect(cache.listSnapshotMedia()).toEqual([]);
@@ -654,7 +654,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     rawDb.close();
 
     const migrated = new CacheDatabase(v5DbPath);
-    expect(migrated.getSchemaVersion()).toBe(7);
+    expect(migrated.getSchemaVersion()).toBe(8);
     expect(migrated.getSyncState('01M6KEEP000000000000000001')?.slug).toBe('keep');
     expect(migrated.getSnapshotMeta('posts')).toBeNull();
     migrated.close();

@@ -90,6 +90,7 @@ emit pull [target] [options]
 - `--metadata-only`: With `--media` or on-demand media mirroring, write companion `.yaml` metadata only without downloading binary image files.
 - `--local-media-refs` / `--no-local-media-refs`: Enable (default-ON) or disable rewriting mirrored body image URLs on disk to article-relative `../../media/<storageKey>` paths, persisting the choice to `.emit/config.json`.
 - `--from-snapshot`: Restore article(s) offline from the local `.emit/cache.db` snapshot catalog with zero network calls (works without an auth token). Stores a `snapshot:<comparisonRev>` sentinel in `base_snapshots.rev` so offline `status`/`diff` work while `push` is blocked (`PULL_REQUIRED_BEFORE_PUSH`) until the next online `pull`. Unlike online `emit pull`, batch snapshot restore intentionally performs **no disk pruning** so local files outside the snapshot window remain untouched.
+- `--no-media-restore`: When used with `--from-snapshot`, skip materializing cached media binaries from `media/_cache/` into `media/`.
 - `--stale-threshold-days <days>`: Snapshot staleness warning threshold in days when using `--from-snapshot` (default: `30`).
 - `-p, --profile <name>`: Explicitly select a connection profile.
 
@@ -291,10 +292,10 @@ emit media-search [query] [-l, --limit <n>] [--mirrored-only] [--since <date>] [
 
 ### 15. `emit snapshot`
 
-Captures, inspects, or clears a full-library metadata snapshot (articles, media, taxonomies) in `.emit/cache.db` (Schema v7) for exhaustive 0-HTTP search, `--from-snapshot` offline article restore, and 0-GET remote taxonomy filtering.
+Captures, inspects, or clears a full-library metadata snapshot (articles, media, taxonomies) in `.emit/cache.db` (Schema v8) for exhaustive 0-HTTP search, `--from-snapshot` offline article restore, opt-in `media/_cache/` binary caching, and 0-GET remote taxonomy filtering.
 
 ```bash
-emit snapshot [-c, --collection <collection>] [--status] [--clear] [--concurrency <number>] [-p, --profile <name>]
+emit snapshot [-c, --collection <collection>] [--status] [--clear] [--prune-cache] [--include-media | --no-include-media] [--media-cache-limit <n>] [--media-cache-max-bytes <bytes>] [--concurrency <number>] [-p, --profile <name>]
 ```
 
 ---
@@ -328,7 +329,7 @@ All 17 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 1 | `sync_status` | `emit status` | `collection?`, `status?` (`"draft"\|"published"\|"all"`), `search?`, `limit?`, `profile?` | Inspect local workspace tracking status, summary counts, and `actionRequired` items. |
 | 2 | `sync_diff` | `emit diff` | `filePath?`, `id?`, `profile?` | Inspect unified diff between local working file and reconstructed baseline snapshot. |
 | 3 | `sync_new` | `emit new` | `slug` *(required)*, `title?`, `collection?`, `locale?`, `byline?`, `categories?`, `tags?`, `description?`, `featuredImage?`, `profile?` | Scaffold a new draft article offline with canonical ULID, one-shot frontmatter, G18 duplicate-slug check, and taxonomy hints. |
-| 4 | `sync_pull` | `emit pull` | `collection?`, `id?`, `filePath?`, `status?`, `force?`, `noPrune?`, `prune?`, `postsOnly?`, `noMedia?`, `includeMedia?`, `metadataOnly?`, `localMediaRefs?`, `fromSnapshot?`, `staleThresholdDays?`, `profile?` | Pull batch sliding window (articles + taxonomies + on-demand referenced media), pull a single article by `id`/`filePath`, or restore offline from snapshot (`fromSnapshot: true`). |
+| 4 | `sync_pull` | `emit pull` | `collection?`, `id?`, `filePath?`, `status?`, `force?`, `noPrune?`, `prune?`, `postsOnly?`, `noMedia?`, `includeMedia?`, `metadataOnly?`, `localMediaRefs?`, `fromSnapshot?`, `restoreMedia?`, `staleThresholdDays?`, `profile?` | Pull batch sliding window (articles + taxonomies + on-demand referenced media), pull a single article by `id`/`filePath`, or restore offline from snapshot (`fromSnapshot: true`). |
 | 5 | `sync_push` | `emit push` | `filePath` *(required)*, `allowPublish?`, `allowModifiedOpaqueBlocks?`, `noTaxonomyAudit?`, `allowUnappliedTaxonomies?`, `allowWipeTaxonomies?`, `resolveTaxonomy?` (`"union"\|"local"\|"remote"`), `revive?`, `force?`, `localMediaRefs?`, `profile?` | Push a single article with preflight guards (G1–G19), distributed lock, 3-way merge, and `media/drafts/*` auto-upload. |
 | 6 | `sync_delete` | `emit delete` | `filePath?`, `id?`, `allowDeletePublished?`, `discardLocalEdits?`, `dryRun?`, `profile?` | Delete an article locally and remotely after creating a `.deleted.md` rescue backup in `conflicts/`. |
 | 7 | `sync_conflicts` | `emit conflicts` | `action?` (`"list"\|"diff"\|"resolve"\|"prune"`, defaults to `"list"`), `filePath?`, `strategy?` (`"accept-local"\|"accept-canonical"`), `force?`, `olderThan?`, `allowOrphanRescues?`, `dryRun?`, `collection?`, `profile?` | List, diff, resolve, or prune quarantined `.conflict.md` and `.deleted.md` rescue copies. |
@@ -339,6 +340,6 @@ All 17 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 12 | `sync_delete_media` | `emit delete-media` | `targets` *(required, `string[]`)*, `dryRun?`, `noBackup?`, `collection?`, `profile?` | Delete unreferenced media asset(s) from remote and local `media/` with Guard G20 (`MEDIA_IN_USE_PROTECTION`) and rescue backup to `media/_trash/` (MCP requires an authenticated profile even for `dryRun`). |
 | 13 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `mirroredOnly?`, `suggestKeywords?`, `profile?` | Exhaustive 0-HTTP search across local mirrors and `snapshot_media` with `snapshotStatus` (`fresh`/`stale`/`missing`) framing. |
 | 14 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `live?`, `limit?`, `includeConflicts?`, `profile?` | Exhaustive 0-HTTP search across local Markdown and `snapshot_articles` (with `snapshotStatus` framing), or keyword-only remote FTS with `live: true`. |
-| 15 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
+| 15 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"\|"prune-cache"`, defaults to `"capture"`), `collection?`, `concurrency?`, `includeMedia?`, `mediaCacheLimit?`, `mediaCacheMaxBytes?`, `profile?` | Capture, inspect, clear, or prune the full-library metadata snapshot and opt-in `media/_cache/` binaries in `cache.db`. |
 | 16 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
 | 17 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |

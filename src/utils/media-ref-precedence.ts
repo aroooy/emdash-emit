@@ -33,3 +33,14 @@ export function resolveLocalMediaRefsOption(
 ): boolean | undefined {
   return optionValue !== undefined ? optionValue : config?.localMediaRefs;
 }
+
+/**
+ * Pure precedence resolver for `snapshotMedia`:
+ * An explicit CLI flag or MCP tool argument takes precedence over `.emit/config.json`.
+ */
+export function resolveSnapshotMediaOption(
+  optionValue: boolean | undefined,
+  config?: Pick<EmitConfig, 'snapshotMedia'> | null,
+): boolean {
+  return optionValue !== undefined ? optionValue : Boolean(config?.snapshotMedia);
+}

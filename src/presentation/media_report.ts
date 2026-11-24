@@ -206,3 +206,20 @@ export function formatMediaDeleteReport(result: DeleteMediaResult): string {
 
   return lines.join('\n');
 }
+
+/**
+ * Formats offline media cache statistics produced by `snapshot capture --include-media`.
+ */
+export function formatMediaCacheSummary(res: {
+  mediaCached: number;
+  mediaCacheSkipped: number;
+  mediaCacheBytes: number;
+  mediaCacheBudgetHit: boolean;
+  mediaCacheTotalCandidates: number;
+}): string {
+  const mb = (res.mediaCacheBytes / (1024 * 1024)).toFixed(2);
+  const budgetNote = res.mediaCacheBudgetHit
+    ? ` ⚠️ [MEDIA_CACHE_BUDGET cached=${res.mediaCached}/${res.mediaCacheTotalCandidates}]`
+    : '';
+  return `Media cache: ${res.mediaCached} downloaded (${mb} MiB), ${res.mediaCacheSkipped} skipped/existing.${budgetNote}`;
+}

@@ -20,8 +20,11 @@
  * SOFTWARE.
  */
 
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { extractComparisonRev, isSameRev, unwrapEnvelope } from '../../client/api.js';
-import { articleContentEndpoint } from '../../client/endpoints.js';
+import { articleContentEndpoint, mediaFileEndpoint } from '../../client/endpoints.js';
 import { createAuthedFetch } from '../../client/http.js';
 import {
   extractBylinesFromRaw,
@@ -38,8 +41,20 @@ import type {
   SnapshotMediaRecord,
 } from '../../db/cache.js';
 import { loadConfig } from '../../utils/config.js';
+import {
+  DEFAULT_SNAPSHOT_MEDIA_LIMIT,
+  DEFAULT_SNAPSHOT_MEDIA_MAX_BYTES,
+  mediaCacheDir,
+  toMediaCacheFileName,
+} from '../../utils/media-cache.js';
+import { resolveSnapshotMediaOption } from '../../utils/media-ref-precedence.js';
 import { resolveConcurrency } from '../../utils/sync-limit-precedence.js';
-import { fetchMediaListPage } from '../media/index.js';
+import {
+  collectArticleStorageKeys,
+  collectLocalMirrorIndex,
+  collectWorkspaceArticleStorageKeys,
+  fetchMediaListPage,
+} from '../media/index.js';
 import { listRemoteArticles } from '../pull/index.js';
 import {
   canonicalizeTaxonomiesForBaseline,
@@ -52,6 +67,7 @@ import type {
   SnapshotCaptureOptions,
   SnapshotCaptureResult,
   SnapshotClearResult,
+  SnapshotPruneCacheResult,
   SnapshotStatusResult,
 } from './types.js';
 
@@ -60,6 +76,7 @@ export type {
   SnapshotCaptureResult,
   SnapshotStatusResult,
   SnapshotClearResult,
+  SnapshotPruneCacheResult,
 };
 
 const MEDIA_SNAPSHOT_BATCH_SIZE = 100;
@@ -397,6 +414,117 @@ export async function captureWorkspaceSnapshot(
     walkComplete: true,
   });
 
+  // Stage 3b: Opt-in offline media binary cache into `media/_cache/` (budgeted, 0-GET skip)
+  let mediaCached = 0;
+  let mediaCacheSkipped = 0;
+  let mediaCacheBytes = 0;
+  let mediaCacheBudgetHit = false;
+  let mediaCacheTotalCandidates = 0;
+
+  const includeMedia = resolveSnapshotMediaOption(options.includeMedia, config);
+  if (includeMedia) {
+    const budgetLimit = Math.max(
+      0,
+      options.mediaCacheLimit ?? config.snapshotMediaLimit ?? DEFAULT_SNAPSHOT_MEDIA_LIMIT,
+    );
+    const budgetMaxBytes = Math.max(
+      0,
+      options.mediaCacheMaxBytes ??
+        config.snapshotMediaMaxBytes ??
+        DEFAULT_SNAPSHOT_MEDIA_MAX_BYTES,
+    );
+    const cacheDir = mediaCacheDir(path.join(options.workspaceRoot, 'media'));
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheGitignore = path.join(cacheDir, '.gitignore');
+    if (!fs.existsSync(cacheGitignore)) {
+      fs.writeFileSync(cacheGitignore, '*\n', 'utf8');
+    }
+
+    const mirrorIndex = collectLocalMirrorIndex(options.workspaceRoot, options.cache);
+    const allMedia = options.cache.listSnapshotMedia();
+    const candidates: Array<{
+      rec: SnapshotMediaRecord;
+      fileName: string;
+      cacheRelPath: string;
+      cacheAbsPath: string;
+    }> = [];
+
+    for (const rec of allMedia) {
+      if (!rec.storageKey) continue;
+      const fileName = toMediaCacheFileName(rec.storageKey);
+      if (!fileName) continue;
+      if (mirrorIndex.has(rec.storageKey)) {
+        mediaCacheSkipped++;
+        continue;
+      }
+      const cacheRelPath = path.posix.join('media', '_cache', fileName);
+      const cacheAbsPath = path.join(options.workspaceRoot, cacheRelPath);
+      if (rec.cachedAt && fs.existsSync(cacheAbsPath)) {
+        mediaCacheSkipped++;
+        continue;
+      }
+      candidates.push({ rec, fileName, cacheRelPath, cacheAbsPath });
+    }
+
+    mediaCacheTotalCandidates = candidates.length;
+
+    const toDownload: typeof candidates = [];
+    let plannedBytes = 0;
+    for (const cand of candidates) {
+      const estSize = typeof cand.rec.size === 'number' && cand.rec.size > 0 ? cand.rec.size : 0;
+      if (
+        toDownload.length >= budgetLimit ||
+        (estSize > 0 && plannedBytes + estSize > budgetMaxBytes)
+      ) {
+        mediaCacheBudgetHit = true;
+        break;
+      }
+      toDownload.push(cand);
+      plannedBytes += estSize;
+    }
+
+    let dlCursor = 0;
+    const dlWorkers = Array.from(
+      { length: Math.min(concurrency, Math.max(1, toDownload.length)) },
+      async () => {
+        for (;;) {
+          const i = dlCursor++;
+          if (i >= toDownload.length) break;
+          const { rec, fileName, cacheRelPath, cacheAbsPath } = toDownload[i]!;
+          const tmpPath = path.join(cacheDir, `.tmp-${fileName}-${process.pid}-${i}`);
+          try {
+            const res = await fetchFn(mediaFileEndpoint(options.origin, rec.storageKey!), {
+              method: 'GET',
+              headers: { Authorization: `Bearer ${options.token}` },
+            });
+            if (!res.ok) continue;
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (typeof rec.size === 'number' && rec.size >= 0 && buf.byteLength !== rec.size) {
+              continue;
+            }
+            fs.writeFileSync(tmpPath, buf);
+            fs.renameSync(tmpPath, cacheAbsPath);
+            const contentHash = `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
+            options.cache.markMediaCached(rec.mediaId, {
+              cachedAt: Date.now(),
+              cachePath: cacheRelPath,
+              contentHash,
+            });
+            mediaCached++;
+            mediaCacheBytes += buf.byteLength;
+          } catch {
+            try {
+              if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+            } catch {
+              // ignore cleanup failure
+            }
+          }
+        }
+      },
+    );
+    await Promise.all(dlWorkers);
+  }
+
   // Stage 4: Commit snapshot_meta timestamp after both article & media walks succeed
   const finalCapturedAt = Date.now();
   const durationMs = Math.max(0, finalCapturedAt - startedAt);
@@ -418,6 +546,11 @@ export async function captureWorkspaceSnapshot(
     articlesPruned: articleWriteRes.pruned,
     mediaCount: mediaRecords.length,
     mediaPruned: mediaWriteRes.pruned,
+    mediaCached,
+    mediaCacheSkipped,
+    mediaCacheBytes,
+    mediaCacheBudgetHit,
+    mediaCacheTotalCandidates,
     taxonomyFetchedCount,
     taxonomyReusedCount,
     articleSingleGetCount,
@@ -442,15 +575,108 @@ export function getWorkspaceSnapshotStatus(
 }
 
 /**
- * Clears all snapshot catalog records from `.emit/cache.db` (0 HTTP requests).
+ * Clears all snapshot catalog records from `.emit/cache.db` (0 HTTP requests) and,
+ * when the last `snapshot_meta` row is cleared, unlinks unreferenced `media/_cache/` files.
  */
 export function clearWorkspaceSnapshot(
   cache: CacheDatabase,
   collection = 'posts',
+  workspaceRoot?: string,
 ): SnapshotClearResult {
+  // ★C2: Collect referenced storageKeys BEFORE clearSnapshot() deletes snapshot_articles!
+  const cachedRows = workspaceRoot ? cache.listCachedSnapshotMedia() : [];
+  const referencedKeys = new Set<string>();
+  let willClearAllMedia = false;
+
+  if (workspaceRoot) {
+    const totalMeta = cache.countSnapshotMeta();
+    const hasTargetMeta = Boolean(cache.getSnapshotMeta(collection));
+    willClearAllMedia = totalMeta === 0 || (hasTargetMeta && totalMeta <= 1);
+
+    if (willClearAllMedia) {
+      for (const key of collectWorkspaceArticleStorageKeys(workspaceRoot, collection)) {
+        referencedKeys.add(key);
+      }
+      for (const art of cache.listSnapshotArticles(collection)) {
+        for (const desc of collectArticleStorageKeys(art.bodyMarkdown)) {
+          referencedKeys.add(desc.storageKey);
+        }
+      }
+    }
+  }
+
   const res = cache.clearSnapshot(collection);
+
+  let cacheFilesDeleted = 0;
+  let cacheFilesPreserved = 0;
+  if (workspaceRoot && willClearAllMedia) {
+    for (const row of cachedRows) {
+      if (!row.cachePath) continue;
+      const absPath = path.join(workspaceRoot, row.cachePath);
+      if (row.storageKey && referencedKeys.has(row.storageKey)) {
+        cacheFilesPreserved++;
+        continue;
+      }
+      if (fs.existsSync(absPath)) {
+        try {
+          fs.unlinkSync(absPath);
+          cacheFilesDeleted++;
+        } catch {
+          // ignore unlink error
+        }
+      }
+    }
+  }
+
   return {
     collection,
     ...res,
+    cacheFilesDeleted,
+    cacheFilesPreserved,
   };
+}
+
+/**
+ * Deletes orphaned files in `media/_cache/` that are no longer referenced by any
+ * `snapshot_media` manifest entry.
+ */
+export function pruneOrphanMediaCache(
+  cache: CacheDatabase,
+  workspaceRoot: string,
+): SnapshotPruneCacheResult {
+  const cacheDir = mediaCacheDir(path.join(workspaceRoot, 'media'));
+  if (!fs.existsSync(cacheDir)) {
+    return { deletedFiles: 0, preservedFiles: 0 };
+  }
+
+  const validFileNames = new Set<string>();
+  for (const row of cache.listCachedSnapshotMedia()) {
+    if (row.cachePath) {
+      validFileNames.add(path.posix.basename(row.cachePath));
+    }
+  }
+
+  let deletedFiles = 0;
+  let preservedFiles = 0;
+  for (const entry of fs.readdirSync(cacheDir)) {
+    if (entry === '.gitignore' || entry.startsWith('.')) continue;
+    const full = path.join(cacheDir, entry);
+    try {
+      if (!fs.statSync(full).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (validFileNames.has(entry)) {
+      preservedFiles++;
+    } else {
+      try {
+        fs.unlinkSync(full);
+        deletedFiles++;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { deletedFiles, preservedFiles };
 }

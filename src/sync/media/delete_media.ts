@@ -422,6 +422,19 @@ export async function deleteMedia(options: DeleteMediaOptions): Promise<DeleteMe
   const dryRun = Boolean(options.dryRun);
 
   for (const rawTarget of options.targets) {
+    const normTarget = rawTarget.replace(/\\/g, '/');
+    if (normTarget.includes('media/_cache/') || normTarget.startsWith('_cache/')) {
+      items.push({
+        target: rawTarget,
+        action: 'error',
+        error: {
+          code: 'MEDIA_COMPANION_NOT_FOUND',
+          message: `"${rawTarget}" is inside Emit's derived offline cache (media/_cache/) and cannot be deleted directly. Specify the workspace mirror path (media/<stem>.yaml), D1 mediaId, or storageKey instead.`,
+        },
+      });
+      continue;
+    }
+
     // [0] Resolve target -> { mediaId, storageKey?, mirrorPaths? }
     let resolved: ResolvedDeleteTarget;
     try {

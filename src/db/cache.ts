@@ -151,6 +151,9 @@ export interface SnapshotMediaRecord {
   alt?: string | null;
   caption?: string | null;
   createdAt?: string | null;
+  cachedAt?: number | null;
+  cachePath?: string | null;
+  contentHash?: string | null;
   capturedAt: number;
 }
 
@@ -886,11 +889,8 @@ export class CacheDatabase {
     });
   }
 
-  public listSnapshotMedia(): SnapshotMediaRecord[] {
-    const rows = this.db.prepare('SELECT * FROM snapshot_media').all() as Array<
-      Record<string, unknown>
-    >;
-    return rows.map((r) => ({
+  private mapSnapshotMediaRow(r: Record<string, unknown>): SnapshotMediaRecord {
+    return {
       mediaId: String(r.media_id),
       storageKey:
         r.storage_key !== null && r.storage_key !== undefined ? String(r.storage_key) : null,
@@ -900,8 +900,66 @@ export class CacheDatabase {
       alt: r.alt !== null && r.alt !== undefined ? String(r.alt) : null,
       caption: r.caption !== null && r.caption !== undefined ? String(r.caption) : null,
       createdAt: r.created_at !== null && r.created_at !== undefined ? String(r.created_at) : null,
+      cachedAt: r.cached_at !== null && r.cached_at !== undefined ? Number(r.cached_at) : null,
+      cachePath: r.cache_path !== null && r.cache_path !== undefined ? String(r.cache_path) : null,
+      contentHash:
+        r.content_hash !== null && r.content_hash !== undefined ? String(r.content_hash) : null,
       capturedAt: Number(r.captured_at),
-    }));
+    };
+  }
+
+  public listSnapshotMedia(): SnapshotMediaRecord[] {
+    const rows = this.db.prepare('SELECT * FROM snapshot_media').all() as Array<
+      Record<string, unknown>
+    >;
+    return rows.map((r) => this.mapSnapshotMediaRow(r));
+  }
+
+  public getSnapshotMediaByStorageKey(storageKey: string): SnapshotMediaRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM snapshot_media WHERE storage_key = ? LIMIT 1')
+      .get(storageKey) as Record<string, unknown> | undefined;
+    return row ? this.mapSnapshotMediaRow(row) : null;
+  }
+
+  public getSnapshotMediaById(mediaId: string): SnapshotMediaRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM snapshot_media WHERE media_id = ? LIMIT 1')
+      .get(mediaId.toUpperCase()) as Record<string, unknown> | undefined;
+    return row ? this.mapSnapshotMediaRow(row) : null;
+  }
+
+  public listCachedSnapshotMedia(): SnapshotMediaRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM snapshot_media WHERE cached_at IS NOT NULL')
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapSnapshotMediaRow(r));
+  }
+
+  public markMediaCached(
+    mediaId: string,
+    info: { cachedAt: number; cachePath: string; contentHash: string },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE snapshot_media SET cached_at = ?, cache_path = ?, content_hash = ? WHERE media_id = ?`,
+      )
+      .run(info.cachedAt, info.cachePath, info.contentHash, mediaId.toUpperCase());
+  }
+
+  public clearMediaCacheFields(mediaId: string): void {
+    this.db
+      .prepare(
+        `UPDATE snapshot_media SET cached_at = NULL, cache_path = NULL, content_hash = NULL WHERE media_id = ?`,
+      )
+      .run(mediaId.toUpperCase());
+  }
+
+  public countSnapshotMeta(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM snapshot_meta').get() as {
+      cnt: number;
+    };
+    return Number(row?.cnt ?? 0);
   }
 
   public upsertSnapshotMediaBatch(options: {
@@ -910,10 +968,23 @@ export class CacheDatabase {
   }): { upserted: number; pruned: number } {
     return this.runTransaction(() => {
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO snapshot_media (
-          media_id, storage_key, filename, mime_type, size, alt, caption, created_at, captured_at
+        INSERT INTO snapshot_media (
+          media_id, storage_key, filename, mime_type, size, alt, caption, created_at,
+          cached_at, cache_path, content_hash, captured_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(media_id) DO UPDATE SET
+          storage_key = excluded.storage_key,
+          filename = excluded.filename,
+          mime_type = excluded.mime_type,
+          size = excluded.size,
+          alt = excluded.alt,
+          caption = excluded.caption,
+          created_at = excluded.created_at,
+          cached_at = COALESCE(excluded.cached_at, snapshot_media.cached_at),
+          cache_path = COALESCE(excluded.cache_path, snapshot_media.cache_path),
+          content_hash = COALESCE(excluded.content_hash, snapshot_media.content_hash),
+          captured_at = excluded.captured_at
       `);
 
       const keepIds = new Set<string>();
@@ -928,6 +999,9 @@ export class CacheDatabase {
           rec.alt ?? null,
           rec.caption ?? null,
           rec.createdAt ?? null,
+          rec.cachedAt ?? null,
+          rec.cachePath ?? null,
+          rec.contentHash ?? null,
           rec.capturedAt,
         );
       }

@@ -287,4 +287,60 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
       upgraded.close();
     }
   });
+
+  it('preserves local_hash, base_snapshots.hash, and snapshot_media rows across Schema v7 -> v8 migration', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const v7DbPath = path.join(tempDir, 'v7-upgrade.db');
+    const rawDb = new DatabaseSync(v7DbPath);
+    rawDb.exec(`
+      CREATE TABLE sync_state (
+        id TEXT PRIMARY KEY, local_file_path TEXT NOT NULL, local_hash TEXT NOT NULL,
+        remote_rev TEXT NOT NULL, status TEXT NOT NULL, slug TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL, remote_taxonomy_hash TEXT,
+        conflict_pending INTEGER NOT NULL DEFAULT 0, body_conflict_pending INTEGER NOT NULL DEFAULT 0,
+        taxonomy_conflict_pending INTEGER NOT NULL DEFAULT 0, conflict_copy_path TEXT,
+        conflict_copy_hash TEXT, conflict_at INTEGER, delete_pending INTEGER NOT NULL DEFAULT 0,
+        taxonomy_apply_pending INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE base_snapshots (
+        id TEXT PRIMARY KEY, rev TEXT NOT NULL, body_markdown TEXT NOT NULL,
+        frontmatter_yaml TEXT NOT NULL, hash TEXT NOT NULL, saved_at INTEGER NOT NULL
+      );
+      CREATE TABLE snapshot_articles (
+        id TEXT PRIMARY KEY, collection TEXT NOT NULL, slug TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT, updated_at TEXT, published_at TEXT,
+        comparison_rev TEXT NOT NULL, excerpt TEXT, body_markdown TEXT NOT NULL DEFAULT '',
+        body_source TEXT NOT NULL DEFAULT 'list-live', categories_json TEXT NOT NULL DEFAULT '[]',
+        tags_json TEXT NOT NULL DEFAULT '[]', taxonomy_verified INTEGER NOT NULL DEFAULT 1,
+        captured_at INTEGER NOT NULL,
+        locale TEXT, featured_image TEXT, seo_json TEXT NOT NULL DEFAULT '{}', bylines_json TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE snapshot_media (
+        media_id TEXT PRIMARY KEY, storage_key TEXT, filename TEXT, mime_type TEXT,
+        size INTEGER, alt TEXT, caption TEXT, created_at TEXT, captured_at INTEGER NOT NULL
+      );
+      INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
+      VALUES ('01M8MIG1', 'posts/published/20261101_01M8MIG1-test.md', 'hash_v7', '3@live:01L1', 'published', 'test', 1700000000);
+      INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at)
+      VALUES ('01M8MIG1', '3', 'body', '{}', 'hash_v7', 1700000000);
+      INSERT INTO snapshot_media (media_id, storage_key, filename, mime_type, size, captured_at)
+      VALUES ('01M8MED1', '01M8KEY0000000000000000001.png', 'photo.png', 'image/png', 1024, 1700000000);
+      PRAGMA user_version = 7;
+    `);
+    rawDb.close();
+
+    const upgraded = new CacheDatabase(v7DbPath);
+    try {
+      expect(upgraded.getSchemaVersion()).toBe(8);
+      expect(upgraded.getSyncState('01M8MIG1')?.localHash).toBe('hash_v7');
+      expect(upgraded.getBaseSnapshot('01M8MIG1')?.hash).toBe('hash_v7');
+      const media = upgraded.getSnapshotMediaByStorageKey('01M8KEY0000000000000000001.png');
+      expect(media?.mediaId).toBe('01M8MED1');
+      expect(media?.cachedAt).toBeNull();
+      expect(media?.cachePath).toBeNull();
+      expect(media?.contentHash).toBeNull();
+    } finally {
+      upgraded.close();
+    }
+  });
 });

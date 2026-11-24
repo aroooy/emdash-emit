@@ -238,7 +238,13 @@ describe('Workspace Metadata Snapshot Engine (v0.1.47 Phase 2)', () => {
     expect(status.meta?.mediaCount).toBe(2);
 
     const cleared = clearWorkspaceSnapshot(cache, 'posts');
-    expect(cleared).toEqual({ collection: 'posts', articlesCleared: 2, mediaCleared: 2 });
+    expect(cleared).toEqual({
+      collection: 'posts',
+      articlesCleared: 2,
+      mediaCleared: 2,
+      cacheFilesDeleted: 0,
+      cacheFilesPreserved: 0,
+    });
     expect(getWorkspaceSnapshotStatus(cache, 'posts').meta).toBeNull();
   });
 

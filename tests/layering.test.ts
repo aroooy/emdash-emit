@@ -124,10 +124,12 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'captureWorkspaceSnapshot',
     'getWorkspaceSnapshotStatus',
     'clearWorkspaceSnapshot',
+    'pruneOrphanMediaCache',
     'SnapshotCaptureOptions',
     'SnapshotCaptureResult',
     'SnapshotStatusResult',
     'SnapshotClearResult',
+    'SnapshotPruneCacheResult',
   ]),
 };
 

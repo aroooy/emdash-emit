@@ -37,9 +37,11 @@ import {
   asStorageKey,
 } from '../../utils/media-id.js';
 import { MEDIA_FILE_ROUTE_PREFIX } from '../../utils/media-refs.js';
+import { toMediaCacheFileName } from '../../utils/media-cache.js';
 import { storageKeyToMarkdownRef } from '../../utils/naming.js';
 import {
   collectArticleStorageKeys,
+  collectLocalMirrorIndex,
   collectRemoteStorageKeys,
   collectLocalMediaMirrorCandidates,
   syncSingleMediaItem,
@@ -708,4 +710,174 @@ export async function mirrorArticleReferencedMedia(
     canonicalMarkdown,
     featuredImage,
   });
+}
+
+export interface RestoreSnapshotMediaResult {
+  referencedCount: number;
+  restored: number;
+  skipped: number;
+  missing: number;
+  corruptKeys: string[];
+  warnings: string[];
+}
+
+/**
+ * Materializes media assets referenced by a snapshot-restored article from `media/_cache/`
+ * into workspace `media/` with 0 HTTP requests. Uses `linkSync` -> `COPYFILE_FICLONE` -> `copyFileSync`
+ * fallback chain, verifies `size` against `snapshot_media`, synthesizes companion `.yaml`
+ * (`id:` = D1 mediaId), and updates `media_state`.
+ */
+export function restoreSnapshotReferencedMedia(options: {
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  canonicalMarkdown: string;
+  featuredImage?: string | null;
+}): RestoreSnapshotMediaResult {
+  const { workspaceRoot, cache, canonicalMarkdown, featuredImage } = options;
+  const mediaDir = path.join(workspaceRoot, 'media');
+  const bodyDescriptors = collectArticleStorageKeys(canonicalMarkdown);
+  const storageKeys = new Set<string>(bodyDescriptors.map((d) => d.storageKey));
+
+  let restored = 0;
+  let skipped = 0;
+  let missing = 0;
+  const corruptKeys: string[] = [];
+  const warnings: string[] = [];
+
+  const featuredUlid = featuredImage ? extractMediaUlid(featuredImage) : null;
+  if (featuredUlid) {
+    const featuredSnap = cache.getSnapshotMediaById(featuredUlid);
+    if (featuredSnap?.storageKey) {
+      storageKeys.add(featuredSnap.storageKey);
+    } else {
+      const existingFeatured = findLocalBinaryForMediaId(
+        mediaDir,
+        featuredUlid,
+        cache,
+        workspaceRoot,
+      );
+      if (existingFeatured) {
+        skipped++;
+      } else {
+        missing++;
+      }
+    }
+  }
+
+  const referencedCount =
+    storageKeys.size +
+    (featuredUlid && !cache.getSnapshotMediaById(featuredUlid)?.storageKey ? 1 : 0);
+  if (referencedCount === 0) {
+    return {
+      referencedCount: 0,
+      restored: 0,
+      skipped: 0,
+      missing: 0,
+      corruptKeys: [],
+      warnings: [],
+    };
+  }
+
+  const mirrorIndex = collectLocalMirrorIndex(workspaceRoot, cache);
+
+  for (const storageKey of storageKeys) {
+    if (mirrorIndex.has(storageKey)) {
+      skipped++;
+      continue;
+    }
+
+    const cacheFileName = toMediaCacheFileName(storageKey);
+    if (!cacheFileName) {
+      missing++;
+      continue;
+    }
+
+    const snapRow = cache.getSnapshotMediaByStorageKey(storageKey);
+    const cacheRelPath = snapRow?.cachePath || path.posix.join('media', '_cache', cacheFileName);
+    const cacheAbsPath = path.join(workspaceRoot, cacheRelPath);
+
+    if (!snapRow || !snapRow.cachedAt || !fs.existsSync(cacheAbsPath)) {
+      missing++;
+      continue;
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(cacheAbsPath);
+    } catch {
+      missing++;
+      continue;
+    }
+
+    if (typeof snapRow.size === 'number' && snapRow.size >= 0 && stat.size !== snapRow.size) {
+      corruptKeys.push(storageKey);
+      missing++;
+      warnings.push(
+        `[MEDIA_CACHE_CORRUPT key=${storageKey}] expected=${snapRow.size} actual=${stat.size}`,
+      );
+      continue;
+    }
+
+    const stem = storageKeyToMarkdownRef(storageKey);
+    if (!stem) {
+      missing++;
+      continue;
+    }
+
+    const ext = path.posix.extname(cacheFileName) || '.jpg';
+    const mirrorRelPath = path.posix.join('media', `${stem}${ext}`);
+    const mirrorAbsPath = path.join(workspaceRoot, mirrorRelPath);
+    const companionAbsPath = path.join(workspaceRoot, 'media', `${stem}.yaml`);
+
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    if (!fs.existsSync(mirrorAbsPath)) {
+      try {
+        fs.linkSync(cacheAbsPath, mirrorAbsPath);
+      } catch {
+        try {
+          fs.copyFileSync(cacheAbsPath, mirrorAbsPath, fs.constants.COPYFILE_FICLONE);
+        } catch {
+          fs.copyFileSync(cacheAbsPath, mirrorAbsPath);
+        }
+      }
+    }
+
+    if (!fs.existsSync(companionAbsPath)) {
+      const companionDoc: Record<string, unknown> = {
+        id: snapRow.mediaId,
+        storageKey,
+        filename: snapRow.filename || cacheFileName,
+        ...(snapRow.mimeType ? { mimeType: snapRow.mimeType } : {}),
+        size: snapRow.size ?? stat.size,
+        ...(snapRow.alt ? { alt: snapRow.alt } : {}),
+        ...(snapRow.caption ? { caption: snapRow.caption } : {}),
+        url: `/_emdash/api/media/file/${storageKey}`,
+        status: 'ready',
+      };
+      fs.writeFileSync(companionAbsPath, yaml.dump(companionDoc), 'utf8');
+    }
+
+    cache.saveMediaState({
+      mediaId: asMediaRecordId(snapRow.mediaId),
+      storageKey: asStorageKey(storageKey),
+      url: `/_emdash/api/media/file/${storageKey}`,
+      workspacePath: mirrorRelPath,
+      markdownRef: stem,
+      status: 'ready',
+      localContentHash: snapRow.contentHash ?? null,
+      uploadedAt: Math.floor(Date.now() / 1000),
+    });
+
+    restored++;
+  }
+
+  return {
+    referencedCount,
+    restored,
+    skipped,
+    missing,
+    corruptKeys,
+    warnings,
+  };
 }

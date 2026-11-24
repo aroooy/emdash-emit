@@ -43,6 +43,7 @@ import {
   resolveCanonicalArticlePath,
 } from '../workspace/index.js';
 import { quarantineDivergentLocalCopies } from './quarantine.js';
+import { restoreSnapshotReferencedMedia } from './media_stage.js';
 import type { PullOptions, QuarantinedLocalCopy } from './types.js';
 
 const DEFAULT_STALE_THRESHOLD_DAYS = 30;
@@ -58,6 +59,7 @@ export interface PullFromSnapshotOptions {
   all?: boolean;
   force?: boolean;
   localMediaRefs?: boolean;
+  restoreMedia?: boolean;
   staleThresholdDays?: number;
   onProgress?: (progress: { current: number; total: number; item: PullFromSnapshotResult }) => void;
 }
@@ -74,6 +76,9 @@ export interface PullFromSnapshotResult {
   bodySource: SnapshotBodySource;
   degradedFields: string[];
   snapshotCapturedAt: number;
+  mediaRestored?: number;
+  mediaMissing?: number;
+  mediaSkipped?: number;
   preservedBlocks?: number;
   quarantined?: QuarantinedLocalCopy[];
   warnings: string[];
@@ -88,6 +93,9 @@ export interface PullFromSnapshotBatchResult {
   updated: number;
   skipped: number;
   preserved: number;
+  mediaRestored: number;
+  mediaMissing: number;
+  mediaSkipped: number;
   items: PullFromSnapshotResult[];
   warnings: string[];
 }
@@ -322,6 +330,34 @@ function restoreSnapshotArticle(
     updatedAt: Math.floor(Date.now() / 1000),
   });
 
+  const mediaRes =
+    options.restoreMedia !== false
+      ? restoreSnapshotReferencedMedia({
+          workspaceRoot: options.workspaceRoot,
+          cache: options.cache,
+          canonicalMarkdown,
+          featuredImage: frontmatter.featuredImage,
+        })
+      : { referencedCount: 0, restored: 0, skipped: 0, missing: 0, corruptKeys: [], warnings: [] };
+
+  const capturedIso = new Date(row.capturedAt).toISOString();
+  const resolvedMediaWarnings: string[] = [];
+  if (mediaRes.referencedCount > 0 && mediaRes.missing === 0 && mediaRes.corruptKeys.length === 0) {
+    resolvedMediaWarnings.push(
+      `[MEDIA_CACHE captured_at=${capturedIso} restored=${mediaRes.restored} missing=0 skipped=${mediaRes.skipped}]`,
+    );
+  } else {
+    if (mediaRes.restored > 0 || mediaRes.skipped > 0) {
+      resolvedMediaWarnings.push(
+        `[MEDIA_CACHE captured_at=${capturedIso} restored=${mediaRes.restored} missing=${mediaRes.missing} skipped=${mediaRes.skipped}]`,
+      );
+    }
+    resolvedMediaWarnings.push(...mediaRes.warnings);
+    resolvedMediaWarnings.push(
+      '[MEDIA_NOT_GUARANTEED] mirrored assets only; run pull-media when back online',
+    );
+  }
+
   return {
     id: row.id,
     slug: row.slug,
@@ -332,9 +368,12 @@ function restoreSnapshotArticle(
     bodySource: row.bodySource,
     degradedFields,
     snapshotCapturedAt: row.capturedAt,
+    mediaRestored: mediaRes.restored,
+    mediaMissing: mediaRes.missing,
+    mediaSkipped: mediaRes.skipped,
     preservedBlocks,
     quarantined: quarantined.length > 0 ? quarantined : undefined,
-    warnings: itemWarnings,
+    warnings: [...itemWarnings, ...resolvedMediaWarnings],
   };
 }
 
@@ -379,9 +418,6 @@ export function pullFromSnapshot(
   if (isStale) {
     globalWarnings.push(`[SNAPSHOT_STALE age=${staleDays}d threshold=${thresholdDays}d]`);
   }
-  globalWarnings.push(
-    '[MEDIA_NOT_GUARANTEED] mirrored assets only; run pull-media when back online',
-  );
 
   const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
   const bylineIdToSlug = options.cache.getBylineMaps().idToSlug;
@@ -429,6 +465,9 @@ export function pullFromSnapshot(
   let updated = 0;
   let skipped = 0;
   let preserved = 0;
+  let mediaRestored = 0;
+  let mediaMissing = 0;
+  let mediaSkipped = 0;
 
   for (let i = 0; i < selectedRows.length; i++) {
     const item = restoreSnapshotArticle(
@@ -439,6 +478,9 @@ export function pullFromSnapshot(
       globalWarnings,
     );
     items.push(item);
+    mediaRestored += item.mediaRestored ?? 0;
+    mediaMissing += item.mediaMissing ?? 0;
+    mediaSkipped += item.mediaSkipped ?? 0;
     if (item.localEditsPreserved) {
       preserved++;
       skipped++;
@@ -450,6 +492,17 @@ export function pullFromSnapshot(
     options.onProgress?.({ current: i + 1, total: selectedRows.length, item });
   }
 
+  const batchWarnings = [...globalWarnings];
+  if (mediaMissing > 0 || (mediaRestored === 0 && mediaSkipped === 0)) {
+    batchWarnings.push(
+      '[MEDIA_NOT_GUARANTEED] mirrored assets only; run pull-media when back online',
+    );
+  } else {
+    batchWarnings.push(
+      `[MEDIA_CACHE captured_at=${capturedIso} restored=${mediaRestored} missing=0 skipped=${mediaSkipped}]`,
+    );
+  }
+
   return {
     collection,
     snapshotCapturedAt: meta.capturedAt,
@@ -459,7 +512,10 @@ export function pullFromSnapshot(
     updated,
     skipped,
     preserved,
+    mediaRestored,
+    mediaMissing,
+    mediaSkipped,
     items,
-    warnings: globalWarnings,
+    warnings: batchWarnings,
   };
 }

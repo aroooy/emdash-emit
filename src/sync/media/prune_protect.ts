@@ -137,3 +137,28 @@ export function collectPruneProtectionSets(
     referencingFilesByRecordId,
   };
 }
+
+/**
+ * Collects all R2 `storageKey` strings referenced by workspace articles (`draft/`, `published/`,
+ * `conflicts/`) for a collection. Used by snapshot GC before deleting snapshot metadata.
+ */
+export function collectWorkspaceArticleStorageKeys(
+  workspaceRoot: string,
+  collection: string,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const { fullPath } of iterWorkspaceArticles(workspaceRoot, collection, {
+    includeConflicts: true,
+  })) {
+    let content: string;
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const descriptor of collectArticleStorageKeys(content)) {
+      keys.add(descriptor.storageKey);
+    }
+  }
+  return keys;
+}

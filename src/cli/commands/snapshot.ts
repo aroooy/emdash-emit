@@ -25,9 +25,12 @@ import {
   captureWorkspaceSnapshot,
   clearWorkspaceSnapshot,
   getWorkspaceSnapshotStatus,
+  pruneOrphanMediaCache,
 } from '../../sync/snapshot/index.js';
 import { formatSnapshotAge, formatSnapshotTimestamp } from '../../presentation/article_report.js';
-import type { CliContextResolver } from '../context.js';
+import { formatMediaCacheSummary } from '../../presentation/media_report.js';
+import { persistSnapshotMedia } from '../../utils/config.js';
+import { resolveExplicitBooleanOption, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
 
 export function registerSnapshotCommand(
@@ -41,18 +44,42 @@ export function registerSnapshotCommand(
     )
     .option('-c, --collection <collection>', 'Collection to snapshot (default: posts)')
     .option('--status', 'Show current snapshot freshness and counts without contacting remote')
-    .option('--clear', 'Clear cached snapshot tables from cache.db')
+    .option('--clear', 'Clear cached snapshot tables from cache.db and GC unreferenced media cache')
+    .option('--prune-cache', 'Remove orphaned files in media/_cache/ not present in manifest')
+    .option(
+      '--include-media',
+      'Opt-in: also download media binaries into media/_cache/ (remembered in .emit/config.json)',
+    )
+    .option('--no-include-media', 'Disable remembered snapshotMedia caching in .emit/config.json')
+    .option('--media-cache-limit <number>', 'Max media binaries to cache per capture (default 200)')
+    .option(
+      '--media-cache-max-bytes <bytes>',
+      'Max bytes to cache per capture (default 536870912 / 512 MiB)',
+    )
     .option('--concurrency <number>', 'Max concurrent remote fetches (default from config)')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (options) => {
+    .action(async (options, command) => {
       try {
-        const ctx = resolveContext(options.profile);
+        const isLocalOnly = Boolean(options.clear || options.status || options.pruneCache);
+        const ctx = resolveContext(options.profile, { optionalAuth: isLocalOnly });
         const collection = options.collection || ctx.config.defaultCollection;
 
-        if (options.clear) {
-          const cleared = clearWorkspaceSnapshot(ctx.cache, collection);
+        if (options.pruneCache) {
+          const pruned = pruneOrphanMediaCache(ctx.cache, ctx.root);
           console.log(
-            `🗑️  Cleared snapshot for "${cleared.collection}" (${cleared.articlesCleared} article(s), ${cleared.mediaCleared} media record(s)).`,
+            `🧹 Pruned ${pruned.deletedFiles} orphaned file(s) from media/_cache/ (${pruned.preservedFiles} valid cached file(s) kept).`,
+          );
+          return;
+        }
+
+        if (options.clear) {
+          const cleared = clearWorkspaceSnapshot(ctx.cache, collection, ctx.root);
+          const cacheMsg =
+            cleared.cacheFilesDeleted > 0 || cleared.cacheFilesPreserved > 0
+              ? ` | Media cache GC: ${cleared.cacheFilesDeleted} deleted, ${cleared.cacheFilesPreserved} preserved [MEDIA_CACHE_PRESERVED]`
+              : '';
+          console.log(
+            `🗑️  Cleared snapshot for "${cleared.collection}" (${cleared.articlesCleared} article(s), ${cleared.mediaCleared} media record(s)${cacheMsg}).`,
           );
           return;
         }
@@ -76,8 +103,20 @@ export function registerSnapshotCommand(
           return;
         }
 
+        const explicitIncludeMedia = resolveExplicitBooleanOption(command, 'includeMedia');
+        if (explicitIncludeMedia !== undefined) {
+          persistSnapshotMedia(ctx.root, explicitIncludeMedia);
+        }
+
         const concurrency =
           options.concurrency !== undefined ? parseInt(options.concurrency, 10) : undefined;
+        const mediaCacheLimit =
+          options.mediaCacheLimit !== undefined ? parseInt(options.mediaCacheLimit, 10) : undefined;
+        const mediaCacheMaxBytes =
+          options.mediaCacheMaxBytes !== undefined
+            ? parseInt(options.mediaCacheMaxBytes, 10)
+            : undefined;
+
         const result = await captureWorkspaceSnapshot({
           workspaceRoot: ctx.root,
           cache: ctx.cache,
@@ -86,6 +125,9 @@ export function registerSnapshotCommand(
           refreshToken: ctx.auth.refreshToken,
           collection,
           concurrency: Number.isFinite(concurrency) ? concurrency : undefined,
+          includeMedia: explicitIncludeMedia,
+          mediaCacheLimit: Number.isFinite(mediaCacheLimit) ? mediaCacheLimit : undefined,
+          mediaCacheMaxBytes: Number.isFinite(mediaCacheMaxBytes) ? mediaCacheMaxBytes : undefined,
         });
 
         const iso = new Date(result.capturedAt).toISOString();
@@ -96,6 +138,9 @@ export function registerSnapshotCommand(
             `   • Terms:    ${result.categoriesSynced} categories, ${result.tagsSynced} tags ` +
             `(article terms: ${result.taxonomyFetchedCount} fetched, ${result.taxonomyReusedCount} reused)`,
         );
+        if (result.mediaCached > 0 || result.mediaCacheSkipped > 0 || result.mediaCacheBudgetHit) {
+          console.log(`   • ${formatMediaCacheSummary(result)}`);
+        }
         if (result.taxonomyWarning) {
           console.log(`⚠️ ${result.taxonomyWarning}`);
         }

@@ -114,6 +114,12 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
         .describe(
           'Restore article(s) offline from the local .emit/cache.db snapshot catalog (no network calls)',
         ),
+      restoreMedia: z
+        .boolean()
+        .optional()
+        .describe(
+          'With fromSnapshot: materialize referenced media from media/_cache/ (defaults to true when manifest exists)',
+        ),
       staleThresholdDays: z
         .number()
         .int()
@@ -146,6 +152,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
               id: targetId,
               force: args.force,
               localMediaRefs,
+              restoreMedia: args.restoreMedia,
               staleThresholdDays: args.staleThresholdDays,
             });
             const actionText = res.localEditsPreserved
@@ -154,6 +161,10 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
                 ? 'ℹ️ Article is already up-to-date'
                 : '✅ Successfully restored article from snapshot';
             const titleText = res.title ? ` "${res.title}"` : '';
+            const mediaLine =
+              res.mediaRestored && res.mediaRestored > 0
+                ? `\nMedia: 🖼️ Restored ${res.mediaRestored} referenced media asset(s) to media/ from local cache (0 network calls).`
+                : '';
             const notice = formatSnapshotFallbackNotice({
               snapshotCapturedAt: res.snapshotCapturedAt,
               warnings: res.warnings,
@@ -161,7 +172,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             });
             const quarantineNotice = formatQuarantineNotice(res.quarantined);
             return formatToolTextWithMeta(
-              `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}\n\n${notice}${quarantineNotice ? `\n\n${quarantineNotice}` : ''}`,
+              `${actionText}${titleText} (${res.slug})\nFile path: ${res.filePath}\nStatus: ${res.status}${mediaLine}\n\n${notice}${quarantineNotice ? `\n\n${quarantineNotice}` : ''}`,
               ctx.meta,
               'Offline snapshot restore complete. Run sync_pull when back online before pushing.',
             );
@@ -176,6 +187,7 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             limit,
             force: args.force,
             localMediaRefs,
+            restoreMedia: args.restoreMedia,
             staleThresholdDays: args.staleThresholdDays,
           });
           const degradedUnion = Array.from(
@@ -186,13 +198,17 @@ export function registerSyncPullTools(server: McpServer, resolveContext: Context
             warnings: batchRes.warnings,
             degradedFields: degradedUnion,
           });
+          const mediaLine =
+            batchRes.mediaRestored > 0
+              ? `\nMedia: 🖼️ Restored ${batchRes.mediaRestored} referenced media asset(s) to media/ from local cache (0 network calls).`
+              : '';
           const sampleLines = batchRes.items
             .slice(0, 10)
             .map((i) => `  - [${i.status}] ${i.filePath}${i.title ? ` (${i.title})` : ''}`);
           const detailBlock =
             sampleLines.length > 0 ? `\n\nRestored Articles:\n${sampleLines.join('\n')}` : '';
           return formatToolTextWithMeta(
-            `✅ Restored ${batchRes.total} article(s) from snapshot (${batchRes.updated} updated, ${batchRes.skipped} skipped/up-to-date, ${batchRes.preserved} preserved).\n\n${notice}${detailBlock}`,
+            `✅ Restored ${batchRes.total} article(s) from snapshot (${batchRes.updated} updated, ${batchRes.skipped} skipped/up-to-date, ${batchRes.preserved} preserved).${mediaLine}\n\n${notice}${detailBlock}`,
             ctx.meta,
             'Offline snapshot restore complete. Run sync_pull when back online before pushing.',
           );

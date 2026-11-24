@@ -199,6 +199,7 @@ export function searchLocalMirrorMedia(options: {
         mirrored: false,
         localPath: null,
         fromSnapshot: true,
+        ...(row.cachedAt ? { cached: true } : {}),
         matchedOn,
       });
     }

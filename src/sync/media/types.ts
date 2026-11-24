@@ -276,6 +276,8 @@ export interface MediaSearchHit {
   localPath: string | null;
   /** True when this hit came from the cached metadata snapshot rather than a local mirror. */
   fromSnapshot?: boolean;
+  /** True when this snapshot hit has a cached binary in `media/_cache/`. */
+  cached?: boolean;
   /** Which field matched the query, so an agent can read why a row was returned. */
   matchedOn: Array<'filename' | 'alt' | 'caption' | 'storageKey' | 'mirrorStem'>;
 }

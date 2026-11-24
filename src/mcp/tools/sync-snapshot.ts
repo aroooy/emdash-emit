@@ -26,19 +26,21 @@ import {
   captureWorkspaceSnapshot,
   clearWorkspaceSnapshot,
   getWorkspaceSnapshotStatus,
+  pruneOrphanMediaCache,
 } from '../../sync/snapshot/index.js';
+import { formatMediaCacheSummary } from '../../presentation/media_report.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncSnapshotTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_snapshot',
-    'Capture, inspect, or clear a full-library metadata snapshot (articles, media, taxonomies) in cache.db. Enables comprehensive offline search and 0-GET remote taxonomy filtering.',
+    'Capture, inspect, clear, or prune-cache for the full-library metadata snapshot (articles, media, taxonomies) in cache.db. Enables exhaustive 0-HTTP search, 0-GET taxonomy filtering, and opt-in offline media caching (includeMedia: true).',
     {
       action: z
-        .enum(['capture', 'status', 'clear'])
+        .enum(['capture', 'status', 'clear', 'prune-cache'])
         .optional()
-        .describe('Action to perform: "capture" (default), "status", or "clear"'),
+        .describe('Action to perform: "capture" (default), "status", "clear", or "prune-cache"'),
       collection: z.string().optional().describe('Target collection (defaults to "posts")'),
       concurrency: z
         .number()
@@ -47,6 +49,24 @@ export function registerSyncSnapshotTool(server: McpServer, resolveContext: Cont
         .max(20)
         .optional()
         .describe('Max concurrent remote fetches when capturing'),
+      includeMedia: z
+        .boolean()
+        .optional()
+        .describe(
+          'Opt-in: also download media binaries into media/_cache/ for offline --from-snapshot restore (never mutates .emit/config.json)',
+        ),
+      mediaCacheLimit: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Max media binaries to cache per capture (default 200)'),
+      mediaCacheMaxBytes: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Max bytes to cache per capture (default 536870912 / 512 MiB)'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) =>
@@ -54,8 +74,13 @@ export function registerSyncSnapshotTool(server: McpServer, resolveContext: Cont
         const action = args.action ?? 'capture';
         const collection = args.collection || ctx.config.defaultCollection;
 
+        if (action === 'prune-cache') {
+          const pruned = pruneOrphanMediaCache(ctx.cache, ctx.root);
+          return formatToolSuccess({ action: 'prune-cache', ...pruned }, ctx.meta);
+        }
+
         if (action === 'clear') {
-          const cleared = clearWorkspaceSnapshot(ctx.cache, collection);
+          const cleared = clearWorkspaceSnapshot(ctx.cache, collection, ctx.root);
           return formatToolSuccess({ action: 'clear', ...cleared }, ctx.meta);
         }
 
@@ -89,12 +114,16 @@ export function registerSyncSnapshotTool(server: McpServer, resolveContext: Cont
           refreshToken: ctx.auth.refreshToken,
           collection,
           concurrency: args.concurrency,
+          includeMedia: args.includeMedia,
+          mediaCacheLimit: args.mediaCacheLimit,
+          mediaCacheMaxBytes: args.mediaCacheMaxBytes,
         });
 
         return formatToolSuccess(
           {
             action: 'capture',
             ...result,
+            mediaCacheSummary: formatMediaCacheSummary(result),
             capturedAtIso: new Date(result.capturedAt).toISOString(),
           },
           ctx.meta,

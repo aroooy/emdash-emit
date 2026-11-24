@@ -204,6 +204,9 @@ describe('v0.1.38 characterization: initWorkspace generated files', () => {
         "mediaSyncLimit",
         "origin",
         "postsSyncLimit",
+        "snapshotMedia",
+        "snapshotMediaLimit",
+        "snapshotMediaMaxBytes",
       ]
     `);
   });

@@ -361,6 +361,10 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
       'Restore article(s) offline from the local .emit/cache.db snapshot catalog (no network calls)',
     )
     .option(
+      '--no-media-restore',
+      'With --from-snapshot: skip materializing referenced media from media/_cache/',
+    )
+    .option(
       '--stale-threshold-days <days>',
       'Snapshot staleness warning threshold in days when using --from-snapshot (default: 30)',
     )
@@ -436,6 +440,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
               id: targetId,
               force: options.force,
               localMediaRefs,
+              restoreMedia: options.mediaRestore !== false,
               staleThresholdDays,
             });
 
@@ -447,6 +452,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
               console.log(`ℹ️ Article ${res.slug} is already up-to-date (${res.filePath})`);
             } else {
               console.log(`✅ Restored from snapshot: ${res.slug} -> ${res.filePath}`);
+            }
+            if (res.mediaRestored && res.mediaRestored > 0) {
+              console.log(
+                `🖼️ Restored ${res.mediaRestored} referenced media asset(s) to media/ from local cache (0 network calls).`,
+              );
             }
 
             const notice = formatSnapshotFallbackNotice({
@@ -473,6 +483,7 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
             limit,
             force: options.force,
             localMediaRefs,
+            restoreMedia: options.mediaRestore !== false,
             staleThresholdDays,
           });
 
@@ -480,6 +491,11 @@ export function registerPullCommands(program: Command, resolveContext: CliContex
           console.log(
             `\n🎉 Snapshot restore (${collection}): ${batchRes.total} total${statusBreakdown} (${batchRes.updated} updated, ${batchRes.skipped} skipped/up-to-date)`,
           );
+          if (batchRes.mediaRestored > 0) {
+            console.log(
+              `🖼️ Restored ${batchRes.mediaRestored} referenced media asset(s) to media/ from local cache (0 network calls).`,
+            );
+          }
           if (batchRes.preserved > 0) {
             console.log(
               `🛡️  ${batchRes.preserved} article(s) had unpushed local edits: Emit kept your local version.`,

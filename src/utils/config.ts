@@ -43,6 +43,14 @@ export interface EmitConfig {
    */
   localMediaRefs?: boolean;
   /**
+   * Opt-in offline media cache: when true, `emit snapshot` downloads remote media binaries
+   * into `media/_cache/` (bounded by `snapshotMediaLimit` and `snapshotMediaMaxBytes`) so
+   * `emit pull --from-snapshot` can materialize referenced images with 0 network calls.
+   */
+  snapshotMedia?: boolean;
+  snapshotMediaLimit?: number;
+  snapshotMediaMaxBytes?: number;
+  /**
    * Package version that initialized this workspace.
    */
   createdWithVersion?: string;
@@ -77,6 +85,9 @@ export const DEFAULT_CONFIG = {
   mediaSyncLimit: 100,
   concurrency: 8,
   localMediaRefs: true,
+  snapshotMedia: false,
+  snapshotMediaLimit: 200,
+  snapshotMediaMaxBytes: 512 * 1024 * 1024,
 } as const satisfies EmitConfig;
 
 /**
@@ -192,6 +203,23 @@ export function persistLocalMediaRefs(workspaceRoot: string, value: boolean): vo
 }
 
 /**
+ * Persists the `snapshotMedia` opt-in preference into `.emit/config.json` (CLI only).
+ */
+export function persistSnapshotMedia(workspaceRoot: string, value: boolean): void {
+  try {
+    const paths = getWorkspacePaths(workspaceRoot);
+    if (!fs.existsSync(paths.configPath)) return;
+
+    const raw = fs.readFileSync(paths.configPath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed.snapshotMedia = value;
+    fs.writeFileSync(paths.configPath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Non-fatal if config update fails
+  }
+}
+
+/**
  * Updates `lastSyncedVersion` in `.emit/config.json` after a successful sync operation.
  */
 export function updateConfigSyncedVersion(workspaceRoot: string, version?: string): void {
@@ -241,6 +269,9 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       // `../../media/<storageKey>` reference so preview resolves offline. Only an explicit `false` opts back out;
       // an absent key (a workspace predating the setting) now defaults to local refs rather than canonical URLs.
       localMediaRefs: parsed.localMediaRefs ?? DEFAULT_CONFIG.localMediaRefs,
+      snapshotMedia: parsed.snapshotMedia ?? DEFAULT_CONFIG.snapshotMedia,
+      snapshotMediaLimit: parsed.snapshotMediaLimit ?? DEFAULT_CONFIG.snapshotMediaLimit,
+      snapshotMediaMaxBytes: parsed.snapshotMediaMaxBytes ?? DEFAULT_CONFIG.snapshotMediaMaxBytes,
       createdWithVersion: parsed.createdWithVersion,
       lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,

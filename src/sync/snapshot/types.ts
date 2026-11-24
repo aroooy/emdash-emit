@@ -30,6 +30,9 @@ export interface SnapshotCaptureOptions {
   refreshToken?: string;
   collection?: string;
   concurrency?: number;
+  includeMedia?: boolean;
+  mediaCacheLimit?: number;
+  mediaCacheMaxBytes?: number;
   fetchFn?: typeof fetch;
 }
 
@@ -40,6 +43,11 @@ export interface SnapshotCaptureResult {
   articlesPruned: number;
   mediaCount: number;
   mediaPruned: number;
+  mediaCached: number;
+  mediaCacheSkipped: number;
+  mediaCacheBytes: number;
+  mediaCacheBudgetHit: boolean;
+  mediaCacheTotalCandidates: number;
   taxonomyFetchedCount: number;
   taxonomyReusedCount: number;
   articleSingleGetCount: number;
@@ -58,4 +66,11 @@ export interface SnapshotClearResult {
   collection: string;
   articlesCleared: number;
   mediaCleared: number;
+  cacheFilesDeleted: number;
+  cacheFilesPreserved: number;
+}
+
+export interface SnapshotPruneCacheResult {
+  deletedFiles: number;
+  preservedFiles: number;
 }

@@ -45,6 +45,7 @@ import {
   FENCE_POLICY,
   scanClassifiedMediaReferences,
 } from '../utils/media-refs.js';
+import { isReservedMediaSubdir } from '../utils/media-cache.js';
 
 export type CheckStatus = 'ok' | 'warning' | 'error';
 
@@ -128,7 +129,9 @@ function countMirroredMedia(mediaDir: string): number {
   if (!fs.existsSync(mediaDir)) return 0;
   let count = 0;
   for (const file of fs.readdirSync(mediaDir)) {
-    if (file.endsWith('.yaml') || file.startsWith('legacy_')) continue;
+    if (isReservedMediaSubdir(file) || file.endsWith('.yaml') || file.startsWith('legacy_')) {
+      continue;
+    }
     if (!fs.statSync(path.join(mediaDir, file)).isFile()) continue;
     count++;
   }
@@ -681,7 +684,7 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
           // ignore corrupted individual yaml
         }
       } else if (!f.startsWith('.')) {
-        if (f !== 'drafts' && f !== '_trash') {
+        if (!isReservedMediaSubdir(f)) {
           nonYamlMediaFiles.add(f);
         }
         // media/<markdownRef>.<ext>: the stem is the sanitized storageKey, so it is recorded whole and

@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPackageVersion } from '../utils/version.js';
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 7;
+export const CURRENT_CACHE_SCHEMA_VERSION = 8;
 
 function pruneBackups(dbPath: string): void {
   if (dbPath === ':memory:') return;
@@ -223,6 +223,9 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
       alt TEXT,
       caption TEXT,
       created_at TEXT,
+      cached_at INTEGER,
+      cache_path TEXT,
+      content_hash TEXT,
       captured_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_snapshot_media_storage_key ON snapshot_media (storage_key);
@@ -428,6 +431,21 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
     }
     if (!snapshotArtColNames.has('bylines_json')) {
       db.exec("ALTER TABLE snapshot_articles ADD COLUMN bylines_json TEXT NOT NULL DEFAULT '[]';");
+    }
+
+    // Migration 8 (v8): extend snapshot_media with cached_at, cache_path, content_hash
+    const snapshotMediaCols = db.prepare("PRAGMA table_info('snapshot_media');").all() as Array<
+      Record<string, unknown>
+    >;
+    const snapshotMediaColNames = new Set(snapshotMediaCols.map((c) => String(c.name)));
+    if (!snapshotMediaColNames.has('cached_at')) {
+      db.exec('ALTER TABLE snapshot_media ADD COLUMN cached_at INTEGER;');
+    }
+    if (!snapshotMediaColNames.has('cache_path')) {
+      db.exec('ALTER TABLE snapshot_media ADD COLUMN cache_path TEXT;');
+    }
+    if (!snapshotMediaColNames.has('content_hash')) {
+      db.exec('ALTER TABLE snapshot_media ADD COLUMN content_hash TEXT;');
     }
 
     db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);

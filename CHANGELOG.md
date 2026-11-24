@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.56] - 2026-11-24
+
+### Added
+
+- **Opt-In Offline Media Cache & Materialization (`media/_cache/`, Schema v8)**:
+  - `emit snapshot` (`--include-media` / `--no-include-media`, `--media-cache-limit <n>`, `--media-cache-max-bytes <bytes>`, `--prune-cache`, with offline `optionalAuth` for `--status`/`--clear`/`--prune-cache`) and MCP `sync_snapshot` (extended `action` enum with `"prune-cache"`, plus `includeMedia`, `mediaCacheLimit`, `mediaCacheMaxBytes`) download remote media binaries into `media/_cache/<basename>` (with `.gitignore` `*`, SHA-256 `content_hash`, and 0-GET incremental skip) under default budgets (`200` items / `512 MiB`, `[MEDIA_CACHE_BUDGET]` on cap; byte cap is planned pre-download from remote `size` metadata).
+  - `emit pull --from-snapshot` (default-ON, opt-out via `--no-media-restore` / `restoreMedia: false`) materializes referenced media from `media/_cache/` into `media/<stem>.<ext>` + companion `.yaml` (`id:` = D1 `mediaId`) + `media_state` with 0 HTTP requests via `linkSync` → `COPYFILE_FICLONE` → `copyFileSync`, verifying file `size` (`[MEDIA_CACHE_CORRUPT]`) and omitting `[MEDIA_NOT_GUARANTEED]` when all referenced assets are resolved.
+  - Added `snapshotMedia`, `snapshotMediaLimit`, and `snapshotMediaMaxBytes` config keys (`resolveSnapshotMediaOption` in Layer 0; CLI-only `.emit/config.json` persistence), Schema v8 `snapshot_media` columns (`cached_at`, `cache_path`, `content_hash`), site-wide `--clear` GC ordering, `isReservedMediaSubdir()` isolation across `doctor` / `media-search` / `pull-media --prune` / `delete-media`, and `cached?: boolean` on `MediaSearchHit`.
+
 ## [0.1.55] - 2026-11-24
 
 ### Breaking Changes

@@ -65,7 +65,7 @@ All safety guardrails are centrally registered in `GUARD_REGISTRY` (`src/sync/gu
 Emit provides exhaustive 0-HTTP search across both articles (`src/sync/article_search/`) and media (`src/sync/media/local_search.ts`), plus an explicit `--live` FTS mode for articles (`src/sync/article_search/remote.ts`):
 
 1. **No Bounded Scan**:
-   - Default `article-search` and `media-search` inspect 100% of local workspace files (`iterWorkspaceArticles` / `media_state` + `media/*.yaml`) and cached `.emit/cache.db` snapshot rows (`snapshot_articles` / `snapshot_media`), with disk/mirror precedence and `list-stale` body exclusion (`[body unverified]`).
+   - Default `article-search` and `media-search` inspect 100% of local workspace files (`iterWorkspaceArticles` / `media_state` + `media/*.yaml`, excluding `media/_cache/` via `isReservedMediaSubdir()`) and cached `.emit/cache.db` snapshot rows (`snapshot_articles` / `snapshot_media`, surfacing `cached: true` when binary is cached in `media/_cache/`), with disk/mirror precedence and `list-stale` body exclusion (`[body unverified]`).
    - Display count is capped via `clampSearchLimit` (`limit` default `20`, max `50`), setting `truncated: true` and `truncatedHint` when more matches exist.
 2. **Explicit `--live` / `live: true` FTS (`article-search` only)**:
    - Queries `/_emdash/api/search` directly for keyword-only searches and enriches hits from `snapshot_articles` (`enrichedFromSnapshot`, `enrichmentStale`).
