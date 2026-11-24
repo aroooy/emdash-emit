@@ -63,9 +63,9 @@ When probing a diff or plan in `emdash-emit`, actively test against these 7 doma
 4. **Two Media ID Spaces (`docs/media-id-spaces.md`)**:
    - Are D1 record `id` (`MediaRecordId`, used in `featuredImage` and `GET /_emdash/api/media/{id}`) and R2 `storageKey` (`StorageKey`, used in `/_emdash/api/media/file/{storageKey}` and `media_state` PK) ever interchanged?
    - Is `snapshot_media` treated as site-wide (collection-independent) while `snapshot_articles` / `snapshot_meta` are collection-scoped?
-5. **Epistemic Search & Offline Doctor (`docs/safety-guards-and-diagnostics.md`)**:
-   - Whenever `walkComplete === false`, does the output preserve `[WALK_INCOMPLETE]` without asserting absence?
-   - Does `emit doctor` remain 100% offline unless `--check-auth`, `--check-media-urls`, or `--check-media-library` is explicitly passed?
+5. **Snapshot-First Search (`snapshotStatus` Framing) & Offline Doctor (`docs/safety-guards-and-diagnostics.md`)**:
+   - Whenever `hits.length === 0` and `snapshotStatus !== 'fresh'` (or `live` FTS uses `< 3` chars / returns `nextCursor`), does `buildSnapshotSearchFraming()` set `absenceGuaranteed: false` and avoid asserting absence? Does `live` FTS reject unsupported filters with `LIVE_SEARCH_UNSUPPORTED_FILTER`?
+   - Does `emit doctor` remain 100% offline unless `--check-auth`, `--check-media-urls`, or `--check-media-library` is explicitly passed? (Always check `AGENTS.md` §3 and `docs/` for the latest invariants.)
 
 ---
 

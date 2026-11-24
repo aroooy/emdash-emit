@@ -109,9 +109,12 @@ Every core invariant is paired with the structural mechanism (Architecture, Type
 
 ---
 
-## 4. The Golden Path for AI Content Authoring (Workflows A/B & 2-Stage Push)
+## 4. Product Behavior Spec: The Golden Path for Content Authoring
 
-When drafting, reviewing, or updating blog articles, AI agents must follow the **Golden Path Workflows**:
+> [!NOTE]
+> **Audience Distinction (For Repository Developers)**: This section defines the **end-user / MCP authoring workflow** that `emdash-emit` must support and enforce via `emit guide`, MCP tool descriptions, and preflight guards (`G1–G20`). When developing `emdash-emit` itself, treat this section as the product behavioral specification to preserve—**not** as instructions for editing this repository.
+
+When drafting, reviewing, or updating blog articles using Emit, content-authoring AI agents follow the **Golden Path Workflows**:
 
 ```text
   [0. SYNC WORKSPACE]  sync_pull / sync_status  (Syncs 30+30 window, categories/tags & media)

@@ -32,7 +32,7 @@ For each safety claim your change depends on, push it to **Step 4 or 5** and sta
 Whenever you touch Layer 0, Layer 1, or SQLite persistence, check these 5 non-obvious blast zones:
 
 1. **SQLite `cache.db` Schema & Hash Invariants (`src/db/migrations.ts`, `src/db/cache.ts`)**:
-   - Does a schema migration (v1 → v6+) alter any column read by `reconstructBaseline()` or invalidate existing `sync_state.local_hash` values? (Verify with `npx vitest run tests/migration_hash_invariants.test.ts tests/cache.test.ts`.)
+   - Does a schema migration (currently Schema v7 / `CURRENT_CACHE_SCHEMA_VERSION`) alter any column read by `reconstructBaseline()` or invalidate existing `sync_state.local_hash` values? (Verify with `npx vitest run tests/migration_hash_invariants.test.ts tests/cache.test.ts`.)
    - Are `snapshot_articles` / `snapshot_meta` (collection-scoped) and `snapshot_media` (site-wide, preserved until the last `snapshot_meta` row is cleared) kept consistent?
 2. **Two-Layer Representation Round-Trip (`Layer A` ⇔ `Layer B`)**:
    - **Layer A** (`base_snapshots.frontmatter_yaml` JSON & remote payloads): canonical percent-encoded taxonomy slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) and `/_emdash/api/media/file/<storageKey>`.
