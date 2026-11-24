@@ -32,6 +32,7 @@ import { toMediaCacheFileName } from '../src/utils/media-cache.js';
 import {
   captureWorkspaceSnapshot,
   clearWorkspaceSnapshot,
+  getWorkspaceSnapshotStatus,
   pruneOrphanMediaCache,
 } from '../src/sync/snapshot/index.js';
 import { pullFromSnapshot } from '../src/sync/pull/index.js';
@@ -42,7 +43,10 @@ import {
   searchLocalMirrorMedia,
 } from '../src/sync/media/index.js';
 import { runWorkspaceDoctor } from '../src/sync/doctor.js';
-import { formatMediaCacheSummary } from '../src/presentation/media_report.js';
+import {
+  formatMediaCacheStatusLine,
+  formatMediaCacheSummary,
+} from '../src/presentation/media_report.js';
 
 function sha256(buf: Buffer): string {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -591,5 +595,122 @@ describe('Offline Media Cache & Materialize (v0.1.56)', () => {
     expect(resolveSnapshotMediaOption(true, cfgBefore)).toBe(true);
     expect(resolveSnapshotMediaOption(false, { ...cfgBefore, snapshotMedia: true })).toBe(false);
     expect(resolveSnapshotMediaOption(undefined, { ...cfgBefore, snapshotMedia: true })).toBe(true);
+  });
+
+  it('reports mediaCache file count and byte total in getWorkspaceSnapshotStatus (including when meta is null)', async () => {
+    const storageKey = '01M8KEY0000000000000000010.png';
+    const pngBytes = Buffer.alloc(2048, 7);
+    const counts = { fileGets: 0 };
+
+    await captureWorkspaceSnapshot({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'tok',
+      includeMedia: true,
+      fetchFn: buildOnlineMock(
+        [],
+        [
+          {
+            id: '01M8MED0000000000000000010',
+            storageKey,
+            filename: 'stat.png',
+            mimeType: 'image/png',
+            bytes: pngBytes,
+          },
+        ],
+        counts,
+      ),
+    });
+
+    // 2-arg call keeps mediaCache omitted for backwards compatibility
+    const statusNoRoot = getWorkspaceSnapshotStatus(cache, 'posts');
+    expect(statusNoRoot.mediaCache).toBeUndefined();
+
+    // 3-arg call counts real files on disk
+    const statusWithRoot = getWorkspaceSnapshotStatus(cache, 'posts', tempDir);
+    expect(statusWithRoot.mediaCache).toEqual({
+      cachedCount: 1,
+      totalBytes: pngBytes.byteLength,
+    });
+    expect(formatMediaCacheStatusLine(statusWithRoot.mediaCache)).toContain(
+      'Media cache: 1 file(s)',
+    );
+
+    // Even for another collection where meta === null, cached binaries are still reported
+    const pagesStatus = getWorkspaceSnapshotStatus(cache, 'pages', tempDir);
+    expect(pagesStatus.meta).toBeNull();
+    expect(pagesStatus.mediaCache).toEqual({
+      cachedCount: 1,
+      totalBytes: pngBytes.byteLength,
+    });
+  });
+
+  it('emits [MEDIA_CACHE_AVAILABLE] in doctor for valid cached keys and excludes corrupt cache files', async () => {
+    const validKey = '01M8KEY0000000000000000011.png';
+    const corruptKey = '01M8KEY0000000000000000012.png';
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const counts = { fileGets: 0 };
+
+    await captureWorkspaceSnapshot({
+      workspaceRoot: tempDir,
+      cache,
+      origin: 'https://example.com',
+      token: 'tok',
+      includeMedia: true,
+      fetchFn: buildOnlineMock(
+        [],
+        [
+          {
+            id: '01M8MED0000000000000000011',
+            storageKey: validKey,
+            filename: 'valid.png',
+            mimeType: 'image/png',
+            bytes,
+          },
+          {
+            id: '01M8MED0000000000000000012',
+            storageKey: corruptKey,
+            filename: 'corrupt.png',
+            mimeType: 'image/png',
+            bytes,
+          },
+        ],
+        counts,
+      ),
+    });
+
+    // Corrupt the second cache file size on disk
+    fs.writeFileSync(
+      path.join(tempDir, 'media', '_cache', toMediaCacheFileName(corruptKey)!),
+      Buffer.from('bad'),
+    );
+
+    // Create an article referencing both images without mirroring them into media/
+    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, 'posts', 'draft', '20261124_01M8POST000000000000000099-doc.md'),
+      `---\nid: 01M8POST000000000000000099\nslug: doc\ntitle: Doc\ncollection: posts\nstatus: draft\n---\n\n![v](../../media/${validKey})\n\n![c](../../media/${corruptKey})\n`,
+      'utf8',
+    );
+
+    const doctorRes = await runWorkspaceDoctor({
+      workspaceRoot: tempDir,
+      cache,
+      config: DEFAULT_CONFIG,
+    });
+
+    const availCheck = doctorRes.checks.find((c) => c.id === 'media_cache_available');
+    expect(availCheck).toBeDefined();
+    expect(availCheck?.status).toBe('ok');
+    expect(availCheck?.message).toContain('[MEDIA_CACHE_AVAILABLE] 1 missing media reference(s)');
+    expect(availCheck?.details).toEqual({
+      availableKeys: [validKey],
+      corruptKeys: [corruptKey],
+    });
+
+    const refsCheck = doctorRes.checks.find((c) => c.id === 'media_references');
+    expect(refsCheck?.status).toBe('warning');
+    expect(refsCheck?.suggestion).toContain('emit pull --from-snapshot');
   });
 });

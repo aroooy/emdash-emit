@@ -567,10 +567,34 @@ export async function captureWorkspaceSnapshot(
 export function getWorkspaceSnapshotStatus(
   cache: CacheDatabase,
   collection = 'posts',
+  workspaceRoot?: string,
 ): SnapshotStatusResult {
+  const meta = cache.getSnapshotMeta(collection);
+  if (!workspaceRoot) {
+    return { collection, meta };
+  }
+
+  let cachedCount = 0;
+  let totalBytes = 0;
+  for (const row of cache.listCachedSnapshotMedia()) {
+    if (!row.cachePath) continue;
+    const cacheAbs = path.join(workspaceRoot, row.cachePath);
+    if (!fs.existsSync(cacheAbs)) continue;
+    try {
+      const stat = fs.statSync(cacheAbs);
+      if (stat.isFile()) {
+        cachedCount++;
+        totalBytes += stat.size;
+      }
+    } catch {
+      // ignore unreadable cache file
+    }
+  }
+
   return {
     collection,
-    meta: cache.getSnapshotMeta(collection),
+    meta,
+    mediaCache: { cachedCount, totalBytes },
   };
 }
 

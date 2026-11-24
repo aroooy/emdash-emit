@@ -57,9 +57,15 @@ export interface SnapshotCaptureResult {
   durationMs: number;
 }
 
+export interface SnapshotMediaCacheStatus {
+  cachedCount: number;
+  totalBytes: number;
+}
+
 export interface SnapshotStatusResult {
   collection: string;
   meta: SnapshotMetaRecord | null;
+  mediaCache?: SnapshotMediaCacheStatus;
 }
 
 export interface SnapshotClearResult {

@@ -208,6 +208,20 @@ export function formatMediaDeleteReport(result: DeleteMediaResult): string {
 }
 
 /**
+ * Formats a concise human-readable line for `emit snapshot --status` when cached binaries exist in
+ * `media/_cache/`. Returns `null` when `cachedCount` is 0 or `mediaCache` is omitted.
+ */
+export function formatMediaCacheStatusLine(
+  mediaCache?: { cachedCount: number; totalBytes: number } | null,
+): string | null {
+  if (!mediaCache || mediaCache.cachedCount <= 0) {
+    return null;
+  }
+  const mib = (mediaCache.totalBytes / (1024 * 1024)).toFixed(2);
+  return `   Media cache: ${mediaCache.cachedCount} file(s) (${mib} MiB in media/_cache/)`;
+}
+
+/**
  * Formats offline media cache statistics produced by `snapshot capture --include-media`.
  */
 export function formatMediaCacheSummary(res: {

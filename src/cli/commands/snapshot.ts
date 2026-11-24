@@ -28,7 +28,10 @@ import {
   pruneOrphanMediaCache,
 } from '../../sync/snapshot/index.js';
 import { formatSnapshotAge, formatSnapshotTimestamp } from '../../presentation/article_report.js';
-import { formatMediaCacheSummary } from '../../presentation/media_report.js';
+import {
+  formatMediaCacheStatusLine,
+  formatMediaCacheSummary,
+} from '../../presentation/media_report.js';
 import { persistSnapshotMedia } from '../../utils/config.js';
 import { resolveExplicitBooleanOption, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
@@ -85,11 +88,15 @@ export function registerSnapshotCommand(
         }
 
         if (options.status) {
-          const status = getWorkspaceSnapshotStatus(ctx.cache, collection);
+          const status = getWorkspaceSnapshotStatus(ctx.cache, collection, ctx.root);
+          const cacheLine = formatMediaCacheStatusLine(status.mediaCache);
           if (!status.meta) {
             console.log(
               `📸 Snapshot (${collection}): none (run "emit snapshot" to cache full remote metadata).`,
             );
+            if (cacheLine) {
+              console.log(cacheLine);
+            }
             return;
           }
           const iso = new Date(status.meta.capturedAt).toISOString();
@@ -100,6 +107,9 @@ export function registerSnapshotCommand(
             `📸 Snapshot (${collection}): ${formatSnapshotTimestamp(iso)} (${formatSnapshotAge(iso)}) · ` +
               `${status.meta.articleCount} article(s) · ${status.meta.mediaCount} media record(s)${staleNote}`,
           );
+          if (cacheLine) {
+            console.log(cacheLine);
+          }
           return;
         }
 

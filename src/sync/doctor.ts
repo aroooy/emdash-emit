@@ -751,6 +751,18 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
     if (!m) return null;
     return VALID_MEDIA_FILE_KEY.test(m[1]) ? m[1] : null;
   };
+  const extractCacheCandidateKey = (ref: string): string | null => {
+    const remoteKey = probeKey(ref);
+    if (remoteKey) return remoteKey;
+    const cleanRef = ref.replace(/^[./]+/, '');
+    const localKeyMatch = cleanRef.match(/^media\/([^?#]+)/);
+    if (localKeyMatch && VALID_MEDIA_FILE_KEY.test(localKeyMatch[1])) {
+      return localKeyMatch[1];
+    }
+    return null;
+  };
+  const cacheAvailableKeys = new Set<string>();
+  const corruptCacheKeys = new Set<string>();
   const referencedStorageKeys = new Set<string>();
   const referencedMediaIds = new Set<string>();
   const referencedStems = new Set<string>();
@@ -846,6 +858,29 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
       for (const ref of detailed.normalRefs) {
         if (checkRef(ref)) continue;
         const source = relPath;
+        const candidateKey = extractCacheCandidateKey(ref);
+        if (candidateKey) {
+          const snapRow = options.cache.getSnapshotMediaByStorageKey(candidateKey);
+          if (snapRow?.cachedAt && snapRow.cachePath) {
+            const cacheAbs = path.join(options.workspaceRoot, snapRow.cachePath);
+            if (fs.existsSync(cacheAbs)) {
+              try {
+                const stat = fs.statSync(cacheAbs);
+                if (
+                  typeof snapRow.size === 'number' &&
+                  snapRow.size >= 0 &&
+                  stat.size !== snapRow.size
+                ) {
+                  corruptCacheKeys.add(candidateKey);
+                } else {
+                  cacheAvailableKeys.add(candidateKey);
+                }
+              } catch {
+                // ignore unreadable cache file
+              }
+            }
+          }
+        }
         const key = options.checkMediaUrls ? probeKey(ref) : null;
         if (key) {
           pendingRemoteProbes.push({ ref, key, source });
@@ -948,9 +983,23 @@ async function runMediaIntegrityChecks(ctx: DoctorCheckContext): Promise<void> {
         `Body URLs carry R2 storage keys, so a missing local file does not mean the remote asset is broken: see docs/media-id-spaces.md.`,
       suggestion: options.checkMediaUrls
         ? 'These keys are R2 storage keys, not media record ids, so a file-route hit proves only that the object exists. The full library index is reachable without binary downloads through "emit doctor --check-media-library" (or "emit pull-media --all" for complete offline backup), which reports every storageKey the server holds without any server-side query. Confirm by storageKey before registering anything — a blind INSERT can duplicate an existing record. Emit mirrors records, never repairs server data.'
-        : undefined,
+        : cacheAvailableKeys.size > 0
+          ? 'Run "emit pull --from-snapshot" to materialize cached media from media/_cache/ without network requests.'
+          : undefined,
       details: missingMedia,
     });
+    if (cacheAvailableKeys.size > 0) {
+      checks.push({
+        id: 'media_cache_available',
+        name: 'Offline Media Cache',
+        status: 'ok',
+        message: `[MEDIA_CACHE_AVAILABLE] ${cacheAvailableKeys.size} missing media reference(s) are already cached in media/_cache/ — run "emit pull --from-snapshot" to materialize them offline (0 HTTP requests).`,
+        details: {
+          availableKeys: Array.from(cacheAvailableKeys),
+          ...(corruptCacheKeys.size > 0 ? { corruptKeys: Array.from(corruptCacheKeys) } : {}),
+        },
+      });
+    }
   } else if (remoteLibrary) {
     const notes: string[] = [
       `Remote media library holds ${remoteLibrary.totalCount ?? 'an unknown number of'} record(s); this workspace mirrors ${remoteLibrary.mirroredCount}`,

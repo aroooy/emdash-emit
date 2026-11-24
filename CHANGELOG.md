@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.59] - 2026-11-24
+
+### Added
+
+- **Media Cache Observability (`snapshot --status` & `doctor`)**:
+  - `getWorkspaceSnapshotStatus(cache, collection, workspaceRoot?)` now reports real `media/_cache/` file count and byte size (`mediaCache: { cachedCount, totalBytes }`), surfaced by `emit snapshot --status` (including orphan caches when `meta === null`) and MCP `sync_snapshot({ action: "status" })`.
+  - `emit doctor` / `sync_doctor` now checks missing media references against size-verified `media/_cache/` entries (0-HTTP) and emits an informational `media_cache_available` (`[MEDIA_CACHE_AVAILABLE]`) check guiding `emit pull --from-snapshot`.
+
+### Changed
+
+- **README Overhaul**:
+  - Added `Why Emit?` (Cloudflare D1 quota defense with upfront sync vs. zero-cost local iteration, offline media staging, G1–G20 guardrails), `1-Minute Daily Workflow`, an updated ASCII architecture diagram, `media/_cache/` workspace entry, and synchronized CLI/MCP tables (`17` MCP tools, `G1–G20`, `Schema v8`, `--include-media`, `--live`).
+
 ## [0.1.58] - 2026-11-24
 
 ### Fixed

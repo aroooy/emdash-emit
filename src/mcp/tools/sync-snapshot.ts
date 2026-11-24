@@ -85,7 +85,7 @@ export function registerSyncSnapshotTool(server: McpServer, resolveContext: Cont
         }
 
         if (action === 'status') {
-          const status = getWorkspaceSnapshotStatus(ctx.cache, collection);
+          const status = getWorkspaceSnapshotStatus(ctx.cache, collection, ctx.root);
           const ageDays = status.meta
             ? Math.max(0, Math.floor((Date.now() - status.meta.capturedAt) / 86_400_000))
             : null;
@@ -93,6 +93,7 @@ export function registerSyncSnapshotTool(server: McpServer, resolveContext: Cont
             {
               action: 'status',
               collection: status.collection,
+              ...(status.mediaCache ? { mediaCache: status.mediaCache } : {}),
               meta: status.meta
                 ? {
                     ...status.meta,
