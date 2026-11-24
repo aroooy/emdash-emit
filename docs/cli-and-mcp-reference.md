@@ -291,7 +291,7 @@ emit media-search [query] [-l, --limit <n>] [--mirrored-only] [--since <date>] [
 
 ### 15. `emit snapshot`
 
-Captures, inspects, or clears a full-library metadata snapshot (articles, media, taxonomies) in `.emit/cache.db` (Schema v6) for comprehensive offline search and 0-GET remote taxonomy filtering.
+Captures, inspects, or clears a full-library metadata snapshot (articles, media, taxonomies) in `.emit/cache.db` (Schema v7) for exhaustive 0-HTTP search, `--from-snapshot` offline article restore, and 0-GET remote taxonomy filtering.
 
 ```bash
 emit snapshot [-c, --collection <collection>] [--status] [--clear] [--concurrency <number>] [-p, --profile <name>]

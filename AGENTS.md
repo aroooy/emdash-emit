@@ -129,7 +129,7 @@ When drafting, reviewing, or updating blog articles, AI agents must follow the *
   [2. DIRECT MARKDOWN EDIT & MEDIA STAGING]
    • Edit posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
    • New local images: place in media/drafts/<file> & reference as ![alt](../../media/drafts/<file>)
-   • Existing remote images: discover via sync_media_search(query, since, offline)
+   • Existing remote images: discover via sync_media_search(query, since)
    • Preserved blocks: keep structural keys intact on <!--ec:block {...} --> lines; safe image layout/caption edits, block removal, and reordering are permitted (Guard G9)
                                  │
                                  ▼
@@ -146,7 +146,7 @@ When drafting, reviewing, or updating blog articles, AI agents must follow the *
 ### Critical Authoring Rules for AI Agents
 
 1. **Pull Before Editing**: Run `sync_pull` (or `sync_status`) first. Batch `sync_pull` syncs the latest 30 published + 30 draft articles, refreshes `categories/` and `tags/`, and mirrors referenced media on demand.
-   - **Targeting Older Articles Outside the 30-Post Window**: Use `sync_article_search` (by keyword, `tag`, `category`, `since`/`until`, `status`, or `offline: true`) to discover the article's 26-character ULID, then run `sync_pull(id: "<ulid>")`. Never guess ULIDs.
+   - **Targeting Older Articles Outside the 30-Post Window**: Use `sync_article_search` (by keyword, `tag`, `category`, `since`/`until`, `status`, or `live: true` for keyword-only FTS) to discover the article's 26-character ULID, then run `sync_pull(id: "<ulid>")`. Never guess ULIDs.
 2. **One-Shot Scaffolding (`sync_new`) & No Throwaway Files (Guard G18)**:
    - Never create disposable files (`temp.md`, `draft.md`, `scratch.md`). Always use `sync_new` with `title`, `categories`, `tags`, `description`, and `featuredImage` to generate a complete, schema-valid file in one step.
 3. **Never Move or Rename Files with `mv` (Guard G2)**:
