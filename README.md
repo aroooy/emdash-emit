@@ -30,9 +30,9 @@
 ## 💡 Why Emit?
 
 - **🛡️ Zero-Cost AI Iteration (Defend Cloudflare D1 Limits)**:
-  When AI agents (like Google Antigravity, Cursor, or Claude Code) interact directly with a remote CMS, their rapid, iterative read/search/edit loops can quickly exhaust API quotas (such as Cloudflare D1 daily read/write limits). Emit trades a **one-time upfront sync cost** (an initial `emit pull` or full-library `emit snapshot` performs a batch read to populate `.emit/cache.db` via `node:sqlite`) for **zero-cost local iteration**—agents can search (`snapshot`-first), diff, validate guards, and iterate thousands of times locally with **zero network requests**, syncing only the final delta via a distributed lock and 3-way merge.
+  When AI agents (like Google Antigravity, Cursor, or Claude Code) interact directly with a remote CMS, their rapid, iterative read/search/edit loops can quickly exhaust API quotas (such as Cloudflare D1 daily read/write limits). Emit trades a **one-time upfront sync cost** (an initial `emit pull` or full-library `emit snapshot` performs a batch read to populate `.emit/cache.db` via `node:sqlite`) for **zero network requests during iteration and minimal delta on sync**—agents can search (`snapshot`-first), diff, validate guards, and iterate thousands of times locally, syncing only the final reviewed delta via a distributed lock and 3-way merge.
 - **✈️ True Offline Authoring & Media Staging**:
-  Web editors struggle on flights or unstable Wi-Fi, especially with image uploads. With Emit, place new images in `media/drafts/`, write Markdown in VS Code or Obsidian with relative image preview (`../../media/...`), and push when back online—Emit handles the 4-stage R2 upload and URL rewrite automatically. You can even cache existing remote media binaries (`emit snapshot --include-media`) for full offline restoration via `emit pull --from-snapshot`.
+  Web editors struggle on flights or unstable Wi-Fi, especially with image uploads. With Emit, place new images in `media/drafts/`, write Markdown in VS Code or Obsidian with relative image preview (`../../media/...`), and push when back online—Emit handles the upload → confirm → promote R2 pipeline and URL rewrite automatically. You can even cache existing remote media binaries (`emit snapshot --include-media`) for full offline restoration via `emit pull --from-snapshot`.
 - **🔒 20 Code-Level Guardrails for AI Agents (G1–G20)**:
   Autonomous agents can accidentally publish unfinished drafts or hallucinate taxonomy slugs if given raw CMS APIs. Emit enforces 20 physical preflight guardrails before any write—blocking unapproved live publishing without `--allow-publish` / `allowPublish: true` (**G3**), invalid taxonomy terms (**G4**), manual `mv` corruption (**G2**), and deleting in-use media (**G20**).
 
@@ -44,7 +44,7 @@ Your day-to-day writing workflow takes just 4 steps:
 
 1. **Initialize once**: `emit profile add <name> --origin https://your-site.example --token <token>` and `emit init`
 2. **Pull latest state**: `emit pull` (syncs recent posts, taxonomies, and referenced media)
-3. **Write & iterate offline**: Edit Markdown in VS Code / Obsidian or let your AI agent work via CLI / MCP (`0 network / 0 D1 reads`)
+3. **Write & iterate offline**: Edit Markdown in VS Code / Obsidian or run local CLI / MCP checks (`0-HTTP` search, diff, and guard validation)
 4. **Push safely**: `emit push` (uploads `media/drafts/*`, acquires a distributed lock, and 3-way merges)
 
 > **Using Cursor, Claude Desktop/Code, or Antigravity via MCP?** Copy-paste the 6-line stdio config in [MCP Client Configuration](#mcp-client-configuration-claude_desktop_configjson--cursormcpjson--mcp_configjson).
@@ -224,7 +224,8 @@ your-blog/
 ├── categories/                     # Category YAML definitions (<id>-<label>.yaml; decoded slug + canonicalSlug)
 ├── tags/                           # Tag YAML definitions (<id>-<label>.yaml; decoded slug + canonicalSlug)
 ├── media/                          # Mirrored media (<markdownRef>.<ext> + .yaml; named after storageKey)
-│   └── drafts/                     # Staging folder for offline draft images (auto-uploaded & moved on push)
+│   ├── drafts/                     # Staging folder for offline draft images (auto-uploaded & moved on push)
+│   └── _cache/                     # Opt-in offline media cache (via snapshot --include-media; gitignored)
 └── posts/                          # Local Markdown Articles (<yyyyMMdd>_<ulid>-<title>.md)
     ├── draft/                      # Draft articles
     ├── published/                  # Live published articles (includes published* with "# draft revision")
@@ -339,11 +340,11 @@ Emit provides **17 top-level CLI commands** (plus **10 subcommands** under `prof
 | `emit delete <target>` | Delete article locally & remotely after creating a `.deleted.md` backup in `posts/conflicts/` | `emit delete <file> --allow-delete-published` |
 | `emit conflicts` | Inspect and resolve rescue copies in `posts/conflicts/` (`list`, `diff`, `resolve`, `prune`) | `emit conflicts list` / `emit conflicts resolve <path> --accept-local` |
 | `emit doctor` | Run offline workspace health checks + opt-in probes (`--check-auth`, `--check-media-library`, `--check-media-urls`) | `emit doctor` / `emit doctor --check-auth` |
-| `emit article-search [q]` | Search remote articles (or local Markdown bodies via `--offline`) by keyword, tag, category, or date | `emit article-search "Cloudflare" --tag ai --since 2026-01-01` |
-| `emit media-search [q]` | Search remote media library (or local mirrors via `--offline`) by keyword and date range | `emit media-search "header" --mirrored-only` |
+| `emit article-search [q]` | Exhaustive 0-HTTP search across local Markdown and `snapshot_articles` (or keyword-only remote FTS via `--live`) | `emit article-search "Cloudflare" --tag ai --since 2026-01-01` / `emit article-search "Cloudflare" --live` |
+| `emit media-search [q]` | Exhaustive 0-HTTP search across local mirrors and `snapshot_media` by keyword and date range | `emit media-search "header" --mirrored-only` |
 | `emit pull-taxonomies` | Standalone download of remote categories and tags into `categories/*.yaml` and `tags/*.yaml` | `emit pull-taxonomies` |
 | `emit pull-media` | Mirror media assets by `--article <id>`, `--storage-key <key>`, or bounded library window | `emit pull-media --article 01M6ABCDEF...` |
-| `emit snapshot` | Capture full-library metadata snapshot (articles, media, taxonomies) into `cache.db` for offline search | `emit snapshot` / `emit snapshot --status` |
+| `emit snapshot` | Capture full-library metadata snapshot (`articles`, `media`, `taxonomies`) into `cache.db` and optionally cache media binaries | `emit snapshot --include-media` / `emit snapshot --status` |
 | `emit guide` | Print the concise Golden Path cheat sheet and AI safety rules to the console | `emit guide` |
 | `emit mcp` | Launch Emit as a Model Context Protocol (MCP) stdio server for AI coding agents | `emit mcp` |
 
