@@ -68,90 +68,106 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
     return prog;
   }
 
-  // T3-1: emit media-search <kw> (正常)
-  it('T3-1: searches remote media and prints storageKey and mirror status', async () => {
-    setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+  // Helper to seed snapshot_media in tempDir/.emit/cache.db
+  function seedMediaSnapshot(
+    records: Array<{
+      mediaId: string;
+      storageKey?: string | null;
+      filename?: string | null;
+      mimeType?: string | null;
+      size?: number | null;
+      alt?: string | null;
+      caption?: string | null;
+      createdAt?: string | null;
+    }>,
+    capturedAt = Date.now(),
+  ): void {
+    const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
+    try {
+      cache.saveSnapshotMeta({
+        collection: 'posts',
+        capturedAt,
+        articleCount: 0,
+        mediaCount: records.length,
+        taxonomyFetchedCount: 0,
+        taxonomyReusedCount: 0,
+        articleSingleGetCount: 0,
+        durationMs: 1,
+      });
+      cache.upsertSnapshotMediaBatch({
+        walkComplete: true,
+        records: records.map((r) => ({ ...r, capturedAt })),
+      });
+    } finally {
+      cache.close();
+    }
+  }
 
-    const mockItem = {
-      id: '01M67P08DXFTYDPFRTJCC4XMP8',
-      filename: 'sunset.jpg',
-      mimeType: 'image/jpeg',
-      size: 102400,
-      alt: '夕焼け空',
-      storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
-    };
+  // T3-1: デフォルト検索（ローカル + Snapshot、0 HTTP）
+  it('T3-1: searches local + snapshot media with 0 HTTP calls and prints storageKey and mirror status', async () => {
+    seedMediaSnapshot([
+      {
+        mediaId: '01M67P08DXFTYDPFRTJCC4XMP8',
+        filename: 'sunset.jpg',
+        mimeType: 'image/jpeg',
+        size: 102400,
+        alt: '夕焼け空',
+        storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+      },
+    ]);
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: {
-          items: [mockItem],
-          nextCursor: null,
-          totalCount: 1,
-        },
-      }),
-    } as Response);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('media-search must not issue HTTP requests');
+    });
 
     const prog = createProgram();
     await prog.parseAsync(['node', 'emit', 'media-search', '夕焼け']);
 
-    expect(fetchSpy).toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     const stdout = stdoutLogs.join('\n');
-    expect(stdout).toContain('Media search: "夕焼け"');
+    expect(stdout).toContain('Media search (local + snapshot');
     expect(stdout).toContain('01M67P08DXFTYDPFRTJCC4XMP8');
     expect(stdout).toContain('01M67P07X2VPW0MYRRRGMA6T5A.jpg');
-    expect(stdout).toContain('[not mirrored]');
+    expect(stdout).toContain('[snapshot]');
     expect(stdout).toContain('100 KB');
     expect(stdout).toContain('💡 To use a hit:');
     expect(exitCode).toBeNull();
   });
 
-  // T3-2: 未認証（token 解決不可）
-  it('T3-2: exits 1 with clean error message when authentication token is missing', async () => {
+  // T3-2: 未認証（token なし）でも動作する
+  it('T3-2: runs without authentication token and reports missing snapshot framing', async () => {
     const prog = createProgram();
-    await expect(prog.parseAsync(['node', 'emit', 'media-search', 'sunset'])).rejects.toThrow(
-      'process.exit(1)',
-    );
+    await prog.parseAsync(['node', 'emit', 'media-search', 'sunset']);
 
-    expect(exitCode).toBe(1);
-    const stderr = stderrLogs.join('\n');
-    expect(stderr).toContain('❌');
-    expect(stderr).toContain('No authentication found');
-    expect(stderr).toContain('emit profile add');
-    expect(stderr).not.toContain('file://');
-    expect(stderr).not.toContain('    at ');
+    expect(exitCode).toBeNull();
+    const stdout = stdoutLogs.join('\n');
+    expect(stdout).toContain('local mirrors only — no snapshot');
+    expect(stdout).toContain('emit snapshot capture');
   });
 
-  // T3-3: --max-scan 打ち切り時
-  it('T3-3: prints [WALK_INCOMPLETE] warning when stopped at maxScan', async () => {
-    setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
-
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: {
-          items: [
-            {
-              id: '01M6ITEM000000000000000001',
-              filename: 'beach.png',
-              mimeType: 'image/png',
-              size: 2000,
-              storageKey: 'beach.png',
-            },
-          ],
-          nextCursor: 'cursor-has-more',
+  // T3-3: stale snapshot (>7d) 警告表示
+  it('T3-3: warns when snapshot is stale (>= 7 days old)', async () => {
+    const tenDaysAgo = Date.now() - 10 * 86_400_000;
+    seedMediaSnapshot(
+      [
+        {
+          mediaId: '01M6ITEM000000000000000001',
+          filename: 'beach.png',
+          mimeType: 'image/png',
+          size: 2000,
+          storageKey: 'beach.png',
         },
-      }),
-    } as Response);
+      ],
+      tenDaysAgo,
+    );
 
     const prog = createProgram();
-    await prog.parseAsync(['node', 'emit', 'media-search', 'beach', '--max-scan', '1']);
+    await prog.parseAsync(['node', 'emit', 'media-search', 'beach']);
 
     const stdout = stdoutLogs.join('\n');
-    expect(stdout).toContain('[WALK_INCOMPLETE]');
-    expect(stdout).toContain('absence is not proven');
+    expect(stdout).toContain('[STALE_SNAPSHOT: 10d old]');
+    expect(stdout).toContain('10-day-old snapshot');
+    expect(stdout).toContain('emit snapshot capture');
   });
 
   // T3-4: --suggest-keywords
@@ -206,26 +222,15 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
 
   // T3-5: --mirrored-only と --limit の組み合わせ
   it('T3-5: respects --mirrored-only and --limit options', async () => {
-    setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
-
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: {
-          items: [
-            {
-              id: '01M6ITEM000000000000000001',
-              filename: 'remote-1.png',
-              mimeType: 'image/png',
-              size: 2000,
-              storageKey: 'remote-1.png',
-            },
-          ],
-          nextCursor: null,
-        },
-      }),
-    } as Response);
+    seedMediaSnapshot([
+      {
+        mediaId: '01M6ITEM000000000000000001',
+        filename: 'remote-1.png',
+        mimeType: 'image/png',
+        size: 2000,
+        storageKey: 'remote-1.png',
+      },
+    ]);
 
     const prog = createProgram();
     await prog.parseAsync([
@@ -239,29 +244,20 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
     ]);
 
     const stdout = stdoutLogs.join('\n');
-    expect(stdout).toContain('No match found');
+    expect(stdout).toContain('No matching media found');
   });
 
-  // T3-6: -p <profile> 解決
-  it('T3-6: resolves specific profile with -p option', async () => {
-    setProfile('custom-site', { origin: 'https://custom.test', token: 'custom-token' });
+  // T3-6: --max-scan / --offline 削除（unknown option 拒否）
+  it('T3-6: rejects removed --max-scan and --offline flags on media-search', async () => {
+    const prog1 = createProgram();
+    await expect(
+      prog1.parseAsync(['node', 'emit', 'media-search', 'test', '--max-scan', '10']),
+    ).rejects.toThrow();
 
-    let requestedOrigin = '';
-    vi.spyOn(globalThis, 'fetch').mockImplementation((urlStr: string | URL | Request) => {
-      requestedOrigin = new URL(urlStr.toString()).origin;
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: { items: [], nextCursor: null },
-        }),
-      } as Response);
-    });
-
-    const prog = createProgram();
-    await prog.parseAsync(['node', 'emit', 'media-search', 'test', '-p', 'custom-site']);
-
-    expect(requestedOrigin).toBe('https://custom.test');
+    const prog2 = createProgram();
+    await expect(
+      prog2.parseAsync(['node', 'emit', 'media-search', 'test', '--offline']),
+    ).rejects.toThrow();
   });
 
   // T5-4: --article / --all との排他
@@ -341,9 +337,9 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
   it('Minor-A: verifies exact parity of hits and storageKeys between CLI and MCP', async () => {
     setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
 
-    const items = [
+    seedMediaSnapshot([
       {
-        id: '01M6PARITY0000000000000001',
+        mediaId: '01M6PARITY0000000000000001',
         filename: 'landscape.jpg',
         mimeType: 'image/jpeg',
         size: 5000,
@@ -351,33 +347,21 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
         storageKey: '01M6KEY000000000000000001.jpg',
       },
       {
-        id: '01M6PARITY0000000000000002',
+        mediaId: '01M6PARITY0000000000000002',
         filename: 'mountain.png',
         mimeType: 'image/png',
         size: 8000,
         caption: '山と風景のパノラマ',
         storageKey: '01M6KEY000000000000000002.png',
       },
-    ];
-
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: {
-          items,
-          nextCursor: null,
-          totalCount: 2,
-        },
-      }),
-    } as Response);
+    ]);
 
     // 1. Run CLI
     const prog = createProgram();
     await prog.parseAsync(['node', 'emit', 'media-search', '風景']);
 
     const cliStdout = stdoutLogs.join('\n');
-    expect(cliStdout).toContain('Media search: "風景"');
+    expect(cliStdout).toContain('Media search (local + snapshot');
     expect(cliStdout).toContain('01M6KEY000000000000000001.jpg');
     expect(cliStdout).toContain('01M6KEY000000000000000002.png');
 
@@ -405,6 +389,8 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
       const mcpPayload = JSON.parse(mcpRes.content[0].text);
 
       expect(mcpPayload.totalCount).toBe(2);
+      expect(mcpPayload.snapshotStatus).toBe('fresh');
+      expect(mcpPayload.absenceGuaranteed).toBe(true);
       expect(mcpPayload.hits).toHaveLength(2);
       const mcpKeys = mcpPayload.hits.map((h: { storageKey: string }) => h.storageKey);
       expect(mcpKeys).toEqual(['01M6KEY000000000000000001.jpg', '01M6KEY000000000000000002.png']);
@@ -418,39 +404,28 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
     }
   });
 
-  // P0 Characterization Snapshots for CLI media-search output (byte-for-byte safety for P3)
+  // P0 Characterization Snapshots for CLI media-search output
   describe('P0 Characterization Snapshots: emit media-search output', () => {
-    it('P0-1: remote hit output snapshot', async () => {
-      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
-
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: {
-            items: [
-              {
-                id: '01M67P08DXFTYDPFRTJCC4XMP8',
-                filename: 'sunset.jpg',
-                mimeType: 'image/jpeg',
-                size: 102400,
-                alt: '夕焼け空',
-                caption: 'Sea view',
-                storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
-              },
-            ],
-            nextCursor: null,
-            totalCount: 1,
-          },
-        }),
-      } as Response);
+    it('P0-1: fresh snapshot hit output', async () => {
+      seedMediaSnapshot([
+        {
+          mediaId: '01M67P08DXFTYDPFRTJCC4XMP8',
+          filename: 'sunset.jpg',
+          mimeType: 'image/jpeg',
+          size: 102400,
+          alt: '夕焼け空',
+          caption: 'Sea view',
+          storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+        },
+      ]);
 
       const prog = createProgram();
       await prog.parseAsync(['node', 'emit', 'media-search', '夕焼け']);
 
-      expect(stdoutLogs).toEqual([
-        'Media search: "夕焼け" (scanned 1 of 1 records)',
-        '  1.  01M67P08DXFTYDPFRTJCC4XMP8  storageKey 01M67P07X2VPW0MYRRRGMA6T5A.jpg  [not mirrored]',
+      expect(stdoutLogs[0]).toContain('Media search (local + snapshot @');
+      expect(stdoutLogs[0]).toContain('searched 1 asset(s), 1 in snapshot');
+      expect(stdoutLogs.slice(1)).toEqual([
+        '  1.  01M67P08DXFTYDPFRTJCC4XMP8  storageKey 01M67P07X2VPW0MYRRRGMA6T5A.jpg  [snapshot]',
         '     alt: 夕焼け空   caption: Sea view   image/jpeg   100 KB',
         '\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it',
         '   automatically. For an offline copy first: emit pull-media --storage-key <storageKey>.',
@@ -458,83 +433,56 @@ describe('CLI: emit media-search & targeted pull (v0.1.16)', () => {
       ]);
     });
 
-    it('P0-2: remote empty result (walkComplete: true) snapshot', async () => {
-      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
-
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: {
-            items: [],
-            nextCursor: null,
-            totalCount: 42,
-          },
-        }),
-      } as Response);
+    it('P0-2: fresh snapshot empty result', async () => {
+      seedMediaSnapshot([
+        {
+          mediaId: '01M67P08DXFTYDPFRTJCC4XMP8',
+          filename: 'sunset.jpg',
+          storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+        },
+      ]);
 
       const prog = createProgram();
       await prog.parseAsync(['node', 'emit', 'media-search', 'nonexistent']);
 
-      expect(stdoutLogs).toEqual([
-        'Media search: "nonexistent" (scanned 0 of 42 records)',
-        '\nNo match found in the remote media library (0 records scanned).',
-      ]);
+      expect(stdoutLogs[0]).toContain('Media search (local + snapshot @');
+      expect(stdoutLogs[1]).toBe('\nNo matching media found (1 local/snapshot asset(s) searched).');
     });
 
-    it('P0-3: remote walk-incomplete (max-scan + hit-limit) snapshot', async () => {
-      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
-
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: {
-            items: [
-              {
-                id: '01M6ITEM000000000000000001',
-                filename: 'beach.png',
-                mimeType: 'image/png',
-                size: 2000,
-                storageKey: 'beach.png',
-              },
-              {
-                id: '01M6ITEM000000000000000002',
-                filename: 'beach2.png',
-                mimeType: 'image/png',
-                size: 3000,
-                storageKey: 'beach2.png',
-              },
-            ],
-            nextCursor: 'cursor-has-more',
-          },
-        }),
-      } as Response);
+    it('P0-3: limit-truncated hit output', async () => {
+      seedMediaSnapshot([
+        {
+          mediaId: '01M6ITEM000000000000000001',
+          filename: 'beach.png',
+          mimeType: 'image/png',
+          size: 2000,
+          storageKey: 'beach.png',
+        },
+        {
+          mediaId: '01M6ITEM000000000000000002',
+          filename: 'beach2.png',
+          mimeType: 'image/png',
+          size: 3000,
+          storageKey: 'beach2.png',
+        },
+      ]);
 
       const prog = createProgram();
       await prog.parseAsync(['node', 'emit', 'media-search', 'beach', '--limit', '1']);
 
-      expect(stdoutLogs).toEqual([
-        'Media search: "beach" (scanned 1 of an unknown-size library) [truncated at limit]',
-        '  1.  01M6ITEM000000000000000001  storageKey beach.png  [not mirrored]',
-        '     image/png   2 KB',
-        '\n⚠️ [WALK_INCOMPLETE] read 1 record(s) and stopped at --max-scan; absence is not proven.',
-        '   Hit limit reached at 1; raise --limit to see more matches from the same walk.',
-        '   Narrow the query or raise --max-scan (0 walks the whole library).',
-        '\n💡 To use a hit: write /_emdash/api/media/file/<storageKey> into the article body — pull/push mirrors it',
-        '   automatically. For an offline copy first: emit pull-media --storage-key <storageKey>.',
-        '   Fleet-scale listing stays on the official EmDash MCP / Admin Dashboard.',
-      ]);
+      expect(stdoutLogs[0]).toContain('[truncated at limit]');
+      expect(stdoutLogs).toContain('\nℹ️ Showing top 1 of 2 match(es); raise --limit to see more.');
     });
 
-    it('P0-4: offline search empty snapshot', async () => {
-      setProfile('default', { origin: 'https://emdash.test', token: 'valid-token' });
+    it('P0-4: missing snapshot empty output', async () => {
       const prog = createProgram();
-      await prog.parseAsync(['node', 'emit', 'media-search', 'offline-missing', '--offline']);
+      await prog.parseAsync(['node', 'emit', 'media-search', 'missing-snap']);
 
       expect(stdoutLogs).toEqual([
-        '[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\nSearched 0 mirrored asset(s) in this workspace.\nRemote EmDash library was NOT queried.',
-        '\nNo matching media found in local workspace. (Remote EmDash library was NOT checked. The asset may exist remotely.)',
+        'Media search (local mirrors only — no snapshot): "missing-snap" (searched 0 asset(s))',
+        '\nNo matching media found in local workspace (no snapshot captured yet).',
+        '\n⚠️ No matching items found in local workspace files. Full-library snapshot has not been captured yet, so older remote items were not searched.',
+        '💡 Run sync_snapshot(action: "capture") / "emit snapshot capture" to index the full remote media library.',
       ]);
     });
   });

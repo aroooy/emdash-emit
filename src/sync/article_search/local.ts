@@ -359,7 +359,7 @@ export function searchLocalArticles(options: ArticleSearchOptions): ArticleSearc
 
   return {
     hits: slicedHits,
-    searchMode: 'scan',
+    searchMode: 'local',
     scannedCount,
     totalCount: hits.length,
     walkComplete: true,

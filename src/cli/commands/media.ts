@@ -26,16 +26,15 @@ import {
   deleteMedia,
   pushMedia,
   searchLocalMirrorMedia,
-  searchRemoteMedia,
 } from '../../sync/media/index.js';
 import { getLocalTaxonomiesSummary } from '../../sync/taxonomies.js';
+import { buildSnapshotSearchFraming } from '../../presentation/article_report.js';
 import {
   formatMediaDeleteReport,
   formatMediaSearchEmptyNotice,
   formatMediaSearchHeader,
   formatMediaSearchHit,
   formatMediaSearchUsageHint,
-  formatMediaSearchWalkIncompleteNotice,
   formatTagSearchHints,
 } from '../../presentation/media_report.js';
 import type { CliContextResolver } from '../context.js';
@@ -48,18 +47,10 @@ export function registerMediaSearchCommand(
   program
     .command('media-search [query]')
     .description(
-      'Search the remote EmDash media library by keyword (filename, alt, caption, storageKey); omit the query to browse by recency',
+      'Search media across local workspace mirrors and .emit/cache.db snapshot (0-HTTP, exhaustive); omit the query to browse by recency',
     )
     .option('-l, --limit <number>', 'Max hits (default 20, max 50)')
-    .option(
-      '--max-scan <number>',
-      'Records to read before stopping (default 500; 0 = whole library)',
-    )
-    .option('--mirrored-only', 'Only assets Emit already mirrors')
-    .option(
-      '--offline',
-      'Search only this workspace media mirrors — no network requests. Results cover local files only.',
-    )
+    .option('--mirrored-only', 'Only assets Emit already mirrors (excludes snapshot-only records)')
     .option(
       '--since <date>',
       'Only assets created on or after this date: today, yesterday, or YYYY-MM-DD (local time)',
@@ -70,35 +61,19 @@ export function registerMediaSearchCommand(
     .action(async (query: string | undefined, options) => {
       try {
         const limit = options.limit ? parseInt(options.limit, 10) : undefined;
-        const maxScan = options.maxScan !== undefined ? parseInt(options.maxScan, 10) : undefined;
 
-        // The mirror index is needed by both paths, and in offline mode it is the only source of truth.
-        const ctx = resolveContext(options.profile);
+        const ctx = resolveContext(options.profile, { optionalAuth: true });
         const mirrorIndex = collectLocalMirrorIndex(ctx.root, ctx.cache);
 
-        const result = options.offline
-          ? searchLocalMirrorMedia({
-              query,
-              since: options.since,
-              until: options.until,
-              limit,
-              mirrorIndex,
-              cache: ctx.cache,
-              mirroredOnly: Boolean(options.mirroredOnly),
-            })
-          : await searchRemoteMedia({
-              workspaceRoot: ctx.root,
-              origin: ctx.origin,
-              token: ctx.auth.token,
-              refreshToken: ctx.auth.refreshToken,
-              query,
-              since: options.since,
-              until: options.until,
-              limit,
-              maxScan,
-              mirroredOnly: Boolean(options.mirroredOnly),
-              mirrorIndex,
-            });
+        const result = searchLocalMirrorMedia({
+          query,
+          since: options.since,
+          until: options.until,
+          limit,
+          mirrorIndex,
+          cache: ctx.cache,
+          mirroredOnly: Boolean(options.mirroredOnly),
+        });
 
         const rangeLabel = [
           options.since ? `since ${options.since}` : '',
@@ -108,13 +83,9 @@ export function registerMediaSearchCommand(
           .join(' ');
         const subject = query ? `"${query}"` : rangeLabel || 'recency browse';
 
-        console.log(
-          formatMediaSearchHeader(result, { subject, offline: Boolean(options.offline) }),
-        );
+        console.log(formatMediaSearchHeader(result, { subject }));
 
-        const emptyNotice = formatMediaSearchEmptyNotice(result, {
-          offline: Boolean(options.offline),
-        });
+        const emptyNotice = formatMediaSearchEmptyNotice(result);
         if (emptyNotice) {
           console.log(`\n${emptyNotice}`);
         } else {
@@ -125,21 +96,29 @@ export function registerMediaSearchCommand(
           });
         }
 
-        if (!options.offline) {
-          const walkNotice = formatMediaSearchWalkIncompleteNotice(result, {
-            isMcp: false,
-            limit,
-          });
-          if (walkNotice) {
-            const lines = walkNotice.split('\n');
-            console.log(`\n${lines[0]}`);
-            for (const line of lines.slice(1)) {
-              console.log(line);
-            }
-          }
+        const framing = buildSnapshotSearchFraming({
+          snapshot: result.snapshot,
+          hitCount: result.hits.length,
+          totalCount: result.totalCount,
+          truncated: result.truncated,
+          walkComplete: result.walkComplete,
+          isLive: false,
+          query,
+          kind: 'media',
+          isMcp: false,
+        });
+
+        if (framing.truncatedHint) {
+          console.log(`\nℹ️ ${framing.truncatedHint}`);
+        }
+        if (framing.userNotice) {
+          console.log(`\n⚠️ ${framing.userNotice}`);
+        }
+        if (framing.recommendedAction) {
+          console.log(`💡 ${framing.recommendedAction}`);
         }
 
-        if (result.hits.length > 0 && !options.offline) {
+        if (result.hits.length > 0) {
           const usageLines = formatMediaSearchUsageHint().split('\n');
           console.log(`\n${usageLines[0]}`);
           for (const line of usageLines.slice(1)) {

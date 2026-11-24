@@ -252,122 +252,72 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
     expect(mcpSource).not.toMatch(/from\s+['"]\.\.\/\.\.\/cli\//);
   });
 
-  it('S-1: formatMediaSearchWalkIncompleteNotice differs between CLI and MCP only in flag syntax', async () => {
-    const { formatMediaSearchWalkIncompleteNotice } =
-      await import('../src/presentation/media_report.js');
-    const incompleteResult = {
-      hits: [],
-      scannedCount: 42,
-      walkComplete: false,
-      totalCount: null,
-      truncated: false,
-    };
+  it('S-1: buildSnapshotSearchFraming shares snapshotStatus, absenceGuaranteed, and truncatedHint across CLI and MCP', async () => {
+    const { buildSnapshotSearchFraming } = await import('../src/presentation/article_report.js');
 
-    const cliNotice = formatMediaSearchWalkIncompleteNotice(incompleteResult, {
+    const missingFramingCli = buildSnapshotSearchFraming({
+      hitCount: 0,
+      kind: 'media',
       isMcp: false,
-      limit: 20,
     });
-    const mcpNotice = formatMediaSearchWalkIncompleteNotice(incompleteResult, {
+    const missingFramingMcp = buildSnapshotSearchFraming({
+      hitCount: 0,
+      kind: 'media',
       isMcp: true,
-      limit: 20,
     });
+    expect(missingFramingCli.snapshotStatus).toBe('missing');
+    expect(missingFramingCli.absenceGuaranteed).toBe(false);
+    expect(missingFramingCli).toEqual(missingFramingMcp);
 
-    expect(cliNotice).not.toBeNull();
-    expect(mcpNotice).not.toBeNull();
-
-    // Normalize CLI visual prefix/whitespace and flag syntax
-    const normalizedCli = cliNotice!
-      .replace(/^⚠️\s+/, '')
-      .replace(/\n\s+/g, ' ')
-      .replace(/--max-scan/g, 'maxScan');
-    expect(normalizedCli).toBe(mcpNotice);
+    const truncatedCli = buildSnapshotSearchFraming({
+      snapshot: { capturedAt: new Date().toISOString(), ageDays: 1, stale: false },
+      hitCount: 20,
+      totalCount: 45,
+      truncated: true,
+      kind: 'article',
+      isMcp: false,
+    });
+    const truncatedMcp = buildSnapshotSearchFraming({
+      snapshot: { capturedAt: new Date().toISOString(), ageDays: 1, stale: false },
+      hitCount: 20,
+      totalCount: 45,
+      truncated: true,
+      kind: 'article',
+      isMcp: true,
+    });
+    expect(truncatedCli.snapshotStatus).toBe('fresh');
+    expect(truncatedCli.absenceGuaranteed).toBe(true);
+    expect(truncatedCli.truncatedHint).toContain('--limit');
+    expect(truncatedMcp.truncatedHint).toContain('limit');
+    expect(truncatedCli.truncatedHint!.replace('--limit', 'limit')).toBe(
+      truncatedMcp.truncatedHint,
+    );
   });
 
-  it('S-2: CLI and MCP media search modules import walk incomplete formatter from presentation/media_report.js', () => {
-    const cliSource = fs.readFileSync(
+  it('S-2: CLI and MCP search modules import buildSnapshotSearchFraming from presentation/article_report.js', () => {
+    const cliArticleSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/cli/commands/article-search.ts'),
+      'utf-8',
+    );
+    const cliMediaSource = fs.readFileSync(
       path.resolve(__dirname, '../src/cli/commands/media.ts'),
       'utf-8',
     );
-    const mcpSource = fs.readFileSync(
+    const mcpArticleSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/mcp/tools/sync-article-search.ts'),
+      'utf-8',
+    );
+    const mcpMediaSource = fs.readFileSync(
       path.resolve(__dirname, '../src/mcp/tools/sync-media-search.ts'),
       'utf-8',
     );
 
-    expect(cliSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/media_report(?:\.js)?['"]/);
-    expect(cliSource).toContain('formatMediaSearchWalkIncompleteNotice');
-    expect(cliSource).toMatch(/formatMediaSearchWalkIncompleteNotice\s*\(/);
-
-    expect(mcpSource).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/media_report(?:\.js)?['"]/);
-    expect(mcpSource).toContain('formatMediaSearchWalkIncompleteNotice');
-    expect(mcpSource).toMatch(/formatMediaSearchWalkIncompleteNotice\s*\(/);
-  });
-
-  it('S-3 (v0.1.49 H-3): article-search CLI and MCP share formatArticleSearchWalkIncompleteNotice and identical hit-limit wording', async () => {
-    const { formatArticleSearchWalkIncompleteNotice } =
-      await import('../src/presentation/article_report.js');
-    const { formatMediaSearchHitLimitNotice } = await import('../src/presentation/media_report.js');
-
-    const hitLimitResult = {
-      hits: [
-        {
-          id: '1',
-          slug: '1',
-          title: '1',
-          isLocal: false,
-          localPath: null,
-          matchedOn: ['recency' as const],
-        },
-        {
-          id: '2',
-          slug: '2',
-          title: '2',
-          isLocal: false,
-          localPath: null,
-          matchedOn: ['recency' as const],
-        },
-        {
-          id: '3',
-          slug: '3',
-          title: '3',
-          isLocal: false,
-          localPath: null,
-          matchedOn: ['recency' as const],
-        },
-      ],
-      searchMode: 'scan' as const,
-      scannedCount: 15,
-      totalCount: null,
-      walkComplete: false,
-      truncated: true,
-      normalizedQuery: '',
-      taxonomyFetchCount: 0,
-      taxonomyCacheHitCount: 0,
-    };
-
-    const cliNotice = formatArticleSearchWalkIncompleteNotice(hitLimitResult, {
-      limit: 3,
-      isMcp: false,
-    });
-    const mcpNotice = formatArticleSearchWalkIncompleteNotice(hitLimitResult, {
-      limit: 3,
-      isMcp: true,
-    });
-
-    expect(cliNotice).toContain(formatMediaSearchHitLimitNotice(3, { isMcp: false }));
-    expect(mcpNotice).toContain(formatMediaSearchHitLimitNotice(3, { isMcp: true }));
-
-    const normalizedCli = cliNotice!
-      .replace(/^⚠️\s+/, '')
-      .replace(/\n\s+/g, ' ')
-      .replace(/--max-scan/g, 'maxScan')
-      .replace(/--limit/g, 'limit');
-    expect(normalizedCli).toBe(mcpNotice);
-
-    const mcpArticleSearchSrc = fs.readFileSync(
-      path.resolve(__dirname, '../src/mcp/tools/sync-article-search.ts'),
-      'utf-8',
-    );
-    expect(mcpArticleSearchSrc).toContain('formatArticleSearchWalkIncompleteNotice');
+    for (const src of [cliArticleSource, cliMediaSource, mcpArticleSource, mcpMediaSource]) {
+      expect(src).toMatch(/from\s+['"]\.\.\/\.\.\/presentation\/article_report(?:\.js)?['"]/);
+      expect(src).toContain('buildSnapshotSearchFraming');
+      expect(src).toMatch(/buildSnapshotSearchFraming\s*\(/);
+    }
     expect(remediationFor('MEDIA_IN_USE_PROTECTION')).toContain('referencing local article');
+    expect(remediationFor('LIVE_SEARCH_UNSUPPORTED_FILTER')).toContain('Omit --live');
   });
 });

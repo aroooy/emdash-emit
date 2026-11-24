@@ -262,32 +262,29 @@ emit delete-media <targets...> [--dry-run] [--no-backup] [-c, --collection <coll
 
 ### 13. `emit article-search`
 
-Searches remote EmDash articles (or local Markdown files with `--offline`) by keyword, taxonomy, status, slug, or date range. Omit `[query]` to browse recent articles.
+Searches articles exhaustively across the local workspace and `.emit/cache.db` snapshot (0-HTTP, no auth token required) by keyword, taxonomy, status, slug, or date range — or passes `--live` for keyword-only remote FTS. Omit `[query]` to browse recent articles.
 
 ```bash
-emit article-search [query] [-t, --tag <slug>] [-c, --category <slug>] [--status <draft|published>] [--slug <slug>] [--since <date>] [--until <date>] [--date-field <publishedAt|updatedAt|createdAt>] [--offline] [-l, --limit <n>] [--max-scan <n>] [--include-conflicts] [-p, --profile <name>]
+emit article-search [query] [-t, --tag <slug>] [-c, --category <slug>] [--status <draft|published>] [--slug <slug>] [--since <date>] [--until <date>] [--date-field <publishedAt|updatedAt|createdAt>] [--live] [-l, --limit <n>] [--include-conflicts] [-p, --profile <name>]
 ```
 
 - `--since` / `--until`: Accepts `today`, `yesterday`, or `YYYY-MM-DD`. Malformed values fail with `DATE_BOUNDARY_INVALID`.
-- `--status <draft|published>`: Filters by status and routes to scan mode (even when a keyword query is given) so scan `maxScan` and `[WALK_INCOMPLETE]` rules apply.
-- `-l, --limit <n>`: Max hits to return (default: `20`, max: `50`). Stops the walk immediately once reached; scan-path `[WALK_INCOMPLETE]` notices append `Hit limit reached at N; raise --limit to see more matches from the same walk.`.
-- `--max-scan <n>`: Max records to inspect (default: `300`, or `50` with `--tag`/`--category`; `0` = unbounded). Uses 0-GET local baseline/snapshot fast-path for cached articles when filtering by taxonomy.
-- `--offline`: Search local Markdown files and cached `snapshot_articles` (when captured) with zero network requests. When a snapshot exists, remote 0-hit/truncated hints display the snapshot count, capture date, and `>=7d` stale warning; FTS hits also enrich missing date/status fields from `snapshot_articles` (`[enriched: snapshot (unverified)]` when rev cannot be verified).
+- `--live`: Query EmDash `/_emdash/api/search` (FTS) directly. Requires a non-empty keyword query and rejects `--tag`, `--category`, `--status`, `--since`, and `--until` (`LIVE_SEARCH_UNSUPPORTED_FILTER`). Enriches hits with `snapshot_articles` status/dates when available (`[enriched: snapshot (unverified)]` when rev cannot be verified).
+- `-l, --limit <n>`: Max hits to return (default: `20`, max: `50`). When more matches exist, `truncatedHint` advises raising `--limit`.
+- Freshness & coverage framing (`buildSnapshotSearchFraming`): Reports `snapshotStatus` (`fresh` < 7d, `stale` >= 7d, or `missing`), `absenceGuaranteed`, and actionable next steps (`emit snapshot capture` or `--live`).
 
 ---
 
 ### 14. `emit media-search`
 
-Searches the remote media library (or local mirrors with `--offline`) across filename, alt text, caption, and `storageKey`. Omit `[query]` to browse newest media assets.
+Searches media exhaustively across local workspace mirrors (`media_state` + `media/*.yaml`) and `.emit/cache.db` `snapshot_media` (0-HTTP, no auth token required) by filename, alt text, caption, and `storageKey`. Omit `[query]` to browse newest media assets.
 
 ```bash
-emit media-search [query] [-l, --limit <n>] [--max-scan <n>] [--mirrored-only] [--offline] [--since <date>] [--until <date>] [--suggest-keywords] [-p, --profile <name>]
+emit media-search [query] [-l, --limit <n>] [--mirrored-only] [--since <date>] [--until <date>] [--suggest-keywords] [-p, --profile <name>]
 ```
 
 - `-l, --limit <n>`: Max hits (default: `20`, max: `50`).
-- `--max-scan <n>`: Max remote records to scan (default: `500`; `0` = unbounded).
-- `--mirrored-only`: Filter to assets already mirrored in `media/`.
-- `--offline`: Search local `media_state` and `media/*.yaml` companions with zero network requests.
+- `--mirrored-only`: Filter to assets already mirrored in `media/` (excludes snapshot-only records).
 - `--suggest-keywords`: Append top local tag slugs as keyword suggestions.
 
 ---
@@ -340,8 +337,8 @@ All 17 MCP tools attach structured `_meta` (`profile`, `workspace`, `origin`, `r
 | 10 | `sync_pull_media` | `emit pull-media` | `article?`, `storageKey?`, `limit?`, `all?`, `noPrune?`, `downloadFiles?`, `profile?` | Mirror media assets by article (`article`), specific key (`storageKey`), or bounded library window (`mediaSyncLimit`). |
 | 11 | `sync_push_media` | `emit push-media` | `targets` *(required, `string[]`)*, `alt?`, `caption?`, `profile?` | Upload standalone local image file(s) (`media/drafts/*` move or external copy) and/or sync `alt`/`caption` metadata from flags or local `media/<stem>.yaml`. |
 | 12 | `sync_delete_media` | `emit delete-media` | `targets` *(required, `string[]`)*, `dryRun?`, `noBackup?`, `collection?`, `profile?` | Delete unreferenced media asset(s) from remote and local `media/` with Guard G20 (`MEDIA_IN_USE_PROTECTION`) and rescue backup to `media/_trash/` (MCP requires an authenticated profile even for `dryRun`). |
-| 13 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `maxScan?`, `mirroredOnly?`, `offline?`, `suggestKeywords?`, `profile?` | Search remote media library or local mirrors (`offline: true`) by keyword and date range. |
-| 14 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `offline?`, `limit?`, `maxScan?`, `includeConflicts?`, `profile?` | Multidimensional search across remote articles or local Markdown bodies (`offline: true`) to discover ULIDs for targeted `sync_pull(id)`. |
+| 13 | `sync_media_search` | `emit media-search` | `query?`, `since?`, `until?`, `limit?`, `mirroredOnly?`, `suggestKeywords?`, `profile?` | Exhaustive 0-HTTP search across local mirrors and `snapshot_media` with `snapshotStatus` (`fresh`/`stale`/`missing`) framing. |
+| 14 | `sync_article_search` | `emit article-search` | `query?`, `tag?`, `category?`, `status?`, `slug?`, `since?`, `until?`, `dateField?`, `live?`, `limit?`, `includeConflicts?`, `profile?` | Exhaustive 0-HTTP search across local Markdown and `snapshot_articles` (with `snapshotStatus` framing), or keyword-only remote FTS with `live: true`. |
 | 15 | `sync_snapshot` | `emit snapshot` | `action?` (`"capture"\|"status"\|"clear"`, defaults to `"capture"`), `collection?`, `concurrency?`, `profile?` | Capture, inspect, or clear the full-library metadata snapshot in `cache.db`. |
 | 16 | `profile_list` | `emit profile list` | *(none)* | List all configured profiles, origins, workspaces, and active resolution rationale. |
 | 17 | `profile_switch` | `emit profile use` | `name` *(required)*, `persist?` | Switch the active session/default profile for multi-site operation. |

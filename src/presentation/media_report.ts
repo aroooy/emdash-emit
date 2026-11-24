@@ -21,9 +21,8 @@
  */
 
 import {
-  formatOfflineSearchHeader,
   formatSearchHitLimitNotice,
-  OFFLINE_SEARCH_EMPTY_NOTICE,
+  formatSnapshotTimestamp,
   type MediaSearchSnapshotView,
 } from './article_report.js';
 import type { DeleteMediaItemResult, DeleteMediaResult } from '../sync/media/index.js';
@@ -61,35 +60,31 @@ export function formatSize(bytes: number | null | undefined): string | null {
 }
 
 /**
- * Formats the media search header (offline local framing or remote scan summary).
+ * Formats the media search header (local mirrors + snapshot summary).
  */
 export function formatMediaSearchHeader(
   result: MediaSearchResultView,
-  options: { subject: string; offline: boolean },
+  options: { subject: string },
 ): string {
-  if (options.offline) {
-    return formatOfflineSearchHeader(result.scannedCount, result.snapshot);
+  const truncLabel = result.truncated ? ' [truncated at limit]' : '';
+  if (!result.snapshot) {
+    return `Media search (local mirrors only — no snapshot): ${options.subject} (searched ${result.scannedCount} asset(s))${truncLabel}`;
   }
-  const totalLabel =
-    result.totalCount !== null ? `${result.totalCount} records` : 'an unknown-size library';
-  return `Media search: ${options.subject} (scanned ${result.scannedCount} of ${totalLabel})${result.truncated ? ' [truncated at limit]' : ''}`;
+  const staleTag = result.snapshot.stale
+    ? ` ⚠️ [STALE_SNAPSHOT: ${result.snapshot.ageDays}d old]`
+    : '';
+  return `Media search (local + snapshot @ ${formatSnapshotTimestamp(result.snapshot.capturedAt)}): ${options.subject} (searched ${result.scannedCount} asset(s), ${result.snapshot.mediaCount} in snapshot)${staleTag}${truncLabel}`;
 }
 
 /**
  * Formats the empty-result notice for media search, returning null when hits exist.
  */
-export function formatMediaSearchEmptyNotice(
-  result: MediaSearchResultView,
-  options: { offline: boolean },
-): string | null {
+export function formatMediaSearchEmptyNotice(result: MediaSearchResultView): string | null {
   if (result.hits.length > 0) return null;
-  if (options.offline) {
-    return OFFLINE_SEARCH_EMPTY_NOTICE;
+  if (!result.snapshot) {
+    return 'No matching media found in local workspace (no snapshot captured yet).';
   }
-  if (result.walkComplete) {
-    return `No match found in the remote media library (${result.scannedCount} records scanned).`;
-  }
-  return `No match in the first ${result.scannedCount} record(s).`;
+  return `No matching media found (${result.scannedCount} local/snapshot asset(s) searched).`;
 }
 
 /**
@@ -116,7 +111,7 @@ export function formatMediaSearchHit(hit: MediaSearchHitView, index: number): st
 }
 
 /**
- * Formats supplementary hit-limit notice for media search walks stopped early.
+ * Formats supplementary hit-limit notice for media search results capped by `limit`.
  * Unifies presentation between CLI and MCP stdio interfaces.
  */
 export function formatMediaSearchHitLimitNotice(
@@ -124,30 +119,6 @@ export function formatMediaSearchHitLimitNotice(
   options?: { isMcp?: boolean },
 ): string {
   return formatSearchHitLimitNotice(hitCount, options);
-}
-
-/**
- * Formats the [WALK_INCOMPLETE] epistemic warning shared by CLI and MCP media search.
- */
-export function formatMediaSearchWalkIncompleteNotice(
-  result: MediaSearchResultView,
-  options: { isMcp: boolean; limit: number | undefined },
-): string | null {
-  if (result.walkComplete) return null;
-  const maxScanSyntax = options.isMcp ? 'maxScan' : '--max-scan';
-  const headline = `[WALK_INCOMPLETE] read ${result.scannedCount} record(s) and stopped at ${maxScanSyntax}; absence is not proven.`;
-  const hitLimitLine =
-    result.truncated && result.hits.length >= (options.limit ?? 20)
-      ? formatMediaSearchHitLimitNotice(result.hits.length, { isMcp: options.isMcp })
-      : null;
-  const guidance = `Narrow the query or raise ${maxScanSyntax} (0 walks the whole library).`;
-
-  if (options.isMcp) {
-    return [headline, hitLimitLine, guidance].filter(Boolean).join(' ');
-  }
-  return [`⚠️ ${headline}`, ...(hitLimitLine ? [`   ${hitLimitLine}`] : []), `   ${guidance}`].join(
-    '\n',
-  );
 }
 
 /**

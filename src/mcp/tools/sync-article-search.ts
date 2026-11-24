@@ -23,12 +23,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { searchRemoteArticles } from '../../sync/article_search/index.js';
-import {
-  buildOfflineArticleSearchFraming,
-  formatArticleSearchOfflineHint,
-  formatArticleSearchWalkIncompleteNotice,
-} from '../../presentation/article_report.js';
-import { clampSearchLimit } from '../../utils/search-options.js';
+import { buildSnapshotSearchFraming } from '../../presentation/article_report.js';
 import type { ContextResolver } from '../context.js';
 import { formatToolSuccess, withResolvedContext } from '../tool-errors.js';
 
@@ -38,59 +33,47 @@ export function registerSyncArticleSearchTool(
 ): void {
   server.tool(
     'sync_article_search',
-    'Search past articles on remote EmDash (or local workspace with offline:true) by keyword, date range (since/until: "today", "yesterday", YYYY-MM-DD), status (draft/published), slug, category, or tag. Returns up to 20 hits by default with their ULID, title, status, and local tracking state. Use this to locate past articles outside the 30-post sync window before running sync_pull(id: "..."). Omit "query" to browse recent articles. When offline:true is set, queries only local markdown files with zero HTTP requests. Absence is only proven when walkComplete is true.',
+    'Search articles exhaustively across the local workspace and .emit/cache.db snapshot (0-HTTP, supports keyword, tag, category, status, slug, and since/until date filters), or set live:true for keyword-only remote FTS (trigram index; queries < 3 chars may miss). Returns up to 20 hits by default with ULID, title, status, and local tracking state for targeted sync_pull(id: "..."). Omit "query" to browse recent articles. Guidance: if snapshotStatus is "missing" or "stale", explain coverage/freshness to the user and offer sync_snapshot(action: "capture") (or live:true for keyword-only queries). If hits is empty and absenceGuaranteed is false, do NOT assert the article does not exist.',
     {
       query: z
         .string()
         .min(1)
         .optional()
         .describe(
-          'Search keyword (matched on title, slug, excerpt, body). Omit to browse by recency.',
+          'Search keyword (matched on title, slug, excerpt, body). Omit to browse by recency (default mode only).',
         ),
-      tag: z
-        .string()
-        .optional()
-        .describe('Filter by tag slug (requires taxonomy term lookup, maxScan defaults to 50)'),
-      category: z
-        .string()
-        .optional()
-        .describe(
-          'Filter by category slug (requires taxonomy term lookup, maxScan defaults to 50)',
-        ),
+      tag: z.string().optional().describe('Filter by tag slug (default mode only)'),
+      category: z.string().optional().describe('Filter by category slug (default mode only)'),
       status: z
         .enum(['draft', 'published'])
         .optional()
-        .describe('Filter by status: "draft" or "published"'),
+        .describe('Filter by status: "draft" or "published" (default mode only)'),
       slug: z.string().optional().describe('Filter by article slug substring'),
       since: z
         .string()
         .optional()
         .describe(
-          'Only articles created/published on or after this date: "today", "yesterday", or YYYY-MM-DD (local time)',
+          'Only articles created/published on or after this date: "today", "yesterday", or YYYY-MM-DD (local time; default mode only)',
         ),
       until: z
         .string()
         .optional()
-        .describe('Only articles created/published on or before this date (same formats as since)'),
+        .describe(
+          'Only articles created/published on or before this date (same formats as since; default mode only)',
+        ),
       dateField: z
         .enum(['publishedAt', 'updatedAt', 'createdAt'])
         .optional()
         .describe(
           'Date field for comparison (default: publishedAt for published, createdAt for draft)',
         ),
-      offline: z
+      live: z
         .boolean()
         .optional()
         .describe(
-          'Search only local Markdown files in posts/ — zero network requests. Results describe workspace only and never prove remote absence.',
+          'Query remote EmDash FTS endpoint directly (keyword-only; rejects tag/category/date/status filters; trigram queries < 3 chars may miss)',
         ),
       limit: z.number().optional().describe('Max hits to return (default 20, max 50)'),
-      maxScan: z
-        .number()
-        .optional()
-        .describe(
-          'Articles to read before stopping (default 300, 50 with taxonomy filters; 0 = whole library)',
-        ),
       includeConflicts: z
         .boolean()
         .optional()
@@ -99,6 +82,7 @@ export function registerSyncArticleSearchTool(
     },
     async (args) =>
       withResolvedContext(resolveContext, args, async (ctx) => {
+        const isLive = Boolean(args.live);
         const result = await searchRemoteArticles({
           query: args.query,
           tag: args.tag,
@@ -108,9 +92,8 @@ export function registerSyncArticleSearchTool(
           since: args.since,
           until: args.until,
           dateField: args.dateField,
-          offline: Boolean(args.offline),
+          live: isLive,
           limit: args.limit,
-          maxScan: args.maxScan,
           includeConflicts: Boolean(args.includeConflicts),
           workspaceRoot: ctx.root,
           origin: ctx.origin,
@@ -118,22 +101,17 @@ export function registerSyncArticleSearchTool(
           cache: ctx.cache,
         });
 
-        let note: string | undefined = !args.offline
-          ? (formatArticleSearchWalkIncompleteNotice(result, {
-              limit: clampSearchLimit(args.limit),
-              isMcp: true,
-            }) ?? undefined)
-          : undefined;
-
-        const offlineHint = formatArticleSearchOfflineHint(result, {
-          offline: args.offline,
-          tag: args.tag,
-          category: args.category,
-          workspaceRoot: ctx.root,
+        const framing = buildSnapshotSearchFraming({
+          snapshot: result.snapshot,
+          hitCount: result.hits.length,
+          totalCount: result.totalCount,
+          truncated: result.truncated,
+          walkComplete: result.walkComplete,
+          isLive,
+          query: args.query,
+          kind: 'article',
+          isMcp: true,
         });
-        if (offlineHint) {
-          note = note ? `${note} ${offlineHint}` : offlineHint;
-        }
 
         const payload: Record<string, unknown> = {
           query: args.query ?? null,
@@ -143,12 +121,9 @@ export function registerSyncArticleSearchTool(
           totalCount: result.totalCount,
           truncated: result.truncated,
           hits: result.hits,
+          ...framing,
         };
-        if (result.taxonomyFetchCount > 0) payload.taxonomyFetchCount = result.taxonomyFetchCount;
-        if (result.taxonomyCacheHitCount > 0)
-          payload.taxonomyCacheHitCount = result.taxonomyCacheHitCount;
-        if (result.fallbackReason) payload.fallbackReason = result.fallbackReason;
-        if (result.snapshot && !args.offline) payload.snapshot = result.snapshot;
+        if (result.snapshot) payload.snapshot = result.snapshot;
         if (typeof result.snapshotEnrichedCount === 'number') {
           payload.snapshotEnrichedCount = result.snapshotEnrichedCount;
         }
@@ -157,15 +132,6 @@ export function registerSyncArticleSearchTool(
         if (args.tag) payload.tag = args.tag;
         if (args.category) payload.category = args.category;
         if (args.status) payload.status = args.status;
-        if (args.offline) Object.assign(payload, buildOfflineArticleSearchFraming(result.snapshot));
-        if (offlineHint) {
-          payload.hint = {
-            offlineSearch: true,
-            reason: result.hits.length === 0 ? 'no-hits' : 'walk-truncated',
-            ...(result.snapshot ? { snapshotArticles: result.snapshot.articleCount } : {}),
-          };
-        }
-        if (note) payload.note = note;
 
         return formatToolSuccess(payload, ctx.meta);
       }),

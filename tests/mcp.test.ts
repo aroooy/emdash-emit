@@ -832,45 +832,47 @@ Inline body
     )._registeredTools;
 
     const origFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockImplementation((urlStr: string) => {
-      const url = new URL(urlStr);
-      expect(url.searchParams.has('q')).toBe(false);
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: {
-            items: [
-              {
-                id: '01M67P08DXFTYDPFRTJCC4XMP8',
-                filename: 'sky.jpg',
-                mimeType: 'image/jpeg',
-                size: 5000,
-                alt: '夕焼け空',
-                storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
-              },
-            ],
-            nextCursor: 'cursor-has-more',
-            totalCount: 100,
-          },
-        }),
-      });
+    const now = Date.now();
+    cache.saveSnapshotMeta({
+      collection: 'posts',
+      capturedAt: now,
+      articleCount: 0,
+      mediaCount: 1,
+      taxonomyFetchedCount: 0,
+      taxonomyReusedCount: 0,
+      articleSingleGetCount: 0,
+      durationMs: 1,
+    });
+    cache.upsertSnapshotMediaBatch({
+      walkComplete: true,
+      records: [
+        {
+          mediaId: '01M67P08DXFTYDPFRTJCC4XMP8',
+          storageKey: '01M67P07X2VPW0MYRRRGMA6T5A.jpg',
+          filename: 'sky.jpg',
+          mimeType: 'image/jpeg',
+          size: 5000,
+          alt: '夕焼け空',
+          capturedAt: now,
+        },
+      ],
+    });
+    globalThis.fetch = vi.fn(() => {
+      throw new Error('sync_media_search must not make network calls');
     }) as unknown as typeof fetch;
 
     try {
       const res = await registered['sync_media_search'].handler({
         query: '夕焼け',
-        maxScan: 1,
       });
 
       expect(res.isError).toBeUndefined();
       const payload = JSON.parse(res.content[0].text);
       expect(payload.query).toBe('夕焼け');
       expect(payload.scannedCount).toBe(1);
-      expect(payload.walkComplete).toBe(false);
-      expect(payload.note).toContain('[WALK_INCOMPLETE]');
-      expect(payload.note).not.toContain('does not exist');
-      expect(payload.note).not.toContain('INSERT');
+      expect(payload.walkComplete).toBe(true);
+      expect(payload.snapshotStatus).toBe('fresh');
+      expect(payload.absenceGuaranteed).toBe(true);
       expect(payload.hits).toHaveLength(1);
       expect(payload.hits[0].storageKey).toBe('01M67P07X2VPW0MYRRRGMA6T5A.jpg');
       expect(payload.hits[0].mirrored).toBe(false);
@@ -879,7 +881,7 @@ Inline body
     }
   });
 
-  it('T4-5: sync_media_search formats network error via formatToolError', async () => {
+  it('T4-5: sync_article_search live:true rejects unsupported filters and formats HTTP error via formatToolError', async () => {
     const server = createMcpServer({
       workspaceRoot: tempDir,
       cache,
@@ -899,6 +901,14 @@ Inline body
       }
     )._registeredTools;
 
+    const filterRes = await registered['sync_article_search'].handler({
+      query: 'test',
+      live: true,
+      tag: 'news',
+    });
+    expect(filterRes.isError).toBe(true);
+    expect(filterRes.content[0].text).toContain('LIVE_SEARCH_UNSUPPORTED_FILTER');
+
     const origFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -907,9 +917,12 @@ Inline body
     }) as unknown as typeof fetch;
 
     try {
-      const res = await registered['sync_media_search'].handler({ query: 'fail-test' });
+      const res = await registered['sync_article_search'].handler({
+        query: 'fail-test',
+        live: true,
+      });
       expect(res.isError).toBe(true);
-      expect(res.content[0].text).toContain('MEDIA_LIST_FAILED');
+      expect(res.content[0].text).toContain('ARTICLE_SEARCH_FAILED');
       expect(res.content[0].text).toContain('HTTP 500');
     } finally {
       globalThis.fetch = origFetch;

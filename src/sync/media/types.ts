@@ -282,9 +282,9 @@ export interface MediaSearchHit {
 
 export interface MediaSearchResult {
   hits: MediaSearchHit[];
-  /** Records actually read from the list endpoint. */
+  /** Records inspected across local mirrors and cached snapshot. */
   scannedCount: number;
-  /** True only when the walk finished without hitting `maxScan`. Absence claims require this. */
+  /** True when all local mirrors and snapshot records were inspected. */
   walkComplete: boolean;
   /** Server-reported totalCount when present (live EmDash reports none). */
   totalCount: number | null;

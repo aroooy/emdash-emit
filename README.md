@@ -93,7 +93,7 @@ Emit separates **Layer A (canonical server & baseline data)** from **Layer B (hu
 ### 4. Hardened for Autonomous AI Agents (19 Guardrails & Epistemic Search)
 
 - **19 Code-Level Preflight & Sync Guardrails (G1–G19)**: Physically blocks AI agent accidents before any network request—preventing unapproved live publishing (**G3**), hallucinated category/tag names (**G4**), manual `mv` filename corruption (**G2**), pushing quarantined conflict copies (**G12**), or accidental taxonomy wipes (**G19**).
-- **Epistemic Search (`[WALK_INCOMPLETE]`) & 0-GET Self-Healing**: When `emit article-search` or `emit media-search` stops at `--max-scan` before exhausting the remote library, it explicitly outputs `[WALK_INCOMPLETE]` so AI agents never hallucinate that an older article is absent. On pull, untouched local articles self-heal deleted remote taxonomy terms and legacy spellings on the **0-GET fast path**.
+- **Snapshot-First Exhaustive Search (`snapshotStatus` Framing) & 0-GET Self-Healing**: `emit article-search` and `emit media-search` search 100% of the local workspace + `.emit/cache.db` snapshot with zero network calls (with explicit `fresh` / `stale` / `missing` coverage framing and optional `--live` keyword-only FTS for articles). On pull, untouched local articles self-heal deleted remote taxonomy terms and legacy spellings on the **0-GET fast path**.
 - **Zero-Friction Multi-Site Profiles & Zero Native Dependencies**: Auto-detects the target EmDash site from your current working directory (`~/.config/emit/profiles.yaml`) and runs on Node.js 22+ built-in `node:sqlite` (`DatabaseSync`) with zero C++ `node-gyp` dependencies.
 
 ---
@@ -365,7 +365,7 @@ Detailed specifications, subsystem designs, and troubleshooting guides are organ
 4. **[Local-First Media Pipeline (`docs/media-pipeline.md`)](docs/media-pipeline.md)** — `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path localization, `storageKeyToMarkdownRef` mirror naming, and remote-authoritative media pruning.
 5. **[Two Media ID Spaces: `id` vs `storageKey` (`docs/media-id-spaces.md`)](docs/media-id-spaces.md)** — Authoritative specification of D1 record `id` vs R2 `storageKey`, endpoint lookup matrices, and migrated-corpus behavior.
 6. **[Taxonomies (Two-Layer Representation) & Bylines (`docs/taxonomies-and-bylines.md`)](docs/taxonomies-and-bylines.md)** — Layer A percent-encoded slugs vs Layer B decoded CJK display, collision resolution, 0-GET deleted taxonomy auto-healing, pre-PUT remote taxonomy audit, and author bylines.
-7. **[Safety Guardrails (G1–G19), Diagnostics, Search & Troubleshooting FAQ (`docs/safety-guards-and-diagnostics.md`)](docs/safety-guards-and-diagnostics.md)** — Complete G1–G19 guard table, `emit doctor` checks, epistemic search rules (`[WALK_INCOMPLETE]`), and Troubleshooting FAQ.
+7. **[Safety Guardrails (G1–G20), Diagnostics, Search & Troubleshooting FAQ (`docs/safety-guards-and-diagnostics.md`)](docs/safety-guards-and-diagnostics.md)** — Complete G1–G20 guard table, `emit doctor` checks, snapshot-first search rules (`snapshotStatus`), and Troubleshooting FAQ.
 8. **[CLI Command & MCP Tool Complete Reference (`docs/cli-and-mcp-reference.md`)](docs/cli-and-mcp-reference.md)** — Full option reference and output examples for all 16 CLI commands (+10 subcommands) and 14 MCP tools.
 9. **[npm Publish Guide (`docs/npm-publish-guide.md`)](docs/npm-publish-guide.md)** & **[Historical Implementation Plans (`docs/plans/`)](docs/README.md)** — Release workflow and archived design plans (`v0.1.012` – `v0.1.046`).
 

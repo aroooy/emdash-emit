@@ -92,6 +92,7 @@ export const OPERATIONAL_ERROR_CODES = [
   'ARTICLE_NOT_FOUND',
   'ARTICLE_TARGET_UNRESOLVED',
   'ARTICLE_SEARCH_FAILED',
+  'LIVE_SEARCH_UNSUPPORTED_FILTER',
   'DATE_BOUNDARY_INVALID',
   'MEDIA_LIST_FAILED',
   'MEDIA_SEARCH_QUERY_REQUIRED',
@@ -386,6 +387,8 @@ const REMEDIATION_MAP: Record<string, string> = {
     'The requested article was not found in the local snapshot. Connect to the network and run "emit pull <id>", or refresh with "emit snapshot capture".',
   PULL_REQUIRED_BEFORE_PUSH:
     'This article was restored from an offline snapshot and lacks a live Track 1 _rev token. Run "emit pull" online first (local edits will be preserved), then push.',
+  LIVE_SEARCH_UNSUPPORTED_FILTER:
+    'Live FTS search only accepts a non-empty keyword query without tag, category, date, or status filters. Omit --live / live to search the local workspace and snapshot index.',
   PUSH_CREATE_FAILED:
     'Remote article creation failed. Check network connectivity, permissions, and verify that the slug is not taken on remote.',
   PUSH_FAILED:

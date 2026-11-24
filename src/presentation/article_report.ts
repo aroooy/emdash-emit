@@ -22,7 +22,6 @@
 
 import type { PrunedTaxonomiesDetail } from '../utils/taxonomy-key.js';
 import type { ArticleSearchHit, ArticleSearchResult } from '../sync/article_search/index.js';
-import { getLocalTaxonomiesSummary } from '../sync/taxonomies.js';
 
 export type ArticleSearchSnapshotView = NonNullable<ArticleSearchResult['snapshot']>;
 
@@ -216,52 +215,106 @@ export function formatPrunedTaxonomiesNotice(
   return `🏷️ Pruned deleted taxonomy term(s) from frontmatter (${parts.join(', ')}). Push the file to apply changes on remote.`;
 }
 
-/**
- * Frames an offline article search as what it is: a view of this workspace's local files only.
- */
-export function formatArticleOfflineSearchHeader(
-  scannedCount: number,
-  snapshot?: ArticleSearchSnapshotView,
-): string {
-  if (!snapshot) {
-    return (
-      `[SOURCE: LOCAL WORKSPACE ONLY (OFFLINE)]\n` +
-      `Searched ${scannedCount} local article(s) in this workspace.\n` +
-      `Remote EmDash library was NOT queried.`
-    );
-  }
-  const staleTag = snapshot.stale ? ' ⚠️ [STALE_SNAPSHOT: >7d old]' : '';
-  return (
-    `[SOURCE: LOCAL WORKSPACE + SNAPSHOT @ ${formatSnapshotTimestamp(snapshot.capturedAt)} (${formatSnapshotAge(snapshot.capturedAt)}) (OFFLINE)]\n` +
-    `Searched ${scannedCount} local/cached article(s) (${snapshot.articleCount} in snapshot).${staleTag}\n` +
-    `Remote EmDash library was NOT queried live.`
-  );
+export type SnapshotSearchStatus = 'fresh' | 'stale' | 'missing';
+
+export interface SnapshotSearchFraming {
+  snapshotStatus: SnapshotSearchStatus;
+  ageDays?: number;
+  capturedAt?: string;
+  absenceGuaranteed: boolean;
+  truncatedHint?: string;
+  userNotice?: string;
+  recommendedAction?: string;
 }
 
-/** The absence-protection line an offline article search must print when it finds nothing. */
-export const OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE =
-  'ℹ️ No matching articles found in local workspace. This does NOT prove the article does not exist on remote. Run without --offline to search the remote library.';
+/**
+ * Shared epistemic and freshness framing for CLI and MCP search (article & media).
+ * Distinguishes 100%-corpus coverage (`absenceGuaranteed`) from `limit`-capped display (`truncatedHint`).
+ */
+export function buildSnapshotSearchFraming(options: {
+  snapshot?: { capturedAt: string; ageDays: number; stale: boolean };
+  hitCount: number;
+  totalCount?: number | null;
+  truncated?: boolean;
+  walkComplete?: boolean;
+  isLive?: boolean;
+  query?: string;
+  kind: 'article' | 'media';
+  isMcp?: boolean;
+}): SnapshotSearchFraming {
+  const snapshotStatus: SnapshotSearchStatus = !options.snapshot
+    ? 'missing'
+    : options.snapshot.stale
+      ? 'stale'
+      : 'fresh';
 
-/** The machine-readable counterpart of offline article search framing for MCP JSON payloads. */
-export function buildOfflineArticleSearchFraming(snapshot?: ArticleSearchSnapshotView): {
-  source: 'local_workspace';
-  remoteQueried: false;
-  warning: string;
-  snapshot?: ArticleSearchSnapshotView;
-  staleSnapshot?: true;
-} {
+  const trimmedQuery = options.query?.trim() ?? '';
+  const isShortLiveQuery = Boolean(
+    options.isLive && trimmedQuery.length > 0 && trimmedQuery.length < 3,
+  );
+
+  const absenceGuaranteed = options.isLive
+    ? !isShortLiveQuery && options.walkComplete !== false
+    : snapshotStatus === 'fresh';
+
+  let truncatedHint: string | undefined;
+  if (options.truncated) {
+    const limitSyntax = options.isMcp ? 'limit' : '--limit';
+    if (typeof options.totalCount === 'number' && options.totalCount > options.hitCount) {
+      truncatedHint = `Showing top ${options.hitCount} of ${options.totalCount} match(es); raise ${limitSyntax} to see more.`;
+    } else {
+      truncatedHint = `Hit limit reached at ${options.hitCount}; raise ${limitSyntax} to see more matches.`;
+    }
+  }
+
+  let userNotice: string | undefined;
+  let recommendedAction: string | undefined;
+
+  if (options.isLive) {
+    if (options.hitCount === 0 && isShortLiveQuery) {
+      userNotice = 'Live FTS uses trigram indexing and may miss queries shorter than 3 characters.';
+      recommendedAction =
+        'Omit --live / live to run an exact substring search across the local workspace and snapshot index.';
+    } else if (options.walkComplete === false) {
+      userNotice =
+        'Live FTS returned a partial page (nextCursor present); more remote matches may exist.';
+      recommendedAction = 'Refine the keyword or raise limit.';
+    }
+  } else if (snapshotStatus === 'missing') {
+    userNotice =
+      options.hitCount === 0
+        ? 'No matching items found in local workspace files. Full-library snapshot has not been captured yet, so older remote items were not searched.'
+        : 'Full-library snapshot has not been captured yet; only local workspace files were searched.';
+    recommendedAction =
+      options.kind === 'article'
+        ? 'Run sync_snapshot(action: "capture") / "emit snapshot capture" to index the full remote library (or pass live: true / --live for keyword-only FTS).'
+        : 'Run sync_snapshot(action: "capture") / "emit snapshot capture" to index the full remote media library.';
+  } else if (snapshotStatus === 'stale') {
+    const age = options.snapshot!.ageDays;
+    userNotice =
+      options.hitCount === 0
+        ? `No matching items found in the ${age}-day-old snapshot. Items added or updated remotely since capture are not included.`
+        : `Searched ${age}-day-old snapshot; items added or updated remotely since capture may not be reflected.`;
+    recommendedAction =
+      options.kind === 'article'
+        ? 'Run sync_snapshot(action: "capture") / "emit snapshot capture" to refresh the index (or pass live: true / --live for keyword-only FTS).'
+        : 'Run sync_snapshot(action: "capture") / "emit snapshot capture" to refresh the media index.';
+  }
+
   return {
-    source: 'local_workspace',
-    remoteQueried: false,
-    warning:
-      'Remote CMS was NOT checked. Absence from this list does NOT prove the article does not exist remotely.',
-    ...(snapshot ? { snapshot } : {}),
-    ...(snapshot?.stale ? { staleSnapshot: true as const } : {}),
+    snapshotStatus,
+    ...(options.snapshot
+      ? { ageDays: options.snapshot.ageDays, capturedAt: options.snapshot.capturedAt }
+      : {}),
+    absenceGuaranteed,
+    ...(truncatedHint ? { truncatedHint } : {}),
+    ...(userNotice ? { userNotice } : {}),
+    ...(recommendedAction ? { recommendedAction } : {}),
   };
 }
 
 export interface ArticleSearchHeaderOptions {
-  offline?: boolean;
+  live?: boolean;
   query?: string;
   since?: string;
   until?: string;
@@ -277,10 +330,6 @@ export function formatArticleSearchHeader(
   result: ArticleSearchResult,
   options: ArticleSearchHeaderOptions,
 ): string {
-  if (options.offline) {
-    return formatArticleOfflineSearchHeader(result.scannedCount, result.snapshot);
-  }
-
   const filters: string[] = [];
   if (options.query) filters.push(`"${options.query}"`);
   if (options.tag) filters.push(`tag:#${options.tag}`);
@@ -290,22 +339,20 @@ export function formatArticleSearchHeader(
   if (options.until) filters.push(`until ${options.until}`);
 
   const subject = filters.length > 0 ? filters.join(' ') : 'recency browse';
-  const modeLabel =
-    result.searchMode === 'fts'
-      ? 'mode: fts'
-      : result.fallbackReason
-        ? `mode: scan (fallback: ${result.fallbackReason})`
-        : 'mode: scan';
-
-  const taxLabel =
-    result.taxonomyFetchCount > 0
-      ? ` [taxonomies fetched: ${result.taxonomyFetchCount} GET(s)]`
-      : '';
-  const taxCacheLabel =
-    result.taxonomyCacheHitCount > 0 ? ` [taxonomies cached: ${result.taxonomyCacheHitCount}]` : '';
   const truncLabel = result.truncated ? ' [truncated at limit]' : '';
 
-  return `Article search: ${subject} (${modeLabel}, scanned ${result.scannedCount} article(s))${taxLabel}${taxCacheLabel}${truncLabel}`;
+  if (options.live || result.searchMode === 'fts') {
+    return `Article search (live FTS): ${subject} (${result.scannedCount} hit(s))${truncLabel}`;
+  }
+
+  if (!result.snapshot) {
+    return `Article search (local workspace only — no snapshot): ${subject} (searched ${result.scannedCount} article(s))${truncLabel}`;
+  }
+
+  const staleTag = result.snapshot.stale
+    ? ` ⚠️ [STALE_SNAPSHOT: ${result.snapshot.ageDays}d old]`
+    : '';
+  return `Article search (local + snapshot @ ${formatSnapshotTimestamp(result.snapshot.capturedAt)}): ${subject} (searched ${result.scannedCount} article(s), ${result.snapshot.articleCount} in snapshot)${staleTag}${truncLabel}`;
 }
 
 /**
@@ -348,19 +395,19 @@ export function formatArticleSearchHit(hit: ArticleSearchHit, index?: number): s
  */
 export function formatArticleSearchEmptyNotice(
   result: ArticleSearchResult,
-  offline?: boolean,
+  live?: boolean,
 ): string {
-  if (offline) {
-    return OFFLINE_ARTICLE_SEARCH_EMPTY_NOTICE;
+  if (live || result.searchMode === 'fts') {
+    return 'No matching articles found in live FTS index.';
   }
-  if (result.walkComplete) {
-    return `No match found in the remote article library (${result.scannedCount} articles scanned).`;
+  if (!result.snapshot) {
+    return 'No matching articles found in local workspace (no snapshot captured yet).';
   }
-  return `No match in the first ${result.scannedCount} article(s).`;
+  return `No matching articles found (${result.scannedCount} local/snapshot article(s) searched).`;
 }
 
 /**
- * Formats supplementary hit-limit notice for search walks stopped early.
+ * Formats supplementary hit-limit notice for search results capped by `limit`.
  * Shared across article and media search (CLI and MCP).
  */
 export function formatSearchHitLimitNotice(
@@ -368,73 +415,5 @@ export function formatSearchHitLimitNotice(
   options?: { isMcp?: boolean },
 ): string {
   const limitSyntax = options?.isMcp ? 'limit' : '--limit';
-  return `Hit limit reached at ${hitCount}; raise ${limitSyntax} to see more matches from the same walk.`;
-}
-
-/**
- * Formats walk incomplete notice.
- */
-export function formatArticleSearchWalkIncompleteNotice(
-  result: ArticleSearchResult,
-  options?: { limit?: number; isMcp?: boolean },
-): string | null {
-  if (result.walkComplete) return null;
-  const isMcp = Boolean(options?.isMcp);
-  const maxScanSyntax = isMcp ? 'maxScan' : '--max-scan';
-  const headline = `[WALK_INCOMPLETE] read ${result.scannedCount} article(s) and stopped at ${maxScanSyntax}; absence is not proven.`;
-  const hitLimitLine =
-    result.truncated && result.hits.length >= (options?.limit ?? 20)
-      ? formatSearchHitLimitNotice(result.hits.length, { isMcp })
-      : null;
-  const guidance = `Narrow the query or raise ${maxScanSyntax} (0 walks the whole library).`;
-
-  if (isMcp) {
-    return [headline, hitLimitLine, guidance].filter(Boolean).join(' ');
-  }
-  return [`⚠️ ${headline}`, ...(hitLimitLine ? [`   ${hitLimitLine}`] : []), `   ${guidance}`].join(
-    '\n',
-  );
-}
-
-/**
- * Formats the offline re-search hint for a remote article search that found nothing
- * or stopped before the end of the library. Returns null when no hint applies.
- */
-export function formatArticleSearchOfflineHint(
-  result: ArticleSearchResult,
-  options?: { offline?: boolean; tag?: string; category?: string; workspaceRoot?: string },
-): string | null {
-  if (options?.offline) return null;
-
-  const applies = result.hits.length === 0 || result.truncated || !result.walkComplete;
-  if (!applies) return null;
-
-  const hasTaxonomyFilter = Boolean(options?.tag || options?.category);
-  let taxonomyClause = '';
-  if (hasTaxonomyFilter && options?.workspaceRoot) {
-    try {
-      const summary = getLocalTaxonomiesSummary(options.workspaceRoot);
-      if (summary.categories.length > 0 || summary.tags.length > 0) {
-        taxonomyClause = ' For taxonomy filters, verify terms first: emit pull-taxonomies';
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (result.snapshot) {
-    const snap = result.snapshot;
-    const datePart = formatSnapshotTimestamp(snap.capturedAt).slice(0, 10);
-    const agePart = formatSnapshotAge(snap.capturedAt);
-    const staleSuffix = snap.stale ? ' ⚠️ stale snapshot (>7d): run emit snapshot first.' : '';
-    return (
-      `💡 Hint: the full library snapshot (${snap.articleCount} articles @ ${datePart}, ${agePart}) can be searched\n` +
-      `   instantly with --offline (zero HTTP).${staleSuffix}${taxonomyClause}`
-    );
-  }
-
-  return (
-    `💡 Hint: workspace-synced articles can be searched instantly with --offline\n` +
-    `   (local Markdown bodies, zero HTTP).${taxonomyClause}`
-  );
+  return `Hit limit reached at ${hitCount}; raise ${limitSyntax} to see more matches.`;
 }

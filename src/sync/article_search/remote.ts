@@ -20,33 +20,16 @@
  * SOFTWARE.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
 import { createAuthedFetch } from '../../client/http.js';
-import { articleContentEndpoint, searchEndpoint } from '../../client/endpoints.js';
+import { ApiError } from '../../client/error.js';
+import { searchEndpoint } from '../../client/endpoints.js';
 import { unwrapEnvelope, isSameRev, extractComparisonRev, extractRev } from '../../client/api.js';
-import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import { resolveSearchDateBoundaries } from '../../utils/search-date.js';
 import { clampSearchLimit } from '../../utils/search-options.js';
-import {
-  taxonomyTermFilterAliases,
-  taxonomyTermMatchesFilter,
-} from '../../utils/taxonomy-term-match.js';
 import { findLocalFilesByUlid } from '../workspace/index.js';
-import { fetchAssignedTerms } from '../terms.js';
-import { loadLocalTaxonomyMaps, canonicalizeTaxonomiesForBaseline } from '../taxonomies.js';
-import { isLocalFileUnmodified } from '../baseline-reconstruction.js';
+import { searchLocalArticles } from './local.js';
 import {
-  inArticleDateRange,
-  matchesArticleKeyword,
-  parseArticleDates,
-  resolveArticleDateField,
-} from './query.js';
-import { searchLocalArticles, readTaxonomyAliases } from './local.js';
-import {
-  ARTICLE_SEARCH_DEFAULT_MAX_SCAN,
-  ARTICLE_SEARCH_TAXONOMY_MAX_SCAN,
   type ArticleSearchHit,
   type ArticleSearchOptions,
   type ArticleSearchResult,
@@ -79,655 +62,147 @@ function buildArticleSnapshotInfo(
   };
 }
 
-interface RawSearchResponse {
-  items?: RawSearchItem[];
-  nextCursor?: string;
-}
-
 /**
- * Searches remote articles in EmDash.
- * Follows the single decision rule:
- *   1. offline: true -> local markdown scan
- *   2. tag / category given -> scan path
- *   3. since / until given -> scan path
- *   4. query given -> FTS path (with fallback to scan on HTTP error or short queries)
- *   5. no query -> scan path (recency browse)
+ * Searches articles using Emit's two-mode model:
+ *   - Default (`!options.live`): 0-HTTP exhaustive search across local `posts/` and `.emit/cache.db` snapshot.
+ *   - Explicit `options.live`: queries EmDash's live FTS endpoint (`/_emdash/api/search`, keyword-only;
+ *     rejects unsupported filters with `LIVE_SEARCH_UNSUPPORTED_FILTER`).
  */
 export async function searchRemoteArticles(
   options: ArticleSearchOptions,
 ): Promise<ArticleSearchResult> {
-  if (options.offline) {
+  if (!options.live) {
     return searchLocalArticles(options);
   }
 
   const collection = options.collection || 'posts';
-  const fetchFn = createAuthedFetch(options);
+  const trimmedQuery = options.query?.trim();
+  const normalizedQuery = trimmedQuery ? trimmedQuery.toLowerCase() : '';
 
   const { sinceBoundary, untilBoundary } = resolveSearchDateBoundaries({
     since: options.since,
     until: options.until,
   });
 
-  const trimmedQuery = options.query?.trim();
-  const normalizedQuery = trimmedQuery ? trimmedQuery.toLowerCase() : '';
-  const hasTaxonomyFilter = Boolean(options.tag?.trim() || options.category?.trim());
-  const hasDateFilter = Boolean(sinceBoundary !== null || untilBoundary !== null);
+  const unsupportedFilters: string[] = [];
+  if (options.tag?.trim()) unsupportedFilters.push('tag');
+  if (options.category?.trim()) unsupportedFilters.push('category');
+  if (options.status) unsupportedFilters.push('status');
+  if (sinceBoundary !== null) unsupportedFilters.push('since');
+  if (untilBoundary !== null) unsupportedFilters.push('until');
+
+  if (!normalizedQuery || unsupportedFilters.length > 0) {
+    const reason = !normalizedQuery
+      ? 'Live FTS search requires a non-empty keyword query.'
+      : `Live FTS search does not support filter(s): ${unsupportedFilters.join(', ')}.`;
+    throw new ApiError({
+      endpoint: '/_emdash/api/search',
+      code: 'LIVE_SEARCH_UNSUPPORTED_FILTER',
+      status: 400,
+      message: reason,
+      suggestion:
+        'Omit --live / live to run default exhaustive search across the local workspace and snapshot index.',
+    });
+  }
 
   const limit = clampSearchLimit(options.limit);
+  const fetchFn = createAuthedFetch(options);
 
-  // Determine path:
-  const mustUseScan =
-    hasTaxonomyFilter || hasDateFilter || Boolean(options.status) || !normalizedQuery;
+  const searchUrl = new URL(searchEndpoint(options.origin));
+  searchUrl.searchParams.set('q', trimmedQuery!);
+  searchUrl.searchParams.set('collections', collection);
+  searchUrl.searchParams.set('limit', String(limit));
 
-  if (!mustUseScan && normalizedQuery) {
-    // Attempt FTS path first
-    try {
-      const searchUrl = new URL(searchEndpoint(options.origin));
-      searchUrl.searchParams.set('q', trimmedQuery!);
-      searchUrl.searchParams.set('collections', collection);
-      searchUrl.searchParams.set('limit', String(limit));
-      if (options.status) {
-        searchUrl.searchParams.set('status', options.status);
-      }
-
-      const res = await fetchFn(searchUrl.toString(), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: 'application/json',
-        },
-      });
-
-      if (res.ok) {
-        const json = (await res.json()) as Record<string, unknown>;
-        const data = unwrapEnvelope<RawSearchResponse>(json);
-        const rawItems = Array.isArray(data.items) ? data.items : [];
-
-        // Check M6: if query length is < 3 and FTS returned 0 hits,
-        // trigram tokenization may have missed Japanese words. Fall back to scan path!
-        if (rawItems.length === 0 && trimmedQuery!.length < 3) {
-          return executeScanSearch({
-            options,
-            collection,
-            fetchFn,
-            limit,
-            sinceBoundary,
-            untilBoundary,
-            normalizedQuery,
-            fallbackReason:
-              'Short query length (< 3 characters) fell back to scan for trigram completeness',
-          });
-        }
-
-        const hits: ArticleSearchHit[] = [];
-        for (const item of rawItems) {
-          if (!item.id) continue;
-          const localFiles = findLocalFilesByUlid(options.workspaceRoot, collection, item.id);
-          const syncState = options.cache?.getSyncState(item.id);
-          const isLocal = localFiles.length > 0 || Boolean(syncState);
-          const localPath = localFiles[0] || syncState?.localFilePath || null;
-
-          // Slug filter if specified
-          if (
-            options.slug &&
-            item.slug &&
-            !item.slug.toLowerCase().includes(options.slug.toLowerCase())
-          ) {
-            continue;
-          }
-
-          const snap = options.cache?.getSnapshotArticle(item.id) ?? null;
-          let enrichment: Partial<ArticleSearchHit> = {};
-          if (snap) {
-            let revVerified = false;
-            if (item._rev || item.version) {
-              const rawItemObj = item as unknown as Record<string, unknown>;
-              const rawRev = extractRev(rawItemObj, '');
-              const compRev = rawRev ? extractComparisonRev(rawItemObj, rawRev) : '';
-              revVerified = Boolean(compRev && isSameRev(snap.comparisonRev, compRev));
-            }
-            enrichment = {
-              status: snap.status,
-              createdAt: snap.createdAt ?? undefined,
-              publishedAt: snap.publishedAt,
-              updatedAt: snap.updatedAt ?? undefined,
-              enrichedFromSnapshot: true,
-              ...(!revVerified ? { enrichmentStale: true } : {}),
-            };
-          }
-
-          hits.push({
-            id: item.id,
-            slug: item.slug || null,
-            title: item.title || 'Untitled',
-            snippet: item.snippet,
-            score: item.score,
-            isLocal,
-            localPath,
-            ...enrichment,
-            matchedOn: ['title'],
-          });
-        }
-
-        const nextCursor = data.nextCursor;
-        const finalHits = hits.slice(0, limit);
-        const truncated = Boolean(nextCursor && hits.length >= limit);
-        const walkComplete = !nextCursor;
-        const snapshotInfo = buildArticleSnapshotInfo(options.cache, collection);
-        const finalEnrichedCount = finalHits.filter((h) => h.enrichedFromSnapshot).length;
-
-        return {
-          hits: finalHits,
-          searchMode: 'fts',
-          scannedCount: hits.length,
-          totalCount: null,
-          walkComplete,
-          truncated,
-          normalizedQuery,
-          taxonomyFetchCount: 0,
-          taxonomyCacheHitCount: 0,
-          ...(snapshotInfo ? { snapshot: snapshotInfo } : {}),
-          ...(finalEnrichedCount > 0 ? { snapshotEnrichedCount: finalEnrichedCount } : {}),
-        };
-      }
-
-      // If FTS returns HTTP error (404/5xx), fall back to scan path
-      return executeScanSearch({
-        options,
-        collection,
-        fetchFn,
-        limit,
-        sinceBoundary,
-        untilBoundary,
-        normalizedQuery,
-        fallbackReason: `HTTP ${res.status} from /search endpoint`,
-      });
-    } catch (err: unknown) {
-      // Network or parse error from search endpoint -> fall back to scan
-      const reason = err instanceof Error ? err.message : String(err);
-      return executeScanSearch({
-        options,
-        collection,
-        fetchFn,
-        limit,
-        sinceBoundary,
-        untilBoundary,
-        normalizedQuery,
-        fallbackReason: `Network error from /search: ${reason}`,
-      });
-    }
-  }
-
-  // Scan path
-  return executeScanSearch({
-    options,
-    collection,
-    fetchFn,
-    limit,
-    sinceBoundary,
-    untilBoundary,
-    normalizedQuery,
-  });
-}
-
-interface ExecuteScanParams {
-  options: ArticleSearchOptions;
-  collection: string;
-  fetchFn: typeof fetch;
-  limit: number;
-  sinceBoundary: number | null;
-  untilBoundary: number | null;
-  normalizedQuery: string;
-  fallbackReason?: string;
-}
-
-export const MAX_TAXONOMY_REMOTE_FETCHES = 100;
-
-export interface BaselineTaxonomyRead {
-  /** null = fast-path not satisfied -> caller falls back to remote terms GET */
-  terms: { categories: string[]; tags: string[] } | null;
-  reason:
-    | 'cache-hit'
-    | 'snapshot-hit'
-    | 'no-cache'
-    | 'pending-flag'
-    | 'rev-mismatch'
-    | 'disk-modified'
-    | 'no-snapshot'
-    | 'no-recorded-taxonomies';
-}
-
-/**
- * Evaluates the five baseline fast-path preconditions for taxonomy filtering in scan search.
- * Returns the recorded raw terms on `'cache-hit'` (0-GET), or `terms: null` with a named
- * fallback reason when remote terms GET is required.
- */
-export function readTaxonomiesFromBaseline(params: {
-  cache: CacheDatabase | undefined;
-  itemId: string;
-  item: Record<string, unknown>;
-  workspaceRoot: string;
-}): BaselineTaxonomyRead {
-  const { cache, itemId, item, workspaceRoot } = params;
-  if (!cache) {
-    return { terms: null, reason: 'no-cache' };
-  }
-
-  const rawRevCandidate = String(item._rev || item.rev || item.version || '');
-  const remoteRev = extractRev(item, rawRevCandidate || '1');
-  const comparisonRev = extractComparisonRev(item, remoteRev);
-
-  const trySnapshotFallback = (): BaselineTaxonomyRead | null => {
-    const snap = cache.getSnapshotArticle(itemId);
-    if (!snap || snap.taxonomyVerified !== 1) return null;
-    if (!comparisonRev || !isSameRev(snap.comparisonRev, comparisonRev)) return null;
-    try {
-      const categories = JSON.parse(snap.categoriesJson) as unknown;
-      const tags = JSON.parse(snap.tagsJson) as unknown;
-      return {
-        terms: {
-          categories: Array.isArray(categories) ? categories.map(String) : [],
-          tags: Array.isArray(tags) ? tags.map(String) : [],
-        },
-        reason: 'snapshot-hit',
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const syncState = cache.getSyncState(itemId);
-  if (!syncState) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'no-cache' };
-  }
-
-  if (
-    syncState.deletePending === 1 ||
-    syncState.bodyConflictPending === 1 ||
-    syncState.taxonomyApplyPending === 1 ||
-    syncState.taxonomyConflictPending === 1
-  ) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'pending-flag' };
-  }
-
-  if (!comparisonRev || !isSameRev(syncState.remoteRev, comparisonRev)) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'rev-mismatch' };
-  }
-
-  const fullPath = syncState.localFilePath
-    ? path.join(workspaceRoot, syncState.localFilePath)
-    : null;
-  let isDiskUnmodified = false;
-  if (fullPath && fs.existsSync(fullPath)) {
-    try {
-      const diskContent = fs.readFileSync(fullPath, 'utf8');
-      isDiskUnmodified = isLocalFileUnmodified({
-        workspaceRoot,
-        cache,
-        id: itemId,
-        relPath: syncState.localFilePath,
-        localContent: diskContent,
-        syncState,
-        // Article search is a read-only inspection command: it must never heal
-        // `sync_state.local_hash` as a side effect. The healing edge belongs to
-        // status / diff / doctor / delete only. It therefore verifies disk parity
-        // with healOnSpellingMatch: false, allowing fast-path evaluation without mutating the cache.
-        healOnSpellingMatch: false,
-      });
-    } catch {
-      isDiskUnmodified = false;
-    }
-  }
-
-  if (!isDiskUnmodified) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'disk-modified' };
-  }
-
-  const baseSnapshot = cache.getBaseSnapshot(itemId);
-  if (!baseSnapshot) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'no-snapshot' };
-  }
-
-  const fm = readBaselineFrontmatter(baseSnapshot);
-  const hasRecordedTaxonomies =
-    fm &&
-    fm.taxonomies &&
-    typeof fm.taxonomies === 'object' &&
-    (Array.isArray(fm.taxonomies.categories) || Array.isArray(fm.taxonomies.tags));
-  if (!hasRecordedTaxonomies) {
-    return trySnapshotFallback() ?? { terms: null, reason: 'no-recorded-taxonomies' };
-  }
-
-  return {
-    terms: {
-      categories: Array.isArray(fm.taxonomies.categories)
-        ? fm.taxonomies.categories.map(String)
-        : [],
-      tags: Array.isArray(fm.taxonomies.tags) ? fm.taxonomies.tags.map(String) : [],
+  const res = await fetchFn(searchUrl.toString(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      Accept: 'application/json',
     },
-    reason: 'cache-hit',
-  };
-}
+  });
 
-async function executeScanSearch(params: ExecuteScanParams): Promise<ArticleSearchResult> {
-  const {
-    options,
-    collection,
-    fetchFn,
-    limit,
-    sinceBoundary,
-    untilBoundary,
-    normalizedQuery,
-    fallbackReason,
-  } = params;
+  if (!res.ok) {
+    throw new ApiError({
+      endpoint: searchUrl.pathname,
+      code: 'ARTICLE_SEARCH_FAILED',
+      status: res.status,
+      message: `Live FTS search failed with HTTP ${res.status}.`,
+      suggestion:
+        'Verify network connectivity and authentication, or omit --live / live to search the local workspace and snapshot index.',
+    });
+  }
 
-  const hasTaxonomyFilter = Boolean(options.tag?.trim() || options.category?.trim());
-  const hasSnapshot = Boolean(options.cache?.getSnapshotMeta(collection));
-  const defaultMaxScan =
-    hasTaxonomyFilter && !hasSnapshot
-      ? ARTICLE_SEARCH_TAXONOMY_MAX_SCAN
-      : ARTICLE_SEARCH_DEFAULT_MAX_SCAN;
-
-  const maxScan =
-    options.maxScan === 0
-      ? Infinity
-      : typeof options.maxScan === 'number' && options.maxScan > 0
-        ? options.maxScan
-        : defaultMaxScan;
-
-  const normalizedSlug = options.slug?.trim().toLowerCase();
-  const normalizedTag = options.tag?.trim().toLowerCase();
-  const normalizedCategory = options.category?.trim().toLowerCase();
-
-  // Remote assigned terms come back as canonical (often percent-encoded) slugs while a filter is usually
-  // typed decoded, so both sides must be expanded through the local definitions before comparison.
-  const categoryFilterAliases = normalizedCategory
-    ? taxonomyTermFilterAliases(
-        normalizedCategory,
-        readTaxonomyAliases(options.workspaceRoot, 'categories'),
-      ).map((alias) => alias.toLowerCase())
-    : [];
-  const tagFilterAliases = normalizedTag
-    ? taxonomyTermFilterAliases(
-        normalizedTag,
-        readTaxonomyAliases(options.workspaceRoot, 'tags'),
-      ).map((alias) => alias.toLowerCase())
-    : [];
-
-  const statusesToFetch: Array<'published' | 'draft'> = options.status
-    ? [options.status]
-    : ['published', 'draft'];
+  const json = (await res.json()) as Record<string, unknown>;
+  const data = unwrapEnvelope<{ items?: RawSearchItem[]; nextCursor?: string }>(json);
+  const rawItems = Array.isArray(data.items) ? data.items : [];
 
   const hits: ArticleSearchHit[] = [];
-  let scannedCount = 0;
-  let taxonomyFetchCount = 0;
-  let taxonomyCacheHitCount = 0;
-  let allSeriesComplete = true;
-  let hitLimitReached = false;
-  let fetchCapReached = false;
+  for (const item of rawItems) {
+    if (!item.id) continue;
+    const localFiles = findLocalFilesByUlid(options.workspaceRoot, collection, item.id);
+    const syncState = options.cache?.getSyncState(item.id);
+    const isLocal = localFiles.length > 0 || Boolean(syncState);
+    const localPath = localFiles[0] || syncState?.localFilePath || null;
 
-  const localTaxonomyMaps = hasTaxonomyFilter ? loadLocalTaxonomyMaps(options.workspaceRoot) : null;
-
-  const isCreatedAtSort = options.dateField === 'createdAt' || !options.dateField;
-
-  for (const status of statusesToFetch) {
-    if (scannedCount >= maxScan || hitLimitReached || fetchCapReached) {
-      allSeriesComplete = false;
-      break;
+    if (
+      options.slug &&
+      item.slug &&
+      !item.slug.toLowerCase().includes(options.slug.toLowerCase())
+    ) {
+      continue;
     }
 
-    let cursor: string | undefined = undefined;
-    let seriesReachedSince = false;
-
-    for (;;) {
-      const remainingScan = maxScan - scannedCount;
-      if (remainingScan <= 0 || hitLimitReached) {
-        allSeriesComplete = false;
-        break;
+    const snap = options.cache?.getSnapshotArticle(item.id) ?? null;
+    let enrichment: Partial<ArticleSearchHit> = {};
+    if (snap) {
+      let revVerified = false;
+      if (item._rev || item.version) {
+        const rawItemObj = item as unknown as Record<string, unknown>;
+        const rawRev = extractRev(rawItemObj, '');
+        const compRev = rawRev ? extractComparisonRev(rawItemObj, rawRev) : '';
+        revVerified = Boolean(compRev && isSameRev(snap.comparisonRev, compRev));
       }
-
-      const batchLimit = Math.min(remainingScan, 100);
-      const url = new URL(articleContentEndpoint(options.origin, collection));
-      url.searchParams.set('status', status);
-      url.searchParams.set('limit', String(batchLimit));
-      if (cursor) {
-        url.searchParams.set('cursor', cursor);
-      }
-
-      let res = await fetchFn(url.toString(), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: 'application/json',
-        },
-      });
-
-      if (!res.ok) {
-        allSeriesComplete = false;
-        break;
-      }
-
-      const json = (await res.json()) as Record<string, unknown>;
-      const envelope = unwrapEnvelope<{
-        items?: Array<Record<string, unknown>>;
-        nextCursor?: string;
-      }>(json);
-      const rawItems = Array.isArray(envelope.items) ? envelope.items : [];
-
-      if (rawItems.length === 0) {
-        break;
-      }
-
-      for (const item of rawItems) {
-        scannedCount++;
-        const itemId = String(item.id || '').trim();
-        const itemSlug = String(item.slug || '').trim();
-        const data = (item.data && typeof item.data === 'object' ? item.data : {}) as Record<
-          string,
-          unknown
-        >;
-        const itemTitle = String(data.title || item.title || itemSlug || 'Untitled').trim();
-        const itemStatus = String(item.status || status)
-          .trim()
-          .toLowerCase();
-
-        // Dates
-        const dates = parseArticleDates(item);
-        const dateToCompare = resolveArticleDateField(dates, itemStatus, options.dateField);
-
-        // Early-exit check: evaluated independently per series (T2-6) only when sorting by createdAt
-        if (isCreatedAtSort && sinceBoundary !== null && dates.createdAt) {
-          const createdInstant = Date.parse(dates.createdAt);
-          if (Number.isFinite(createdInstant) && createdInstant < sinceBoundary) {
-            seriesReachedSince = true;
-            break;
-          }
-        }
-
-        // Date range check
-        if (!inArticleDateRange(dateToCompare, sinceBoundary, untilBoundary)) {
-          continue;
-        }
-
-        // Slug check
-        if (normalizedSlug && !itemSlug.toLowerCase().includes(normalizedSlug)) {
-          continue;
-        }
-
-        // Keyword check
-        const matchedOn: Array<
-          'title' | 'slug' | 'excerpt' | 'body' | 'tag' | 'category' | 'recency'
-        > = [];
-
-        if (normalizedQuery) {
-          const textMatches = matchesArticleKeyword(
-            {
-              title: itemTitle,
-              slug: itemSlug,
-              excerpt: typeof data.excerpt === 'string' ? data.excerpt : undefined,
-            },
-            normalizedQuery,
-          );
-          matchedOn.push(...textMatches);
-
-          if (matchedOn.length === 0 && !hasTaxonomyFilter) {
-            continue;
-          }
-        } else {
-          matchedOn.push('recency');
-        }
-
-        // Taxonomy check
-        if (hasTaxonomyFilter) {
-          // Bounded by limit: only fetch terms if hits haven't reached limit
-          if (hits.length < limit) {
-            let usedFastPath = false;
-            let matchesCategory = !normalizedCategory;
-            let matchesTag = !normalizedTag;
-
-            // Fast-path: read recorded taxonomies from baseline when all preconditions hold
-            const baselineTax = readTaxonomiesFromBaseline({
-              cache: options.cache,
-              itemId,
-              item,
-              workspaceRoot: options.workspaceRoot,
-            });
-            if (baselineTax.terms) {
-              usedFastPath = true;
-              taxonomyCacheHitCount++;
-
-              const canonical = localTaxonomyMaps
-                ? canonicalizeTaxonomiesForBaseline(baselineTax.terms, localTaxonomyMaps)
-                : baselineTax.terms;
-
-              if (normalizedCategory) {
-                const cats = canonical.categories || [];
-                if (
-                  cats.some((c) =>
-                    taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
-                  )
-                ) {
-                  matchesCategory = true;
-                  matchedOn.push('category');
-                }
-              }
-
-              if (normalizedTag) {
-                const tgs = canonical.tags || [];
-                if (tgs.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))) {
-                  matchesTag = true;
-                  matchedOn.push('tag');
-                }
-              }
-            }
-
-            if (!usedFastPath) {
-              if (options.token && (normalizedCategory || normalizedTag)) {
-                if (taxonomyFetchCount >= MAX_TAXONOMY_REMOTE_FETCHES) {
-                  fetchCapReached = true;
-                  allSeriesComplete = false;
-                  break;
-                }
-              }
-              if (normalizedCategory && options.token) {
-                taxonomyFetchCount++;
-                const catTerms = await fetchAssignedTerms({
-                  origin: options.origin,
-                  token: options.token,
-                  collection,
-                  id: itemId,
-                  taxonomy: 'category',
-                  fetchFn,
-                });
-                if (
-                  catTerms &&
-                  catTerms.some((c) =>
-                    taxonomyTermMatchesFilter(c.toLowerCase(), categoryFilterAliases),
-                  )
-                ) {
-                  matchesCategory = true;
-                  matchedOn.push('category');
-                }
-              }
-
-              if (normalizedTag && options.token) {
-                taxonomyFetchCount++;
-                const tagTerms = await fetchAssignedTerms({
-                  origin: options.origin,
-                  token: options.token,
-                  collection,
-                  id: itemId,
-                  taxonomy: 'tag',
-                  fetchFn,
-                });
-                if (
-                  tagTerms &&
-                  tagTerms.some((t) => taxonomyTermMatchesFilter(t.toLowerCase(), tagFilterAliases))
-                ) {
-                  matchesTag = true;
-                  matchedOn.push('tag');
-                }
-              }
-            }
-
-            if (!matchesCategory || !matchesTag) {
-              continue;
-            }
-          } else {
-            // Already hit limit
-            hitLimitReached = true;
-            break;
-          }
-        }
-
-        // Local check
-        const localFiles = findLocalFilesByUlid(options.workspaceRoot, collection, itemId);
-        const syncState = options.cache?.getSyncState(itemId);
-        const isLocal = localFiles.length > 0 || Boolean(syncState);
-        const localPath = localFiles[0] || syncState?.localFilePath || null;
-
-        hits.push({
-          id: itemId,
-          slug: itemSlug || null,
-          title: itemTitle,
-          status: itemStatus,
-          createdAt: dates.createdAt,
-          publishedAt: dates.publishedAt,
-          updatedAt: dates.updatedAt,
-          isLocal,
-          localPath,
-          matchedOn,
-        });
-
-        if (hits.length >= limit) {
-          hitLimitReached = true;
-          break;
-        }
-      }
-
-      if (seriesReachedSince || !envelope.nextCursor || hitLimitReached || fetchCapReached) {
-        cursor = undefined;
-        break;
-      }
-      cursor = envelope.nextCursor;
+      enrichment = {
+        status: snap.status,
+        createdAt: snap.createdAt ?? undefined,
+        publishedAt: snap.publishedAt,
+        updatedAt: snap.updatedAt ?? undefined,
+        enrichedFromSnapshot: true,
+        ...(!revVerified ? { enrichmentStale: true } : {}),
+      };
     }
+
+    hits.push({
+      id: item.id,
+      slug: item.slug || null,
+      title: item.title || 'Untitled',
+      snippet: item.snippet,
+      score: item.score,
+      isLocal,
+      localPath,
+      ...enrichment,
+      matchedOn: ['title'],
+    });
   }
 
-  const truncated = hitLimitReached || hits.length > limit;
-  const walkComplete = allSeriesComplete && !hitLimitReached;
+  const nextCursor = data.nextCursor;
+  const finalHits = hits.slice(0, limit);
+  const truncated = Boolean(nextCursor && hits.length >= limit);
+  const walkComplete = !nextCursor;
   const snapshotInfo = buildArticleSnapshotInfo(options.cache, collection);
+  const finalEnrichedCount = finalHits.filter((h) => h.enrichedFromSnapshot).length;
 
   return {
-    hits: hits.slice(0, limit),
-    searchMode: 'scan',
-    scannedCount,
+    hits: finalHits,
+    searchMode: 'fts',
+    scannedCount: hits.length,
     totalCount: null,
     walkComplete,
     truncated,
     normalizedQuery,
-    taxonomyFetchCount,
-    taxonomyCacheHitCount,
-    fallbackReason,
+    taxonomyFetchCount: 0,
+    taxonomyCacheHitCount: 0,
     ...(snapshotInfo ? { snapshot: snapshotInfo } : {}),
+    ...(finalEnrichedCount > 0 ? { snapshotEnrichedCount: finalEnrichedCount } : {}),
   };
 }

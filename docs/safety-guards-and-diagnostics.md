@@ -60,20 +60,20 @@ All safety guardrails are centrally registered in `GUARD_REGISTRY` (`src/sync/gu
 
 ---
 
-## 3. Epistemic Search Invariants (`article-search` & `media-search`)
+## 3. Snapshot-First Search Invariants (`article-search` & `media-search`)
 
-Emit provides multidimensional search across both articles (`src/sync/article_search/`) and media (`src/sync/media/remote_index.ts`, `local_search.ts`):
+Emit provides exhaustive 0-HTTP search across both articles (`src/sync/article_search/`) and media (`src/sync/media/local_search.ts`), plus an explicit `--live` FTS mode for articles (`src/sync/article_search/remote.ts`):
 
-1. **Epistemic Non-Assertion on Incomplete Walks (`[WALK_INCOMPLETE]`)**:
-   - Remote searches stop at `--max-scan` (default `300` for articles, `50` when filtering articles by taxonomy, `500` for media; `0` = full walk).
-   - Whenever a search stops before exhausting the remote cursor (`walkComplete: false`), CLI and MCP emit `[WALK_INCOMPLETE]` and **must never assert that an article or media asset is absent on remote**.
-2. **Early Termination on Hit Limit & `--since` Date Boundary**:
-   - When the requested `--limit` (default `20`, max `50`, clamped via `clampSearchLimit` in `src/utils/search-options.ts`) is reached, the walk terminates immediately to save HTTP requests and prints a hit-limit notice.
-   - Because EmDash lists records newest-first (`createdAt DESC`), a `--since` boundary (resolved via `resolveSearchDateBoundaries` in `src/utils/search-date.ts`, raising `DATE_BOUNDARY_INVALID` on malformed input) stops the cursor walk as soon as an older record is reached and still reports `walkComplete: true`.
-3. **0-GET Local Baseline & Snapshot Fast-Path for Taxonomy Filtering (`src/sync/article_search/remote.ts`)**:
-   - EmDash's list endpoint does not include article taxonomy assignments. When searching articles with `--tag` or `--category`, `readTaxonomiesFromBaseline()` checks `base_snapshots` (unmodified disk + matching rev + no pending flags) and falls back to `snapshot_articles` (`taxonomy_verified === 1` + matching rev) to verify taxonomy membership in memory with **0 extra HTTP GET requests** (`[taxonomies cached: <n>]`). When a snapshot exists, `defaultMaxScan` expands from `50` to `300` (capped at `MAX_TAXONOMY_REMOTE_FETCHES = 100` remote term GETs, setting `walkComplete: false` if reached).
-4. **Offline Framing (`--offline` / `offline: true`)**:
-   - Offline searches inspect local workspace files (`iterWorkspaceArticles` / `media_state` + `media/*.yaml`) and, when captured via `emit snapshot`, merge cached `snapshot_articles` / `snapshot_media` rows (with disk/mirror precedence, `list-stale` body exclusion + `[body unverified]`, and `[STALE_SNAPSHOT]` warning when `>= 7d` old). Absence in an offline search never proves absence on live remote.
+1. **No Bounded Scan**:
+   - Default `article-search` and `media-search` inspect 100% of local workspace files (`iterWorkspaceArticles` / `media_state` + `media/*.yaml`) and cached `.emit/cache.db` snapshot rows (`snapshot_articles` / `snapshot_media`), with disk/mirror precedence and `list-stale` body exclusion (`[body unverified]`).
+   - Display count is capped via `clampSearchLimit` (`limit` default `20`, max `50`), setting `truncated: true` and `truncatedHint` when more matches exist.
+2. **Explicit `--live` / `live: true` FTS (`article-search` only)**:
+   - Queries `/_emdash/api/search` directly for keyword-only searches and enriches hits from `snapshot_articles` (`enrichedFromSnapshot`, `enrichmentStale`).
+   - Rejects `--tag`, `--category`, `--status`, `--since`, `--until`, or empty queries with `LIVE_SEARCH_UNSUPPORTED_FILTER` (no silent scan fallback). Trigram queries `< 3` chars returning 0 hits report `absenceGuaranteed: false` and suggest default snapshot-local search.
+3. **AI-First `snapshotStatus` Framing (`buildSnapshotSearchFraming`)**:
+   - Reports `snapshotStatus: 'fresh' | 'stale' | 'missing'` (`stale` when `ageDays >= 7`), `absenceGuaranteed`, `userNotice`, and `recommendedAction` consistently across CLI and MCP. When `hits.length === 0` and `snapshotStatus !== 'fresh'`, `absenceGuaranteed` is `false`.
+4. **Diagnostic Census Boundary**:
+   - `collectRemoteStorageKeys()` and `findUnmirroredStorageKeys()` (`src/sync/media/remote_index.ts`) are diagnostic census helpers used by `emit doctor --check-media-library` (not search).
 
 ---
 

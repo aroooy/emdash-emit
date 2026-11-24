@@ -23,15 +23,13 @@
 import type { Command } from 'commander';
 import { searchRemoteArticles } from '../../sync/article_search/index.js';
 import {
+  buildSnapshotSearchFraming,
   formatArticleSearchEmptyNotice,
   formatArticleSearchHeader,
   formatArticleSearchHit,
-  formatArticleSearchOfflineHint,
-  formatArticleSearchWalkIncompleteNotice,
 } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
-import { clampSearchLimit } from '../../utils/search-options.js';
 
 export function registerArticleSearchCommand(
   program: Command,
@@ -40,7 +38,7 @@ export function registerArticleSearchCommand(
   program
     .command('article-search [query]')
     .description(
-      'Search remote EmDash articles (or local workspace with --offline) by keyword, date range, status, slug, category, or tag',
+      'Search articles across the local workspace + .emit/cache.db snapshot (0-HTTP, exhaustive), or use --live for keyword-only remote FTS',
     )
     .option('-t, --tag <slug>', 'Filter by tag slug')
     .option('-c, --category <slug>', 'Filter by category slug')
@@ -56,14 +54,10 @@ export function registerArticleSearchCommand(
       'Date field to compare against: "publishedAt", "updatedAt", or "createdAt" (default: publishedAt for published, createdAt for draft)',
     )
     .option(
-      '--offline',
-      'Search only local Markdown files in posts/ — zero network requests. Results describe the workspace only.',
+      '--live',
+      'Query remote EmDash FTS endpoint directly (keyword-only; tag/category/date/status filters are rejected)',
     )
     .option('-l, --limit <number>', 'Max hits to return (default 20, max 50)')
-    .option(
-      '--max-scan <number>',
-      'Articles to read before stopping (default 300, 50 with taxonomy filters; 0 = whole library)',
-    )
     .option(
       '--include-conflicts',
       'Include quarantined rescue copies from posts/conflicts/ in search results',
@@ -72,9 +66,9 @@ export function registerArticleSearchCommand(
     .action(async (query: string | undefined, options) => {
       try {
         const limit = options.limit ? parseInt(options.limit, 10) : undefined;
-        const maxScan = options.maxScan !== undefined ? parseInt(options.maxScan, 10) : undefined;
+        const isLive = Boolean(options.live);
 
-        const ctx = resolveContext(options.profile);
+        const ctx = resolveContext(options.profile, { optionalAuth: !isLive });
 
         const result = await searchRemoteArticles({
           query,
@@ -85,9 +79,8 @@ export function registerArticleSearchCommand(
           since: options.since,
           until: options.until,
           dateField: options.dateField,
-          offline: Boolean(options.offline),
+          live: isLive,
           limit,
-          maxScan,
           includeConflicts: Boolean(options.includeConflicts),
           workspaceRoot: ctx.root,
           origin: ctx.origin,
@@ -97,7 +90,7 @@ export function registerArticleSearchCommand(
 
         console.log(
           formatArticleSearchHeader(result, {
-            offline: options.offline,
+            live: isLive,
             query,
             since: options.since,
             until: options.until,
@@ -108,7 +101,7 @@ export function registerArticleSearchCommand(
         );
 
         if (result.hits.length === 0) {
-          console.log(`\n${formatArticleSearchEmptyNotice(result, options.offline)}`);
+          console.log(`\n${formatArticleSearchEmptyNotice(result, isLive)}`);
         } else {
           console.log('');
           result.hits.forEach((hit, i) => {
@@ -116,22 +109,26 @@ export function registerArticleSearchCommand(
           });
         }
 
-        const incompleteNotice = formatArticleSearchWalkIncompleteNotice(result, {
-          limit: clampSearchLimit(limit),
+        const framing = buildSnapshotSearchFraming({
+          snapshot: result.snapshot,
+          hitCount: result.hits.length,
+          totalCount: result.totalCount,
+          truncated: result.truncated,
+          walkComplete: result.walkComplete,
+          isLive,
+          query,
+          kind: 'article',
           isMcp: false,
         });
-        if (incompleteNotice && !options.offline) {
-          console.log(`\n${incompleteNotice}`);
-        }
 
-        const offlineHint = formatArticleSearchOfflineHint(result, {
-          offline: options.offline,
-          tag: options.tag,
-          category: options.category,
-          workspaceRoot: ctx.root,
-        });
-        if (offlineHint) {
-          console.log(`\n${offlineHint}`);
+        if (framing.truncatedHint) {
+          console.log(`\nℹ️ ${framing.truncatedHint}`);
+        }
+        if (framing.userNotice) {
+          console.log(`\n⚠️ ${framing.userNotice}`);
+        }
+        if (framing.recommendedAction) {
+          console.log(`💡 ${framing.recommendedAction}`);
         }
       } catch (err) {
         reportActionFailure(err);

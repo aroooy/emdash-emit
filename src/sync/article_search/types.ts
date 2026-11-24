@@ -25,8 +25,6 @@ import { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT } from '../../utils/search-optio
 
 export const ARTICLE_SEARCH_DEFAULT_LIMIT = SEARCH_DEFAULT_LIMIT;
 export const ARTICLE_SEARCH_MAX_LIMIT = SEARCH_MAX_LIMIT;
-export const ARTICLE_SEARCH_DEFAULT_MAX_SCAN = 300;
-export const ARTICLE_SEARCH_TAXONOMY_MAX_SCAN = 50;
 
 export interface ArticleSearchSnapshotInfo {
   capturedAt: string;
@@ -59,7 +57,7 @@ export interface ArticleSearchHit {
 
 export interface ArticleSearchResult {
   hits: ArticleSearchHit[];
-  searchMode: 'fts' | 'scan';
+  searchMode: 'local' | 'fts';
   scannedCount: number;
   totalCount: number | null;
   walkComplete: boolean;
@@ -81,9 +79,9 @@ export interface ArticleSearchOptions {
   since?: string;
   until?: string;
   dateField?: 'publishedAt' | 'updatedAt' | 'createdAt';
-  offline?: boolean;
+  /** When true, query remote EmDash FTS endpoint directly (keyword-only, no filters). */
+  live?: boolean;
   limit?: number;
-  maxScan?: number;
   collection?: string;
   origin: string;
   token?: string;

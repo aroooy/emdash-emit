@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.55] - 2026-11-24
+
+### Breaking Changes
+
+- **Unified Snapshot-First Search & Removed Paginated Scan Search (`emit article-search` / `emit media-search` / `sync_article_search` / `sync_media_search`)**:
+  - Default `article-search` and `media-search` now run 0-HTTP exhaustive searches across local workspace files and `.emit/cache.db` snapshots (`optionalAuth: true` in CLI).
+  - Removed `--max-scan` / `maxScan`, `--offline` / `offline`, `executeScanSearch`, `searchRemoteMedia`, and `[WALK_INCOMPLETE]` warnings. Passing removed CLI flags (`--max-scan`, `--offline`) is rejected by Commander as an unknown option.
+
+### Added
+
+- **Explicit Live FTS Mode (`--live` / `live: true` on `article-search` / `sync_article_search`)**:
+  - Queries EmDash `/_emdash/api/search` directly for keyword-only searches while preserving `snapshot_articles` status/date enrichment (`enrichedFromSnapshot`, `enrichmentStale`) and `nextCursor` truncation reporting.
+  - Rejects unsupported filters (`tag`, `category`, `status`, `since`, `until`) or empty queries with `LIVE_SEARCH_UNSUPPORTED_FILTER` instead of falling back to bounded scans.
+- **AI-First `snapshotStatus` Framing (`buildSnapshotSearchFraming` in `src/presentation/article_report.ts`)**:
+  - Shared across CLI and MCP: reports `snapshotStatus` (`fresh` / `stale` / `missing`), `absenceGuaranteed`, `truncatedHint`, `userNotice`, and `recommendedAction`, and embeds freshness/coverage guidance into `sync_article_search` and `sync_media_search` MCP tool descriptions.
+
 ## [0.1.54] - 2026-11-23
 
 ### Added

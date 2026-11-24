@@ -111,7 +111,6 @@ const ALLOWED_LAYER_2_SYMBOLS: Record<string, ReadonlySet<string>> = {
     'MediaInUseDeletionForbiddenError',
     'LOCAL_REFERENCE_SCAN_ONLY_WARNING',
     'collectLocalMirrorIndex',
-    'searchRemoteMedia',
     'searchLocalMirrorMedia',
   ]),
   article_search: new Set([
