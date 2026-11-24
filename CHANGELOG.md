@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.57] - 2026-11-24
+
+### Fixed
+
+- **Declare `js-yaml@^4.1.0` in `dependencies` (fixes #1)**:
+  - Added `js-yaml` (`^4.1.0`, matching `@types/js-yaml@^4.0.9`) to runtime `dependencies` in `package.json` so non-hoisted / linked installs (`pnpm`, `npm --install-strategy=linked`) no longer fail with `ERR_MODULE_NOT_FOUND` and runtime YAML parsing/dumping uses v4 rather than `gray-matter`'s transitive `js-yaml` v3.
+
 ## [0.1.56] - 2026-11-24
 
 ### Added
