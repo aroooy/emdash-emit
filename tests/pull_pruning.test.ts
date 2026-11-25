@@ -164,6 +164,15 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(result.deleted).toBe(1);
 
     // art1 and art2 should still exist
+    if (!fs.existsSync(art1.fullPath)) {
+      throw new Error(
+        `DIAG PRUNE1 missing ${art1.fullPath}; deleted=${result.deleted}; posts=${JSON.stringify(
+          fs.existsSync(path.join(tempDir, 'posts'))
+            ? fs.readdirSync(path.join(tempDir, 'posts'), { recursive: true })
+            : 'no-posts-dir',
+        )}`,
+      );
+    }
     expect(fs.existsSync(art1.fullPath)).toBe(true);
     expect(fs.existsSync(art2.fullPath)).toBe(true);
 

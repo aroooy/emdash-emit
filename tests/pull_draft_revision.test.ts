@@ -130,6 +130,15 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(result1.skipped).toBeUndefined();
 
     // Verify disk content was updated
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(
+        `DIAG PDR1 missing ${fullPath}; result1=${JSON.stringify(result1)}; posts=${JSON.stringify(
+          fs.existsSync(path.join(tempDir, 'posts'))
+            ? fs.readdirSync(path.join(tempDir, 'posts'), { recursive: true })
+            : 'no-posts-dir',
+        )}`,
+      );
+    }
     const updatedContent = fs.readFileSync(fullPath, 'utf8');
     const parsedUpdated = parseMarkdown(updatedContent);
     expect(parsedUpdated.body).toContain('New body edited on server with image.');
