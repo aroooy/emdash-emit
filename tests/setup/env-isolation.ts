@@ -20,6 +20,11 @@
  * SOFTWARE.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { vi } from 'vitest';
+
 /**
  * Test hermeticity: Emit reads `EMDASH_ORIGIN`, `EMDASH_WORKSPACE`, `EMDASH_TOKEN` and
  * `EMDASH_API_TOKEN` from the environment, and those values participate in origin/workspace
@@ -40,3 +45,23 @@ export const SCRUBBED_ENV_KEYS = [
 for (const key of SCRUBBED_ENV_KEYS) {
   delete process.env[key];
 }
+
+/**
+ * Home-directory isolation: profile/auth/heartbeat resolution (`loadProfilesFile`, `resolveAuth`,
+ * `getMcpStateFilePath`) falls back to `~/.config/emit/profiles.yaml` / `credentials.json` /
+ * `mcp_state.json` under the machine home. On a developer workstation that ambient file silently
+ * decides outcomes which CI (a clean environment) can never reproduce — exactly the class of
+ * failure v0.1.62 fixes. Pinning `process.env.HOME` plus `os.homedir()` to a throwaway directory
+ * for every worker structurally blocks that fallback, mirroring what individual tests such as
+ * `cli.test.ts` already do locally.
+ *
+ * Two subtleties (v0.1.38 lesson):
+ * - `os.homedir()` does NOT reliably follow `process.env.HOME`, so both are pinned.
+ * - Tests that deliberately exercise HOME/profiles paths create their own throwaway home in
+ *   `beforeEach` and restore it afterwards, which outranks this baseline (later assignment wins).
+ */
+const HERMETIC_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-test-hermetic-home-'));
+process.env.HOME = HERMETIC_HOME;
+// Windows resolution reads USERPROFILE as its first tier — scrub it so the real profile cannot leak.
+delete process.env.USERPROFILE;
+vi.spyOn(os, 'homedir').mockReturnValue(HERMETIC_HOME);

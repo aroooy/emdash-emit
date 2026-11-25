@@ -1004,7 +1004,13 @@ Inline body
   });
 
   it('registers sync_snapshot and supports status, clear, and sync_status snapshot metadata (v0.1.47)', async () => {
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    // profilesPath must be explicit: without it the server falls back to the machine-level
+    // ~/.config/emit/profiles.yaml, which exists on developer machines but not in CI.
+    const server = createMcpServer({
+      workspaceRoot: tempDir,
+      cache,
+      profilesPath: customProfilesPath,
+    });
     const registered = (
       server as unknown as {
         _registeredTools: Record<

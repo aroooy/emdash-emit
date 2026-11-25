@@ -7,6 +7,7 @@ import { getWorkspaceStatus } from '../src/sync/status.js';
 import { serializeMarkdown, type Frontmatter } from '../src/utils/frontmatter.js';
 import { calculateHash } from '../src/sync/workspace/index.js';
 import { createMcpServer } from '../src/mcp/server.js';
+import { setProfile } from '../src/utils/profile.js';
 
 describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
   let tempDir: string;
@@ -145,10 +146,19 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
     const emitDir = path.join(tempDir, '.emit');
     fs.mkdirSync(emitDir, { recursive: true });
+    // Note: `.emit/config.json` carries no auth tier — tokens live in profiles.yaml. Auth must come
+    // from an explicit test profile so resolution never depends on the machine-level profiles.yaml.
     fs.writeFileSync(
       path.join(emitDir, 'config.json'),
-      JSON.stringify({ origin: 'https://example.com', token: 'fake-token' }),
+      JSON.stringify({ origin: 'https://example.com' }),
       'utf8',
+    );
+    const profilesPath = path.join(tempDir, 'profiles.yaml');
+    setProfile(
+      'default',
+      { origin: 'https://example.com', token: 'fake-token', workspace: tempDir },
+      true,
+      profilesPath,
     );
 
     const pubPath = path.join(tempDir, 'posts', 'published', `20261113_${articleId}-pub-draft.md`);
@@ -180,7 +190,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     });
     diskCache.close();
 
-    const server = createMcpServer({ workspaceRoot: tempDir });
+    const server = createMcpServer({ workspaceRoot: tempDir, profilesPath });
     const registered = (
       server as unknown as {
         _registeredTools: Record<

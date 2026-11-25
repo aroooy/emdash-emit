@@ -1274,6 +1274,12 @@ describe('Emit CLI (Commander)', () => {
   it('T10: resolves pull article target by filePath or ID, and rejects invalid targets (v0.1.29 P4)', async () => {
     const { resolveArticleTarget } = await import('../src/sync/diff.js');
 
+    // `emit pull <target>` resolves a CLI context (auth included) before the target guard runs, so
+    // this test needs deterministic credentials — an env token keeps it independent of whichever
+    // profiles.yaml happens to exist on the machine running the suite.
+    const origToken = process.env.EMDASH_TOKEN;
+    process.env.EMDASH_TOKEN = 'test-token';
+
     const sampleUlid = '01M6ABCDEF1234567890123456';
     const canonicalRelPath = `posts/draft/20261115_${sampleUlid}-sample-title.md`;
 
@@ -1348,6 +1354,8 @@ describe('Emit CLI (Commander)', () => {
     } finally {
       console.error = originalError;
       process.exit = originalExit;
+      if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;
+      else delete process.env.EMDASH_TOKEN;
     }
   });
 
@@ -1440,6 +1448,14 @@ describe('Emit CLI (Commander)', () => {
 
   describe('status and diff failure presentation (v0.1.48 Axis 8)', () => {
     it('routes status and diff profile resolution errors through reportActionFailure without raw stack traces', async () => {
+      // NOTE: no EMDASH_TOKEN here on purpose. resolveAuth() returns at its env tier before ever
+      // consulting profiles, so a stray env token would silently skip the explicit
+      // `--profile nonexistent-profile-xyz` lookup that this test targets (the action would then
+      // run against the real workspace and resolve without error). Instead, seed exactly one
+      // profile in the hermetic-home profiles.yaml: with a known term present, the explicit but
+      // unknown name must fail inside resolveTargetProfile — the branch under test — instead of
+      // degrading to "No authentication found" when the file is empty.
+
       const errLines: string[] = [];
       let exitCode: number | undefined;
       const EXIT_SENTINEL = new Error('PROCESS_EXIT');
@@ -1453,7 +1469,16 @@ describe('Emit CLI (Commander)', () => {
 
       const prevCwd = process.cwd();
       process.chdir(tempDir);
+      // env-isolation pins HOME/os.homedir() to a throwaway dir, so this profiles.yaml is the
+      // only one resolution can see for the duration of the test; remove it in finally.
+      const seededProfilesPath = path.join(os.homedir(), '.config', 'emit', 'profiles.yaml');
       try {
+        setProfile(
+          'seeded-profile',
+          { origin: 'https://seeded.example.com', token: 'seeded-token' },
+          false,
+          seededProfilesPath,
+        );
         await expect(
           program.parseAsync(['node', 'emit', 'status', '--profile', 'nonexistent-profile-xyz']),
         ).rejects.toThrow(EXIT_SENTINEL);
@@ -1470,6 +1495,7 @@ describe('Emit CLI (Commander)', () => {
         expect(errLines.join('\n')).toContain('nonexistent-profile-xyz');
         expect(errLines.join('\n')).not.toContain('    at ');
       } finally {
+        fs.rmSync(seededProfilesPath, { force: true });
         process.chdir(prevCwd);
         console.error = origError;
         process.exit = origExit;
@@ -1478,6 +1504,18 @@ describe('Emit CLI (Commander)', () => {
   });
 
   describe('argument-less emit diff and emit push (v0.1.50 #4)', () => {
+    // Auth must be deterministic for context resolution in every case below; env token outranks
+    // any ambient profiles.yaml so these pass identically on CI and developer machines.
+    let origToken: string | undefined;
+    beforeEach(() => {
+      origToken = process.env.EMDASH_TOKEN;
+      process.env.EMDASH_TOKEN = 'test-token';
+    });
+    afterEach(() => {
+      if (origToken !== undefined) process.env.EMDASH_TOKEN = origToken;
+      else delete process.env.EMDASH_TOKEN;
+    });
+
     it('supports argument-less emit diff for 0 (with untracked/invalid note), 1, and multiple modified articles', async () => {
       const logLines: string[] = [];
       const origLog = console.log;

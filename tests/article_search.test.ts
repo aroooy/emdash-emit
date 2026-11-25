@@ -34,6 +34,7 @@ import {
   formatArticleSearchHit,
 } from '../src/presentation/article_report.js';
 import { initWorkspace } from '../src/utils/config.js';
+import { setProfile } from '../src/utils/profile.js';
 import { parseMarkdownLenient } from '../src/utils/frontmatter.js';
 import { clampSearchLimit } from '../src/utils/search-options.js';
 
@@ -501,7 +502,16 @@ describe('Article Search & Snapshot-First Engine (v0.1.55)', () => {
   });
 
   it('T7: MCP sync_article_search returns snapshotStatus framing for missing/fresh snapshots', async () => {
-    const server = createMcpServer({ workspaceRoot: tempDir, cache });
+    // Auth must resolve from an explicit test profile, never from the developer's own
+    // ~/.config/emit/profiles.yaml — CI has no such file and fails without this isolation.
+    const profilesPath = path.join(tempDir, 'profiles.yaml');
+    setProfile(
+      'default',
+      { origin: 'https://emdash.test', token: 'test-pat-123', workspace: tempDir },
+      true,
+      profilesPath,
+    );
+    const server = createMcpServer({ workspaceRoot: tempDir, cache, profilesPath });
     const registered = (
       server as unknown as {
         _registeredTools: Record<
