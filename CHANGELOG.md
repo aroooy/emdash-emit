@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.62] - 2026-11-25
+
+### Fixed
+
+- **Test-Suite Hermeticity: Ambient `~/.config/emit/profiles.yaml` Dependency (CI failures on clean environments)**:
+  - `tests/setup/env-isolation.ts` now pins `process.env.HOME` and `os.homedir()` (which does not follow `HOME`) to a per-worker throwaway directory and scrubs `USERPROFILE`, structurally blocking silent fallback to the developer machine's profiles/credentials files — the class of failure that made 7 tests pass locally but fail in CI.
+  - MCP-facing tests (`article_search`, `mcp`, `status_unpublished_draft`) now pass an explicit test `profilesPath` (seeded via `setProfile`) to `createMcpServer` instead of relying on ambient home config; the invalid token-in-`.emit/config.json` tier was removed from fixtures.
+  - CLI tests (`cli.test.ts`: pull target resolution, argument-less diff/push) seed deterministic auth (`EMDASH_TOKEN`) so context resolution reaches the branch under test. The profile-resolution-error test deliberately does *not* set an env token — `resolveAuth()`'s env tier would short-circuit the explicit `--profile` lookup — and instead seeds one profile in the hermetic home so `resolveTargetProfile()` throws the not-found error deterministically through `reportActionFailure`.
+
 ## [0.1.61] - 2026-11-24
 
 ### Changed
