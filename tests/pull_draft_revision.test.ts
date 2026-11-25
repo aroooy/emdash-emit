@@ -129,17 +129,9 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(result1.updated).toBe(true);
     expect(result1.skipped).toBeUndefined();
 
-    // Verify disk content was updated
-    if (!fs.existsSync(fullPath)) {
-      throw new Error(
-        `DIAG PDR1 missing ${fullPath}; result1=${JSON.stringify(result1)}; posts=${JSON.stringify(
-          fs.existsSync(path.join(tempDir, 'posts'))
-            ? fs.readdirSync(path.join(tempDir, 'posts'), { recursive: true })
-            : 'no-posts-dir',
-        )}`,
-      );
-    }
-    const updatedContent = fs.readFileSync(fullPath, 'utf8');
+    // Verify disk content was updated at canonical title-cased path
+    expect(result1.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Rev-Test.md`);
+    const updatedContent = fs.readFileSync(path.join(tempDir, result1.filePath), 'utf8');
     const parsedUpdated = parseMarkdown(updatedContent);
     expect(parsedUpdated.body).toContain('New body edited on server with image.');
 
@@ -309,7 +301,8 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(singleGetCallCount).toBe(1);
 
     // Verify disk content contains the full content from single GET, NOT the stale list content
-    const updatedContent = fs.readFileSync(fullPath, 'utf8');
+    expect(result.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Batch-Test.md`);
+    const updatedContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(updatedContent).toContain('Full 7-block content with image from single GET.');
     expect(updatedContent).toContain('追加テキスト');
     expect(updatedContent).not.toContain('Stale 3-block content from list API.');
@@ -435,7 +428,8 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(syncState?.conflictCopyPath).toBeTruthy();
 
     // Verify canonical disk file has the server content
-    const canonicalContent = fs.readFileSync(fullPath, 'utf8');
+    expect(result.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Conflict-Test.md`);
+    const canonicalContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(canonicalContent).toContain('Server content advancing draft revision.');
   });
 

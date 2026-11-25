@@ -163,18 +163,13 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     expect(result.total).toBe(2);
     expect(result.deleted).toBe(1);
 
-    // art1 and art2 should still exist
-    if (!fs.existsSync(art1.fullPath)) {
-      throw new Error(
-        `DIAG PRUNE1 missing ${art1.fullPath}; deleted=${result.deleted}; posts=${JSON.stringify(
-          fs.existsSync(path.join(tempDir, 'posts'))
-            ? fs.readdirSync(path.join(tempDir, 'posts'), { recursive: true })
-            : 'no-posts-dir',
-        )}`,
-      );
-    }
-    expect(fs.existsSync(art1.fullPath)).toBe(true);
-    expect(fs.existsSync(art2.fullPath)).toBe(true);
+    // art1 and art2 should still exist (at canonical title-cased paths)
+    const art1State = cache.getSyncState('01M6ART01');
+    const art2State = cache.getSyncState('01M6ART02');
+    expect(art1State?.localFilePath).toBe(art1.relPath.replace('-article-1.md', '-Article-1.md'));
+    expect(art2State?.localFilePath).toBe(art2.relPath.replace('-article-2.md', '-Article-2.md'));
+    expect(fs.existsSync(path.join(tempDir, art1State!.localFilePath))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, art2State!.localFilePath))).toBe(true);
 
     // art3 should be pruned from disk and cache
     expect(fs.existsSync(art3.fullPath)).toBe(false);

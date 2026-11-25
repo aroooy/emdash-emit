@@ -977,22 +977,8 @@ describe('v0.1.29 Single-Article On-Demand Media Mirroring (T1-T6)', () => {
       fetchFn,
     });
 
-    const expectedT4Path = path.join(
-      tempDir,
-      'posts',
-      'draft',
-      `${todayPrefix}_${ARTICLE_ID}-fast-heal.md`,
-    );
-    if (!fs.existsSync(expectedT4Path)) {
-      throw new Error(
-        `DIAG T4 missing ${expectedT4Path}; res1=${JSON.stringify(res1)}; posts=${JSON.stringify(
-          fs.existsSync(path.join(tempDir, 'posts'))
-            ? fs.readdirSync(path.join(tempDir, 'posts'), { recursive: true })
-            : 'no-posts-dir',
-        )}`,
-      );
-    }
-    const disk1 = fs.readFileSync(expectedT4Path, 'utf8');
+    expect(res1.filePath).toBe(`posts/draft/${todayPrefix}_${ARTICLE_ID}-Fast-Heal.md`);
+    const disk1 = fs.readFileSync(path.join(tempDir, res1.filePath), 'utf8');
     expect(disk1).toContain(CANONICAL_URL);
 
     // 2nd pull (default mediaSync: true) on same remote _rev -> Fast-path mirrors media and heals disk to relative ref!
