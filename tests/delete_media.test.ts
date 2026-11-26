@@ -335,4 +335,81 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
     expect(fs.existsSync(path.join(tempDir, 'media', `${stem1}.yaml`))).toBe(false);
     expect(fs.existsSync(path.join(tempDir, 'media', `${stem2}.jpg`))).toBe(true);
   });
+
+  it('blocks deletion via Guard G20 when remote usedIn reports active references (EmDash 1.6+)', async () => {
+    const usedInFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/media/${mediaId1}`) && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaId1,
+                status: 'ready',
+                storageKey: storageKey1,
+                usedIn: [
+                  {
+                    id: '01M7REMOTEART0000000000001',
+                    collection: 'posts',
+                    title: 'Remote Post',
+                  },
+                ],
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('Unexpected call', { status: 500 });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      deleteMedia({
+        workspaceRoot: tempDir,
+        origin,
+        token,
+        targets: [mediaId1],
+        cache,
+        fetchFn: usedInFetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_IN_USE_PROTECTION',
+      referencedBy: ['remote:posts:"Remote Post" (01M7REMOTEART0000000000001)'],
+    });
+
+    // Empty usedIn: [] deletes cleanly and omits LOCAL_REFERENCE_SCAN_ONLY_WARNING
+    const emptyUsedInFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/media/${mediaId1}`) && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              item: {
+                id: mediaId1,
+                status: 'ready',
+                storageKey: storageKey1,
+                usedIn: [],
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(`/media/${mediaId1}`) && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+      return new Response('Not Found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const cleanRes = await deleteMedia({
+      workspaceRoot: tempDir,
+      origin,
+      token,
+      targets: [mediaId1],
+      cache,
+      fetchFn: emptyUsedInFetch,
+    });
+    expect(cleanRes.items[0]?.action).toBe('deleted');
+    expect(cleanRes.warnings).toEqual([]);
+  });
 });

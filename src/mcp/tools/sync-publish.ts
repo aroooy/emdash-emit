@@ -34,6 +34,10 @@ export function registerSyncPublishTool(server: McpServer, resolveContext: Conte
       target: z
         .string()
         .describe('Target article file path (relative to workspace) or 26-char ULID'),
+      force: z
+        .boolean()
+        .optional()
+        .describe('Proceed even if an active web co-editing room is detected (Guard G23)'),
       localMediaRefs: z
         .boolean()
         .optional()
@@ -51,6 +55,7 @@ export function registerSyncPublishTool(server: McpServer, resolveContext: Conte
           token: ctx.auth.token,
           refreshToken: ctx.auth.refreshToken,
           collection: ctx.config.defaultCollection,
+          force: args.force,
           localMediaRefs:
             args.localMediaRefs === undefined ? ctx.config.localMediaRefs : args.localMediaRefs,
         });

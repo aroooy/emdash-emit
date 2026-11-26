@@ -606,6 +606,7 @@ export interface PublishArticleOptions {
   refreshToken?: string;
   collection?: string;
   localMediaRefs?: boolean;
+  force?: boolean;
   fetchFn?: typeof fetch;
 }
 
@@ -859,6 +860,7 @@ export async function publishArticle(
   await acquireLock(collection, id, {
     origin: options.origin,
     token: options.token,
+    allowActiveCoediting: Boolean(options.force),
     fetchFn,
   });
 
@@ -1086,6 +1088,7 @@ export async function discardDraftArticle(
   await acquireLock(collection, id, {
     origin: options.origin,
     token: options.token,
+    allowActiveCoediting: Boolean(options.force),
     fetchFn,
   });
 

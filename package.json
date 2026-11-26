@@ -1,6 +1,6 @@
 {
   "name": "emdash-emit",
-  "version": "0.1.64",
+  "version": "0.1.65",
   "description": "AI-First Offline Markdown Workspace & Lossless Portable Text Bidirectional Sync for EmDash CMS (CLI & MCP)",
   "author": "hiroaki <45134003+aroooy@users.noreply.github.com>",
   "license": "MIT",

@@ -420,6 +420,7 @@ export async function deleteMedia(options: DeleteMediaOptions): Promise<DeleteMe
   const protection = collectPruneProtectionSets(options.workspaceRoot, collection);
   const items: DeleteMediaItemResult[] = [];
   const dryRun = Boolean(options.dryRun);
+  let hasUnverifiedRemoteUsedIn = dryRun;
 
   for (const rawTarget of options.targets) {
     const normTarget = rawTarget.replace(/\\/g, '/');
@@ -555,6 +556,31 @@ export async function deleteMedia(options: DeleteMediaOptions): Promise<DeleteMe
       resolved.storageKey = detailCheck.item.storageKey;
     }
 
+    if (detailCheck.exists === true && detailCheck.item.usedIn !== undefined) {
+      if (detailCheck.item.usedIn.length > 0) {
+        const remoteRefs = detailCheck.item.usedIn.map((ref) => {
+          if (ref.raw) return `remote:${ref.raw}`;
+          const col = ref.collection || 'content';
+          const titlePart = ref.title ? `"${ref.title}" ` : '';
+          const idPart = ref.id || ref.slug || 'unknown';
+          return `remote:${col}:${titlePart}(${idPart})`;
+        });
+        items.push({
+          target: rawTarget,
+          action: 'refused',
+          mediaId: resolved.mediaId,
+          storageKey: resolved.storageKey,
+          filePath: resolved.filePath,
+          yamlPath: resolved.yamlPath,
+          referencedBy: remoteRefs,
+          size: resolved.size,
+        });
+        continue;
+      }
+    } else {
+      hasUnverifiedRemoteUsedIn = true;
+    }
+
     // [4] DELETE /_emdash/api/media/{mediaId}
     try {
       const delRes = await deleteRemoteMedia(resolved.mediaId, {
@@ -596,7 +622,7 @@ export async function deleteMedia(options: DeleteMediaOptions): Promise<DeleteMe
     }
   }
 
-  const warnings = [LOCAL_REFERENCE_SCAN_ONLY_WARNING];
+  const warnings = hasUnverifiedRemoteUsedIn ? [LOCAL_REFERENCE_SCAN_ONLY_WARNING] : [];
 
   // §2.6: In dry-run mode, never throw; return full preview report
   if (dryRun) {

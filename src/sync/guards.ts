@@ -335,6 +335,16 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     description:
       '前回同期以降にリモート下書きが更新された状態での emit publish 実行を抑止（emit pull を案内）',
   },
+  {
+    id: 23,
+    name: 'ACTIVE_COEDITING_SESSION',
+    codes: ['ACTIVE_COEDITING_SESSION'],
+    stage: 'push',
+    severity: 'error',
+    source: 'src/client/lock.ts',
+    description:
+      'Web管理画面でCo-editingセッション中の記事への書き込み（push / publish / discard-draft）を抑止',
+  },
 ] as const;
 
 /**
@@ -408,6 +418,9 @@ const REMEDIATION_MAP: Record<string, string> = {
   // G22
   REMOTE_CHANGED_BEFORE_PUBLISH:
     'The remote draft changed since your last sync. Run "emit pull" first to review the latest remote draft before publishing.',
+  // G23
+  ACTIVE_COEDITING_SESSION:
+    'Wait until the browser editor closes the co-editing tab, or pass "--force" to proceed anyway (note: in push/discard-draft, "--force" also applies conflict/quarantine overrides).',
   // Standing protections
   UNPUSHED_CHANGES_PROTECTION:
     'The article has unpushed modifications. Push changes first with "emit push" or specify force if deletion is intentional.',

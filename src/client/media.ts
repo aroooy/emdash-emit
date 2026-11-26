@@ -165,6 +165,15 @@ export interface CompensationResult {
   alreadyReadyItem?: Record<string, unknown>;
 }
 
+export interface RemoteMediaUsageRef {
+  id?: string;
+  collection?: string;
+  title?: string;
+  slug?: string;
+  status?: string;
+  raw?: string;
+}
+
 export interface RemoteMediaDetail {
   id: string;
   filename?: string;
@@ -179,6 +188,7 @@ export interface RemoteMediaDetail {
   status?: string;
   createdAt?: string;
   url?: string;
+  usedIn?: RemoteMediaUsageRef[];
 }
 
 /**
@@ -226,6 +236,30 @@ export async function fetchRemoteMediaDetail(
       string,
       unknown
     >;
+    const rawUsedIn = Array.isArray(raw.usedIn)
+      ? raw.usedIn
+      : Array.isArray(data.usedIn)
+        ? data.usedIn
+        : undefined;
+    const usedIn: RemoteMediaUsageRef[] | undefined = rawUsedIn
+      ? rawUsedIn.map((entry): RemoteMediaUsageRef => {
+          if (typeof entry === 'string') {
+            return { raw: entry };
+          }
+          if (entry && typeof entry === 'object') {
+            const obj = entry as Record<string, unknown>;
+            return {
+              id: typeof obj.id === 'string' ? obj.id : undefined,
+              collection: typeof obj.collection === 'string' ? obj.collection : undefined,
+              title: typeof obj.title === 'string' ? obj.title : undefined,
+              slug: typeof obj.slug === 'string' ? obj.slug : undefined,
+              status: typeof obj.status === 'string' ? obj.status : undefined,
+            };
+          }
+          return { raw: String(entry) };
+        })
+      : undefined;
+
     return {
       exists: true,
       item: {
@@ -242,6 +276,7 @@ export async function fetchRemoteMediaDetail(
         status: typeof raw.status === 'string' ? raw.status : undefined,
         createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : undefined,
         url: typeof raw.url === 'string' ? raw.url : undefined,
+        ...(usedIn !== undefined ? { usedIn } : {}),
       },
     };
   } catch (err: unknown) {

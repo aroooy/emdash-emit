@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.65] - 2026-11-26
+
+### Added
+
+- **EmDash 1.5 / 1.6 Safety Guards (Phase 1: Co-editing Room & Remote Media `usedIn`)**:
+  - **Guard G23 (`ACTIVE_COEDITING_SESSION`)**: `acquireLock()` (`src/client/lock.ts`) now detects `room === true` on EmDash 1.5+ lock responses and blocks `emit push`, `emit publish`, and `emit discard-draft` (and corresponding MCP tools) before overwriting active browser co-editing sessions, releasing any just-acquired caller lease cleanly. Bypassable via `--force` / `force: true` (backwards compatible with EmDash 1.4).
+  - **Remote `usedIn` Enforcement on Guard G20 (`MEDIA_IN_USE_PROTECTION`)**: `fetchRemoteMediaDetail()` (`src/client/media.ts`) now extracts `usedIn` from `GET /_emdash/api/media/{id}` with zero extra HTTP requests. `deleteMedia()` refuses deletion via Guard G20 when remote articles reference the asset, and omits `[LOCAL_REFERENCE_SCAN_ONLY]` once remote `usedIn` is verified.
+  - Added regression test in `tests/publish_command.test.ts` for post-publish `GET` failure recovery (`PUBLISH_FAILED` + `"emit pull <id>"` + lock release).
+
 ## [0.1.64] - 2026-11-26
 
 ### Fixed

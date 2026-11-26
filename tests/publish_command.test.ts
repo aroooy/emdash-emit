@@ -284,4 +284,68 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
       }),
     ).rejects.toMatchObject({ code: 'REMOTE_CHANGED_BEFORE_PUBLISH' });
   });
+
+  it('throws PUBLISH_FAILED with emit pull guidance and releases lock if post-publish GET fails', async () => {
+    const id = '01M7BZH06K515A5NQWZ36QK7P5';
+    const draftRevId = '01M7DRAFT00000000000000005';
+    const relPath = seedArticle({
+      id,
+      slug: 'post-publish-get-fail',
+      title: 'Post Publish Get Fail',
+      status: 'published',
+      hasDraftRevision: true,
+      remoteRev: `2@draft:${draftRevId}`,
+    });
+
+    let getCalls = 0;
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/lock')) {
+        return Promise.resolve({ ok: true, json: async () => ({ heldByCaller: true }) });
+      }
+      if (url.endsWith(`/posts/${id}/publish`) && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { _rev: 'MzoyMDI2LTExLTI2VDAwOjAxOjAwLjAwMFo=' },
+          }),
+        });
+      }
+      if (url.endsWith(`/posts/${id}`) && (!init?.method || init.method === 'GET')) {
+        getCalls += 1;
+        if (getCalls === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                item: { id, status: 'published', version: 2, draftRevisionId: draftRevId },
+                _rev: 'MjoyMDI2LTExLTI2VDAwOjAwOjAwLjAwMFo=',
+              },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+
+    await expect(
+      publishArticle(relPath, {
+        workspaceRoot: tempDir,
+        cache,
+        origin: 'https://example.com',
+        token: 'fake-token',
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PUBLISH_FAILED',
+      suggestion: expect.stringContaining(`emit pull ${id}`),
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/lock'),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
 });

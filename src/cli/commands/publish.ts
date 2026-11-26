@@ -29,39 +29,46 @@ export function registerPublishCommand(program: Command, resolveContext: CliCont
   program
     .command('publish <target>')
     .description('Promote a staged remote draft (or draft article) to live published status')
+    .option('-f, --force', 'Proceed even if an active web co-editing room is detected (G23)')
     .option(
       '--local-media-refs',
       'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk',
     )
     .option('--no-local-media-refs', 'Store canonical EmDash URLs on disk')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
-    .action(async (target: string, options: { localMediaRefs?: boolean; profile?: string }) => {
-      try {
-        const ctx = resolveContext(options.profile);
-        const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
-        const res = await publishArticle(target, {
-          workspaceRoot: ctx.root,
-          cache: ctx.cache,
-          origin: ctx.origin,
-          token: ctx.auth.token,
-          refreshToken: ctx.auth.refreshToken,
-          collection: ctx.config.defaultCollection,
-          localMediaRefs,
-        });
+    .action(
+      async (
+        target: string,
+        options: { force?: boolean; localMediaRefs?: boolean; profile?: string },
+      ) => {
+        try {
+          const ctx = resolveContext(options.profile);
+          const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
+          const res = await publishArticle(target, {
+            workspaceRoot: ctx.root,
+            cache: ctx.cache,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            collection: ctx.config.defaultCollection,
+            localMediaRefs,
+            force: Boolean(options.force),
+          });
 
-        if (res.alreadyPublished) {
-          console.log(
-            `ℹ️ Article ${res.id} (${res.filePath}) is already published with no pending draft.`,
-          );
-        } else {
-          console.log(`✅ Published ${res.id} -> ${res.filePath} (rev: ${res.rev})`);
-          if (res.previousFilePath) {
-            console.log(`   📄 Moved local file: ${res.previousFilePath} -> ${res.filePath}`);
+          if (res.alreadyPublished) {
+            console.log(
+              `ℹ️ Article ${res.id} (${res.filePath}) is already published with no pending draft.`,
+            );
+          } else {
+            console.log(`✅ Published ${res.id} -> ${res.filePath} (rev: ${res.rev})`);
+            if (res.previousFilePath) {
+              console.log(`   📄 Moved local file: ${res.previousFilePath} -> ${res.filePath}`);
+            }
           }
+          console.log(`   🛠️ Admin: ${res.adminUrl}`);
+        } catch (err: unknown) {
+          reportActionFailure(err);
         }
-        console.log(`   🛠️ Admin: ${res.adminUrl}`);
-      } catch (err: unknown) {
-        reportActionFailure(err);
-      }
-    });
+      },
+    );
 }

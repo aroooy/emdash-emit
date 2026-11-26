@@ -297,114 +297,61 @@ export async function pushArticle(
   }
 
   // Existing article: execute within full 7-minute entry lock lease
-  return await withEntryLock(collection, id, options, async () => {
-    const { body: rewrittenBody, uploadedByAbsPath } = await uploadAndRewriteDraftImages(
-      parsed.body,
-      preflight.draftImages,
-      options,
-      fetchFn,
-    );
-    parsed.body = rewrittenBody;
-
-    const fiResolution = resolveFeaturedImageMediaId(
-      parsed.frontmatter.featuredImage,
-      uploadedByAbsPath,
-      targetFilePath,
-      options.workspaceRoot,
-    );
-    if (fiResolution) {
-      parsed.frontmatter.featuredImage = fiResolution.mediaId;
-    } else if (parsed.frontmatter.featuredImage) {
-      // Defensive guard (W1): preflight guarantees resolution, but fail-fast if an unresolved value reaches push
-      throw new Error(
-        `Failed to resolve featuredImage '${parsed.frontmatter.featuredImage}' to a media record ID during push.`,
+  return await withEntryLock(
+    collection,
+    id,
+    { ...options, allowActiveCoediting: Boolean(options.force) },
+    async () => {
+      const { body: rewrittenBody, uploadedByAbsPath } = await uploadAndRewriteDraftImages(
+        parsed.body,
+        preflight.draftImages,
+        options,
+        fetchFn,
       );
-    }
+      parsed.body = rewrittenBody;
 
-    let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
-    warnings.push(
-      ...preserveOrResolveFeaturedImage(
-        payload,
+      const fiResolution = resolveFeaturedImageMediaId(
         parsed.frontmatter.featuredImage,
-        options.cache,
-        id,
+        uploadedByAbsPath,
+        targetFilePath,
         options.workspaceRoot,
-        { skipCompanionCheck: fiResolution?.autoUploaded },
-      ),
-    );
-    const putUrl = articleContentEndpoint(options.origin, collection, id);
-
-    // Pre-PUT Taxonomy Audit
-    const { remoteTaxAudit, taxonomyDivergenceDetected } = await auditRemoteTaxonomies({
-      collection,
-      id,
-      parsed,
-      syncState,
-      baseSnapshot,
-      options,
-      fetchFn,
-      warnings,
-    });
-
-    let res: Response | null = null;
-    if (!taxonomyDivergenceDetected) {
-      res = await fetchFn(putUrl, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.status === 404 || res.status === 410) {
-        throwRemoteArticleDeleted(id, targetFilePath, putUrl);
+      );
+      if (fiResolution) {
+        parsed.frontmatter.featuredImage = fiResolution.mediaId;
+      } else if (parsed.frontmatter.featuredImage) {
+        // Defensive guard (W1): preflight guarantees resolution, but fail-fast if an unresolved value reaches push
+        throw new Error(
+          `Failed to resolve featuredImage '${parsed.frontmatter.featuredImage}' to a media record ID during push.`,
+        );
       }
-    }
 
-    // Handle 409 Conflict or detected taxonomy divergence
-    if (taxonomyDivergenceDetected || res?.status === 409) {
-      const conflictOutcome = await resolveConflictAndMerge({
+      let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
+      warnings.push(
+        ...preserveOrResolveFeaturedImage(
+          payload,
+          parsed.frontmatter.featuredImage,
+          options.cache,
+          id,
+          options.workspaceRoot,
+          { skipCompanionCheck: fiResolution?.autoUploaded },
+        ),
+      );
+      const putUrl = articleContentEndpoint(options.origin, collection, id);
+
+      // Pre-PUT Taxonomy Audit
+      const { remoteTaxAudit, taxonomyDivergenceDetected } = await auditRemoteTaxonomies({
         collection,
         id,
-        targetFilePath,
-        fullPath,
-        putUrl,
-        res,
-        taxonomyDivergenceDetected,
         parsed,
         syncState,
         baseSnapshot,
-        remoteTaxAudit,
-        candidates,
         options,
         fetchFn,
         warnings,
       });
 
-      if (conflictOutcome.handled && conflictOutcome.pushResult) {
-        return conflictOutcome.pushResult;
-      }
-
-      if (conflictOutcome.mergedParsed && conflictOutcome.remoteParsedRev) {
-        parsed.frontmatter = conflictOutcome.mergedParsed.frontmatter;
-        parsed.body = conflictOutcome.mergedParsed.body;
-        payload = localToApiPayload(parsed, conflictOutcome.remoteParsedRev, effectiveOptions);
-        warnings.push(
-          ...preserveOrResolveFeaturedImage(
-            payload,
-            parsed.frontmatter.featuredImage,
-            options.cache,
-            id,
-            options.workspaceRoot,
-            {
-              skipCompanionCheck:
-                fiResolution?.mediaId === parsed.frontmatter.featuredImage &&
-                fiResolution?.autoUploaded,
-            },
-          ),
-        );
-
+      let res: Response | null = null;
+      if (!taxonomyDivergenceDetected) {
         res = await fetchFn(putUrl, {
           method: 'PUT',
           headers: {
@@ -414,93 +361,151 @@ export async function pushArticle(
           body: JSON.stringify(payload),
         });
 
-        if (!res.ok) {
-          if (res.status === 404 || res.status === 410) {
-            throwRemoteArticleDeleted(id, targetFilePath, putUrl);
-          }
-
-          const errText = await res.text().catch(() => '');
-          const mergeResult = conflictOutcome.mergeResult;
-          if (
-            (res.status === 400 || res.status === 422) &&
-            ((mergeResult?.autoMergedTaxonomies && mergeResult.autoMergedTaxonomies.length > 0) ||
-              (mergeResult?.strategyAdoptions && mergeResult.strategyAdoptions.length > 0))
-          ) {
-            const wasStrategy =
-              mergeResult.strategyAdoptions && mergeResult.strategyAdoptions.length > 0;
-            throw new ApiError({
-              message: `Remote server rejected the merged taxonomy union (HTTP ${res.status}): ${errText || res.statusText}`,
-              code: 'TAXONOMY_UNION_REJECTED',
-              status: res.status,
-              endpoint: putUrl,
-              suggestion: wasStrategy
-                ? 'The remote server rejected the taxonomy adopted by your strategy (e.g. single-category constraint). Switch strategy with "--resolve-taxonomy=remote" or edit the frontmatter manually before pushing.'
-                : 'The remote server enforces constraints that reject combining local and remote taxonomy terms (e.g. single-category constraint). Resolve by explicitly choosing a side: "emit push <file> --resolve-taxonomy=local" (or remote), or edit the frontmatter manually.',
-            });
-          }
-
-          throw new ApiError({
-            message: `Retry push after auto-merge failed: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
-            code: 'PUSH_RETRY_FAILED',
-            status: res.status,
-            endpoint: putUrl,
-            suggestion:
-              'Another change might have been committed in the meantime. Try pulling again.',
-          });
+        if (res.status === 404 || res.status === 410) {
+          throwRemoteArticleDeleted(id, targetFilePath, putUrl);
         }
       }
-    }
 
-    if (!res || !res.ok) {
-      if (res && (res.status === 404 || res.status === 410)) {
-        throwRemoteArticleDeleted(id, targetFilePath, putUrl);
+      // Handle 409 Conflict or detected taxonomy divergence
+      if (taxonomyDivergenceDetected || res?.status === 409) {
+        const conflictOutcome = await resolveConflictAndMerge({
+          collection,
+          id,
+          targetFilePath,
+          fullPath,
+          putUrl,
+          res,
+          taxonomyDivergenceDetected,
+          parsed,
+          syncState,
+          baseSnapshot,
+          remoteTaxAudit,
+          candidates,
+          options,
+          fetchFn,
+          warnings,
+        });
+
+        if (conflictOutcome.handled && conflictOutcome.pushResult) {
+          return conflictOutcome.pushResult;
+        }
+
+        if (conflictOutcome.mergedParsed && conflictOutcome.remoteParsedRev) {
+          parsed.frontmatter = conflictOutcome.mergedParsed.frontmatter;
+          parsed.body = conflictOutcome.mergedParsed.body;
+          payload = localToApiPayload(parsed, conflictOutcome.remoteParsedRev, effectiveOptions);
+          warnings.push(
+            ...preserveOrResolveFeaturedImage(
+              payload,
+              parsed.frontmatter.featuredImage,
+              options.cache,
+              id,
+              options.workspaceRoot,
+              {
+                skipCompanionCheck:
+                  fiResolution?.mediaId === parsed.frontmatter.featuredImage &&
+                  fiResolution?.autoUploaded,
+              },
+            ),
+          );
+
+          res = await fetchFn(putUrl, {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${options.token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!res.ok) {
+            if (res.status === 404 || res.status === 410) {
+              throwRemoteArticleDeleted(id, targetFilePath, putUrl);
+            }
+
+            const errText = await res.text().catch(() => '');
+            const mergeResult = conflictOutcome.mergeResult;
+            if (
+              (res.status === 400 || res.status === 422) &&
+              ((mergeResult?.autoMergedTaxonomies && mergeResult.autoMergedTaxonomies.length > 0) ||
+                (mergeResult?.strategyAdoptions && mergeResult.strategyAdoptions.length > 0))
+            ) {
+              const wasStrategy =
+                mergeResult.strategyAdoptions && mergeResult.strategyAdoptions.length > 0;
+              throw new ApiError({
+                message: `Remote server rejected the merged taxonomy union (HTTP ${res.status}): ${errText || res.statusText}`,
+                code: 'TAXONOMY_UNION_REJECTED',
+                status: res.status,
+                endpoint: putUrl,
+                suggestion: wasStrategy
+                  ? 'The remote server rejected the taxonomy adopted by your strategy (e.g. single-category constraint). Switch strategy with "--resolve-taxonomy=remote" or edit the frontmatter manually before pushing.'
+                  : 'The remote server enforces constraints that reject combining local and remote taxonomy terms (e.g. single-category constraint). Resolve by explicitly choosing a side: "emit push <file> --resolve-taxonomy=local" (or remote), or edit the frontmatter manually.',
+              });
+            }
+
+            throw new ApiError({
+              message: `Retry push after auto-merge failed: ${res.statusText}${errText ? ` - ${errText}` : ''}`,
+              code: 'PUSH_RETRY_FAILED',
+              status: res.status,
+              endpoint: putUrl,
+              suggestion:
+                'Another change might have been committed in the meantime. Try pulling again.',
+            });
+          }
+        }
       }
-      const errText = res ? await res.text().catch(() => '') : '';
-      throw new ApiError({
-        message: `Push failed: ${res ? res.statusText : 'Request failed'}${errText ? ` - ${errText}` : ''}`,
-        code: 'PUSH_FAILED',
-        status: res ? res.status : 500,
-        endpoint: putUrl,
-        suggestion: 'Verify network connectivity, token permissions, and article status.',
+
+      if (!res || !res.ok) {
+        if (res && (res.status === 404 || res.status === 410)) {
+          throwRemoteArticleDeleted(id, targetFilePath, putUrl);
+        }
+        const errText = res ? await res.text().catch(() => '') : '';
+        throw new ApiError({
+          message: `Push failed: ${res ? res.statusText : 'Request failed'}${errText ? ` - ${errText}` : ''}`,
+          code: 'PUSH_FAILED',
+          status: res ? res.status : 500,
+          endpoint: putUrl,
+          suggestion: 'Verify network connectivity, token permissions, and article status.',
+        });
+      }
+
+      const updatedJson = await res.json().catch(() => ({}));
+      const newRev = extractRev(updatedJson, currentRev);
+
+      const taxFailures = await syncArticleTaxonomies({
+        articleId: id,
+        collection,
+        parsed,
+        taxonomyMaps,
+        resolvedTaxonomies,
+        baseSnapshot,
+        options,
+        fetchFn,
+        warnings,
+        remoteTaxAudit,
       });
-    }
 
-    const updatedJson = await res.json().catch(() => ({}));
-    const newRev = extractRev(updatedJson, currentRev);
-
-    const taxFailures = await syncArticleTaxonomies({
-      articleId: id,
-      collection,
-      parsed,
-      taxonomyMaps,
-      resolvedTaxonomies,
-      baseSnapshot,
-      options,
-      fetchFn,
-      warnings,
-      remoteTaxAudit,
-    });
-
-    return await commitPostPush({
-      mode: 'update',
-      actualId: id,
-      originalId: id,
-      originalRelPath,
-      fullPath,
-      newRev,
-      parsed,
-      rawContent,
-      draftImages: preflight.draftImages,
-      uploadedByAbsPath,
-      candidates,
-      taxFailures,
-      resolvedTaxonomies,
-      options,
-      fetchFn,
-      warnings,
-      syncState,
-      baseSnapshot,
-      updatedRawItem: updatedJson,
-    });
-  });
+      return await commitPostPush({
+        mode: 'update',
+        actualId: id,
+        originalId: id,
+        originalRelPath,
+        fullPath,
+        newRev,
+        parsed,
+        rawContent,
+        draftImages: preflight.draftImages,
+        uploadedByAbsPath,
+        candidates,
+        taxFailures,
+        resolvedTaxonomies,
+        options,
+        fetchFn,
+        warnings,
+        syncState,
+        baseSnapshot,
+        updatedRawItem: updatedJson,
+      });
+    },
+  );
 }

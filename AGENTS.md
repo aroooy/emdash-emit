@@ -23,7 +23,7 @@ Before modifying any subsystem or debugging domain behavior, consult the corresp
 | **Two Media Identifier Spaces (`id` vs `storageKey`)**         | **[docs/media-id-spaces.md](docs/media-id-spaces.md)**                             | **Mandatory reading before debugging any missing or 404 image.** Defines D1 record `id` vs R2 `storageKey`, endpoint matrices, and migrated-corpus behavior.              |
 | **Local-First Media Pipeline, Mirror Naming & Pruning**        | **[docs/media-pipeline.md](docs/media-pipeline.md)**                               | Modifying `src/sync/media/*`, `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path rewriting, `storageKeyToMarkdownRef` naming, or media pruning.      |
 | **Taxonomies (Two-Layer Representation) & Bylines**            | **[docs/taxonomies-and-bylines.md](docs/taxonomies-and-bylines.md)**               | Modifying category/tag sync, percent-encoded (Layer A) vs decoded CJK (Layer B) slugs, collision resolution, 0-GET deleted term auto-healing, or remote taxonomy audit.   |
-| **Safety Guardrails (G1–G22), Doctor, Search & FAQ**           | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` (`snapshotStatus` / `--live` FTS).                          |
+| **Safety Guardrails (G1–G23), Doctor, Search & FAQ**           | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` (`snapshotStatus` / `--live` FTS).                          |
 | **CLI Commands & MCP Tools Complete Reference**                | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)**                 | Inspecting or updating CLI flags (22 top-level commands + 10 subcommands) or MCP tool schemas (19 tools).                                                                 |
 
 ---
@@ -113,7 +113,7 @@ Every core invariant is paired with the structural mechanism (Architecture, Type
 ## 4. Product Behavior Spec: The Golden Path for Content Authoring
 
 > [!NOTE]
-> **Audience Distinction (For Repository Developers)**: This section defines the **end-user / MCP authoring workflow** that `emdash-emit` must support and enforce via `emit guide`, MCP tool descriptions, and preflight guards (`G1–G22`). When developing `emdash-emit` itself, treat this section as the product behavioral specification to preserve—**not** as instructions for editing this repository.
+> **Audience Distinction (For Repository Developers)**: This section defines the **end-user / MCP authoring workflow** that `emdash-emit` must support and enforce via `emit guide`, MCP tool descriptions, and preflight guards (`G1–G23`). When developing `emdash-emit` itself, treat this section as the product behavioral specification to preserve—**not** as instructions for editing this repository.
 
 When drafting, reviewing, or updating blog articles using Emit, content-authoring AI agents follow the **Golden Path Workflows**:
 
@@ -163,7 +163,7 @@ When drafting, reviewing, or updating blog articles using Emit, content-authorin
    - **Staging Protection (Guard G3)**: Keep `status: draft` unless explicitly asked to publish (`allowPublish: true`).
 5. **Quarantine & Conflict Resolution (`posts/conflicts/`, Guards G6, G12–G17, G19)**:
    - Never push a rescue copy under `posts/conflicts/` (blocked by Guard G12). Use `sync_conflicts` (`list`, `diff`, `resolve`, `prune`) to inspect or resolve quarantined copies.
-   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G22 specification and remediation flags.
+   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G23 specification and remediation flags.
 
 ---
 

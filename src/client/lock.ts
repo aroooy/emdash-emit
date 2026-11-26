@@ -31,6 +31,10 @@ export interface LockResponse {
   enabled: boolean;
   holder: LockHolder | null;
   heldByCaller: boolean;
+  room?: boolean;
+  data?: {
+    room?: boolean;
+  };
 }
 
 import { createAuthedFetch } from './http.js';
@@ -40,6 +44,7 @@ export interface LockClientOptions {
   origin: string;
   token: string;
   refreshToken?: string;
+  allowActiveCoediting?: boolean;
   fetchFn?: typeof fetch;
 }
 
@@ -115,6 +120,19 @@ export async function acquireLock(
       `Entry '${id}' is currently locked by ${json.holder.userName} (expires at ${json.holder.expiresAt}).`,
       'ENTRY_LOCKED',
       json.holder,
+    );
+  }
+
+  const isCoeditingRoom = json.room === true || json.data?.room === true;
+  if (isCoeditingRoom && !options.allowActiveCoediting) {
+    if (json.heldByCaller) {
+      await releaseLock(collection, id, options);
+    }
+    const guard = { code: 'ACTIVE_COEDITING_SESSION' as const };
+    throw new EntryLockError(
+      `Article '${id}' is currently active in a web co-editing room. Someone is actively editing this article in the EmDash admin dashboard.`,
+      guard.code,
+      json.holder ?? null,
     );
   }
 

@@ -167,4 +167,55 @@ describe('Lock Protocol (POST /lock -> action -> DELETE /lock)', () => {
       expect.objectContaining({ method: 'DELETE' }),
     );
   });
+
+  it('throws ACTIVE_COEDITING_SESSION (G23) when room=true unless allowActiveCoediting=true', async () => {
+    const mockFetch = vi.fn().mockImplementation((_url, init) => {
+      if (init.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            holder: {
+              userId: 'u1',
+              userName: 'hiroaki',
+              acquiredAt: '2026-11-26T10:00:00Z',
+              expiresAt: '2026-11-26T10:07:00Z',
+            },
+            heldByCaller: true,
+            room: true,
+          }),
+        });
+      }
+      if (init.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.reject(new Error('Unexpected method'));
+    });
+
+    await expect(
+      acquireLock('posts', '01M67MP2W0VKCK2DFWM166CR24', {
+        ...options,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ code: 'ACTIVE_COEDITING_SESSION' });
+
+    // Must release the just-acquired lease so we don't leave a stale lock
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/lock'),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+
+    // Bypass when allowActiveCoediting=true
+    mockFetch.mockClear();
+    const bypassed = await acquireLock('posts', '01M67MP2W0VKCK2DFWM166CR24', {
+      ...options,
+      allowActiveCoediting: true,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    expect(bypassed.heldByCaller).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/lock'),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
 });
