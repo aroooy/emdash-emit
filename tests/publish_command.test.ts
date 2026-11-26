@@ -97,18 +97,21 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
     });
 
     let publishCalled = false;
+    let sentPublishRev: unknown;
+    const expectedTransportRev = 'MjoyMDI2LTExLTI2VDAwOjAwOjAwLjAwMFo=';
     const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/lock')) {
         return Promise.resolve({ ok: true, json: async () => ({ heldByCaller: true }) });
       }
       if (url.endsWith(`/posts/${id}/publish`) && init?.method === 'POST') {
         publishCalled = true;
+        sentPublishRev = JSON.parse(String(init.body))._rev;
         // Minimal /publish response (without liveRevisionId) to verify post-publish GET preserves Track 2
         return Promise.resolve({
           ok: true,
           json: async () => ({
             success: true,
-            data: { _rev: 'rev-3' },
+            data: { _rev: 'MzoyMDI2LTExLTI2VDAwOjAxOjAwLjAwMFo=' },
           }),
         });
       }
@@ -119,20 +122,24 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
             success: true,
             data: publishCalled
               ? {
-                  id,
-                  status: 'published',
-                  version: 3,
-                  draftRevisionId: null,
-                  liveRevisionId: liveRevId,
-                  publishedAt: '2026-11-26T00:00:00.000Z',
-                  _rev: 'rev-3',
+                  item: {
+                    id,
+                    status: 'published',
+                    version: 3,
+                    draftRevisionId: null,
+                    liveRevisionId: liveRevId,
+                    publishedAt: '2026-11-26T00:00:00.000Z',
+                  },
+                  _rev: 'MzoyMDI2LTExLTI2VDAwOjAxOjAwLjAwMFo=',
                 }
               : {
-                  id,
-                  status: 'published',
-                  version: 2,
-                  draftRevisionId: draftRevId,
-                  _rev: 'rev-2',
+                  item: {
+                    id,
+                    status: 'published',
+                    version: 2,
+                    draftRevisionId: draftRevId,
+                  },
+                  _rev: expectedTransportRev,
                 },
           }),
         });
@@ -149,6 +156,7 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
     });
 
     expect(publishCalled).toBe(true);
+    expect(sentPublishRev).toBe(expectedTransportRev);
     expect(res.success).toBe(true);
     expect(res.alreadyPublished).toBe(false);
     expect(res.filePath).toBe(relPath);

@@ -89,12 +89,15 @@ describe('emit discard-draft / discardDraftArticle (v0.1.63)', () => {
     });
 
     let discarded = false;
+    let sentDiscardRev: unknown;
+    const expectedTransportRev = 'MjoyMDI2LTExLTI2VDAwOjAwOjAwLjAwMFo=';
     const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/lock')) {
         return Promise.resolve({ ok: true, json: async () => ({ heldByCaller: true }) });
       }
       if (url.endsWith(`/posts/${id}/discard-draft`) && init?.method === 'POST') {
         discarded = true;
+        sentDiscardRev = JSON.parse(String(init.body))._rev;
         return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
       }
       if (url.endsWith(`/posts/${id}`) && (!init?.method || init.method === 'GET')) {
@@ -104,32 +107,36 @@ describe('emit discard-draft / discardDraftArticle (v0.1.63)', () => {
             success: true,
             data: discarded
               ? {
-                  id,
-                  slug: 'discard-test',
-                  status: 'published',
-                  version: 1,
-                  draftRevisionId: null,
-                  liveRevisionId: liveRevId,
-                  publishedAt: '2026-11-26T00:00:00.000Z',
-                  _rev: 'rev-live',
-                  data: {
-                    title: 'Discard Test',
-                    content: [
-                      {
-                        _type: 'block',
-                        _key: 'b1',
-                        children: [{ _type: 'span', text: 'Original live body.' }],
-                      },
-                    ],
+                  item: {
+                    id,
+                    slug: 'discard-test',
+                    status: 'published',
+                    version: 1,
+                    draftRevisionId: null,
+                    liveRevisionId: liveRevId,
+                    publishedAt: '2026-11-26T00:00:00.000Z',
+                    data: {
+                      title: 'Discard Test',
+                      content: [
+                        {
+                          _type: 'block',
+                          _key: 'b1',
+                          children: [{ _type: 'span', text: 'Original live body.' }],
+                        },
+                      ],
+                    },
                   },
+                  _rev: 'MToyMDI2LTExLTI2VDAwOjAwOjAwLjAwMFo=',
                 }
               : {
-                  id,
-                  slug: 'discard-test',
-                  status: 'published',
-                  version: 2,
-                  draftRevisionId: '01M7DRAFT00000000000000001',
-                  _rev: 'rev-2',
+                  item: {
+                    id,
+                    slug: 'discard-test',
+                    status: 'published',
+                    version: 2,
+                    draftRevisionId: '01M7DRAFT00000000000000001',
+                  },
+                  _rev: expectedTransportRev,
                 },
           }),
         });
@@ -149,6 +156,7 @@ describe('emit discard-draft / discardDraftArticle (v0.1.63)', () => {
     });
 
     expect(discarded).toBe(true);
+    expect(sentDiscardRev).toBe(expectedTransportRev);
     expect(res.noDraftPending).toBe(false);
     expect(cache.getSyncState(id)?.remoteRev).toBe(`1@live:${liveRevId}`);
     const disk = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');

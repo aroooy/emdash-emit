@@ -91,6 +91,8 @@ export function unwrapItem<T = Record<string, unknown>>(raw: unknown): T {
 
 /**
  * Extracts revision string from an API response, prioritizing data._rev over item._rev, rev, version.
+ *
+ * @remarks Always pass the root API envelope JSON (before `unwrapItem()`), because `data._rev` lives outside `data.item`.
  */
 export function extractRev(raw: unknown, fallback = '1'): string {
   if (!raw || typeof raw !== 'object') {

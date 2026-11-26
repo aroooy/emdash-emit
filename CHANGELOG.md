@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.64] - 2026-11-26
+
+### Fixed
+
+- **Envelope `_rev` Extraction in `emit publish` / `emit discard-draft` (`v0.1.63` Regression)**:
+  - Fixed a regression limited to the new `v0.1.63` commands (`publishArticle` and `discardDraftArticle` in `src/sync/orchestrator.ts`) where `unwrapItem()` was called before `extractRev()`, stripping `data._rev` from `{ data: { item, _rev } }` server responses and falling back to integer `version` (causing `HTTP 409 Conflict: Revision precondition did not match` on real EmDash servers).
+  - `publishArticle` now also fails explicitly with recovery guidance (`emit pull <id>`) if the post-publish `GET` fails, protecting Track 2 `comparisonRev` integrity.
+  - Added JSDoc guidance on `extractRev()`, unit coverage in `tests/api_rev.test.ts`, and real `{ data: { item, _rev } }` envelope assertions in `tests/publish_command.test.ts` and `tests/discard_draft.test.ts`.
+
 ## [0.1.63] - 2026-11-26
 
 ### Added

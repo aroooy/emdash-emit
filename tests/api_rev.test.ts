@@ -2,11 +2,34 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { extractComparisonRev, isSameRev, formatRevForDisplay } from '../src/client/api.js';
+import {
+  extractRev,
+  extractComparisonRev,
+  isSameRev,
+  formatRevForDisplay,
+} from '../src/client/api.js';
 import { tryDecodeTaxonomyTerm } from '../src/utils/frontmatter.js';
 import { CacheDatabase } from '../src/db/cache.js';
 
 describe('Revision comparison & formatting (v0.1.22 Layer 0)', () => {
+  describe('extractRev', () => {
+    it('prioritizes envelope data._rev over item.version when root envelope is passed', () => {
+      const response = {
+        success: true,
+        data: {
+          item: {
+            id: '01M7BZH06K515A5NQWZ36QK7NQ',
+            version: 14,
+            status: 'published',
+          },
+          _rev: 'MTQ6MjAyNi0xMS0yNlQwODowMDowMFo=',
+        },
+      };
+
+      expect(extractRev(response)).toBe('MTQ6MjAyNi0xMS0yNlQwODowMDowMFo=');
+    });
+  });
+
   describe('extractComparisonRev', () => {
     it('prioritizes draftRevisionId for draft articles', () => {
       const response = {

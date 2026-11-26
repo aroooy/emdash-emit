@@ -828,8 +828,9 @@ export async function publishArticle(
     });
   }
 
-  const rawItem = unwrapItem<Record<string, unknown>>(await getRes.json());
-  const revForTransport = extractRev(rawItem);
+  const getRawJson = await getRes.json();
+  const rawItem = unwrapItem<Record<string, unknown>>(getRawJson);
+  const revForTransport = extractRev(getRawJson);
   const remoteComparisonRev = extractComparisonRev(rawItem, revForTransport);
 
   // Guard G22: Remote draft diverged since last sync
@@ -891,20 +892,28 @@ export async function publishArticle(
         message: `Failed to publish ${id}: ${errText || publishRes.statusText}`,
       });
     }
-    const publishJson = unwrapItem<Record<string, unknown>>(await publishRes.json());
-    finalRev = extractRev(publishJson, revForTransport);
-    finalRawItem = publishJson;
+    const publishRawJson = await publishRes.json();
+    const publishItem = unwrapItem<Record<string, unknown>>(publishRawJson);
+    finalRev = extractRev(publishRawJson, revForTransport);
+    finalRawItem = publishItem;
 
     // Re-fetch via GET so Track 2 comparisonRev (${version}@live:${liveRevisionId}) is always
     // derived from the full canonical item even if /publish returns a minimal envelope.
     const postPublishGet = await fetchFn(articleContentEndpoint(options.origin, collection, id), {
       headers: { Authorization: `Bearer ${options.token}` },
     });
-    if (postPublishGet.ok) {
-      const refetched = unwrapItem<Record<string, unknown>>(await postPublishGet.json());
-      finalRawItem = refetched;
-      finalRev = extractRev(refetched, finalRev);
+    if (!postPublishGet.ok) {
+      throw new ApiError({
+        endpoint: `/_emdash/api/content/${collection}/${id}`,
+        code: 'PUBLISH_FAILED',
+        status: postPublishGet.status,
+        message: `Article ${id} was published on remote, but re-fetching the live item failed (${postPublishGet.status}).`,
+        suggestion: `The article is already published on remote. Check network connectivity and run "emit pull ${id}" to sync your local file.`,
+      });
     }
+    const postPublishRawJson = await postPublishGet.json();
+    finalRawItem = unwrapItem<Record<string, unknown>>(postPublishRawJson);
+    finalRev = extractRev(postPublishRawJson, finalRev);
   } finally {
     await releaseLock(collection, id, {
       origin: options.origin,
@@ -1040,8 +1049,9 @@ export async function discardDraftArticle(
     });
   }
 
-  const rawItem = unwrapItem<Record<string, unknown>>(await getRes.json());
-  const revForTransport = extractRev(rawItem);
+  const getRawJson = await getRes.json();
+  const rawItem = unwrapItem<Record<string, unknown>>(getRawJson);
+  const revForTransport = extractRev(getRawJson);
 
   // Guard G21: Only published articles can discard a staged draft
   if (rawItem.status !== 'published') {
