@@ -171,6 +171,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         return formatToolTextWithMeta(
           [
             `✅ Successfully pushed '${res.id}' to remote (${res.filePath}, rev: ${res.rev}).`,
+            ...(res.adminUrl ? [`🛠️ Admin: ${res.adminUrl}`] : []),
             ...transitionLines,
             ...taxonomyLines,
             ...warningLines,

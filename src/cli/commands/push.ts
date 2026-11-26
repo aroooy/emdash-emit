@@ -58,6 +58,9 @@ function printPushArticleDetails(
   if (res.previousFilePath) {
     console.log(`   📄 Renamed local file: ${res.previousFilePath} -> ${res.filePath}`);
   }
+  if (res.adminUrl) {
+    console.log(`   🛠️ Admin: ${res.adminUrl}`);
+  }
   if (res.resolvedTaxonomies) {
     for (const [tax, items] of Object.entries(res.resolvedTaxonomies)) {
       if (Array.isArray(items)) {

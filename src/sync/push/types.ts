@@ -82,6 +82,8 @@ export interface PushResult {
   previousFilePath?: string;
   conflict: boolean;
   taxonomyConflict?: boolean;
+  hasDraftRevision?: boolean;
+  adminUrl?: string;
   warnings: string[];
   errors?: PreflightError[];
   resolvedTaxonomies?: {

@@ -41,6 +41,22 @@ export function articleStatusTransitionEndpoint(
   return new URL(`/_emdash/api/content/${collection}/${id}/${action}`, origin).toString();
 }
 
+export function articleDiscardDraftEndpoint(
+  origin: string,
+  collection: string,
+  id: string,
+): string {
+  return new URL(`/_emdash/api/content/${collection}/${id}/discard-draft`, origin).toString();
+}
+
+export function articlePreviewUrlEndpoint(origin: string, collection: string, id: string): string {
+  return new URL(`/_emdash/api/content/${collection}/${id}/preview-url`, origin).toString();
+}
+
+export function articleAdminEndpoint(origin: string, collection: string, id: string): string {
+  return new URL(`/_emdash/admin/content/${collection}/${id}`, origin).toString();
+}
+
 export function articleLockEndpoint(origin: string, collection: string, id: string): string {
   return new URL(`/_emdash/api/content/${collection}/${id}/lock`, origin).toString();
 }

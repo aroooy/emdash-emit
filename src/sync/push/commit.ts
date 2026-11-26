@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { extractComparisonRev } from '../../client/api.js';
+import { articleAdminEndpoint } from '../../client/endpoints.js';
 import { ApiError } from '../../client/error.js';
 import type { UploadMediaResult } from '../../client/media.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
@@ -412,6 +413,8 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     ...(originalRelPath !== newRelPath ? { previousFilePath: originalRelPath } : {}),
     ...(Object.keys(resolvedTaxonomies).length > 0 ? { resolvedTaxonomies } : {}),
     conflict: false,
+    hasDraftRevision: hasDraft,
+    adminUrl: articleAdminEndpoint(options.origin, collection, actualId),
     warnings,
   };
 }

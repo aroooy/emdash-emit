@@ -37,6 +37,8 @@ import { registerProfileTools } from './tools/profile.js';
 import { registerSyncNewTool } from './tools/sync-new.js';
 import { registerSyncPullTools } from './tools/sync-pull.js';
 import { registerSyncPushTool } from './tools/sync-push.js';
+import { registerSyncPublishTool } from './tools/sync-publish.js';
+import { registerSyncDiscardDraftTool } from './tools/sync-discard-draft.js';
 import { registerSyncStatusTool } from './tools/sync-status.js';
 import { registerSyncDiffTool } from './tools/sync-diff.js';
 import { registerSyncDeleteTool } from './tools/sync-delete.js';
@@ -238,6 +240,8 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   registerSyncNewTool(server, resolveContext);
   registerSyncPullTools(server, resolveContext);
   registerSyncPushTool(server, resolveContext);
+  registerSyncPublishTool(server, resolveContext);
+  registerSyncDiscardDraftTool(server, resolveContext);
   registerSyncStatusTool(server, resolveContext);
   registerSyncDiffTool(server, resolveContext);
   registerSyncDeleteTool(server, resolveContext);

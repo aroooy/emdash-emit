@@ -31,7 +31,15 @@
  * Verified against src/ via tests/guards.test.ts to guarantee zero drift.
  */
 
-export type GuardStage = 'cli-mcp' | 'preflight' | 'push' | 'conflicts' | 'new' | 'media-delete';
+export type GuardStage =
+  | 'cli-mcp'
+  | 'preflight'
+  | 'push'
+  | 'publish'
+  | 'discard-draft'
+  | 'conflicts'
+  | 'new'
+  | 'media-delete';
 export type GuardSeverity = 'error' | 'warning' | 'info';
 
 export interface GuardMeta {
@@ -66,6 +74,7 @@ export const OPERATIONAL_ERROR_CODES = [
   'PUSH_RETRY_FAILED',
   'PUBLISH_FAILED',
   'UNPUBLISH_FAILED',
+  'DISCARD_DRAFT_FAILED',
   'REMOTE_ARTICLE_DELETED',
   'CONFLICT_REMOTE_FETCH_FAILED',
   // taxonomy transport (push.ts / taxonomies.ts)
@@ -306,6 +315,26 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     source: 'src/sync/media/delete_media.ts:39',
     description: 'ローカル記事から参照中のメディア削除を拒否（バイパスなし・ローカルスキャンのみ）',
   },
+  {
+    id: 21,
+    name: 'DRAFT_ONLY_DISCARD_FORBIDDEN',
+    codes: ['DRAFT_ONLY_DISCARD_FORBIDDEN'],
+    stage: 'discard-draft',
+    severity: 'error',
+    source: 'src/sync/orchestrator.ts',
+    description:
+      '公開版を持たない下書き専用記事への discard-draft 実行を禁止（emit delete を案内）',
+  },
+  {
+    id: 22,
+    name: 'REMOTE_CHANGED_BEFORE_PUBLISH',
+    codes: ['REMOTE_CHANGED_BEFORE_PUBLISH'],
+    stage: 'publish',
+    severity: 'error',
+    source: 'src/sync/orchestrator.ts',
+    description:
+      '前回同期以降にリモート下書きが更新された状態での emit publish 実行を抑止（emit pull を案内）',
+  },
 ] as const;
 
 /**
@@ -373,6 +402,12 @@ const REMEDIATION_MAP: Record<string, string> = {
   // G20
   MEDIA_IN_USE_PROTECTION:
     'Remove the image reference(s) from the referencing local article(s) and push the article changes before deleting this media asset.',
+  // G21
+  DRAFT_ONLY_DISCARD_FORBIDDEN:
+    'This article is a draft without a published live version. Use "emit delete" instead of "emit discard-draft".',
+  // G22
+  REMOTE_CHANGED_BEFORE_PUBLISH:
+    'The remote draft changed since your last sync. Run "emit pull" first to review the latest remote draft before publishing.',
   // Standing protections
   UNPUSHED_CHANGES_PROTECTION:
     'The article has unpushed modifications. Push changes first with "emit push" or specify force if deletion is intentional.',
@@ -413,6 +448,8 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Remote media deletion failed. Verify network connectivity, token permissions, and remote media service status.',
   MEDIA_DELETE_PRECONDITION_FAILED:
     'Only "ready" media records can be deleted via delete-media. Pending or failed upload records are managed automatically by upload compensation.',
+  DISCARD_DRAFT_FAILED:
+    'Remote draft discard failed. Check network connectivity, lock status, or run "emit pull" to inspect the current remote state.',
 };
 
 /**

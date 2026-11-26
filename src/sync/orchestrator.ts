@@ -30,10 +30,16 @@ import {
   type PullResult,
   type ListRemoteArticlesOptions,
 } from './pull/index.js';
-import { findLocalFilesByUlid } from './workspace/index.js';
+import {
+  findLocalFilesByUlid,
+  quarantineLocalCopy,
+  commitArticleSnapshot,
+  resolveCanonicalArticlePath,
+} from './workspace/index.js';
 import { pushArticle, type PushResult, type PushOptions } from './push/index.js';
 import { getWorkspaceStatus, selectPushCandidates } from './status.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
+import { resolveArticleTarget } from './diff.js';
 import { syncRemoteBylines } from './bylines.js';
 import {
   loadLocalTaxonomyCandidates,
@@ -42,6 +48,25 @@ import {
 } from './taxonomies.js';
 import { pullMedia, type PullMediaResult } from './media/index.js';
 import { updateConfigSyncedVersion } from '../utils/config.js';
+import { createAuthedFetch } from '../client/http.js';
+import {
+  articleAdminEndpoint,
+  articleContentEndpoint,
+  articleDiscardDraftEndpoint,
+  articlePreviewUrlEndpoint,
+  articleStatusTransitionEndpoint,
+} from '../client/endpoints.js';
+import { ApiError } from '../client/error.js';
+import { acquireLock, releaseLock } from '../client/lock.js';
+import { extractComparisonRev, extractRev, isSameRev, unwrapItem } from '../client/api.js';
+import { parseMarkdown, serializeMarkdown, type Frontmatter } from '../utils/frontmatter.js';
+import { extractDatePrefixFromPath } from '../utils/naming.js';
+import { isCanonicalUlid } from '../utils/ulid.js';
+import {
+  carriesDepthFreeMediaRef,
+  localizeArticleMediaRefs,
+  scanArticleMediaReferences,
+} from '../utils/media-body-refs.js';
 import {
   resolveConcurrency,
   resolveMediaSyncLimit,
@@ -550,4 +575,564 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
     results,
     ...(skippedItems.length > 0 ? { skippedItems } : {}),
   };
+}
+
+export interface PreviewArticleOptions {
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  origin: string;
+  token?: string;
+  refreshToken?: string;
+  collection?: string;
+  fetchFn?: typeof fetch;
+  /** Whether to query EmDash preview-url endpoint (defaults to true when token is provided). */
+  fetchPreviewUrl?: boolean;
+}
+
+export interface PreviewArticleResult {
+  id: string;
+  collection: string;
+  filePath: string;
+  adminUrl: string;
+  previewUrl?: string;
+  url: string;
+}
+
+export interface PublishArticleOptions {
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  collection?: string;
+  localMediaRefs?: boolean;
+  fetchFn?: typeof fetch;
+}
+
+export interface PublishArticleResult {
+  success: boolean;
+  alreadyPublished: boolean;
+  id: string;
+  filePath: string;
+  previousFilePath?: string;
+  rev: string;
+  adminUrl: string;
+}
+
+export interface DiscardDraftOptions {
+  workspaceRoot: string;
+  cache: CacheDatabase;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  collection?: string;
+  localMediaRefs?: boolean;
+  force?: boolean;
+  fetchFn?: typeof fetch;
+}
+
+export interface DiscardDraftResult {
+  success: boolean;
+  noDraftPending: boolean;
+  id: string;
+  filePath: string;
+  rescueFilePath?: string;
+  rev: string;
+  adminUrl: string;
+}
+
+function resolveLifecycleTarget(
+  workspaceRoot: string,
+  cache: CacheDatabase,
+  target: string,
+  collection = 'posts',
+): { id: string; relPath: string; fullPath: string; parsed: ReturnType<typeof parseMarkdown> } {
+  const trimmed = target.trim();
+  const isUlid = isCanonicalUlid(trimmed);
+  const resolved = resolveArticleTarget({
+    workspaceRoot,
+    cache,
+    filePath: isUlid ? undefined : trimmed,
+    id: isUlid ? trimmed : undefined,
+  });
+
+  const resolvedFilePath =
+    resolved.filePath ??
+    (isUlid ? findLocalFilesByUlid(workspaceRoot, collection, trimmed)[0] : undefined);
+
+  if (!resolvedFilePath) {
+    throw new Error(
+      `Could not resolve article target: "${target}". Run "emit status" to list workspace articles.`,
+    );
+  }
+
+  const fullPath = path.isAbsolute(resolvedFilePath)
+    ? resolvedFilePath
+    : path.join(workspaceRoot, resolvedFilePath);
+  if (!fs.existsSync(fullPath)) {
+    throw new Error(`Target file not found: ${resolvedFilePath}`);
+  }
+
+  const relPath = path.relative(workspaceRoot, fullPath);
+  const rawContent = fs.readFileSync(fullPath, 'utf8');
+  const parsed = parseMarkdown(rawContent, relPath);
+  return { id: parsed.frontmatter.id, relPath, fullPath, parsed };
+}
+
+/**
+ * Resolves the Admin URL (and optional signed preview URL) for a local article.
+ */
+export async function previewArticle(
+  target: string,
+  options: PreviewArticleOptions,
+): Promise<PreviewArticleResult> {
+  const { id, relPath, parsed } = resolveLifecycleTarget(
+    options.workspaceRoot,
+    options.cache,
+    target,
+  );
+  const collection = parsed.frontmatter.collection || options.collection || 'posts';
+  const adminUrl = articleAdminEndpoint(options.origin, collection, id);
+  let previewUrl: string | undefined;
+
+  if (options.fetchPreviewUrl !== false && options.token) {
+    try {
+      const fetchFn = createAuthedFetch({
+        origin: options.origin,
+        token: options.token,
+        refreshToken: options.refreshToken,
+        fetchFn: options.fetchFn,
+      });
+      const res = await fetchFn(articlePreviewUrlEndpoint(options.origin, collection, id), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${options.token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (res.ok) {
+        const json = (await res.json()) as Record<string, unknown>;
+        const data = (json.data as Record<string, unknown> | undefined) ?? json;
+        const rawUrl =
+          typeof data.url === 'string'
+            ? data.url
+            : typeof data.previewUrl === 'string'
+              ? data.previewUrl
+              : undefined;
+        if (rawUrl) {
+          previewUrl = new URL(rawUrl, options.origin).toString();
+        }
+      }
+    } catch {
+      // Preview endpoint may not exist on older EmDash servers; fall back cleanly to adminUrl
+    }
+  }
+
+  return {
+    id,
+    collection,
+    filePath: relPath,
+    adminUrl,
+    ...(previewUrl ? { previewUrl } : {}),
+    url: previewUrl ?? adminUrl,
+  };
+}
+
+/**
+ * Promotes a staged remote draft (or draft article) to live published status without re-uploading content.
+ * Enforces local unmodified guard, pending-flag guards, and Guard G22 (remote change detection).
+ */
+export async function publishArticle(
+  target: string,
+  options: PublishArticleOptions,
+): Promise<PublishArticleResult> {
+  const { id, relPath, fullPath, parsed } = resolveLifecycleTarget(
+    options.workspaceRoot,
+    options.cache,
+    target,
+  );
+  const collection = parsed.frontmatter.collection || options.collection || 'posts';
+  const syncState = options.cache.getSyncState(id);
+  const baseSnapshot = options.cache.getBaseSnapshot(id);
+  const rawContent = fs.readFileSync(fullPath, 'utf8');
+  const adminUrl = articleAdminEndpoint(options.origin, collection, id);
+
+  // Guard 1: Pending state checks (conflict, G15 deletePending, G16 taxConflict, G17 taxApply)
+  if (syncState?.deletePending === 1) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'DELETE_PENDING_ARTICLE',
+      status: 409,
+      message: `Article ${id} (${relPath}) is marked as delete-pending.`,
+      suggestion: `Run "emit push ${relPath} --revive" or "emit pull" to resolve deletion state first.`,
+    });
+  }
+  if (syncState?.conflictPending === 1 || syncState?.taxonomyConflictPending === 1) {
+    const isTaxOnly =
+      syncState?.taxonomyConflictPending === 1 && (syncState?.bodyConflictPending ?? 0) === 0;
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: isTaxOnly ? 'TAXONOMY_CONFLICT_PENDING' : 'UNPUSHED_CHANGES_PROTECTION',
+      status: 409,
+      message: `Article ${id} (${relPath}) has unresolved sync conflicts.`,
+      suggestion: `Resolve conflicts first or run "emit push ${relPath} --allow-publish".`,
+    });
+  }
+  if (syncState?.taxonomyApplyPending === 1) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'TAXONOMY_APPLY_PENDING',
+      status: 409,
+      message: `Article ${id} (${relPath}) has pending remote taxonomy updates.`,
+      suggestion: 'Run "emit pull" to synchronize local taxonomy definitions before publishing.',
+    });
+  }
+
+  // Guard 2: Local must be unmodified and free of un-uploaded media/drafts/ references
+  const hasLocalDraftMedia =
+    (typeof parsed.frontmatter.featuredImage === 'string' &&
+      parsed.frontmatter.featuredImage.includes('media/drafts/')) ||
+    scanArticleMediaReferences(parsed.body).some((ref) => ref.includes('media/drafts/'));
+
+  const isClean =
+    !hasLocalDraftMedia &&
+    isLocalFileUnmodified({
+      workspaceRoot: options.workspaceRoot,
+      cache: options.cache,
+      id,
+      relPath,
+      localContent: rawContent,
+      syncState,
+    });
+
+  if (!isClean) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}/publish`,
+      code: 'UNPUSHED_CHANGES_PROTECTION',
+      status: 409,
+      message: `Article ${id} (${relPath}) has unpushed local modifications.`,
+      suggestion: `To upload and publish your latest local changes, run: "emit push ${relPath} --allow-publish"`,
+    });
+  }
+
+  const fetchFn = createAuthedFetch(options);
+  const getRes = await fetchFn(articleContentEndpoint(options.origin, collection, id), {
+    headers: { Authorization: `Bearer ${options.token}` },
+  });
+  if (!getRes.ok) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'PUBLISH_FAILED',
+      status: getRes.status,
+      message: `Failed to fetch remote article ${id} before publish (${getRes.status}).`,
+    });
+  }
+
+  const rawItem = unwrapItem<Record<string, unknown>>(await getRes.json());
+  const revForTransport = extractRev(rawItem);
+  const remoteComparisonRev = extractComparisonRev(rawItem, revForTransport);
+
+  // Guard G22: Remote draft diverged since last sync
+  if (syncState?.remoteRev && !isSameRev(syncState.remoteRev, remoteComparisonRev)) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}/publish`,
+      code: 'REMOTE_CHANGED_BEFORE_PUBLISH',
+      status: 409,
+      message: `Remote draft for ${id} (${relPath}) changed since your last sync.`,
+      suggestion: `Run "emit pull ${id}" to inspect the latest remote draft, then run "emit publish ${relPath}".`,
+    });
+  }
+
+  const alreadyLiveNoDraft = rawItem.status === 'published' && !rawItem.draftRevisionId;
+  if (alreadyLiveNoDraft) {
+    return {
+      success: true,
+      alreadyPublished: true,
+      id,
+      filePath: relPath,
+      rev: revForTransport,
+      adminUrl,
+    };
+  }
+
+  await acquireLock(collection, id, {
+    origin: options.origin,
+    token: options.token,
+    fetchFn,
+  });
+
+  let finalRev = revForTransport;
+  let finalRawItem = rawItem;
+  try {
+    const publishEndpoint = articleStatusTransitionEndpoint(
+      options.origin,
+      collection,
+      id,
+      'publish',
+    );
+    const publishBody: Record<string, unknown> = { _rev: revForTransport };
+    if (parsed.frontmatter.publishedAt) {
+      publishBody.publishedAt = parsed.frontmatter.publishedAt;
+    }
+    const publishRes = await fetchFn(publishEndpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(publishBody),
+    });
+    if (!publishRes.ok) {
+      const errText = await publishRes.text();
+      throw new ApiError({
+        endpoint: publishEndpoint,
+        code: 'PUBLISH_FAILED',
+        status: publishRes.status,
+        message: `Failed to publish ${id}: ${errText || publishRes.statusText}`,
+      });
+    }
+    const publishJson = unwrapItem<Record<string, unknown>>(await publishRes.json());
+    finalRev = extractRev(publishJson, revForTransport);
+    finalRawItem = publishJson;
+
+    // Re-fetch via GET so Track 2 comparisonRev (${version}@live:${liveRevisionId}) is always
+    // derived from the full canonical item even if /publish returns a minimal envelope.
+    const postPublishGet = await fetchFn(articleContentEndpoint(options.origin, collection, id), {
+      headers: { Authorization: `Bearer ${options.token}` },
+    });
+    if (postPublishGet.ok) {
+      const refetched = unwrapItem<Record<string, unknown>>(await postPublishGet.json());
+      finalRawItem = refetched;
+      finalRev = extractRev(refetched, finalRev);
+    }
+  } finally {
+    await releaseLock(collection, id, {
+      origin: options.origin,
+      token: options.token,
+      fetchFn,
+    });
+  }
+
+  const comparisonRev = extractComparisonRev(finalRawItem, finalRev);
+  const publishedAt =
+    typeof finalRawItem.publishedAt === 'string'
+      ? finalRawItem.publishedAt
+      : parsed.frontmatter.publishedAt || new Date().toISOString();
+
+  const updatedFrontmatter: Frontmatter = {
+    ...parsed.frontmatter,
+    status: 'published',
+    publishedAt,
+  };
+  const savedFrontmatter: Frontmatter = {
+    ...updatedFrontmatter,
+    ...(baseSnapshot
+      ? {
+          taxonomies:
+            JSON.parse(baseSnapshot.frontmatterYaml || '{}').taxonomies ??
+            updatedFrontmatter.taxonomies,
+        }
+      : {}),
+  };
+
+  const existingPrefix = extractDatePrefixFromPath(relPath);
+  const newRelPath = resolveCanonicalArticlePath(
+    collection,
+    'published',
+    id,
+    updatedFrontmatter.title || updatedFrontmatter.slug || id,
+    {
+      publishedAt,
+      createdAt: typeof finalRawItem.createdAt === 'string' ? finalRawItem.createdAt : null,
+      updatedAt: typeof finalRawItem.updatedAt === 'string' ? finalRawItem.updatedAt : null,
+    },
+    existingPrefix,
+  );
+  const newFullPath = path.join(options.workspaceRoot, newRelPath);
+
+  const candidates = loadLocalTaxonomyCandidates(options.workspaceRoot);
+  const serializedCanonical = serializeMarkdown(savedFrontmatter, parsed.body, candidates, {
+    hasDraftRevision: false,
+  });
+  const serializedContent = options.localMediaRefs
+    ? localizeArticleMediaRefs(serializedCanonical, {
+        workspaceRoot: options.workspaceRoot,
+        articleRelPath: newRelPath,
+        fs,
+        preferLegacyRef: carriesDepthFreeMediaRef(rawContent),
+      })
+    : serializedCanonical;
+
+  commitArticleSnapshot(options.cache, options.workspaceRoot, {
+    id,
+    relPath: newRelPath,
+    diskContent: serializedContent,
+    canonicalContent: serializedCanonical,
+    frontmatter: savedFrontmatter,
+    bodyMarkdown: parsed.body,
+    revForTransport: finalRev,
+    revForComparison: comparisonRev,
+  });
+
+  if (path.resolve(fullPath) !== path.resolve(newFullPath) && fs.existsSync(fullPath)) {
+    fs.unlinkSync(fullPath);
+  }
+  updateConfigSyncedVersion(options.workspaceRoot);
+
+  return {
+    success: true,
+    alreadyPublished: false,
+    id,
+    filePath: newRelPath,
+    ...(relPath !== newRelPath ? { previousFilePath: relPath } : {}),
+    rev: finalRev,
+    adminUrl,
+  };
+}
+
+/**
+ * Discards an unpublished remote draft revision on a published article and re-pulls the live version.
+ * Enforces Guard G21 (draft-only articles forbidden) and local unpushed modification protection.
+ */
+export async function discardDraftArticle(
+  target: string,
+  options: DiscardDraftOptions,
+): Promise<DiscardDraftResult> {
+  const { id, relPath, fullPath, parsed } = resolveLifecycleTarget(
+    options.workspaceRoot,
+    options.cache,
+    target,
+  );
+  const collection = parsed.frontmatter.collection || options.collection || 'posts';
+  const syncState = options.cache.getSyncState(id);
+  const rawContent = fs.readFileSync(fullPath, 'utf8');
+  const adminUrl = articleAdminEndpoint(options.origin, collection, id);
+
+  const isClean = isLocalFileUnmodified({
+    workspaceRoot: options.workspaceRoot,
+    cache: options.cache,
+    id,
+    relPath,
+    localContent: rawContent,
+    syncState,
+  });
+
+  if (!isClean && !options.force) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}/discard-draft`,
+      code: 'UNPUSHED_CHANGES_PROTECTION',
+      status: 409,
+      message: `Article ${id} (${relPath}) has unpushed local modifications.`,
+      suggestion: `Push changes first or pass --force to quarantine local edits and discard the remote draft.`,
+    });
+  }
+
+  const fetchFn = createAuthedFetch(options);
+  const getRes = await fetchFn(articleContentEndpoint(options.origin, collection, id), {
+    headers: { Authorization: `Bearer ${options.token}` },
+  });
+  if (!getRes.ok) {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'DISCARD_DRAFT_FAILED',
+      status: getRes.status,
+      message: `Failed to fetch remote article ${id} before discarding draft (${getRes.status}).`,
+    });
+  }
+
+  const rawItem = unwrapItem<Record<string, unknown>>(await getRes.json());
+  const revForTransport = extractRev(rawItem);
+
+  // Guard G21: Only published articles can discard a staged draft
+  if (rawItem.status !== 'published') {
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}/discard-draft`,
+      code: 'DRAFT_ONLY_DISCARD_FORBIDDEN',
+      status: 400,
+      message: `Article ${id} (${relPath}) has status "${String(rawItem.status)}" with no published live version.`,
+      suggestion: `Use "emit delete ${relPath}" to delete a draft-only article.`,
+    });
+  }
+
+  if (!rawItem.draftRevisionId) {
+    return {
+      success: true,
+      noDraftPending: true,
+      id,
+      filePath: relPath,
+      rev: revForTransport,
+      adminUrl,
+    };
+  }
+
+  let rescueFilePath: string | undefined;
+  if (!isClean && options.force) {
+    rescueFilePath =
+      quarantineLocalCopy(options.workspaceRoot, collection, relPath, rawContent, {
+        isForce: true,
+      }) ?? undefined;
+  }
+
+  await acquireLock(collection, id, {
+    origin: options.origin,
+    token: options.token,
+    fetchFn,
+  });
+
+  try {
+    const discardRes = await fetchFn(articleDiscardDraftEndpoint(options.origin, collection, id), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ _rev: revForTransport }),
+    });
+    if (!discardRes.ok) {
+      const errText = await discardRes.text();
+      throw new ApiError({
+        endpoint: `/_emdash/api/content/${collection}/${id}/discard-draft`,
+        code: 'DISCARD_DRAFT_FAILED',
+        status: discardRes.status,
+        message: `Failed to discard remote draft for ${id}: ${errText || discardRes.statusText}`,
+      });
+    }
+  } finally {
+    await releaseLock(collection, id, {
+      origin: options.origin,
+      token: options.token,
+      fetchFn,
+    });
+  }
+
+  try {
+    const pullRes = await pullArticle(collection, id, {
+      workspaceRoot: options.workspaceRoot,
+      cache: options.cache,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      localMediaRefs: options.localMediaRefs,
+      force: true,
+      fetchFn,
+    });
+    return {
+      success: true,
+      noDraftPending: false,
+      id,
+      filePath: pullRes.filePath,
+      ...(rescueFilePath ? { rescueFilePath } : {}),
+      rev: options.cache.getSyncState(id)?.remoteRev ?? revForTransport,
+      adminUrl,
+    };
+  } catch (pullErr: unknown) {
+    const msg = pullErr instanceof Error ? pullErr.message : String(pullErr);
+    throw new ApiError({
+      endpoint: `/_emdash/api/content/${collection}/${id}`,
+      code: 'DISCARD_DRAFT_FAILED',
+      status: 500,
+      message: `Remote draft for ${id} was discarded, but re-pulling the live version failed: ${msg}`,
+      suggestion: `Remote draft is already discarded. Check network connectivity and run "emit pull ${id}" to sync your local file.`,
+    });
+  }
 }
