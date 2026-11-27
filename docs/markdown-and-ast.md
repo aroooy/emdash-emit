@@ -17,6 +17,8 @@ collection: posts # Target collection (defaults to "posts")
 status: draft # "draft" | "published" (or "published # draft revision" on disk when uncommitted remote draft exists)
 publishedAt: null # ISO 8601 timestamp string (e.g. "2026-11-04T12:00:00.000Z") or null
 locale: ja # Locale code (defaults to "ja")
+translationOf: 01M7S6TX8RPWADQJVVNHAV6F6F # Optional 26-char ULID of source article (create-only; sent on POST and cleared once translationGroup is assigned)
+translationGroup: 01M7GROUP00000000000000001 # Optional 26-char server-assigned translation group ULID (omitted when absent)
 featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # 26-char media record ULID (uppercase-normalized), local draft path ("../../media/drafts/cover.jpg"), or null — NEVER a bare R2 storageKey
 taxonomies: # Nested map of taxonomy key -> array of term slugs (or canonical term ULIDs)
   categories:
@@ -42,6 +44,7 @@ bylines: # Author byline slugs (resolved via cached bylines table)
 3. **`id` and `featuredImage` normalization**: `id` must be an exact 26-character ULID. `featuredImage` values matching a 26-character ULID are normalized to uppercase automatically on read, pull, merge, and push.
 4. **Draft Revision Annotation (`status: published # draft revision`)**: Managed exclusively by `src/utils/disk-spelling.ts` based on `hasUncommittedDraftRevision()` (`sync_state.remote_rev.includes('@draft:')`). Never add, edit, or strip this comment manually.
 5. **No Duplicate `# Title` in Body**: The article title lives in frontmatter `title:`. Do not repeat `# Article Title` as the first line of the Markdown body (Preflight Guard **G7** detects and automatically trims redundant top-level title headings).
+6. **Multi-Language Translation Fields (`translationOf` / `translationGroup`)**: Both fields are optional 26-character ULIDs (`z.string().length(26).optional()`) and are omitted from serialized YAML when absent (preserving byte-for-byte compatibility for single-locale articles). `translationOf` is create-only: `emit push` sends it exclusively on `POST /_emdash/api/content/{collection}` (never on `PUT` updates) and clears `translationOf` once the server returns `translationGroup`.
 
 ---
 
@@ -99,12 +102,12 @@ flowchart TD
     LayerB -->|"emit push (Canonicalize + markdownToPortableText)"| LayerA
 ```
 
-| Aspect | Layer A (Internal Baseline & Remote Payloads) | Layer B (On-Disk Markdown File) |
-| --- | --- | --- |
-| **Storage Location** | `base_snapshots.frontmatter_yaml` (**JSON-encoded** `Frontmatter`) & `base_snapshots.body_markdown` | `posts/draft/*.md`, `posts/published/*.md` |
-| **Taxonomy Slugs** | Canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) | Decoded human-readable Unicode (`未分類`) |
-| **Mirrored Body Media URLs** | Canonical root-relative URLs (`/_emdash/api/media/file/<storageKey>`) | Article-relative paths (`../../media/<storageKey>`) when `localMediaRefs: true` (default) |
-| **Published Draft Status** | `status: "published"` (with `@draft:<ULID>` in `sync_state.remote_rev`) | `status: published # draft revision` |
+| Aspect                       | Layer A (Internal Baseline & Remote Payloads)                                                       | Layer B (On-Disk Markdown File)                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Storage Location**         | `base_snapshots.frontmatter_yaml` (**JSON-encoded** `Frontmatter`) & `base_snapshots.body_markdown` | `posts/draft/*.md`, `posts/published/*.md`                                                |
+| **Taxonomy Slugs**           | Canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`)                                   | Decoded human-readable Unicode (`未分類`)                                                 |
+| **Mirrored Body Media URLs** | Canonical root-relative URLs (`/_emdash/api/media/file/<storageKey>`)                               | Article-relative paths (`../../media/<storageKey>`) when `localMediaRefs: true` (default) |
+| **Published Draft Status**   | `status: "published"` (with `@draft:<ULID>` in `sync_state.remote_rev`)                             | `status: published # draft revision`                                                      |
 
 ### Baseline Reconstruction (`src/sync/baseline-reconstruction.ts`)
 
@@ -122,16 +125,16 @@ EmDash stores article bodies as Portable Text (an array of typed JSON blocks). E
 
 ### 4.1 Supported Markdown Constructs (Tier 1 & Tier 2)
 
-- **Headings**: ATX headings `#` through `######` (`style: 'h1'..'h6'`). *Note: Setext underlined headings (`===` / `---`) are not supported and trigger Preflight Guard **G8**.*
+- **Headings**: ATX headings `#` through `######` (`style: 'h1'..'h6'`). _Note: Setext underlined headings (`===` / `---`) are not supported and trigger Preflight Guard **G8**._
 - **Paragraphs & Inline Marks**: Bold (`**text**`), italic (`*text*`), inline code (`` `code` ``), strikethrough (`~~text~~`), and links (`[label](url)`).
 - **Lists**: Unordered (`-`, `*`) and ordered (`1.`) lists, including nested indentation.
 - **Blockquotes**: Standard `> quote` blocks.
 - **Fenced Code Blocks**: Backtick code fences (` ```lang ... ``` `) of 3 or more backticks.
-  - *Tilde Fence Warning*: Tilde fences (`~~~`) are **not** recognized as code blocks by the Portable Text mapper; they trigger Preflight Guard **G8** and are scanned as normal prose by image guards G5/G11.
-  - *Unterminated Code Fence Warning*: Unclosed backtick fences are flagged by `detectCodeFenceIssues()` (Guard **G8**) during preflight to prevent the remainder of the article from being swallowed into a single code block.
+  - _Tilde Fence Warning_: Tilde fences (`~~~`) are **not** recognized as code blocks by the Portable Text mapper; they trigger Preflight Guard **G8** and are scanned as normal prose by image guards G5/G11.
+  - _Unterminated Code Fence Warning_: Unclosed backtick fences are flagged by `detectCodeFenceIssues()` (Guard **G8**) during preflight to prevent the remainder of the article from being swallowed into a single code block.
 - **GFM Tables**: Standard GitHub Flavored Markdown pipe tables (`| col1 | col2 |` with separator row `| --- | --- |`) round-trip to EmDash Portable Text `table` blocks (`_type: 'table'`, `rows: [{ _type: 'tableRow', cells: [...] }]`).
 - **Thematic Breaks (Horizontal Rules)**: Standalone `---`, `***`, or `___` lines round-trip to Portable Text thematic break blocks (`_type: 'thematicBreak'` / `hr`).
-  - *Accepted Setext Heuristic Limitation*: In `detectUnsupportedMarkdownSyntax()`, a line beginning with `*`, `+`, or a digit immediately followed by `---` on the next line still emits a Setext heading warning so legitimate Setext headings like `*emphasized*\n---` or `2026 was great\n---` are not silently missed. Always place a blank line before a horizontal rule `---`.
+  - _Accepted Setext Heuristic Limitation_: In `detectUnsupportedMarkdownSyntax()`, a line beginning with `*`, `+`, or a digit immediately followed by `---` on the next line still emits a Setext heading warning so legitimate Setext headings like `*emphasized*\n---` or `2026 was great\n---` are not silently missed. Always place a blank line before a horizontal rule `---`.
 
 ---
 
@@ -141,9 +144,9 @@ EmDash supports both standard images and layout-styled images (`alignment: 'left
 
 To balance **Local-First offline editing** with **100% CMS round-trip fidelity**, Emit separates images and blocks into two tracks:
 
-| Track | Target Block | Markdown Representation | Local Editor Preview | Core Purpose & Behavior |
-| --- | --- | --- | :---: | --- |
-| **Track A: Plain Image (Tier 1)** | Image blocks with only standard `_type: 'image'`, `_key`, `alt`, and `asset: { url }` | `![alt](../../media/<storageKey>.<ext>)` | 🖼️ **Visible** | Mirrored into `media/` and rewritten to article-relative paths (`localMediaRefs: true`) for offline preview in VS Code / Obsidian. |
+| Track                                 | Target Block                                                                              | Markdown Representation                                                                   |     Local Editor Preview     | Core Purpose & Behavior                                                                                                                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | :--------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Track A: Plain Image (Tier 1)**     | Image blocks with only standard `_type: 'image'`, `_key`, `alt`, and `asset: { url }`     | `![alt](../../media/<storageKey>.<ext>)`                                                  |        🖼️ **Visible**        | Mirrored into `media/` and rewritten to article-relative paths (`localMediaRefs: true`) for offline preview in VS Code / Obsidian.                                          |
 | **Track B: Preserved Block (Tier 3)** | Styled images (`alignment`, `displayWidth`, `caption`, etc.) & custom non-standard blocks | `<!--ec:block {"_type":"image",...,"url":"/_emdash/api/media/file/<storageKey>",...} -->` | ❌ **Hidden** (HTML comment) | Standard Markdown lacks layout/width syntax. Wrapping the raw Portable Text JSON in a single-line opaque comment fence prevents destructive reset of CMS styling on `push`. |
 
 ### Guard G9 (`MODIFIED_OPAQUE_BLOCK`) & Authoring Rules

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `apiResponseToLocal()` and `localToApiPayload()` (`src/client/mapper.ts`) so `POST /_emdash/api/content/{collection}` sends `translationOf` on create (never on `PUT` updates) and records the server's `translationGroup` back to disk and `base_snapshots` while clearing `translationOf`.
   - Scoped Guard **G18 (`DUPLICATE_SLUG_CONFLICT`)** to `(collection, locale, slug)` (case-insensitive `locale` comparison, matching EmDash `UNIQUE(slug, locale)`), backed by multi-row `getSyncStatesBySlug()` / `getEntriesBySlug()` lookups in `src/db/cache.ts` (zero schema migrations).
   - Added `--translation-of <fileOrId>` to `emit new [slug]` and `translationOf` to MCP `sync_new`, inheriting `slug` (when omitted), `featuredImage`, and `bylines` while keeping `categories`/`tags` empty by default (with warning) to respect EmDash's per-locale taxonomy resolution.
+  - _Note_: The first `emit pull` on existing translated articles will perform a one-time frontmatter normalization adding `translationGroup` (updating `local_hash` once).
 
 ## [0.1.65] - 2026-11-26
 
