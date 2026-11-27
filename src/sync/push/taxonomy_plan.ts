@@ -26,15 +26,14 @@ import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { BaseSnapshot } from '../../db/cache.js';
 import type { ParsedMarkdown } from '../../utils/frontmatter.js';
 import {
-  createRemoteTaxonomyTerm,
   loadLocalTaxonomyTerms,
-  promoteLocalDraftTerm,
+  promoteDraftTermsWithAncestors,
   resolveCanonicalSlugForLocale,
   resolveTermIdForLocale,
   type loadLocalTaxonomyMaps,
   type LocalTaxonomyTermEntry,
 } from '../taxonomies.js';
-import { aliasesOf, canonicalSlugOf } from '../../utils/taxonomy-key.js';
+import { aliasesOf } from '../../utils/taxonomy-key.js';
 import type { PushOptions, ResolvedTaxonomyItem } from './types.js';
 
 export interface TaxonomyPlanResult {
@@ -126,119 +125,20 @@ export async function promoteDraftTaxonomiesForArticle(params: {
   }
   if (draftById.size === 0) return [];
 
-  const promoted: Array<{
-    taxonomy: 'category' | 'tag';
-    provisionalId: string;
-    id: string;
-    slug: string;
-  }> = [];
-  const provisionalToServerId = new Map<string, string>();
-  const visiting = new Set<string>();
-
-  const promoteTermWithAncestors = async (draft: LocalTaxonomyTermEntry): Promise<string> => {
-    const already = provisionalToServerId.get(draft.id);
-    if (already) return already;
-    if (visiting.has(draft.id)) {
-      throw new Error(`Circular parentId reference detected in draft taxonomy term "${draft.id}".`);
-    }
-    visiting.add(draft.id);
-
-    let resolvedParentId = draft.parentId ?? null;
-    if (resolvedParentId && draftById.has(resolvedParentId)) {
-      resolvedParentId = await promoteTermWithAncestors(draftById.get(resolvedParentId)!);
-    }
-
-    const reqSlug = canonicalSlugOf(draft);
-    const serverTerm = await createRemoteTaxonomyTerm({
-      origin: options.origin,
-      token: options.token,
-      refreshToken: options.refreshToken,
-      fetchFn,
-      taxonomy: draft.taxonomy,
-      label: draft.name,
-      slug: reqSlug,
-      locale: draft.locale || parsed.frontmatter.locale || 'ja',
-      parentId: resolvedParentId,
-      translationOf: draft.translationOf,
-      ...(typeof draft.description === 'string' && draft.description
-        ? { description: draft.description }
-        : {}),
-    });
-
-    promoteLocalDraftTerm({
-      workspaceRoot: options.workspaceRoot,
-      taxonomy: draft.taxonomy,
-      draftFilePath: draft.filePath || '',
-      serverTerm,
-      fallbackLocale: draft.locale || parsed.frontmatter.locale || 'ja',
-    });
-
-    // Update shared taxonomyMaps in-place (both locale-scoped byLocale and top-level with === oldId guard)
-    const taxKind = draft.taxonomy;
-    const oldId = draft.id;
-    const canonical = serverTerm.slug;
-    const promotedLocale = (serverTerm.locale || draft.locale || parsed.frontmatter.locale || 'ja')
-      .trim()
-      .toLowerCase();
-
-    if (taxonomyMaps.byLocale) {
-      if (!taxonomyMaps.byLocale[promotedLocale]) {
-        taxonomyMaps.byLocale[promotedLocale] = {
-          slugToId: { category: {}, tag: {} },
-          idToSlug: { category: {}, tag: {} },
-        };
-      }
-      const localePair = taxonomyMaps.byLocale[promotedLocale]!;
-      delete localePair.idToSlug[taxKind][oldId];
-      localePair.idToSlug[taxKind][serverTerm.id] = canonical;
-      localePair.slugToId[taxKind][canonical] = serverTerm.id;
-      for (const alias of aliasesOf(draft)) {
-        if (localePair.slugToId[taxKind][alias] === oldId || !localePair.slugToId[taxKind][alias]) {
-          localePair.slugToId[taxKind][alias] = serverTerm.id;
-        }
-      }
-      if (
-        localePair.slugToId[taxKind][draft.name] === oldId ||
-        !localePair.slugToId[taxKind][draft.name]
-      ) {
-        localePair.slugToId[taxKind][draft.name] = serverTerm.id;
-      }
-    }
-
-    delete taxonomyMaps.idToSlug[taxKind][oldId];
-    taxonomyMaps.idToSlug[taxKind][serverTerm.id] = canonical;
-    if (
-      !taxonomyMaps.slugToId[taxKind][canonical] ||
-      taxonomyMaps.slugToId[taxKind][canonical] === oldId
-    ) {
-      taxonomyMaps.slugToId[taxKind][canonical] = serverTerm.id;
-    }
-    for (const alias of aliasesOf(draft)) {
-      if (taxonomyMaps.slugToId[taxKind][alias] === oldId) {
-        taxonomyMaps.slugToId[taxKind][alias] = serverTerm.id;
-      }
-    }
-    if (taxonomyMaps.slugToId[taxKind][draft.name] === oldId) {
-      taxonomyMaps.slugToId[taxKind][draft.name] = serverTerm.id;
-    }
-
-    provisionalToServerId.set(oldId, serverTerm.id);
-    draftById.delete(oldId);
-    visiting.delete(oldId);
-    promoted.push({
-      taxonomy: taxKind,
-      provisionalId: oldId,
-      id: serverTerm.id,
-      slug: canonical,
-    });
-    return serverTerm.id;
-  };
-
   const articleLocale = parsed.frontmatter.locale?.trim().toLowerCase();
   const axes: Array<{ key: 'categories' | 'tags'; kind: 'category' | 'tag' }> = [
     { key: 'categories', kind: 'category' },
     { key: 'tags', kind: 'tag' },
   ];
+
+  const targetsToPromote: LocalTaxonomyTermEntry[] = [];
+  const targetSeen = new Set<string>();
+  const ulidFrontmatterRefs: Array<{
+    terms: string[];
+    index: number;
+    kind: 'category' | 'tag';
+    provisionalId: string;
+  }> = [];
 
   for (const { key, kind } of axes) {
     const terms = parsed.frontmatter.taxonomies[key];
@@ -262,17 +162,106 @@ export async function promoteDraftTaxonomiesForArticle(params: {
       }
       if (resolvedId && draftById.has(resolvedId)) {
         const draft = draftById.get(resolvedId)!;
-        const serverId = await promoteTermWithAncestors(draft);
-        // If frontmatter held the provisional ULID directly, replace with canonical slug
+        if (!targetSeen.has(draft.id)) {
+          targetSeen.add(draft.id);
+          targetsToPromote.push(draft);
+        }
         if (term === draft.id) {
-          terms[i] =
-            resolveCanonicalSlugForLocale(taxonomyMaps, kind, serverId, articleLocale) || term;
+          ulidFrontmatterRefs.push({ terms, index: i, kind, provisionalId: draft.id });
         }
       }
     }
   }
 
-  return promoted;
+  if (targetsToPromote.length === 0) return [];
+
+  const provisionalToServerId = new Map<string, string>();
+  const promotedRecords = await promoteDraftTermsWithAncestors({
+    workspaceRoot: options.workspaceRoot,
+    origin: options.origin,
+    token: options.token,
+    refreshToken: options.refreshToken,
+    fetchFn,
+    fallbackLocale: parsed.frontmatter.locale || 'ja',
+    draftById,
+    targets: targetsToPromote,
+    onPromoted: (draft, serverTerm) => {
+      // Update shared taxonomyMaps in-place (both locale-scoped byLocale and top-level with === oldId guard)
+      const taxKind = draft.taxonomy;
+      const oldId = draft.id;
+      const canonical = serverTerm.slug;
+      const promotedLocale = (
+        serverTerm.locale ||
+        draft.locale ||
+        parsed.frontmatter.locale ||
+        'ja'
+      )
+        .trim()
+        .toLowerCase();
+
+      if (taxonomyMaps.byLocale) {
+        if (!taxonomyMaps.byLocale[promotedLocale]) {
+          taxonomyMaps.byLocale[promotedLocale] = {
+            slugToId: { category: {}, tag: {} },
+            idToSlug: { category: {}, tag: {} },
+          };
+        }
+        const localePair = taxonomyMaps.byLocale[promotedLocale]!;
+        delete localePair.idToSlug[taxKind][oldId];
+        localePair.idToSlug[taxKind][serverTerm.id] = canonical;
+        localePair.slugToId[taxKind][canonical] = serverTerm.id;
+        for (const alias of aliasesOf(draft)) {
+          if (
+            localePair.slugToId[taxKind][alias] === oldId ||
+            !localePair.slugToId[taxKind][alias]
+          ) {
+            localePair.slugToId[taxKind][alias] = serverTerm.id;
+          }
+        }
+        if (
+          localePair.slugToId[taxKind][draft.name] === oldId ||
+          !localePair.slugToId[taxKind][draft.name]
+        ) {
+          localePair.slugToId[taxKind][draft.name] = serverTerm.id;
+        }
+      }
+
+      delete taxonomyMaps.idToSlug[taxKind][oldId];
+      taxonomyMaps.idToSlug[taxKind][serverTerm.id] = canonical;
+      if (
+        !taxonomyMaps.slugToId[taxKind][canonical] ||
+        taxonomyMaps.slugToId[taxKind][canonical] === oldId
+      ) {
+        taxonomyMaps.slugToId[taxKind][canonical] = serverTerm.id;
+      }
+      for (const alias of aliasesOf(draft)) {
+        if (taxonomyMaps.slugToId[taxKind][alias] === oldId) {
+          taxonomyMaps.slugToId[taxKind][alias] = serverTerm.id;
+        }
+      }
+      if (taxonomyMaps.slugToId[taxKind][draft.name] === oldId) {
+        taxonomyMaps.slugToId[taxKind][draft.name] = serverTerm.id;
+      }
+      provisionalToServerId.set(oldId, serverTerm.id);
+    },
+  });
+
+  // If frontmatter held the provisional ULID directly, replace with canonical slug
+  for (const ref of ulidFrontmatterRefs) {
+    const serverId = provisionalToServerId.get(ref.provisionalId);
+    if (serverId) {
+      ref.terms[ref.index] =
+        resolveCanonicalSlugForLocale(taxonomyMaps, ref.kind, serverId, articleLocale) ||
+        ref.terms[ref.index]!;
+    }
+  }
+
+  return promotedRecords.map((r) => ({
+    taxonomy: r.taxonomy,
+    provisionalId: r.provisionalId,
+    id: r.id,
+    slug: r.slug,
+  }));
 }
 
 export interface TaxonomySyncFailure {

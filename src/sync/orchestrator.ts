@@ -575,6 +575,7 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
       refreshToken: options.refreshToken,
       allowPublish: options.allowPublish,
       allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
+      noTaxonomyAudit: options.noTaxonomyAudit,
       fetchFn: options.fetchFn,
       taxonomyMaps: sharedTaxonomyMaps,
       candidates: sharedCandidates,

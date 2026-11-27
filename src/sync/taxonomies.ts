@@ -720,6 +720,26 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
         }
       }
     }
+    const byLocale: Record<
+      string,
+      { slugToName: { category: Record<string, string>; tag: Record<string, string> } }
+    > = {};
+    for (const item of loadLocalTaxonomyTerms(workspaceRoot)) {
+      const loc = (item.locale || '').trim().toLowerCase();
+      if (!loc || !item.name || !item.slug) continue;
+      if (!byLocale[loc]) {
+        byLocale[loc] = { slugToName: { category: {}, tag: {} } };
+      }
+      const targetMap = byLocale[loc]!.slugToName[item.taxonomy];
+      targetMap[item.slug] = item.name;
+      const decoded = tryDecodeTaxonomyTerm(item.slug);
+      if (decoded !== item.slug) {
+        targetMap[decoded] = item.name;
+      }
+      if (item.canonicalSlug && item.canonicalSlug !== item.slug) {
+        targetMap[item.canonicalSlug] = item.name;
+      }
+    }
     return {
       categories: Array.from(new Set(summary.categories.flatMap((c) => aliasesOf(c)))),
       tags: Array.from(new Set(summary.tags.flatMap((t) => aliasesOf(t)))),
@@ -727,6 +747,7 @@ export function loadLocalTaxonomyCandidates(workspaceRoot: string): TaxonomyCand
         category: catMap,
         tag: tagMap,
       },
+      byLocale,
     };
   } catch {
     return {
@@ -1767,4 +1788,144 @@ export async function updateTaxonomyTerm(
       : {}),
     warnings,
   };
+}
+
+export interface PromotedDraftTermRecord {
+  taxonomy: 'category' | 'tag';
+  provisionalId: string;
+  id: string;
+  slug: string;
+  locale: string;
+  name: string;
+  canonicalFilePath: string;
+}
+
+/**
+ * Shared Layer 1 topological + cycle-guarded promotion engine for offline draft terms.
+ * Promotes parent drafts before child drafts, calls `onPromoted` for each promoted term
+ * (allowing callers such as Layer 2 `promoteDraftTaxonomiesForArticle` to update shared
+ * `taxonomyMaps` in-place), and returns all promoted records.
+ */
+export async function promoteDraftTermsWithAncestors(params: {
+  workspaceRoot: string;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  fetchFn?: typeof fetch;
+  fallbackLocale?: string;
+  draftById: Map<string, LocalTaxonomyTermEntry>;
+  targets: LocalTaxonomyTermEntry[];
+  onPromoted?: (draft: LocalTaxonomyTermEntry, serverTerm: TaxonomyTerm) => void;
+}): Promise<PromotedDraftTermRecord[]> {
+  const {
+    workspaceRoot,
+    origin,
+    token,
+    refreshToken,
+    fetchFn,
+    fallbackLocale,
+    draftById,
+    targets,
+    onPromoted,
+  } = params;
+  const promoted: PromotedDraftTermRecord[] = [];
+  const provisionalToServerId = new Map<string, string>();
+  const visiting = new Set<string>();
+
+  const promoteOne = async (draft: LocalTaxonomyTermEntry): Promise<string> => {
+    const already = provisionalToServerId.get(draft.id);
+    if (already) return already;
+    if (visiting.has(draft.id)) {
+      throw new Error(`Circular parentId reference detected in draft taxonomy term "${draft.id}".`);
+    }
+    visiting.add(draft.id);
+
+    let resolvedParentId = draft.parentId ?? null;
+    if (resolvedParentId && provisionalToServerId.has(resolvedParentId)) {
+      resolvedParentId = provisionalToServerId.get(resolvedParentId)!;
+    } else if (resolvedParentId && draftById.has(resolvedParentId)) {
+      resolvedParentId = await promoteOne(draftById.get(resolvedParentId)!);
+    }
+
+    const reqSlug = canonicalSlugOf(draft);
+    const termLocale = (draft.locale || fallbackLocale || 'ja').trim().toLowerCase();
+    const serverTerm = await createRemoteTaxonomyTerm({
+      origin,
+      token,
+      refreshToken,
+      fetchFn,
+      taxonomy: draft.taxonomy,
+      label: draft.name,
+      slug: reqSlug,
+      locale: termLocale,
+      parentId: resolvedParentId,
+      translationOf: draft.translationOf,
+      ...(typeof draft.description === 'string' && draft.description
+        ? { description: draft.description }
+        : {}),
+    });
+
+    const { canonicalFilePath } = promoteLocalDraftTerm({
+      workspaceRoot,
+      taxonomy: draft.taxonomy,
+      draftFilePath: draft.filePath || '',
+      serverTerm,
+      fallbackLocale: termLocale,
+    });
+
+    onPromoted?.(draft, serverTerm);
+    provisionalToServerId.set(draft.id, serverTerm.id);
+    draftById.delete(draft.id);
+    visiting.delete(draft.id);
+    promoted.push({
+      taxonomy: draft.taxonomy,
+      provisionalId: draft.id,
+      id: serverTerm.id,
+      slug: serverTerm.slug,
+      locale: serverTerm.locale || termLocale,
+      name: serverTerm.label || draft.name,
+      canonicalFilePath,
+    });
+    return serverTerm.id;
+  };
+
+  for (const target of targets) {
+    if (draftById.has(target.id)) {
+      await promoteOne(target);
+    }
+  }
+
+  return promoted;
+}
+
+/**
+ * Standalone promotion of ALL staged offline draft terms (`categories/drafts/` and `tags/drafts/`)
+ * in parent-before-child topological order. Performs 0 HTTP calls when no draft terms exist.
+ */
+export async function promoteAllDraftTerms(options: {
+  workspaceRoot: string;
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  fetchFn?: typeof fetch;
+  defaultLocale?: string;
+}): Promise<PromotedDraftTermRecord[]> {
+  const drafts = loadLocalTaxonomyTerms(options.workspaceRoot).filter((t) => t.isDraft);
+  if (drafts.length === 0) return [];
+
+  const draftById = new Map<string, LocalTaxonomyTermEntry>();
+  for (const d of drafts) {
+    draftById.set(d.id, d);
+  }
+
+  return promoteDraftTermsWithAncestors({
+    workspaceRoot: options.workspaceRoot,
+    origin: options.origin,
+    token: options.token,
+    refreshToken: options.refreshToken,
+    fetchFn: options.fetchFn,
+    fallbackLocale: options.defaultLocale,
+    draftById,
+    targets: drafts,
+  });
 }

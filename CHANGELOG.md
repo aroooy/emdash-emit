@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.4] - 2026-11-27
+
+### Added
+
+- **Pending Draft Terms in `emit status` / `sync_status`**:
+  - Added `summary.draftTerms` (`categories`, `tags`, `total`, `items`) to `getWorkspaceStatus()` (`src/sync/status.ts`) and displayed pending draft counts in `emit status` and `emit status --i18n` with 0 HTTP calls.
+- **Standalone Draft Term Promotion (`emit push --terms` / MCP `sync_push({ termsOnly: true })`)**:
+  - Extracted shared topological + cycle-guarded promotion engine `promoteDraftTermsWithAncestors()` and added `promoteAllDraftTerms()` in Layer 1 (`src/sync/taxonomies.ts`).
+  - Added CLI `emit push --terms` and MCP `sync_push({ termsOnly: true })`, plus a hint in `emit push --all` when 0 articles are modified but staged `drafts/` terms remain.
+- **Locale-Scoped `# <Name>` Inline Comments (`byLocale`)**:
+  - Extended `TaxonomyCandidates` (`src/utils/frontmatter.ts`) and `loadLocalTaxonomyCandidates()` (`src/sync/taxonomies.ts`) with `byLocale` so frontmatter `# <Name>` inline comments resolve to the article's own locale label.
+  - **Upgrade note**: Pre-existing disk files whose `# <Name>` comments were written with another locale's label may temporarily appear as `[modified]` in `emit status` until normalized by the next `emit push` or `emit pull`.
+- **Taxonomy Sync HTTP Optimization & `.emit/config.json` `noTaxonomyAudit` Option**:
+  - Skips redundant `POST .../terms/{taxonomy}` calls (`syncArticleTaxonomies`) on article updates when local `taxonomies:` are unchanged from baseline (while keeping G16 pre-PUT audit active by default and preserving `sync_state.remoteTaxonomyHash`).
+  - Added optional `noTaxonomyAudit?: boolean` (default `false`) to `.emit/config.json` (`src/utils/config.ts`) with pure Layer 0 resolver `resolveNoTaxonomyAuditOption()` (`--taxonomy-audit` / `--no-taxonomy-audit` > `.emit/config.json` > `false`).
+
+---
+
 ## [0.2.3] - 2026-11-27
 
 ### Fixed
@@ -92,7 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `apiResponseToLocal()` and `localToApiPayload()` (`src/client/mapper.ts`) so `POST /_emdash/api/content/{collection}` sends `translationOf` on create (never on `PUT` updates) and records the server's `translationGroup` back to disk and `base_snapshots` while clearing `translationOf`.
   - Scoped Guard **G18 (`DUPLICATE_SLUG_CONFLICT`)** to `(collection, locale, slug)` (case-insensitive `locale` comparison, matching EmDash `UNIQUE(slug, locale)`), backed by multi-row `getSyncStatesBySlug()` / `getEntriesBySlug()` lookups in `src/db/cache.ts` (zero schema migrations).
   - Added `--translation-of <fileOrId>` to `emit new [slug]` and `translationOf` to MCP `sync_new`, inheriting `slug` (when omitted), `featuredImage`, and `bylines` while keeping `categories`/`tags` empty by default (with warning) to respect EmDash's per-locale taxonomy resolution.
-  - _Note_: The first `emit pull` on existing translated articles will perform a one-time frontmatter normalization adding `translationGroup` (updating `local_hash` once).
   - _Note_: The first `emit pull` on existing translated articles will perform a one-time frontmatter normalization adding `translationGroup` (updating `local_hash` once).
 
 ## [0.1.65] - 2026-11-26

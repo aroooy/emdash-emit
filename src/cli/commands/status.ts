@@ -175,6 +175,12 @@ export function registerStatusInitCommands(
         console.log(
           `\nSummary: ${status.summary.total} total (${status.summary.synced} synced, ${status.summary.modified} modified, ${status.summary.untracked} untracked${invalidSuffix}${healableSuffix})\n`,
         );
+        if (status.summary.draftTerms && status.summary.draftTerms.total > 0) {
+          const dt = status.summary.draftTerms;
+          console.log(
+            `Draft terms pending push: ${dt.categories} categories, ${dt.tags} tags (under drafts/) — run "emit push --terms" or "emit push <article>"\n`,
+          );
+        }
         if (
           status.summary.flags &&
           (status.summary.flags.conflictPending > 0 ||

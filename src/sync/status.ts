@@ -31,6 +31,7 @@ import {
 import { calculateHash, CONFLICTS_SUBDIR, iterWorkspaceArticles } from './workspace/index.js';
 import { hasUncommittedDraftRevision } from '../utils/draft-revision.js';
 import { isLocalFileUnmodified } from './baseline-reconstruction.js';
+import { loadLocalTaxonomyTerms } from './taxonomies.js';
 import { formatRevForDisplay } from '../client/api.js';
 import {
   compareArticleFilenameDesc,
@@ -79,6 +80,19 @@ export interface WorkspaceStatusResult {
       deletePending: number;
       taxonomyApplyPending: number;
       hasUnpublishedDraft?: number;
+    };
+    /** Unpromoted offline draft taxonomy terms staged under `categories/drafts/` or `tags/drafts/`. */
+    draftTerms?: {
+      categories: number;
+      tags: number;
+      total: number;
+      items: Array<{
+        taxonomy: 'category' | 'tag';
+        locale: string;
+        slug: string;
+        name: string;
+        filePath: string;
+      }>;
     };
   };
 }
@@ -249,6 +263,19 @@ export function getWorkspaceStatus(
   // Sort items descending by filename (YYYYMMDD_ prefix / ULID) so newest articles appear first
   items.sort((a, b) => compareArticleFilenameDesc(a.filePath, b.filePath));
 
+  const draftTermEntries = loadLocalTaxonomyTerms(workspaceRoot)
+    .filter((t) => t.isDraft)
+    .map((t) => ({
+      taxonomy: t.taxonomy,
+      locale: t.locale || 'ja',
+      slug: t.slug,
+      name: t.name,
+      filePath: t.filePath ? path.relative(workspaceRoot, t.filePath).replace(/\\/g, '/') : '',
+    }))
+    .sort((a, b) => a.filePath.localeCompare(b.filePath));
+  const draftCatCount = draftTermEntries.filter((t) => t.taxonomy === 'category').length;
+  const draftTagCount = draftTermEntries.filter((t) => t.taxonomy === 'tag').length;
+
   const summary = {
     total: items.length,
     synced: items.filter((i) => i.syncStatus === 'synced').length,
@@ -264,6 +291,16 @@ export function getWorkspaceStatus(
       taxonomyApplyPending: items.filter((i) => i.taxonomyApplyPending).length,
       hasUnpublishedDraft: items.filter((i) => i.hasUnpublishedDraft).length,
     },
+    ...(draftTermEntries.length > 0
+      ? {
+          draftTerms: {
+            categories: draftCatCount,
+            tags: draftTagCount,
+            total: draftTermEntries.length,
+            items: draftTermEntries,
+          },
+        }
+      : {}),
   };
 
   return { items, summary };

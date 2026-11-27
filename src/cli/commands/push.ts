@@ -25,6 +25,8 @@ import type { Command } from 'commander';
 import { pushArticle, type PushResult } from '../../sync/push/index.js';
 import { pushAll } from '../../sync/orchestrator.js';
 import { getWorkspaceStatus, selectPushCandidates } from '../../sync/status.js';
+import { loadLocalTaxonomyTerms, promoteAllDraftTerms } from '../../sync/taxonomies.js';
+import { resolveNoTaxonomyAuditOption } from '../../utils/config.js';
 import { resolveAndPersistLocalMediaRefs, type CliContextResolver } from '../context.js';
 import { reportActionFailure } from '../report-failure.js';
 
@@ -102,6 +104,14 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
       '--allow-unapplied-taxonomies',
       'Allow push even if previous taxonomy sync failed (bypasses Guard G17)',
     )
+    .option(
+      '--terms',
+      'Promote all staged offline draft taxonomy terms under drafts/ without pushing articles',
+    )
+    .option(
+      '--taxonomy-audit',
+      'Force remote taxonomy pre-audit even if noTaxonomyAudit is enabled in .emit/config.json',
+    )
     .option('--no-taxonomy-audit', 'Skip remote taxonomy pre-audit check before pushing')
     .option('--revive', 'Intentionally revive and push a delete-pending article')
     .option('-f, --force', 'Force push and overwrite conflicting taxonomy states')
@@ -117,8 +127,36 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
     .action(async (file, options) => {
       const ctx = resolveContext(options.profile);
       const localMediaRefs = resolveAndPersistLocalMediaRefs(ctx, options.localMediaRefs);
+      const noTaxonomyAudit = resolveNoTaxonomyAuditOption({
+        cliFlag: options.taxonomyAudit === undefined ? undefined : !options.taxonomyAudit,
+        configValue: ctx.config.noTaxonomyAudit,
+      });
 
       try {
+        if (options.terms) {
+          if (file || options.all) {
+            throw new Error('--terms cannot be combined with a file path or --all.');
+          }
+          const promoted = await promoteAllDraftTerms({
+            workspaceRoot: ctx.root,
+            origin: ctx.origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            defaultLocale: ctx.config.defaultLocale,
+          });
+          if (promoted.length === 0) {
+            console.log('✨ No staged draft taxonomy terms pending under drafts/.');
+            return;
+          }
+          console.log(`✅ Promoted ${promoted.length} draft taxonomy term(s):`);
+          for (const item of promoted) {
+            console.log(
+              `   - [${item.taxonomy}/${item.locale}] ${item.slug} (${item.provisionalId} -> ${item.id}) -> ${item.canonicalFilePath}`,
+            );
+          }
+          return;
+        }
+
         if (options.all) {
           const pushResult = await pushAll({
             workspaceRoot: ctx.root,
@@ -128,6 +166,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
             refreshToken: ctx.auth.refreshToken,
             allowPublish: options.allowPublish,
             allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
+            noTaxonomyAudit,
             localMediaRefs,
           });
 
@@ -147,7 +186,14 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           }
 
           if (pushResult.total === 0) {
-            console.log('✨ All valid articles are already in sync. Nothing to push.');
+            const pendingDrafts = loadLocalTaxonomyTerms(ctx.root).filter((t) => t.isDraft);
+            if (pendingDrafts.length > 0) {
+              console.log(
+                `✨ All valid articles are already in sync, but ${pendingDrafts.length} draft term(s) are pending under drafts/. Run "emit push --terms" to promote them.`,
+              );
+            } else {
+              console.log('✨ All valid articles are already in sync. Nothing to push.');
+            }
             return;
           }
 
@@ -244,7 +290,7 @@ export function registerPushCommand(program: Command, resolveContext: CliContext
           resolveTaxonomy: options.resolveTaxonomy,
           allowWipeTaxonomies: options.allowWipeTaxonomies,
           allowUnappliedTaxonomies: options.allowUnappliedTaxonomies,
-          noTaxonomyAudit: options.taxonomyAudit === false || Boolean(options.noTaxonomyAudit),
+          noTaxonomyAudit,
           revive: options.revive,
           force: options.force,
           localMediaRefs,

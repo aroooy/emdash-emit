@@ -24,7 +24,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContextResolver } from '../context.js';
 import { pushArticle } from '../../sync/push/index.js';
-import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
+import { promoteAllDraftTerms } from '../../sync/taxonomies.js';
+import { resolveNoTaxonomyAuditOption } from '../../utils/config.js';
+import { formatToolSuccess, formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 
 export function registerSyncPushTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
@@ -33,8 +35,15 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
     {
       filePath: z
         .string()
+        .optional()
         .describe(
-          'Target markdown file path relative to workspace root (e.g. "posts/ja/draft/20261103_01...-my-article.md")',
+          'Target markdown file path relative to workspace root (e.g. "posts/ja/draft/20261103_01...-my-article.md"). Required unless termsOnly=true.',
+        ),
+      termsOnly: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, promotes all staged offline draft taxonomy terms under drafts/ without pushing any articles.',
         ),
       allowPublish: z
         .boolean()
@@ -86,6 +95,39 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
       withResolvedContext(resolveContext, args, async (ctx) => {
         const origin = ctx.origin;
 
+        if (args.termsOnly) {
+          if (args.filePath) {
+            throw new Error('Cannot specify both filePath and termsOnly=true.');
+          }
+          const promoted = await promoteAllDraftTerms({
+            workspaceRoot: ctx.root,
+            origin,
+            token: ctx.auth.token,
+            refreshToken: ctx.auth.refreshToken,
+            defaultLocale: ctx.config.defaultLocale,
+          });
+          return formatToolSuccess(
+            {
+              promotedCount: promoted.length,
+              promoted,
+              message:
+                promoted.length === 0
+                  ? 'No staged draft taxonomy terms pending under drafts/.'
+                  : `Promoted ${promoted.length} draft taxonomy term(s) from drafts/.`,
+            },
+            ctx.meta,
+          );
+        }
+
+        if (!args.filePath) {
+          throw new Error('filePath is required unless termsOnly=true.');
+        }
+
+        const noTaxonomyAudit = resolveNoTaxonomyAuditOption({
+          cliFlag: args.noTaxonomyAudit,
+          configValue: ctx.config.noTaxonomyAudit,
+        });
+
         const res = await pushArticle(args.filePath, {
           workspaceRoot: ctx.root,
           cache: ctx.cache,
@@ -97,7 +139,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
           resolveTaxonomy: args.resolveTaxonomy,
           allowWipeTaxonomies: args.allowWipeTaxonomies,
           allowUnappliedTaxonomies: args.allowUnappliedTaxonomies,
-          noTaxonomyAudit: args.noTaxonomyAudit,
+          noTaxonomyAudit,
           revive: args.revive,
           force: args.force,
           localMediaRefs:

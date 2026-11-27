@@ -51,6 +51,11 @@ export interface EmitConfig {
   snapshotMediaLimit?: number;
   snapshotMediaMaxBytes?: number;
   /**
+   * When true, skips pre-PUT remote taxonomy auditing (`GET /terms/*`) by default for
+   * local-only single-writer workspaces. Explicit CLI/MCP flags take precedence over this setting.
+   */
+  noTaxonomyAudit?: boolean;
+  /**
    * Package version that initialized this workspace.
    */
   createdWithVersion?: string;
@@ -279,6 +284,9 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
       snapshotMedia: parsed.snapshotMedia ?? DEFAULT_CONFIG.snapshotMedia,
       snapshotMediaLimit: parsed.snapshotMediaLimit ?? DEFAULT_CONFIG.snapshotMediaLimit,
       snapshotMediaMaxBytes: parsed.snapshotMediaMaxBytes ?? DEFAULT_CONFIG.snapshotMediaMaxBytes,
+      ...(typeof parsed.noTaxonomyAudit === 'boolean'
+        ? { noTaxonomyAudit: parsed.noTaxonomyAudit }
+        : {}),
       createdWithVersion: parsed.createdWithVersion,
       lastSyncedVersion: parsed.lastSyncedVersion,
       envOrigin,
@@ -286,4 +294,17 @@ export function loadConfig(workspaceRoot?: string): EmitConfig {
   } catch {
     return { ...DEFAULT_CONFIG, envOrigin };
   }
+}
+
+/**
+ * Pure Layer 0 precedence resolver for `noTaxonomyAudit`:
+ * explicit CLI/MCP flag > `.emit/config.json` `noTaxonomyAudit` > `false` (safe default).
+ */
+export function resolveNoTaxonomyAuditOption(params: {
+  cliFlag?: boolean;
+  configValue?: boolean;
+}): boolean {
+  if (typeof params.cliFlag === 'boolean') return params.cliFlag;
+  if (typeof params.configValue === 'boolean') return params.configValue;
+  return false;
 }

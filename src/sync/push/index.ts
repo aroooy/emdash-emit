@@ -49,6 +49,8 @@ import {
   resolveFeaturedImageMediaId,
   uploadAndRewriteDraftImages,
 } from './media_stage.js';
+import { readBaselineFrontmatter } from '../../db/baseline.js';
+import { computeTaxonomyHash } from '../terms.js';
 import { auditRemoteTaxonomies } from './tax_audit.js';
 import { resolveConflictAndMerge } from './merge_stage.js';
 import { commitPostPush } from './commit.js';
@@ -525,18 +527,42 @@ export async function pushArticle(
       const updatedJson = await res.json().catch(() => ({}));
       const newRev = extractRev(updatedJson, currentRev);
 
-      const taxFailures = await syncArticleTaxonomies({
-        articleId: id,
-        collection,
-        parsed,
-        taxonomyMaps,
-        resolvedTaxonomies,
-        baseSnapshot,
-        options,
-        fetchFn,
-        warnings,
-        remoteTaxAudit,
-      });
+      const baseFmForSkip = readBaselineFrontmatter(baseSnapshot);
+      const localCatsForSkip = parsed.frontmatter.taxonomies?.categories;
+      const localTagsForSkip = parsed.frontmatter.taxonomies?.tags;
+      const localTaxHashForSkip = computeTaxonomyHash(localCatsForSkip, localTagsForSkip);
+      const hasExplicitEmptyAxis =
+        (Array.isArray(localCatsForSkip) && localCatsForSkip.length === 0) ||
+        (Array.isArray(localTagsForSkip) && localTagsForSkip.length === 0);
+      const canSkipTaxonomyPost = Boolean(
+        baseSnapshot &&
+        baseFmForSkip &&
+        !hasExplicitEmptyAxis &&
+        !taxonomyDivergenceDetected &&
+        !syncState?.taxonomyApplyPending &&
+        !options.resolveTaxonomy &&
+        localTaxHashForSkip ===
+          computeTaxonomyHash(
+            baseFmForSkip.taxonomies?.categories,
+            baseFmForSkip.taxonomies?.tags,
+          ) &&
+        (!syncState?.remoteTaxonomyHash || syncState.remoteTaxonomyHash === localTaxHashForSkip),
+      );
+
+      const taxFailures = canSkipTaxonomyPost
+        ? []
+        : await syncArticleTaxonomies({
+            articleId: id,
+            collection,
+            parsed,
+            taxonomyMaps,
+            resolvedTaxonomies,
+            baseSnapshot,
+            options,
+            fetchFn,
+            warnings,
+            remoteTaxAudit,
+          });
 
       return await commitPostPush({
         mode: 'update',

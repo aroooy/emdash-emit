@@ -70,7 +70,21 @@ export interface TaxonomyCandidates {
     tag?: Record<string, string>;
     [key: string]: Record<string, string> | undefined;
   };
-  [key: string]: string[] | { [k: string]: Record<string, string> | undefined } | undefined;
+  byLocale?: Record<
+    string,
+    {
+      slugToName?: {
+        category?: Record<string, string>;
+        tag?: Record<string, string>;
+        [key: string]: Record<string, string> | undefined;
+      };
+    }
+  >;
+  [key: string]:
+    | string[]
+    | { [k: string]: Record<string, string> | undefined }
+    | Record<string, { slugToName?: Record<string, Record<string, string> | undefined> }>
+    | undefined;
 }
 
 export interface ParsedMarkdown {
@@ -496,12 +510,24 @@ export function formatFrontmatterYaml(
       lines.push('    []');
     } else {
       const singularKey = taxKey === 'categories' ? 'category' : taxKey === 'tags' ? 'tag' : taxKey;
-      const slugMap = candidates?.slugToName?.[singularKey] || candidates?.slugToName?.[taxKey];
+      const articleLocale = data.locale?.trim().toLowerCase();
+      const localeSlugMap = articleLocale
+        ? candidates?.byLocale?.[articleLocale]?.slugToName?.[singularKey] ||
+          candidates?.byLocale?.[articleLocale]?.slugToName?.[taxKey]
+        : undefined;
+      const globalSlugMap =
+        candidates?.slugToName?.[singularKey] || candidates?.slugToName?.[taxKey];
 
       for (const term of terms) {
         const displayTerm = options?.preferEncodedTaxonomy ? term : tryDecodeTaxonomyTerm(term);
         const decoded = tryDecodeTaxonomyTerm(term);
-        const humanName = slugMap?.[displayTerm] || slugMap?.[term] || slugMap?.[decoded];
+        const humanName =
+          localeSlugMap?.[displayTerm] ||
+          localeSlugMap?.[term] ||
+          localeSlugMap?.[decoded] ||
+          globalSlugMap?.[displayTerm] ||
+          globalSlugMap?.[term] ||
+          globalSlugMap?.[decoded];
         const comment =
           humanName &&
           humanName.trim() &&
