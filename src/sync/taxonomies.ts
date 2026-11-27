@@ -537,13 +537,21 @@ export function loadLocalTaxonomyTerms(workspaceRoot: string): LocalTaxonomyTerm
   return [...categories, ...tags];
 }
 
-/**
- * Loads local taxonomy mapping between term ULID and slug from categories/ and tags/ directories.
- */
-export function loadLocalTaxonomyMaps(workspaceRoot: string): {
+export interface TaxonomyMapsPair {
   slugToId: { category: Record<string, string>; tag: Record<string, string> };
   idToSlug: { category: Record<string, string>; tag: Record<string, string> };
-} {
+}
+
+export interface LocalTaxonomyMaps extends TaxonomyMapsPair {
+  byLocale: Record<string, TaxonomyMapsPair>;
+}
+
+/**
+ * Loads local taxonomy mapping between term ULID and slug from categories/ and tags/ directories.
+ * Includes `byLocale` so multi-language workspaces with identical slugs across locales resolve
+ * without cross-locale shadowing while keeping top-level `slugToId`/`idToSlug` backwards-compatible.
+ */
+export function loadLocalTaxonomyMaps(workspaceRoot: string): LocalTaxonomyMaps {
   const catItems = readTaxonomyDir(path.join(workspaceRoot, 'categories'));
   const tagItems = readTaxonomyDir(path.join(workspaceRoot, 'tags'));
 
@@ -600,6 +608,36 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
   const catMap = toMaps(catItems);
   const tagMap = toMaps(tagItems);
 
+  // Build per-locale maps so identical slugs across locales (e.g. ja vs en) never shadow each other
+  const locales = new Set<string>();
+  const groupByLocale = (items: LocalTaxonomyItem[]) => {
+    const grouped = new Map<string, LocalTaxonomyItem[]>();
+    for (const item of items) {
+      const loc = (item.locale || '').trim().toLowerCase();
+      if (!loc) continue;
+      locales.add(loc);
+      const list = grouped.get(loc);
+      if (list) {
+        list.push(item);
+      } else {
+        grouped.set(loc, [item]);
+      }
+    }
+    return grouped;
+  };
+
+  const catByLocale = groupByLocale(catItems);
+  const tagByLocale = groupByLocale(tagItems);
+  const byLocale: Record<string, TaxonomyMapsPair> = {};
+  for (const loc of locales) {
+    const cMap = toMaps(catByLocale.get(loc) || []);
+    const tMap = toMaps(tagByLocale.get(loc) || []);
+    byLocale[loc] = {
+      slugToId: { category: cMap.slugToId, tag: tMap.slugToId },
+      idToSlug: { category: cMap.idToSlug, tag: tMap.idToSlug },
+    };
+  }
+
   return {
     slugToId: {
       category: catMap.slugToId,
@@ -609,7 +647,44 @@ export function loadLocalTaxonomyMaps(workspaceRoot: string): {
       category: catMap.idToSlug,
       tag: tagMap.idToSlug,
     },
+    byLocale,
   };
+}
+
+/**
+ * Resolves a term ULID for a given taxonomy kind and term input (slug/alias),
+ * preferring the article's locale map before falling back to the global map.
+ */
+export function resolveTermIdForLocale(
+  taxonomyMaps: ReturnType<typeof loadLocalTaxonomyMaps>,
+  kind: 'category' | 'tag',
+  term: string,
+  locale?: string,
+): string | undefined {
+  const safeLocale = locale?.trim().toLowerCase();
+  if (safeLocale && taxonomyMaps.byLocale?.[safeLocale]) {
+    const localeHit = taxonomyMaps.byLocale[safeLocale]!.slugToId[kind]?.[term];
+    if (localeHit) return localeHit;
+  }
+  return taxonomyMaps.slugToId[kind]?.[term];
+}
+
+/**
+ * Resolves a canonical slug for a given term ULID, preferring the article's locale map
+ * before falling back to the global map.
+ */
+export function resolveCanonicalSlugForLocale(
+  taxonomyMaps: ReturnType<typeof loadLocalTaxonomyMaps>,
+  kind: 'category' | 'tag',
+  termId: string,
+  locale?: string,
+): string | undefined {
+  const safeLocale = locale?.trim().toLowerCase();
+  if (safeLocale && taxonomyMaps.byLocale?.[safeLocale]) {
+    const localeHit = taxonomyMaps.byLocale[safeLocale]!.idToSlug[kind]?.[termId];
+    if (localeHit) return localeHit;
+  }
+  return taxonomyMaps.idToSlug[kind]?.[termId];
 }
 
 /**

@@ -150,6 +150,28 @@ export async function pushArticle(
   const currentRev = baseSnapshot?.rev || syncState?.remoteRev || '';
   const warnings = [...preflight.warnings];
 
+  // Warn (non-blocking, per Step 1 Gate) if article's locale has its own non-empty taxonomy map
+  // and a referenced term only exists in another locale (fallback behavior).
+  const articleLocale = parsed.frontmatter.locale?.trim().toLowerCase();
+  const localePair = articleLocale ? taxonomyMaps.byLocale?.[articleLocale] : undefined;
+  if (localePair && parsed.frontmatter.taxonomies) {
+    for (const [key, kind] of [
+      ['categories', 'category'],
+      ['tags', 'tag'],
+    ] as const) {
+      const terms = parsed.frontmatter.taxonomies[key];
+      if (!Array.isArray(terms) || terms.length === 0) continue;
+      if (Object.keys(localePair.slugToId[kind]).length === 0) continue;
+      for (const t of terms) {
+        if (!localePair.slugToId[kind][t] && !localePair.idToSlug[kind][t]) {
+          warnings.push(
+            `🏷️ ${kind} "${t}" was not found in locale "${articleLocale}" (falling back to another locale). Run "emit new-term ${kind} ${t} -l ${articleLocale}" to create a locale-specific translation.`,
+          );
+        }
+      }
+    }
+  }
+
   // Load local bylines map for converting frontmatter byline slugs to ULIDs
   let bylineSlugToId = options.bylineSlugToId;
   if (!bylineSlugToId) {

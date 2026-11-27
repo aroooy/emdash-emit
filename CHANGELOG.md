@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.3] - 2026-11-27
+
+### Fixed
+
+- **Locale-Scoped Taxonomy Resolution (`byLocale`) for Cross-Locale Identical Slugs**:
+  - Extended `loadLocalTaxonomyMaps()` (`src/sync/taxonomies.ts`) with a backwards-compatible `byLocale` map (`Record<locale, { slugToId, idToSlug }>`) and exported `resolveTermIdForLocale()` / `resolveCanonicalSlugForLocale()`.
+  - Fixed `promoteDraftTaxonomiesForArticle()` (`src/sync/push/taxonomy_plan.ts`) so offline draft terms in `categories/drafts/<locale>/` and `tags/drafts/<locale>/` are no longer silently skipped when another locale (e.g. `ja`) already has a term with the same slug (e.g. `ai`).
+  - Fixed `canonicalizeFrontmatterTaxonomies()` and `syncArticleTaxonomies()` to prefer `byLocale[articleLocale]` so multi-language posts receive their own locale's term ULIDs on `POST .../terms/{taxonomy}`, while preserving global fallback (with a non-blocking warning when the article's locale already has its own taxonomy terms) for single-tag-set workspaces.
+  - Note (follow-up): `loadLocalTaxonomyCandidates()` (Layer B `# <Name>` inline comment spelling) remains global and may display another locale's label when slugs collide across locales.
+
+---
+
 ## [0.2.2] - 2026-11-27
 
 ### Added

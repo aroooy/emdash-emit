@@ -29,6 +29,8 @@ import {
   createRemoteTaxonomyTerm,
   loadLocalTaxonomyTerms,
   promoteLocalDraftTerm,
+  resolveCanonicalSlugForLocale,
+  resolveTermIdForLocale,
   type loadLocalTaxonomyMaps,
   type LocalTaxonomyTermEntry,
 } from '../taxonomies.js';
@@ -51,20 +53,23 @@ export function canonicalizeFrontmatterTaxonomies(
   taxonomyMaps: ReturnType<typeof loadLocalTaxonomyMaps>,
 ): TaxonomyPlanResult {
   const resolvedTaxonomies: TaxonomyPlanResult['resolvedTaxonomies'] = {};
+  const articleLocale = parsed.frontmatter.locale?.trim().toLowerCase();
 
   const canonicalizeTerms = (taxName: 'category' | 'tag', terms: string[]): string[] => {
     const list: ResolvedTaxonomyItem[] = [];
     const canonicalized = terms.map((term) => {
       // 1. If term is a ULID in idToSlug
-      if (taxonomyMaps.idToSlug[taxName]?.[term]) {
-        const canonicalSlug = taxonomyMaps.idToSlug[taxName][term];
-        list.push({ input: term, resolved: canonicalSlug, id: term });
-        return canonicalSlug;
+      const directSlug = resolveCanonicalSlugForLocale(taxonomyMaps, taxName, term, articleLocale);
+      if (directSlug) {
+        list.push({ input: term, resolved: directSlug, id: term });
+        return directSlug;
       }
       // 2. If term is in slugToId (can be canonical slug, decoded slug, or human name alias)
-      const id = taxonomyMaps.slugToId[taxName]?.[term];
-      if (id && taxonomyMaps.idToSlug[taxName]?.[id]) {
-        const canonicalSlug = taxonomyMaps.idToSlug[taxName][id];
+      const id = resolveTermIdForLocale(taxonomyMaps, taxName, term, articleLocale);
+      const canonicalSlug = id
+        ? resolveCanonicalSlugForLocale(taxonomyMaps, taxName, id, articleLocale)
+        : undefined;
+      if (id && canonicalSlug) {
         if (term !== canonicalSlug) {
           list.push({ input: term, resolved: canonicalSlug, id });
         }
@@ -168,13 +173,46 @@ export async function promoteDraftTaxonomiesForArticle(params: {
       fallbackLocale: draft.locale || parsed.frontmatter.locale || 'ja',
     });
 
-    // Update shared taxonomyMaps in-place
+    // Update shared taxonomyMaps in-place (both locale-scoped byLocale and top-level with === oldId guard)
     const taxKind = draft.taxonomy;
     const oldId = draft.id;
     const canonical = serverTerm.slug;
+    const promotedLocale = (serverTerm.locale || draft.locale || parsed.frontmatter.locale || 'ja')
+      .trim()
+      .toLowerCase();
+
+    if (taxonomyMaps.byLocale) {
+      if (!taxonomyMaps.byLocale[promotedLocale]) {
+        taxonomyMaps.byLocale[promotedLocale] = {
+          slugToId: { category: {}, tag: {} },
+          idToSlug: { category: {}, tag: {} },
+        };
+      }
+      const localePair = taxonomyMaps.byLocale[promotedLocale]!;
+      delete localePair.idToSlug[taxKind][oldId];
+      localePair.idToSlug[taxKind][serverTerm.id] = canonical;
+      localePair.slugToId[taxKind][canonical] = serverTerm.id;
+      for (const alias of aliasesOf(draft)) {
+        if (localePair.slugToId[taxKind][alias] === oldId || !localePair.slugToId[taxKind][alias]) {
+          localePair.slugToId[taxKind][alias] = serverTerm.id;
+        }
+      }
+      if (
+        localePair.slugToId[taxKind][draft.name] === oldId ||
+        !localePair.slugToId[taxKind][draft.name]
+      ) {
+        localePair.slugToId[taxKind][draft.name] = serverTerm.id;
+      }
+    }
+
     delete taxonomyMaps.idToSlug[taxKind][oldId];
     taxonomyMaps.idToSlug[taxKind][serverTerm.id] = canonical;
-    taxonomyMaps.slugToId[taxKind][canonical] = serverTerm.id;
+    if (
+      !taxonomyMaps.slugToId[taxKind][canonical] ||
+      taxonomyMaps.slugToId[taxKind][canonical] === oldId
+    ) {
+      taxonomyMaps.slugToId[taxKind][canonical] = serverTerm.id;
+    }
     for (const alias of aliasesOf(draft)) {
       if (taxonomyMaps.slugToId[taxKind][alias] === oldId) {
         taxonomyMaps.slugToId[taxKind][alias] = serverTerm.id;
@@ -196,6 +234,7 @@ export async function promoteDraftTaxonomiesForArticle(params: {
     return serverTerm.id;
   };
 
+  const articleLocale = parsed.frontmatter.locale?.trim().toLowerCase();
   const axes: Array<{ key: 'categories' | 'tags'; kind: 'category' | 'tag' }> = [
     { key: 'categories', kind: 'category' },
     { key: 'tags', kind: 'tag' },
@@ -206,13 +245,28 @@ export async function promoteDraftTaxonomiesForArticle(params: {
     if (!Array.isArray(terms)) continue;
     for (let i = 0; i < terms.length; i++) {
       const term = terms[i];
-      const resolvedId = draftById.has(term) ? term : taxonomyMaps.slugToId[kind]?.[term];
+      let resolvedId = draftById.has(term)
+        ? term
+        : resolveTermIdForLocale(taxonomyMaps, kind, term, articleLocale);
+      if (!resolvedId || !draftById.has(resolvedId)) {
+        const directDraft = Array.from(draftById.values()).find(
+          (d) =>
+            d.taxonomy === kind &&
+            (!articleLocale || !d.locale || d.locale.toLowerCase() === articleLocale) &&
+            (aliasesOf(d).includes(term) ||
+              d.name.trim().normalize('NFC') === term.trim().normalize('NFC')),
+        );
+        if (directDraft) {
+          resolvedId = directDraft.id;
+        }
+      }
       if (resolvedId && draftById.has(resolvedId)) {
         const draft = draftById.get(resolvedId)!;
         const serverId = await promoteTermWithAncestors(draft);
         // If frontmatter held the provisional ULID directly, replace with canonical slug
         if (term === draft.id) {
-          terms[i] = taxonomyMaps.idToSlug[kind][serverId] || term;
+          terms[i] =
+            resolveCanonicalSlugForLocale(taxonomyMaps, kind, serverId, articleLocale) || term;
         }
       }
     }
@@ -258,9 +312,9 @@ export async function syncArticleTaxonomies(params: {
   const failures: TaxonomySyncFailure[] = [];
   if (!parsed.frontmatter.taxonomies) return failures;
   const taxMaps = taxonomyMaps;
+  const articleLocale = parsed.frontmatter.locale?.trim().toLowerCase();
 
   const updateTaxonomy = async (taxonomyName: 'category' | 'tag', termSlugsOrIds: string[]) => {
-    const slugMap = taxMaps.slugToId[taxonomyName] || {};
     const idMap = taxMaps.idToSlug[taxonomyName] || {};
     const resolvedTermIds = Array.from(
       new Set(
@@ -272,8 +326,8 @@ export async function syncArticleTaxonomies(params: {
             const tracked = resolvedTaxonomies[taxonomyName === 'category' ? 'categories' : 'tags'];
             const match = tracked?.find((t) => t.resolved === item);
             if (match?.id) return match.id;
-            // 3. Fallback to slugMap
-            return slugMap[item] || item;
+            // 3. Fallback to locale-scoped slugToId (then global slugToId)
+            return resolveTermIdForLocale(taxMaps, taxonomyName, item, articleLocale) || item;
           })
           .filter((tid): tid is string => Boolean(tid)),
       ),
