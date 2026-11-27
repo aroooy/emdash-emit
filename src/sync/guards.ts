@@ -79,6 +79,9 @@ export const OPERATIONAL_ERROR_CODES = [
   'CONFLICT_REMOTE_FETCH_FAILED',
   // taxonomy transport (push.ts / taxonomies.ts)
   'TAXONOMY_UPDATE_FAILED',
+  'TAXONOMY_CREATE_FAILED',
+  'TAXONOMY_SLUG_MISMATCH',
+  'DUPLICATE_TERM_SLUG',
   'TAXONOMY_DIVERGENCE',
   'TAXONOMY_UNION_REJECTED',
   'TAXONOMY_FETCH_FAILED',
@@ -476,6 +479,12 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Only "ready" media records can be deleted via delete-media. Pending or failed upload records are managed automatically by upload compensation.',
   DISCARD_DRAFT_FAILED:
     'Remote draft discard failed. Check network connectivity, lock status, or run "emit pull" to inspect the current remote state.',
+  TAXONOMY_CREATE_FAILED:
+    'Remote taxonomy term creation failed. Your staged draft YAML in categories/drafts/ or tags/drafts/ was preserved; verify network/permissions or run "emit pull" if the term already exists.',
+  TAXONOMY_SLUG_MISMATCH:
+    'Remote taxonomy creation normalized the slug to a different value than requested. Run "emit pull" to inspect the created term, update article frontmatter to match, and remove the local draft YAML.',
+  DUPLICATE_TERM_SLUG:
+    'A taxonomy term with the same slug already exists in this locale (either synced or staged in drafts/). Use the existing term or choose a distinct slug.',
 };
 
 /**

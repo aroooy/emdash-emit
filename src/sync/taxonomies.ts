@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { ulid } from 'ulidx';
 import {
   formatYamlScalar,
   sanitizeTitleForFilename,
@@ -33,6 +34,7 @@ import {
   aliasesOf,
   canonicalSlugOf,
   isKnownTaxonomyTerm,
+  normalizeTaxonomyKey,
   type PrunedTaxonomiesDetail,
   type TaxonomyLookupMaps,
 } from '../utils/taxonomy-key.js';
@@ -123,6 +125,7 @@ function serializeTaxonomyYaml(doc: {
   count: number;
   locale?: string;
   translationGroup?: string;
+  translationOf?: string;
 }): string {
   const lines: string[] = [
     `id: ${formatYamlScalar(doc.id)}`,
@@ -140,6 +143,9 @@ function serializeTaxonomyYaml(doc: {
   }
   if (doc.translationGroup) {
     lines.push(`translationGroup: ${formatYamlScalar(doc.translationGroup)}`);
+  }
+  if (doc.translationOf) {
+    lines.push(`translationOf: ${formatYamlScalar(doc.translationOf)}`);
   }
   return lines.join('\n') + '\n';
 }
@@ -207,7 +213,7 @@ function writeAndPruneTaxonomyDir(params: {
         } catch {
           // Ignore unlink errors
         }
-      } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+      } else if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'drafts') {
         const subFiles = fs.readdirSync(fullEntry);
         for (const file of subFiles) {
           if (file.endsWith('.yaml') && !activeRelPaths.has(`${entry.name}/${file}`)) {
@@ -351,6 +357,12 @@ export interface LocalTaxonomyItem {
   count?: number;
   locale?: string;
   translationGroup?: string;
+  /** Create-only source term ID when staged offline as a translation via `emit new-term --translation-of`. */
+  translationOf?: string;
+  /** True when loaded from `<taxonomy>/drafts/<locale>/*.yaml` (pending remote creation on push). */
+  isDraft?: boolean;
+  /** Absolute disk path of the YAML file (populated by `readTaxonomyDir`). */
+  filePath?: string;
 }
 
 export interface LocalTaxonomyTermEntry extends LocalTaxonomyItem {
@@ -379,22 +391,44 @@ export const DEFAULT_MAX_CATEGORIES = 50;
 export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
   if (!fs.existsSync(dir)) return [];
   try {
-    const yamlTargets: Array<{ fullPath: string; dirLocale?: string }> = [];
+    const yamlTargets: Array<{ fullPath: string; dirLocale?: string; isDraft: boolean }> = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith('.yaml')) {
-        yamlTargets.push({ fullPath: path.join(dir, entry.name) });
+        yamlTargets.push({ fullPath: path.join(dir, entry.name), isDraft: false });
+      } else if (entry.isDirectory() && entry.name === 'drafts') {
+        const draftsRoot = path.join(dir, 'drafts');
+        for (const dEntry of fs.readdirSync(draftsRoot, { withFileTypes: true })) {
+          if (dEntry.isFile() && dEntry.name.endsWith('.yaml')) {
+            yamlTargets.push({ fullPath: path.join(draftsRoot, dEntry.name), isDraft: true });
+          } else if (dEntry.isDirectory() && !dEntry.name.startsWith('.')) {
+            const draftLocaleDir = path.join(draftsRoot, dEntry.name);
+            for (const subFile of fs.readdirSync(draftLocaleDir)) {
+              if (subFile.endsWith('.yaml')) {
+                yamlTargets.push({
+                  fullPath: path.join(draftLocaleDir, subFile),
+                  dirLocale: dEntry.name,
+                  isDraft: true,
+                });
+              }
+            }
+          }
+        }
       } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
         const subDir = path.join(dir, entry.name);
         for (const subFile of fs.readdirSync(subDir)) {
           if (subFile.endsWith('.yaml')) {
-            yamlTargets.push({ fullPath: path.join(subDir, subFile), dirLocale: entry.name });
+            yamlTargets.push({
+              fullPath: path.join(subDir, subFile),
+              dirLocale: entry.name,
+              isDraft: false,
+            });
           }
         }
       }
     }
 
     const items: LocalTaxonomyItem[] = [];
-    for (const { fullPath, dirLocale } of yamlTargets) {
+    for (const { fullPath, dirLocale, isDraft } of yamlTargets) {
       try {
         const content = fs.readFileSync(fullPath, 'utf8');
         const data = yaml.load(content) as Record<string, unknown>;
@@ -431,6 +465,10 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
             data.translationGroup ?? data.translation_group ?? data.translationGroupId;
           const translationGroup =
             typeof rawGroup === 'string' && rawGroup.trim() ? rawGroup.trim() : undefined;
+          const translationOf =
+            typeof data.translationOf === 'string' && data.translationOf.trim()
+              ? data.translationOf.trim()
+              : undefined;
 
           items.push({
             id: data.id,
@@ -441,6 +479,9 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
             count: typeof data.count === 'number' ? data.count : undefined,
             ...(locale ? { locale } : {}),
             ...(translationGroup ? { translationGroup } : {}),
+            ...(translationOf ? { translationOf } : {}),
+            ...(isDraft ? { isDraft: true } : {}),
+            filePath: fullPath,
           });
         }
       } catch {
@@ -898,4 +939,281 @@ export function canonicalizeTaxonomiesForBaseline(
     });
   }
   return canon;
+}
+
+export interface CreateLocalDraftTermOptions {
+  workspaceRoot: string;
+  taxonomy: 'category' | 'tag';
+  slug: string;
+  name?: string;
+  locale: string;
+  parent?: string;
+  translationOf?: string;
+}
+
+export interface CreateLocalDraftTermResult {
+  id: string;
+  slug: string;
+  canonicalSlug: string;
+  name: string;
+  taxonomy: 'category' | 'tag';
+  locale: string;
+  parentId: string | null;
+  translationOf?: string;
+  filePath: string;
+  fullPath: string;
+}
+
+/**
+ * Stages a new category or tag term offline under `<taxonomyDir>/drafts/<locale>/<id>-<name>.yaml`.
+ * Protected from `pullTaxonomies()` pruning and automatically created & promoted on `emit push`.
+ */
+export function createLocalDraftTerm(
+  options: CreateLocalDraftTermOptions,
+): CreateLocalDraftTermResult {
+  const rawSlug = options.slug.trim();
+  if (!rawSlug) {
+    throw new Error('Term slug cannot be empty.');
+  }
+  const safeLocale = options.locale.trim().toLowerCase();
+  if (!safeLocale) {
+    throw new Error('Term locale cannot be empty.');
+  }
+
+  const decodedSlug = tryDecodeTaxonomyTerm(rawSlug);
+  const label = (options.name?.trim() || decodedSlug).trim();
+  const dirName = options.taxonomy === 'category' ? 'categories' : 'tags';
+  const taxRoot = path.join(options.workspaceRoot, dirName);
+
+  // Duplicate check aligned with G4 normalization (same taxonomy + locale + slug/canonicalSlug)
+  const existing = readTaxonomyDir(taxRoot);
+  const targetKeys = new Set([
+    normalizeTaxonomyKey(rawSlug).toLowerCase(),
+    normalizeTaxonomyKey(decodedSlug).toLowerCase(),
+  ]);
+  for (const item of existing) {
+    if (item.locale && item.locale.toLowerCase() !== safeLocale) continue;
+    const itemKeys = new Set([
+      normalizeTaxonomyKey(canonicalSlugOf(item)).toLowerCase(),
+      ...aliasesOf(item).map((a) => normalizeTaxonomyKey(a).toLowerCase()),
+    ]);
+    for (const tk of targetKeys) {
+      if (itemKeys.has(tk)) {
+        throw new Error(
+          `[DUPLICATE_TERM_SLUG] ${options.taxonomy} term "${rawSlug}" already exists for locale "${safeLocale}" (id: ${item.id}${item.isDraft ? ', draft' : ''}).`,
+        );
+      }
+    }
+  }
+
+  // Optional parent resolution (categories)
+  let parentId: string | null = null;
+  if (options.parent?.trim()) {
+    const parentQuery = options.parent.trim();
+    const parentNorm = normalizeTaxonomyKey(parentQuery).toLowerCase();
+    const match =
+      existing.find((i) => i.id.toUpperCase() === parentQuery.toUpperCase()) ??
+      existing.find(
+        (i) =>
+          (!i.locale || i.locale.toLowerCase() === safeLocale) &&
+          (normalizeTaxonomyKey(canonicalSlugOf(i)).toLowerCase() === parentNorm ||
+            normalizeTaxonomyKey(i.slug).toLowerCase() === parentNorm),
+      );
+    if (!match) {
+      throw new Error(
+        `Parent ${options.taxonomy} "${parentQuery}" not found in local ${dirName}/ definitions.`,
+      );
+    }
+    parentId = match.id;
+  }
+
+  const id = ulid();
+  const sanitized = sanitizeTitleForFilename(label);
+  const fileName = `${id}-${sanitized}.yaml`;
+  const relPath = `${dirName}/drafts/${safeLocale}/${fileName}`;
+  const fullPath = path.join(options.workspaceRoot, relPath);
+
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  const doc = {
+    id,
+    name: label,
+    slug: decodedSlug,
+    ...(decodedSlug !== rawSlug ? { canonicalSlug: rawSlug } : {}),
+    taxonomy: options.taxonomy,
+    parentId,
+    count: 0,
+    locale: safeLocale,
+    ...(options.translationOf?.trim() ? { translationOf: options.translationOf.trim() } : {}),
+  };
+  fs.writeFileSync(fullPath, serializeTaxonomyYaml(doc), 'utf8');
+
+  return {
+    id,
+    slug: decodedSlug,
+    canonicalSlug: rawSlug,
+    name: label,
+    taxonomy: options.taxonomy,
+    locale: safeLocale,
+    parentId,
+    ...(options.translationOf?.trim() ? { translationOf: options.translationOf.trim() } : {}),
+    filePath: relPath,
+    fullPath,
+  };
+}
+
+export interface CreateRemoteTaxonomyTermOptions {
+  origin: string;
+  token: string;
+  refreshToken?: string;
+  fetchFn?: typeof fetch;
+  taxonomy: 'category' | 'tag';
+  label: string;
+  slug: string;
+  locale: string;
+  parentId?: string | null;
+  translationOf?: string;
+}
+
+/**
+ * Creates a taxonomy term on remote EmDash via `POST /_emdash/api/taxonomies/{taxonomy}/terms`.
+ * Verifies returned slug parity to prevent silent G4 mismatches on subsequent pushes.
+ */
+export async function createRemoteTaxonomyTerm(
+  options: CreateRemoteTaxonomyTermOptions,
+): Promise<TaxonomyTerm> {
+  const fetchFn = createAuthedFetch(options);
+  const url = taxonomiesTermsEndpoint(options.origin, options.taxonomy);
+  const body: Record<string, unknown> = {
+    label: options.label,
+    slug: options.slug,
+    locale: options.locale,
+    ...(options.parentId ? { parentId: options.parentId } : {}),
+    ...(options.translationOf ? { translationOf: options.translationOf } : {}),
+  };
+
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.statusText);
+    throw new ApiError({
+      message: `Failed to create remote ${options.taxonomy} term "${options.slug}": ${errText || res.statusText}`,
+      code: 'TAXONOMY_CREATE_FAILED',
+      status: res.status,
+      endpoint: url,
+      suggestion:
+        res.status === 409
+          ? 'This term may already exist on remote. Run "emit pull" to refresh local taxonomy definitions and remove the duplicate draft YAML.'
+          : 'Verify network connectivity and taxonomy permissions, then retry "emit push" (the local draft term was preserved).',
+    });
+  }
+
+  const json = await res.json();
+  const data = unwrapEnvelope<Record<string, unknown>>(json);
+  const raw = (data.term ?? data.item ?? data) as Record<string, unknown>;
+  const serverId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const serverSlug = typeof raw.slug === 'string' ? raw.slug.trim() : options.slug;
+
+  if (!serverId) {
+    throw new ApiError({
+      message: `Remote ${options.taxonomy} creation for "${options.slug}" did not return a valid term ID.`,
+      code: 'TAXONOMY_CREATE_FAILED',
+      status: res.status,
+      endpoint: url,
+      suggestion: 'Run "emit pull" to inspect remote taxonomy definitions.',
+    });
+  }
+
+  // Verify returned slug parity (prevents silent server normalization breaking local G4 matching)
+  const expectedNorm = new Set([
+    normalizeTaxonomyKey(options.slug).toLowerCase(),
+    normalizeTaxonomyKey(tryDecodeTaxonomyTerm(options.slug)).toLowerCase(),
+  ]);
+  const returnedNorm = normalizeTaxonomyKey(tryDecodeTaxonomyTerm(serverSlug)).toLowerCase();
+  const returnedRawNorm = normalizeTaxonomyKey(serverSlug).toLowerCase();
+  if (!expectedNorm.has(returnedNorm) && !expectedNorm.has(returnedRawNorm)) {
+    throw new ApiError({
+      message: `Remote ${options.taxonomy} creation returned slug "${serverSlug}" which differs from requested "${options.slug}". Aborting promotion to avoid G4 mismatch.`,
+      code: 'TAXONOMY_SLUG_MISMATCH',
+      status: res.status,
+      endpoint: url,
+      suggestion: `Run "emit pull" to inspect the created term "${serverSlug}", update article frontmatter to match, and remove the local draft YAML.`,
+    });
+  }
+
+  const rawGroup = raw.translationGroup ?? raw.translation_group ?? raw.translationGroupId;
+  return {
+    id: serverId,
+    slug: serverSlug,
+    label: typeof raw.label === 'string' ? raw.label : options.label,
+    parentId: typeof raw.parentId === 'string' ? raw.parentId : (options.parentId ?? null),
+    count: typeof raw.count === 'number' ? raw.count : 0,
+    locale:
+      typeof raw.locale === 'string' && raw.locale.trim() ? raw.locale.trim() : options.locale,
+    ...(typeof rawGroup === 'string' && rawGroup.trim()
+      ? { translationGroup: rawGroup.trim() }
+      : {}),
+  };
+}
+
+/**
+ * Promotes a staged draft taxonomy YAML file into its canonical `<taxonomyDir>/<locale>/<serverId>-<label>.yaml`
+ * location and removes the temporary draft file (cleaning up empty draft locale directories).
+ */
+export function promoteLocalDraftTerm(params: {
+  workspaceRoot: string;
+  taxonomy: 'category' | 'tag';
+  draftFilePath: string;
+  serverTerm: TaxonomyTerm;
+  fallbackLocale?: string;
+}): { canonicalFilePath: string } {
+  const dirName = params.taxonomy === 'category' ? 'categories' : 'tags';
+  const termLocale =
+    params.serverTerm.locale?.trim().toLowerCase() ||
+    params.fallbackLocale?.trim().toLowerCase() ||
+    'ja';
+  const label = params.serverTerm.label || params.serverTerm.slug;
+  const sanitized = sanitizeTitleForFilename(label);
+  const fileName = `${params.serverTerm.id}-${sanitized}.yaml`;
+  const targetDir = path.join(params.workspaceRoot, dirName, termLocale);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const targetFullPath = path.join(targetDir, fileName);
+
+  const rawSlug = params.serverTerm.slug;
+  const decodedSlug = tryDecodeTaxonomyTerm(rawSlug);
+  const doc = {
+    id: params.serverTerm.id,
+    name: label,
+    slug: decodedSlug,
+    ...(decodedSlug !== rawSlug ? { canonicalSlug: rawSlug } : {}),
+    taxonomy: params.taxonomy,
+    parentId: params.serverTerm.parentId ?? null,
+    count: params.serverTerm.count ?? 0,
+    locale: termLocale,
+    ...(params.serverTerm.translationGroup
+      ? { translationGroup: params.serverTerm.translationGroup }
+      : {}),
+  };
+  fs.writeFileSync(targetFullPath, serializeTaxonomyYaml(doc), 'utf8');
+
+  if (params.draftFilePath && fs.existsSync(params.draftFilePath)) {
+    try {
+      fs.unlinkSync(params.draftFilePath);
+      const draftParent = path.dirname(params.draftFilePath);
+      if (fs.existsSync(draftParent) && fs.readdirSync(draftParent).length === 0) {
+        fs.rmdirSync(draftParent);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
+  return { canonicalFilePath: `${dirName}/${termLocale}/${fileName}` };
 }

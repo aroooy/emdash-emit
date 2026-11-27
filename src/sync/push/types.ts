@@ -23,6 +23,7 @@
 import type { MapperOptions } from '../../client/mapper.js';
 import type { CacheDatabase } from '../../db/cache.js';
 import type { TaxonomyCandidates } from '../../utils/frontmatter.js';
+import type { loadLocalTaxonomyMaps } from '../taxonomies.js';
 
 import type { PreflightError } from '../preflight.js';
 
@@ -42,6 +43,8 @@ export interface PushOptions extends MapperOptions {
   allowModifiedOpaqueBlocks?: boolean;
   knownTaxonomies?: Record<string, string[]>;
   candidates?: TaxonomyCandidates;
+  /** Pre-loaded local taxonomy maps shared across batch pushAll() to avoid repeated disk reads. */
+  taxonomyMaps?: ReturnType<typeof loadLocalTaxonomyMaps>;
   resolveTaxonomy?: TaxonomyResolutionStrategy;
   force?: boolean;
   /**

@@ -27,6 +27,7 @@ import { runMcpServer } from '../mcp/server.js';
 import { createCliContextResolver } from '../cli/context.js';
 import { registerProfileCommands } from '../cli/commands/profile.js';
 import { registerNewCommand } from '../cli/commands/new.js';
+import { registerNewTermCommand } from '../cli/commands/new-term.js';
 import { registerPullCommands } from '../cli/commands/pull.js';
 import { registerPushCommand } from '../cli/commands/push.js';
 import { registerPreviewCommand } from '../cli/commands/preview.js';
@@ -57,6 +58,7 @@ const resolveContext = createCliContextResolver();
 // Register modular commands
 registerProfileCommands(program);
 registerNewCommand(program, resolveContext);
+registerNewTermCommand(program, resolveContext);
 registerPullCommands(program, resolveContext);
 registerPushCommand(program, resolveContext);
 registerPreviewCommand(program, resolveContext);

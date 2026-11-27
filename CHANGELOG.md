@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-11-27
+
+### Added
+
+- **Offline Taxonomy Creation (`emit new-term` / MCP `sync_new_term` & Auto-Promotion on Push)**:
+  - Added `createLocalDraftTerm()` (`src/sync/taxonomies.ts`), CLI `emit new-term <category|tag> <slug>` (`src/cli/commands/new-term.ts`), and MCP `sync_new_term` (`src/mcp/tools/sync-new-term.ts`) to stage new categories and tags completely offline under `categories/drafts/<locale>/` and `tags/drafts/<locale>/`.
+  - Protected `drafts/` directories from `pullTaxonomies()` pruning while `readTaxonomyDir()` transparently loads them so Guard **G4** (`INVALID_TAXONOMY_ERROR`) remains strict against typos while accepting explicitly staged draft terms.
+  - Added `promoteDraftTaxonomiesForArticle()` (`src/sync/push/taxonomy_plan.ts`) to automatically `POST /_emdash/api/taxonomies/{taxonomy}/terms` in parent-before-child topological order before article writes, verify returned slug parity (`TAXONOMY_SLUG_MISMATCH`), promote to canonical `<taxonomy>/<locale>/<serverId>-<name>.yaml`, and update shared `taxonomyMaps` in-place.
+
+### Changed
+
+- **`pushAll` Taxonomy Sync & Cache Optimization**:
+  - `pushAll()` (`src/sync/orchestrator.ts`) now refreshes remote taxonomies once upfront (preserving partial-failure protection and `drafts/`) and loads `taxonomyMaps` + `candidates` once into memory, sharing them across all `pushArticle()` calls via `PushOptions.taxonomyMaps?` and `PushOptions.candidates?` (eliminating $2N$ repeated disk YAML reads).
+  - Optimized Guard **G4** term lookup in `runPreflightChecks()` (`src/sync/preflight.ts`) from $O(N)$ `Array.includes` to $O(1)$ `Set.has`.
+
 ## [0.2.0] - 2026-11-27
 
 ### BREAKING CHANGES

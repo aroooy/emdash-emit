@@ -25,7 +25,14 @@ import { articleTermsEndpoint } from '../../client/endpoints.js';
 import { readBaselineFrontmatter } from '../../db/baseline.js';
 import type { BaseSnapshot } from '../../db/cache.js';
 import type { ParsedMarkdown } from '../../utils/frontmatter.js';
-import type { loadLocalTaxonomyMaps } from '../taxonomies.js';
+import {
+  createRemoteTaxonomyTerm,
+  loadLocalTaxonomyTerms,
+  promoteLocalDraftTerm,
+  type loadLocalTaxonomyMaps,
+  type LocalTaxonomyTermEntry,
+} from '../taxonomies.js';
+import { aliasesOf, canonicalSlugOf } from '../../utils/taxonomy-key.js';
 import type { PushOptions, ResolvedTaxonomyItem } from './types.js';
 
 export interface TaxonomyPlanResult {
@@ -87,6 +94,128 @@ export function canonicalizeFrontmatterTaxonomies(
   }
 
   return { resolvedTaxonomies };
+}
+
+/**
+ * Promotes any offline draft taxonomy terms (`categories/drafts/` or `tags/drafts/`) referenced
+ * by the article to remote EmDash in parent-before-child topological order, updating the shared
+ * `taxonomyMaps` in-place so subsequent articles in `pushAll()` never double-POST.
+ */
+export async function promoteDraftTaxonomiesForArticle(params: {
+  parsed: ParsedMarkdown;
+  taxonomyMaps: ReturnType<typeof loadLocalTaxonomyMaps>;
+  options: PushOptions;
+  fetchFn: typeof fetch;
+}): Promise<
+  Array<{ taxonomy: 'category' | 'tag'; provisionalId: string; id: string; slug: string }>
+> {
+  const { parsed, taxonomyMaps, options, fetchFn } = params;
+  if (!parsed.frontmatter.taxonomies) return [];
+
+  const allLocalTerms = loadLocalTaxonomyTerms(options.workspaceRoot);
+  const draftById = new Map<string, LocalTaxonomyTermEntry>();
+  for (const t of allLocalTerms) {
+    if (t.isDraft) {
+      draftById.set(t.id, t);
+    }
+  }
+  if (draftById.size === 0) return [];
+
+  const promoted: Array<{
+    taxonomy: 'category' | 'tag';
+    provisionalId: string;
+    id: string;
+    slug: string;
+  }> = [];
+  const provisionalToServerId = new Map<string, string>();
+  const visiting = new Set<string>();
+
+  const promoteTermWithAncestors = async (draft: LocalTaxonomyTermEntry): Promise<string> => {
+    const already = provisionalToServerId.get(draft.id);
+    if (already) return already;
+    if (visiting.has(draft.id)) {
+      throw new Error(`Circular parentId reference detected in draft taxonomy term "${draft.id}".`);
+    }
+    visiting.add(draft.id);
+
+    let resolvedParentId = draft.parentId ?? null;
+    if (resolvedParentId && draftById.has(resolvedParentId)) {
+      resolvedParentId = await promoteTermWithAncestors(draftById.get(resolvedParentId)!);
+    }
+
+    const reqSlug = canonicalSlugOf(draft);
+    const serverTerm = await createRemoteTaxonomyTerm({
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      fetchFn,
+      taxonomy: draft.taxonomy,
+      label: draft.name,
+      slug: reqSlug,
+      locale: draft.locale || parsed.frontmatter.locale || 'ja',
+      parentId: resolvedParentId,
+      translationOf: draft.translationOf,
+    });
+
+    promoteLocalDraftTerm({
+      workspaceRoot: options.workspaceRoot,
+      taxonomy: draft.taxonomy,
+      draftFilePath: draft.filePath || '',
+      serverTerm,
+      fallbackLocale: draft.locale || parsed.frontmatter.locale || 'ja',
+    });
+
+    // Update shared taxonomyMaps in-place
+    const taxKind = draft.taxonomy;
+    const oldId = draft.id;
+    const canonical = serverTerm.slug;
+    delete taxonomyMaps.idToSlug[taxKind][oldId];
+    taxonomyMaps.idToSlug[taxKind][serverTerm.id] = canonical;
+    taxonomyMaps.slugToId[taxKind][canonical] = serverTerm.id;
+    for (const alias of aliasesOf(draft)) {
+      if (taxonomyMaps.slugToId[taxKind][alias] === oldId) {
+        taxonomyMaps.slugToId[taxKind][alias] = serverTerm.id;
+      }
+    }
+    if (taxonomyMaps.slugToId[taxKind][draft.name] === oldId) {
+      taxonomyMaps.slugToId[taxKind][draft.name] = serverTerm.id;
+    }
+
+    provisionalToServerId.set(oldId, serverTerm.id);
+    draftById.delete(oldId);
+    visiting.delete(oldId);
+    promoted.push({
+      taxonomy: taxKind,
+      provisionalId: oldId,
+      id: serverTerm.id,
+      slug: canonical,
+    });
+    return serverTerm.id;
+  };
+
+  const axes: Array<{ key: 'categories' | 'tags'; kind: 'category' | 'tag' }> = [
+    { key: 'categories', kind: 'category' },
+    { key: 'tags', kind: 'tag' },
+  ];
+
+  for (const { key, kind } of axes) {
+    const terms = parsed.frontmatter.taxonomies[key];
+    if (!Array.isArray(terms)) continue;
+    for (let i = 0; i < terms.length; i++) {
+      const term = terms[i];
+      const resolvedId = draftById.has(term) ? term : taxonomyMaps.slugToId[kind]?.[term];
+      if (resolvedId && draftById.has(resolvedId)) {
+        const draft = draftById.get(resolvedId)!;
+        const serverId = await promoteTermWithAncestors(draft);
+        // If frontmatter held the provisional ULID directly, replace with canonical slug
+        if (term === draft.id) {
+          terms[i] = taxonomyMaps.idToSlug[kind][serverId] || term;
+        }
+      }
+    }
+  }
+
+  return promoted;
 }
 
 export interface TaxonomySyncFailure {

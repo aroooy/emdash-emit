@@ -85,4 +85,33 @@ describe('v0.2.x Layout String Sync Gate (no stale 2-tier paths in CLI/MCP/guard
 
     expect(violations).toEqual([]);
   });
+
+  it('contains zero stale 2-tier layout strings or outdated guard counts in README.md and AGENTS.md', () => {
+    const docTargets = [path.join(ROOT, 'README.md'), path.join(ROOT, 'AGENTS.md')];
+    const docPatterns: Array<{ name: string; regex: RegExp }> = [
+      ...stalePatterns,
+      { name: 'outdated guard range G1–G20..G23', regex: /G1–G2[0-3]\b/ },
+      {
+        name: 'outdated guard count 20 preflight/Code-Level',
+        regex: /\b20\s+(?:preflight|Code-Level)/,
+      },
+    ];
+    const violations: string[] = [];
+
+    for (const filePath of docTargets) {
+      const rel = path.relative(ROOT, filePath).replace(/\\/g, '/');
+      const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+
+      for (let idx = 0; idx < lines.length; idx++) {
+        const line = lines[idx];
+        for (const { name, regex } of docPatterns) {
+          if (regex.test(line)) {
+            violations.push(`${rel}:${idx + 1} [${name}] -> ${line.trim()}`);
+          }
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
 });

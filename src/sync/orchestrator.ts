@@ -43,6 +43,7 @@ import { resolveArticleTarget } from './diff.js';
 import { syncRemoteBylines } from './bylines.js';
 import {
   loadLocalTaxonomyCandidates,
+  loadLocalTaxonomyMaps,
   pullTaxonomies,
   type PullTaxonomiesResult,
 } from './taxonomies.js';
@@ -549,6 +550,22 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
   const results: PushResult[] = [];
   let pushed = 0;
 
+  // Refresh remote taxonomies once upfront (preserving drafts/ and partial-failure protection),
+  // then load taxonomyMaps & candidates once and inject across all pushArticle() calls.
+  if (toPush.length > 0) {
+    await pullTaxonomies({
+      workspaceRoot: options.workspaceRoot,
+      origin: options.origin,
+      token: options.token,
+      refreshToken: options.refreshToken,
+      fetchFn: options.fetchFn,
+    }).catch(() => null);
+  }
+  const sharedTaxonomyMaps =
+    toPush.length > 0 ? loadLocalTaxonomyMaps(options.workspaceRoot) : undefined;
+  const sharedCandidates =
+    toPush.length > 0 ? loadLocalTaxonomyCandidates(options.workspaceRoot) : undefined;
+
   for (const item of toPush) {
     const res = await pushArticle(item.filePath, {
       workspaceRoot: options.workspaceRoot,
@@ -559,6 +576,8 @@ export async function pushAll(options: PushAllOptions): Promise<PushAllResult> {
       allowPublish: options.allowPublish,
       allowModifiedOpaqueBlocks: options.allowModifiedOpaqueBlocks,
       fetchFn: options.fetchFn,
+      taxonomyMaps: sharedTaxonomyMaps,
+      candidates: sharedCandidates,
       // Batch push must honor the same setting single push does, or a workspace that spells mirrored images as
       // local references gets every one of them rewritten to canonical URLs on disk.
       localMediaRefs: options.localMediaRefs,

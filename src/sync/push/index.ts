@@ -39,7 +39,11 @@ import {
   evaluatePostPreflightGuards,
 } from './guards.js';
 import { executePreflightStage } from './preflight_stage.js';
-import { canonicalizeFrontmatterTaxonomies, syncArticleTaxonomies } from './taxonomy_plan.js';
+import {
+  canonicalizeFrontmatterTaxonomies,
+  promoteDraftTaxonomiesForArticle,
+  syncArticleTaxonomies,
+} from './taxonomy_plan.js';
 import {
   preserveOrResolveFeaturedImage,
   resolveFeaturedImageMediaId,
@@ -95,8 +99,8 @@ export async function pushArticle(
   const syncState = options.cache.getSyncState(id);
   const baseSnapshot = options.cache.getBaseSnapshot(id);
 
-  // Pre-load local taxonomy maps once for canonicalization, G4 guard, and remote sync
-  const taxonomyMaps = loadLocalTaxonomyMaps(options.workspaceRoot);
+  // Pre-load local taxonomy maps once for canonicalization, G4 guard, and remote sync (reuse shared maps from pushAll if provided)
+  const taxonomyMaps = options.taxonomyMaps || loadLocalTaxonomyMaps(options.workspaceRoot);
 
   // Canonicalize frontmatter taxonomy terms in-place before preflight and payload creation
   const { resolvedTaxonomies } = canonicalizeFrontmatterTaxonomies(parsed, taxonomyMaps);
@@ -133,6 +137,14 @@ export async function pushArticle(
 
   // 3 & 4. Post-preflight guards (G16: taxonomy conflict pending, G17: taxonomy apply pending)
   evaluatePostPreflightGuards(syncState, options, collection, id, targetFilePath);
+
+  // 4.5. Promote any offline draft taxonomy terms referenced by this article before remote article writes
+  await promoteDraftTaxonomiesForArticle({
+    parsed,
+    taxonomyMaps,
+    options,
+    fetchFn,
+  });
 
   // Track 1 (Transport Token): baseSnapshot holds the raw token from server. Prioritize it to prevent 409 conflicts.
   const currentRev = baseSnapshot?.rev || syncState?.remoteRev || '';

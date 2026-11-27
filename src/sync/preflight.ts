@@ -416,8 +416,9 @@ export function runPreflightChecks(
     for (const [taxName, terms] of Object.entries(frontmatter.taxonomies)) {
       const allowed = options.knownTaxonomies[taxName];
       if (allowed && Array.isArray(terms)) {
+        const allowedSet = new Set(allowed);
         for (const term of terms) {
-          if (!allowed.includes(term)) {
+          if (!allowedSet.has(term)) {
             // Term IDs are canonical 26-char ULIDs: uppercase Crockford base32 (excludes I, L, O, U).
             // Restricting to that alphabet prevents 26-character slugs from being mislabeled as IDs.
             const isTermId = CANONICAL_ULID_EXACT_REGEX.test(term);
