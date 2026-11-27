@@ -41,6 +41,7 @@ export interface ContentUpdatePayload {
   status?: 'draft' | 'published';
   publishedAt?: string | null;
   locale?: string;
+  translationOf?: string;
   data: Record<string, unknown>;
   taxonomies?: Record<string, string[]>;
   seo?: Record<string, unknown>;
@@ -51,6 +52,7 @@ export interface ContentUpdatePayload {
 
 export interface MapperOptions {
   allowPublish?: boolean;
+  includeTranslationOf?: boolean;
   bylineSlugToId?: Record<string, string>;
   bylineIdToSlug?: Record<string, string>;
 }
@@ -134,6 +136,10 @@ export function localToApiPayload(
   // Note: In EmDash, publishing/unpublishing is performed via dedicated
   // /publish and /unpublish endpoints rather than in PUT payloads.
   // We omit status here to comply with EmDash PUT endpoint validation.
+
+  if (options?.includeTranslationOf && frontmatter.translationOf) {
+    payload.translationOf = frontmatter.translationOf;
+  }
 
   if (frontmatter.publishedAt !== undefined) {
     payload.publishedAt = frontmatter.publishedAt;
@@ -286,6 +292,12 @@ export function apiResponseToLocal(
   const bylines = extractBylinesFromRaw(item, options?.bylineIdToSlug);
 
   const featuredImage = extractFeaturedImageFromRaw(item);
+  const rawTranslationGroup =
+    item.translationGroup ?? item.translation_group ?? item.translationGroupId;
+  const translationGroup =
+    typeof rawTranslationGroup === 'string' && rawTranslationGroup.length === 26
+      ? rawTranslationGroup
+      : undefined;
 
   const frontmatter: Frontmatter = {
     id,
@@ -295,6 +307,7 @@ export function apiResponseToLocal(
     status,
     publishedAt,
     locale,
+    ...(translationGroup ? { translationGroup } : {}),
     ...(featuredImage !== undefined ? { featuredImage } : {}),
     taxonomies,
     seo,

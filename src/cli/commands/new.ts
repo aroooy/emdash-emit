@@ -28,13 +28,17 @@ import { reportActionFailure } from '../report-failure.js';
 
 export function registerNewCommand(program: Command, resolveContext: CliContextResolver): void {
   program
-    .command('new <slug>')
+    .command('new [slug]')
     .description(
       'Create a new draft article template with an auto-generated ULID and taxonomy hints',
     )
     .option('-t, --title <title>', 'Article title')
     .option('-c, --collection <collection>', 'Target collection (defaults to "posts")')
     .option('-l, --locale <locale>', 'Article locale (defaults to "ja")')
+    .option(
+      '--translation-of <fileOrId>',
+      'Create a localized translation linked to an existing article (file path or 26-char ULID)',
+    )
     .option(
       '-b, --byline <slug>',
       'Author byline slug (defaults to first cached non-guest author by slug)',
@@ -58,6 +62,7 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
           title: options.title,
           collection,
           locale,
+          translationOf: options.translationOf,
           byline: options.byline,
           categories: options.categories,
           tags: options.tags,

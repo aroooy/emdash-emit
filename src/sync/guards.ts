@@ -295,7 +295,7 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     stage: 'new',
     severity: 'error',
     source: 'src/sync/new.ts:45',
-    description: '記事作成時の重複スラッグ検証',
+    description: '記事作成時の同一コレクション・同一ロケール内重複スラッグ検証',
   },
   {
     id: 19,
@@ -405,7 +405,7 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Remote taxonomy updates are pending application. Run "emit pull" to synchronize local taxonomy definitions.',
   // G18
   DUPLICATE_SLUG_CONFLICT:
-    'An article with this slug already exists locally or in the workspace index. Choose a unique slug.',
+    'An article with this slug already exists in the same collection and locale. Choose a unique slug or specify a different --locale.',
   // G19
   DESTRUCTIVE_TAXONOMY_WIPE:
     'Pushing with an empty taxonomy set would wipe all remote categories/tags. Verify taxonomy assignments or specify explicit terms.',

@@ -177,24 +177,18 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
       remoteRev: `1@draft:${draftRevId}`,
     });
 
+    let publishCalled = false;
     const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/lock')) {
         return Promise.resolve({ ok: true, json: async () => ({ heldByCaller: true }) });
       }
       if (url.endsWith(`/posts/${id}/publish`) && init?.method === 'POST') {
+        publishCalled = true;
         return Promise.resolve({
           ok: true,
           json: async () => ({
             success: true,
-            data: {
-              id,
-              status: 'published',
-              version: 2,
-              draftRevisionId: null,
-              liveRevisionId: liveRevId,
-              publishedAt: '2026-11-26T01:00:00.000Z',
-              _rev: 'rev-2',
-            },
+            data: { _rev: 'rev-2' },
           }),
         });
       }
@@ -202,13 +196,27 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
         ok: true,
         json: async () => ({
           success: true,
-          data: {
-            id,
-            status: 'draft',
-            version: 1,
-            draftRevisionId: draftRevId,
-            _rev: 'rev-1',
-          },
+          data: publishCalled
+            ? {
+                item: {
+                  id,
+                  status: 'published',
+                  version: 2,
+                  draftRevisionId: null,
+                  liveRevisionId: liveRevId,
+                  publishedAt: '2026-11-26T01:00:00.000Z',
+                },
+                _rev: 'rev-2',
+              }
+            : {
+                item: {
+                  id,
+                  status: 'draft',
+                  version: 1,
+                  draftRevisionId: draftRevId,
+                },
+                _rev: 'rev-1',
+              },
         }),
       });
     });

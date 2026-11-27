@@ -187,7 +187,10 @@ export async function pushArticle(
       );
     }
 
-    const payload = localToApiPayload(parsed, '', effectiveOptions);
+    const payload = localToApiPayload(parsed, '', {
+      ...effectiveOptions,
+      includeTranslationOf: true,
+    });
     warnings.push(
       ...preserveOrResolveFeaturedImage(
         payload,
@@ -261,6 +264,14 @@ export async function pushArticle(
     const newRev = extractRev(createdJson, '1');
 
     parsed.frontmatter.id = actualId;
+    const rawTranslationGroup =
+      createdItem.translationGroup ??
+      createdItem.translation_group ??
+      createdItem.translationGroupId;
+    if (typeof rawTranslationGroup === 'string' && rawTranslationGroup.length === 26) {
+      parsed.frontmatter.translationGroup = rawTranslationGroup;
+      delete parsed.frontmatter.translationOf;
+    }
 
     const taxFailures = await syncArticleTaxonomies({
       articleId: actualId,

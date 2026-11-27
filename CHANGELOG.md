@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.66] - 2026-11-27
+
+### Added
+
+- **Multi-Language Translation Lifecycle (Phase 1: `translationOf` / `translationGroup` & Locale-Scoped G18)**:
+  - Added optional `translationOf` (create-only source ULID) and `translationGroup` (server-assigned shared group ULID) fields to `FrontmatterSchema` and `formatFrontmatterYaml()` (`src/utils/frontmatter.ts`) with 100% byte-for-byte backwards compatibility for single-locale articles.
+  - Updated `apiResponseToLocal()` and `localToApiPayload()` (`src/client/mapper.ts`) so `POST /_emdash/api/content/{collection}` sends `translationOf` on create (never on `PUT` updates) and records the server's `translationGroup` back to disk and `base_snapshots` while clearing `translationOf`.
+  - Scoped Guard **G18 (`DUPLICATE_SLUG_CONFLICT`)** to `(collection, locale, slug)` (case-insensitive `locale` comparison, matching EmDash `UNIQUE(slug, locale)`), backed by multi-row `getSyncStatesBySlug()` / `getEntriesBySlug()` lookups in `src/db/cache.ts` (zero schema migrations).
+  - Added `--translation-of <fileOrId>` to `emit new [slug]` and `translationOf` to MCP `sync_new`, inheriting `slug` (when omitted), `featuredImage`, and `bylines` while keeping `categories`/`tags` empty by default (with warning) to respect EmDash's per-locale taxonomy resolution.
+
 ## [0.1.65] - 2026-11-26
 
 ### Added

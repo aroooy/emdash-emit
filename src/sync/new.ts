@@ -26,13 +26,14 @@ import { ulid } from 'ulidx';
 import {
   computeArticleRelativePath,
   parseMarkdown,
+  parseMarkdownLenient,
   serializeMarkdown,
   type Frontmatter,
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { normalizeTaxonomyKey } from '../utils/taxonomy-key.js';
 import { loadLocalTaxonomyCandidates } from './taxonomies.js';
-import { CANONICAL_ULID_REGEX } from '../utils/ulid.js';
+import { CANONICAL_ULID_REGEX, isCanonicalUlid } from '../utils/ulid.js';
 import type { CacheDatabase } from '../db/cache.js';
 
 export interface DuplicateSlugInfo {
@@ -67,21 +68,86 @@ export class DuplicateSlugError extends Error {
   }
 }
 
+function resolveCachedArticleLocale(
+  workspaceRoot: string,
+  relPath: string | undefined,
+  id: string,
+  cache?: CacheDatabase,
+  rawJson?: string,
+): string | null {
+  if (rawJson) {
+    try {
+      const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+      const dataObj = parsed.data as Record<string, unknown> | undefined;
+      const itemObj = (dataObj?.item as Record<string, unknown> | undefined) ?? dataObj ?? parsed;
+      if (typeof itemObj.locale === 'string' && itemObj.locale.trim()) {
+        return itemObj.locale.trim();
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (cache) {
+    const base = cache.getBaseSnapshot(id);
+    if (base?.frontmatterYaml) {
+      try {
+        const fm = JSON.parse(base.frontmatterYaml) as Record<string, unknown>;
+        if (typeof fm.locale === 'string' && fm.locale.trim()) {
+          return fm.locale.trim();
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (relPath) {
+    const fullPath = path.isAbsolute(relPath) ? relPath : path.join(workspaceRoot, relPath);
+    if (fs.existsSync(fullPath)) {
+      try {
+        const parsed = parseMarkdownLenient(fs.readFileSync(fullPath, 'utf8'));
+        if (parsed?.frontmatter.locale) {
+          return parsed.frontmatter.locale;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * Searches local workspace files and cache.db to detect duplicate slug before article creation.
+ * Searches local workspace files and cache.db to detect duplicate (collection, locale, slug) before article creation.
  */
 export function findLocalDuplicateSlug(
   workspaceRoot: string,
   collection: string,
   slug: string,
   cache?: CacheDatabase,
+  locale?: string,
 ): DuplicateSlugInfo | null {
   const normalizedSlug = slug.trim().toLowerCase();
+  const normalizedTargetLocale = locale ? locale.trim().toLowerCase() : null;
 
-  // 1. Check CacheDatabase entries and sync_state (indexed lookups)
+  // 1. Check CacheDatabase entries and sync_state (multi-row lookup for multi-locale support)
   if (cache) {
-    const syncState = cache.getSyncStateBySlug(normalizedSlug);
-    if (syncState) {
+    const syncStates = cache.getSyncStatesBySlug(normalizedSlug);
+    for (const syncState of syncStates) {
+      const firstSegment = syncState.localFilePath.split(/[\\/]/)[0];
+      if (firstSegment && firstSegment !== collection) {
+        continue;
+      }
+      if (normalizedTargetLocale) {
+        const existingLocale = resolveCachedArticleLocale(
+          workspaceRoot,
+          syncState.localFilePath,
+          syncState.id,
+          cache,
+        );
+        if (existingLocale && existingLocale.toLowerCase() !== normalizedTargetLocale) {
+          continue;
+        }
+      }
       return {
         slug: normalizedSlug,
         existingId: syncState.id,
@@ -91,8 +157,20 @@ export function findLocalDuplicateSlug(
       };
     }
 
-    const entry = cache.getEntryBySlug(normalizedSlug, collection);
-    if (entry) {
+    const entries = cache.getEntriesBySlug(normalizedSlug, collection);
+    for (const entry of entries) {
+      if (normalizedTargetLocale) {
+        const existingLocale = resolveCachedArticleLocale(
+          workspaceRoot,
+          undefined,
+          entry.id,
+          cache,
+          entry.rawJson,
+        );
+        if (existingLocale && existingLocale.toLowerCase() !== normalizedTargetLocale) {
+          continue;
+        }
+      }
       return {
         slug: normalizedSlug,
         existingId: entry.id,
@@ -116,8 +194,15 @@ export function findLocalDuplicateSlug(
         const fullPath = path.join(subDir, file);
         try {
           const raw = fs.readFileSync(fullPath, 'utf8');
-          const parsed = parseMarkdown(raw);
+          const parsed = parseMarkdownLenient(raw) ?? parseMarkdown(raw);
           if (parsed.frontmatter.slug && parsed.frontmatter.slug.toLowerCase() === normalizedSlug) {
+            if (
+              normalizedTargetLocale &&
+              parsed.frontmatter.locale &&
+              parsed.frontmatter.locale.toLowerCase() !== normalizedTargetLocale
+            ) {
+              continue;
+            }
             return {
               slug: normalizedSlug,
               existingId: parsed.frontmatter.id,
@@ -149,12 +234,94 @@ export function findLocalDuplicateSlug(
   return null;
 }
 
+interface ResolvedTranslationSource {
+  id: string;
+  slug: string;
+  locale: string;
+  translationGroup?: string;
+  featuredImage?: string | null;
+  bylines: string[];
+}
+
+function resolveTranslationSource(
+  workspaceRoot: string,
+  collection: string,
+  target: string,
+  cache?: CacheDatabase,
+): ResolvedTranslationSource {
+  const trimmed = target.trim();
+  const isUlid = isCanonicalUlid(trimmed);
+
+  const tryReadFromPath = (relOrAbsPath: string): ResolvedTranslationSource | null => {
+    const full = path.isAbsolute(relOrAbsPath)
+      ? relOrAbsPath
+      : path.join(workspaceRoot, relOrAbsPath);
+    if (!fs.existsSync(full)) return null;
+    const parsed = parseMarkdownLenient(fs.readFileSync(full, 'utf8'));
+    if (!parsed) return null;
+    return {
+      id: parsed.frontmatter.id,
+      slug: parsed.frontmatter.slug,
+      locale: parsed.frontmatter.locale || 'ja',
+      translationGroup: parsed.frontmatter.translationGroup,
+      featuredImage: parsed.frontmatter.featuredImage,
+      bylines: parsed.frontmatter.bylines ?? [],
+    };
+  };
+
+  if (!isUlid) {
+    const fromPath = tryReadFromPath(trimmed);
+    if (fromPath) return fromPath;
+  } else {
+    const normalizedId = trimmed.toUpperCase();
+    const syncState = cache?.getSyncState(normalizedId);
+    if (syncState) {
+      const fromTracked = tryReadFromPath(syncState.localFilePath);
+      if (fromTracked) return fromTracked;
+    }
+    const base = cache?.getBaseSnapshot(normalizedId);
+    if (base?.frontmatterYaml) {
+      try {
+        const fm = JSON.parse(base.frontmatterYaml) as Partial<Frontmatter>;
+        if (fm.id && fm.slug) {
+          return {
+            id: fm.id,
+            slug: fm.slug,
+            locale: fm.locale || 'ja',
+            translationGroup: fm.translationGroup,
+            featuredImage: fm.featuredImage,
+            bylines: Array.isArray(fm.bylines) ? fm.bylines : [],
+          };
+        }
+      } catch {
+        // fall through to disk scan
+      }
+    }
+    for (const sub of ['draft', 'published']) {
+      const subDir = path.join(workspaceRoot, collection, sub);
+      if (!fs.existsSync(subDir)) continue;
+      for (const file of fs.readdirSync(subDir)) {
+        if (!file.endsWith('.md')) continue;
+        if (file.toUpperCase().includes(normalizedId)) {
+          const found = tryReadFromPath(path.join(collection, sub, file));
+          if (found && found.id.toUpperCase() === normalizedId) return found;
+        }
+      }
+    }
+  }
+
+  throw new Error(
+    `Source article for --translation-of not found: "${target}". Run "emit pull ${isUlid ? trimmed : '<id>'}" first so the source article exists locally.`,
+  );
+}
+
 export interface CreateArticleOptions {
   workspaceRoot: string;
-  slug: string;
+  slug?: string;
   title?: string;
   collection?: string;
   locale?: string;
+  translationOf?: string;
   byline?: string;
   cache?: CacheDatabase;
   candidates?: TaxonomyCandidates;
@@ -198,14 +365,37 @@ function normalizeStringList(input?: string[] | string): string[] {
  */
 export function createArticleScaffold(options: CreateArticleOptions): CreateArticleResult {
   const collection = options.collection || 'posts';
-  const slug = options.slug.trim().toLowerCase();
+  const locale = options.locale || 'ja';
+  const warnings: string[] = [];
 
-  // Guard against duplicate slug across workspace files and cache.db
+  let translationSource: ResolvedTranslationSource | undefined;
+  if (options.translationOf) {
+    translationSource = resolveTranslationSource(
+      options.workspaceRoot,
+      collection,
+      options.translationOf,
+      options.cache,
+    );
+    if (translationSource.locale.toLowerCase() === locale.toLowerCase()) {
+      throw new Error(
+        `Cannot create a "${locale}" translation of "${translationSource.id}" because the source article already has locale "${translationSource.locale}". Specify a different --locale.`,
+      );
+    }
+  }
+
+  const rawSlug = options.slug?.trim() || translationSource?.slug?.trim();
+  if (!rawSlug) {
+    throw new Error('Slug is required unless --translation-of is specified.');
+  }
+  const slug = rawSlug.toLowerCase();
+
+  // Guard against duplicate (collection, locale, slug) across workspace files and cache.db
   const existingDup = findLocalDuplicateSlug(
     options.workspaceRoot,
     collection,
     slug,
     options.cache,
+    locale,
   );
   if (existingDup) {
     throw new DuplicateSlugError(existingDup);
@@ -213,11 +403,12 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
 
   const id = ulid();
   const title = options.title || slug;
-  const locale = options.locale || 'ja';
 
   let initialBylines: string[] = [];
   if (options.byline) {
     initialBylines = [options.byline];
+  } else if (translationSource && translationSource.bylines.length > 0) {
+    initialBylines = [...translationSource.bylines];
   } else if (options.cache) {
     const cached = options.cache.getBylines().filter((b) => !b.isGuest);
     if (cached.length > 0 && cached[0].slug) {
@@ -228,9 +419,16 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   const normalizedCategories = normalizeStringList(options.categories);
   const normalizedTags = normalizeStringList(options.tags);
 
+  if (translationSource && normalizedCategories.length === 0 && normalizedTags.length === 0) {
+    warnings.push(
+      'Categories and tags were not auto-copied from the source article because EmDash resolves taxonomy terms per locale. Assign locale-appropriate taxonomies manually.',
+    );
+  }
+
   let initialFeaturedImage: string | undefined;
-  if (options.featuredImage) {
-    const trimmed = options.featuredImage.trim();
+  const featuredImageInput = options.featuredImage ?? translationSource?.featuredImage ?? undefined;
+  if (featuredImageInput) {
+    const trimmed = featuredImageInput.trim();
     if (trimmed) {
       initialFeaturedImage = CANONICAL_ULID_REGEX.test(trimmed) ? trimmed.toUpperCase() : trimmed;
     }
@@ -247,7 +445,6 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   }
 
   const candidates = options.candidates || loadLocalTaxonomyCandidates(options.workspaceRoot);
-  const warnings: string[] = [];
   const candidateCategories = candidates.categories ?? [];
   const candidateTags = candidates.tags ?? [];
 
@@ -297,6 +494,10 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     status: 'draft',
     publishedAt: null,
     locale,
+    ...(translationSource ? { translationOf: translationSource.id } : {}),
+    ...(translationSource?.translationGroup
+      ? { translationGroup: translationSource.translationGroup }
+      : {}),
     taxonomies: {
       categories: normalizedCategories,
       tags: normalizedTags,

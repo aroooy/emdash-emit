@@ -227,6 +227,27 @@ export class CacheDatabase {
     };
   }
 
+  public getEntriesBySlug(slug: string, collection?: string): CachedEntry[] {
+    const query = collection
+      ? 'SELECT * FROM entries WHERE slug = ? AND collection = ?'
+      : 'SELECT * FROM entries WHERE slug = ?';
+    const stmt = this.db.prepare(query);
+    const rows = (collection ? stmt.all(slug, collection) : stmt.all(slug)) as Array<
+      Record<string, unknown>
+    >;
+    return rows.map((row) => ({
+      id: String(row.id),
+      collection: String(row.collection),
+      slug: String(row.slug),
+      status: String(row.status),
+      title: String(row.title),
+      rev: String(row.rev),
+      publishedAt: row.published_at ? String(row.published_at) : null,
+      rawJson: String(row.raw_json),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
   public getEntryBySlug(slug: string, collection?: string): CachedEntry | null {
     const query = collection
       ? 'SELECT * FROM entries WHERE slug = ? AND collection = ? LIMIT 1'
@@ -525,6 +546,12 @@ export class CacheDatabase {
     const row = stmt.get(slug) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.rowToSyncState(row);
+  }
+
+  public getSyncStatesBySlug(slug: string): SyncState[] {
+    const stmt = this.db.prepare('SELECT * FROM sync_state WHERE slug = ?');
+    const rows = stmt.all(slug) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.rowToSyncState(r));
   }
 
   public deleteSyncState(id: string): void {

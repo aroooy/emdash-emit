@@ -32,13 +32,22 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
     'sync_new',
     'Create a new article draft scaffold in posts/draft/ with standardized frontmatter (ULID, slug, title, default bylines). Returns the created relative file path and available categories/tags hints (sorted by usage) so you can edit the Markdown file directly before pushing.',
     {
-      slug: z.string().describe('URL slug for the new article'),
+      slug: z
+        .string()
+        .optional()
+        .describe('URL slug for the new article (optional when translationOf is specified)'),
       title: z.string().optional().describe('Article title'),
       collection: z
         .string()
         .optional()
         .describe('Target collection (defaults to "posts" or config)'),
       locale: z.string().optional().describe('Article locale (defaults to "ja")'),
+      translationOf: z
+        .string()
+        .optional()
+        .describe(
+          'Source article file path or 26-char ULID to link this new draft as a translation',
+        ),
       byline: z
         .string()
         .optional()
@@ -81,6 +90,7 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
           collection,
           title: args.title,
           locale: args.locale || ctx.config.defaultLocale,
+          translationOf: args.translationOf,
           byline: args.byline,
           categories: args.categories,
           tags: args.tags,
