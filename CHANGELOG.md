@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2026-11-27
+
+### Added
+
+- **Existing Taxonomy Term Updates (`emit update-term` / MCP `sync_update_term`)**:
+  - Added `taxonomyTermEndpoint()` (`src/client/endpoints.ts`), `updateTaxonomyTerm()` (`src/sync/taxonomies.ts`), CLI `emit update-term <category|tag> <target>` (`src/cli/commands/update-term.ts`), and MCP `sync_update_term` (`src/mcp/tools/sync-update-term.ts`).
+  - Supports updating `name` (`label`), `slug`, `parentId` (`--parent` / `--clear-parent`), and `description` via `PUT /_emdash/api/taxonomies/{taxonomy}/terms/{termSlug}` (with optional `?locale=` selector for translations sharing a slug), followed by `pullTaxonomies()` mirror refresh.
+  - Supports offline updates on unpromoted `drafts/` terms and forwards `description` during `emit push` promotion (`src/sync/push/taxonomy_plan.ts`).
+  - Performs fail-fast `DUPLICATE_TERM_SLUG` validation on renames and warns when local articles (including `posts/conflicts/`) still reference an old slug.
+  - Persists `description` in taxonomy YAML mirrors (`serializeTaxonomyYaml()`, `loadLocalTaxonomyTerms()`).
+
+---
+
 ## [0.2.1] - 2026-11-27
 
 ### Added

@@ -155,6 +155,9 @@ export async function promoteDraftTaxonomiesForArticle(params: {
       locale: draft.locale || parsed.frontmatter.locale || 'ja',
       parentId: resolvedParentId,
       translationOf: draft.translationOf,
+      ...(typeof draft.description === 'string' && draft.description
+        ? { description: draft.description }
+        : {}),
     });
 
     promoteLocalDraftTerm({

@@ -336,6 +336,7 @@ Emit provides **17 top-level CLI commands** (plus **10 subcommands** under `prof
 | `emit profile`                | Manage site profiles (`list`, `add`, `current`, `set-token`, `remove`, `use`)                                                     | `emit profile add blog --origin <url> --workspace .`                                                       |
 | `emit new <slug>`             | Scaffold a new draft offline (or localized translation via `--translation-of` with Auto-Map) & G18 duplicate-slug guard           | `emit new my-post -t "Title" -l ja -C tech -T ai`                                                          |
 | `emit new-term <tax> <slug>`  | Stage a new category or tag term offline in `<tax>/drafts/<locale>/` (auto-created & promoted on `emit push`)                     | `emit new-term tag typescript --name "TypeScript" -l ja`                                                   |
+| `emit update-term <tax> <tgt>`| Update an existing category or tag term (`--name`, `--slug`, `--parent`, `--clear-parent`, `--description`) and refresh local YAML | `emit update-term category news --name "お知らせ" -l ja`                                                   |
 | `emit pull [target]`          | Pull sliding window (articles + taxonomies + referenced media) or a single article by ULID/path                                   | `emit pull` / `emit pull 01M6ABCDEF...`                                                                    |
 | `emit push [file]`            | Validate (G1–G24), promote `drafts/` terms & images, acquire lock, 3-way merge, and push to EmDash                                | `emit push` / `emit push posts/ja/draft/20261104_01M6...md`                                                |
 | `emit status`                 | Inspect workspace sync status (`synced`, `published*`, `modified`, `untracked`, `invalid`) & `--i18n` coverage matrix             | `emit status --i18n` / `emit status --search "AI"`                                                         |
@@ -384,6 +385,7 @@ Every tool attaches structured `_meta` (`profile`, `workspace`, `origin`, `resol
 | `sync_diff`            | View unified diff between local working file and baseline snapshot                                                                                  |
 | `sync_new`             | Scaffold new draft article (or `translationOf` translation with locale Auto-Map) offline with canonical ULID, one-shot metadata, and taxonomy hints |
 | `sync_new_term`        | Stage a new category or tag term offline under `categories/drafts/<locale>/` or `tags/drafts/<locale>/` (auto-promoted on `sync_push`)              |
+| `sync_update_term`     | Update an existing category or tag term (`name`, `slug`, `parent`, `clearParent`, `description`) and refresh local YAML mirrors                      |
 | `sync_pull`            | Pull batch sliding window (articles + taxonomies + referenced media), single article by `id`/`filePath`, or offline `fromSnapshot: true`            |
 | `sync_push`            | Push local article changes with preflight guards (G1–G24), distributed lock, 3-way merge, `drafts/` term promotion & `media/drafts/*` auto-upload   |
 | `sync_publish`         | Promote a staged remote draft (`published*`) or `draft` article to live `published` status (enforces Guard G22)                                     |
@@ -414,7 +416,7 @@ Detailed specifications, subsystem designs, and troubleshooting guides are organ
 5. **[Two Media ID Spaces: `id` vs `storageKey` (`docs/media-id-spaces.md`)](docs/media-id-spaces.md)** — Authoritative specification of D1 record `id` vs R2 `storageKey`, endpoint lookup matrices, and migrated-corpus behavior.
 6. **[Taxonomies (Two-Layer Representation) & Bylines (`docs/taxonomies-and-bylines.md`)](docs/taxonomies-and-bylines.md)** — Layer A percent-encoded slugs vs Layer B decoded CJK display, collision resolution, 0-GET deleted taxonomy auto-healing, pre-PUT remote taxonomy audit, and author bylines.
 7. **[Safety Guardrails (G1–G24), Diagnostics, Search & Troubleshooting FAQ (`docs/safety-guards-and-diagnostics.md`)](docs/safety-guards-and-diagnostics.md)** — Complete G1–G24 guard table, `emit doctor` checks, snapshot-first search rules (`snapshotStatus`), and Troubleshooting FAQ.
-8. **[CLI Command & MCP Tool Complete Reference (`docs/cli-and-mcp-reference.md`)](docs/cli-and-mcp-reference.md)** — Full option reference and output examples for all 23 CLI commands (+10 subcommands) and 20 MCP tools.
+8. **[CLI Command & MCP Tool Complete Reference (`docs/cli-and-mcp-reference.md`)](docs/cli-and-mcp-reference.md)** — Full option reference and output examples for all 24 CLI commands (+10 subcommands) and 21 MCP tools.
 9. **[npm Publish Guide (`docs/npm-publish-guide.md`)](docs/npm-publish-guide.md)** & **[Historical Implementation Plans (`docs/plans/`)](docs/README.md)** — Release workflow and archived design plans (`v0.1.012` – `v0.1.046`).
 
 ---

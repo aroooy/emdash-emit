@@ -36,6 +36,7 @@ import type { ServerContext, ContextResolver, McpMeta } from './context.js';
 import { registerProfileTools } from './tools/profile.js';
 import { registerSyncNewTool } from './tools/sync-new.js';
 import { registerSyncNewTermTool } from './tools/sync-new-term.js';
+import { registerSyncUpdateTermTool } from './tools/sync-update-term.js';
 import { registerSyncPullTools } from './tools/sync-pull.js';
 import { registerSyncPushTool } from './tools/sync-push.js';
 import { registerSyncPublishTool } from './tools/sync-publish.js';
@@ -240,6 +241,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   });
   registerSyncNewTool(server, resolveContext);
   registerSyncNewTermTool(server, resolveContext);
+  registerSyncUpdateTermTool(server, resolveContext);
   registerSyncPullTools(server, resolveContext);
   registerSyncPushTool(server, resolveContext);
   registerSyncPublishTool(server, resolveContext);

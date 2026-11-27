@@ -97,3 +97,12 @@ Updating an article on EmDash requires two separate HTTP calls: `PUT /content/{c
 - **Automatic Cache Sync**: During `emit pull` / `sync_pull`, Emit queries EmDash's `/_emdash/api/mcp` (`byline_list`) endpoint and caches author records (`id`, `slug`, `display_name`, `is_guest`) in the `bylines` table of `.emit/cache.db`.
 - **Slug ⇔ ULID Resolution**: Frontmatter `bylines:` stores human-readable author slugs (`- aroooy`), which Emit resolves to canonical author ULIDs when building remote payloads.
 - **Deterministic Default Author on `emit new` / `sync_new`**: When scaffolding a new draft without `--byline` (`byline`), Emit automatically populates `bylines:` with the first cached non-guest author (`is_guest = 0`) ordered deterministically by `slug ASC`.
+
+---
+
+## 5. Updating Existing Terms (`emit update-term` / `sync_update_term`)
+
+- **Immediate Remote Update Model**: Existing categories and tags are updated independently of article `push` via `PUT /_emdash/api/taxonomies/{taxonomy}/terms/{termSlug}` (with optional `?locale=<locale>` selector when translations share a slug), followed by `pullTaxonomies()` to refresh local YAML mirrors.
+- **Supported Mutations**: `name` (`label`), `slug`, `parentId` (`--parent <slugOrId>` or `--clear-parent` to send `null`), and `description` (also persisted in local YAML mirrors).
+- **Offline `drafts/` Support**: Targeting an unpromoted term under `<taxonomy>/drafts/<locale>/` updates the draft YAML locally and preserves `description` through `emit push` promotion.
+- **Slug Rename Safety**: EmDash cascades term slug renames on existing remote content references (`termId`-backed). Emit scans `posts/` (`draft/`, `published/`, `conflicts/`) for any remaining references to the old slug and emits warnings (never mutating article files automatically).

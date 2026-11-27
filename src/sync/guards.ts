@@ -481,6 +481,8 @@ const REMEDIATION_MAP: Record<string, string> = {
     'Remote draft discard failed. Check network connectivity, lock status, or run "emit pull" to inspect the current remote state.',
   TAXONOMY_CREATE_FAILED:
     'Remote taxonomy term creation failed. Your staged draft YAML in categories/drafts/ or tags/drafts/ was preserved; verify network/permissions or run "emit pull" if the term already exists.',
+  TAXONOMY_UPDATE_FAILED:
+    'Remote taxonomy term update failed. Verify network connectivity, taxonomy permissions, and that the target term or new slug does not conflict with another term.',
   TAXONOMY_SLUG_MISMATCH:
     'Remote taxonomy creation normalized the slug to a different value than requested. Run "emit pull" to inspect the created term, update article frontmatter to match, and remove the local draft YAML.',
   DUPLICATE_TERM_SLUG:

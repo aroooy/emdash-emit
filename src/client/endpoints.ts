@@ -74,6 +74,22 @@ export function taxonomiesTermsEndpoint(origin: string, taxonomy: string): strin
   return new URL(`/_emdash/api/taxonomies/${taxonomy}/terms`, origin).toString();
 }
 
+export function taxonomyTermEndpoint(
+  origin: string,
+  taxonomy: string,
+  termSlug: string,
+  locale?: string,
+): string {
+  const url = new URL(
+    `/_emdash/api/taxonomies/${taxonomy}/terms/${encodeURIComponent(termSlug)}`,
+    origin,
+  );
+  if (locale && locale.trim()) {
+    url.searchParams.set('locale', locale.trim().toLowerCase());
+  }
+  return url.toString();
+}
+
 export function mediaDetailEndpoint(origin: string, mediaId: string): string {
   return new URL(`/_emdash/api/media/${mediaId}`, origin).toString();
 }
