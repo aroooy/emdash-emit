@@ -117,6 +117,8 @@ export interface PullResult {
   media?: PullArticleMediaSummary;
   /** Count of preserved opaque blocks (<!--ec:block ... -->) retaining custom/styled attributes. */
   preservedBlocks?: number;
+  /** Informational notices or warnings surfaced to Layer 3 (e.g. opaque custom fields preserved). */
+  warnings?: string[];
 }
 
 /**

@@ -27,6 +27,7 @@ import { ApiError } from '../../client/error.js';
 import { createAuthedFetch } from '../../client/http.js';
 import { withEntryLock } from '../../client/lock.js';
 import { localToApiPayload } from '../../client/mapper.js';
+import { readBaselineExtraData } from '../../db/baseline.js';
 import { articleContentEndpoint } from '../../client/endpoints.js';
 import { parseMarkdown, type TaxonomyCandidates } from '../../utils/frontmatter.js';
 import { syncRemoteBylines } from '../bylines.js';
@@ -336,7 +337,11 @@ export async function pushArticle(
         );
       }
 
-      let payload = localToApiPayload(parsed, currentRev, effectiveOptions);
+      const opaqueExtraData = readBaselineExtraData(baseSnapshot);
+      let payload = localToApiPayload(parsed, currentRev, {
+        ...effectiveOptions,
+        opaqueExtraData,
+      });
       warnings.push(
         ...preserveOrResolveFeaturedImage(
           payload,
@@ -404,7 +409,10 @@ export async function pushArticle(
         if (conflictOutcome.mergedParsed && conflictOutcome.remoteParsedRev) {
           parsed.frontmatter = conflictOutcome.mergedParsed.frontmatter;
           parsed.body = conflictOutcome.mergedParsed.body;
-          payload = localToApiPayload(parsed, conflictOutcome.remoteParsedRev, effectiveOptions);
+          payload = localToApiPayload(parsed, conflictOutcome.remoteParsedRev, {
+            ...effectiveOptions,
+            opaqueExtraData: conflictOutcome.remoteOpaqueExtraData ?? opaqueExtraData,
+          });
           warnings.push(
             ...preserveOrResolveFeaturedImage(
               payload,

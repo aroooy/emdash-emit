@@ -71,11 +71,11 @@ export const EMIT_MCP_INSTRUCTIONS = `
 Emit manages articles, taxonomies, and media as plain files on your local filesystem, backed by a local SQLite cache.
 
 ## Local Directory Structure
-- posts/published/YYYYMMDD_<ulid>-<title>.md : Published articles in Markdown
-- posts/draft/YYYYMMDD_<ulid>-<title>.md : Draft articles in Markdown
+- posts/<locale>/published/YYYYMMDD_<ulid>-<title>.md : Published articles in Markdown (e.g. posts/ja/published/...)
+- posts/<locale>/draft/YYYYMMDD_<ulid>-<title>.md : Draft articles in Markdown (e.g. posts/en/draft/...)
 - posts/conflicts/<name>.conflict.md : Preserved divergent local copies (read-only rescue content; never an article)
-- categories/<id>-<name>.yaml : Category definitions
-- tags/<id>-<name>.yaml : Tag definitions
+- categories/<locale>/<id>-<name>.yaml : Category definitions
+- tags/<locale>/<id>-<name>.yaml : Tag definitions
 - media/<markdownRef>.<ext> & .yaml : Media assets & companion metadata (markdownRef derived from the storageKey)
 - media/drafts/<filename> : Staging folder for offline draft images (auto-uploaded on sync_push)
 
@@ -88,7 +88,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 - Every EmDash asset has two unrelated ULIDs: the D1 media record id (used by GET /_emdash/api/media/{id}) and the R2 storageKey (served by /_emdash/api/media/file/{storageKey}). They never match for the same asset, so a local mirror named media/<yyyyMMdd>_<record-id>-<name> is never addressable by its own body URL. Full specification: docs/media-id-spaces.md in this repository.
 - Frontmatter featuredImage uses the 26-character media record id (e.g. "01M67P0MBMJQQXH2K95HHCYRYB") or null.
 - Markdown body images use the storageKey-based URL: ![alt](/_emdash/api/media/file/<storageKey>). Never put a media record id in /_emdash/api/media/file/.
-- For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media/ (the file is moved from media/drafts/ to media/, keeping media/drafts/ clean).
+- For new local images, place the file in media/drafts/<filename> and reference it on a standalone line: ![alt](../../../media/drafts/<filename>). sync_push will automatically upload it, rewrite the Markdown URL, and promote the file into media/ (the file is moved from media/drafts/ to media/, keeping media/drafts/ clean).
 - Never treat an unresolved body storageKey as proof that a media record is missing, and never create or register media records from Emit. GET /_emdash/api/media/{id} searches the record id, so querying it with a storageKey returns 401 without a bearer token and 404 for a record that does exist. The list operation GET /_emdash/api/media is the only endpoint that reports each record's own storageKey and exposes no key filter. Use sync_doctor with checkMediaLibrary:true to compare remote and local counts before investigating server-side.
 
 ## AI Workflow (The Golden Path)
@@ -96,7 +96,7 @@ Emit manages articles, taxonomies, and media as plain files on your local filesy
 2. [PULL]: Use sync_pull to sync articles AND taxonomies (categories/tags) from EmDash remote. Batch mode automatically pulls both and returns available taxonomy hints (also returned with postsOnly:true). Use postsOnly:true to skip taxonomies. Use includeMedia:true to also pull media assets.
 3. [READ & EDIT]: Read and edit the local Markdown files directly using your standard filesystem tools. Full article content and metadata (title, slug, status, bylines, taxonomies) are stored in the Markdown files.
 4. [PUSH]: Use sync_push with filePath to sync your changes to the remote EmDash CMS. If transitioning status from draft to published, pass allowPublish: true.
-5. [NEW]: Use sync_new to scaffold a new draft file in posts/draft/ (it returns available categories/tags hints). Rejects duplicates if slug already exists locally or in cache.
+5. [NEW]: Use sync_new to scaffold a new draft file in posts/<locale>/draft/ (it returns available categories/tags hints). Rejects duplicates if slug already exists locally or in cache.
 6. [DELETE]: Use sync_delete to permanently delete an article from both local workspace and remote CMS. Strictly refuses deletion if unpushed local modifications exist. Requires allowDeletePublished: true for published articles. Automatically saves a rescue copy in posts/conflicts/<file>.deleted.md and preserves referenced media files in media/.
 7. [CONFLICTS]: Use sync_conflicts to inspect quarantined sync conflict copies (.conflict.md) and deletion rescue backups (.deleted.md) in posts/conflicts/ (action: 'list' | 'diff' | 'resolve', strategy: 'accept-local' | 'accept-canonical'). Overwriting canonical files with unpushed edits requires force: true (G13).
 8. [DOCTOR]: Use sync_doctor to diagnose workspace health (version compatibility, origin consistency, frontmatter integrity, conflicts/quarantine, and media references). For a revoked or mis-scoped token, pass checkAuth: true — it makes exactly one authenticated request and reports whether the origin accepts your credentials (remediation: emit profile set-token).

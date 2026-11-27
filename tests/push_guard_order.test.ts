@@ -36,7 +36,7 @@ describe('Push Guard Evaluation Order & T2-1 Regression Lock (B3)', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-guard-order-test-'));
     fs.mkdirSync(path.join(tmpDir, '.emit'), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'posts', 'ja', 'draft'), { recursive: true });
     cache = new CacheDatabase(path.join(tmpDir, '.emit', 'cache.db'));
   });
 
@@ -47,7 +47,7 @@ describe('Push Guard Evaluation Order & T2-1 Regression Lock (B3)', () => {
 
   it('T2-1 Regression Lock: G6 (UNRESOLVED_CONFLICT_MARKERS) fires BEFORE G16 (TAXONOMY_CONFLICT_PENDING)', async () => {
     const articleId = '01M6TESTLOCKORDER000000000';
-    const relPath = `posts/draft/20261113_${articleId}-conflict-marker.md`;
+    const relPath = `posts/ja/draft/20261113_${articleId}-conflict-marker.md`;
     const fullPath = path.join(tmpDir, relPath);
 
     // Article body contains conflict markers
@@ -108,7 +108,7 @@ Remote incoming content
   });
 
   it('preflight internal ordering: G6 conflict markers are evaluated and reported in preflight', () => {
-    const filePath = 'posts/draft/test.md';
+    const filePath = 'posts/ja/draft/test.md';
     const raw = `---
 id: 01M6TESTPREFLIGHTORDER0000
 slug: test

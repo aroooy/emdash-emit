@@ -108,7 +108,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
   it('tracks sync state and path mappings', () => {
     const state: SyncState = {
       id: '01M67MP2W0VKCK2DFWM166CR24',
-      localFilePath: 'posts/draft/01M67MP2W0VKCK2DFWM166CR24-my-post.md',
+      localFilePath: 'posts/ja/draft/01M67MP2W0VKCK2DFWM166CR24-my-post.md',
       localHash: 'hash_local_123',
       remoteRev: 'rev_remote_456',
       status: 'draft',
@@ -134,7 +134,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     expect(byPath).toEqual(state);
 
     // Path lookup for non-existing path returns null
-    expect(cache.getSyncStateByPath('posts/draft/non-existing.md')).toBeNull();
+    expect(cache.getSyncStateByPath('posts/ja/draft/non-existing.md')).toBeNull();
 
     // Delete
     cache.deleteSyncState(state.id);
@@ -290,7 +290,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
         slug TEXT NOT NULL,
         last_synced_at INTEGER NOT NULL
       );
-      INSERT INTO sync_state VALUES ('test-id', 'posts/draft/test.md', 'hash1', '1', 'draft', 'test', 12345);
+      INSERT INTO sync_state VALUES ('test-id', 'posts/ja/draft/test.md', 'hash1', '1', 'draft', 'test', 12345);
       PRAGMA user_version = 0;
     `);
     rawDb.close();
@@ -342,7 +342,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // Initially set conflict pending and copy metadata
     cache.saveSyncState({
       id,
-      localFilePath: 'posts/draft/test.md',
+      localFilePath: 'posts/ja/draft/test.md',
       localHash: 'hash1',
       remoteRev: '1',
       status: 'draft',
@@ -362,7 +362,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     // Save with pending = 0
     cache.saveSyncState({
       id,
-      localFilePath: 'posts/draft/test.md',
+      localFilePath: 'posts/ja/draft/test.md',
       localHash: 'hash2',
       remoteRev: '2',
       status: 'draft',
@@ -386,7 +386,7 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     const id = '01M67TESTT44000000000000000';
     cache.saveSyncState({
       id,
-      localFilePath: 'posts/draft/test.md',
+      localFilePath: 'posts/ja/draft/test.md',
       localHash: 'hash1',
       remoteRev: '1',
       status: 'draft',
@@ -430,11 +430,11 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
         taxonomy_apply_pending INTEGER DEFAULT 0
       );
       -- Row 1: has conflict_copy_path ending in .conflict.md (body conflict)
-      INSERT INTO sync_state VALUES ('id-body', 'posts/draft/b.md', 'h1', '1', 'draft', 'b', 1000, 1, 0, 'h', 'posts/conflicts/b.conflict.md', 1000, NULL, 0);
+      INSERT INTO sync_state VALUES ('id-body', 'posts/ja/draft/b.md', 'h1', '1', 'draft', 'b', 1000, 1, 0, 'h', 'posts/conflicts/b.conflict.md', 1000, NULL, 0);
       -- Row 2: conflict_pending = 1 but no copy path and has remote_taxonomy_hash (taxonomy conflict)
-      INSERT INTO sync_state VALUES ('id-tax', 'posts/draft/t.md', 'h2', '1', 'draft', 't', 1000, 1, 0, NULL, NULL, NULL, 'taxhash', 0);
+      INSERT INTO sync_state VALUES ('id-tax', 'posts/ja/draft/t.md', 'h2', '1', 'draft', 't', 1000, 1, 0, NULL, NULL, NULL, 'taxhash', 0);
       -- Row 3: normal clean row
-      INSERT INTO sync_state VALUES ('id-clean', 'posts/draft/c.md', 'h3', '1', 'draft', 'c', 1000, 0, 0, NULL, NULL, NULL, NULL, 0);
+      INSERT INTO sync_state VALUES ('id-clean', 'posts/ja/draft/c.md', 'h3', '1', 'draft', 'c', 1000, 0, 0, NULL, NULL, NULL, NULL, 0);
       PRAGMA user_version = 2;
     `);
     rawDb.close();
@@ -630,8 +630,8 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
     migrated.close();
   });
 
-  it('v0.1.47 Phase 1: initializes fresh DB directly at current schema (v7) with snapshot tables', () => {
-    expect(cache.getSchemaVersion()).toBe(8);
+  it('v0.1.47 Phase 1: initializes fresh DB directly at current schema (v9) with snapshot tables', () => {
+    expect(cache.getSchemaVersion()).toBe(9);
     expect(cache.getSnapshotMeta('posts')).toBeNull();
     expect(cache.listSnapshotArticles('posts')).toEqual([]);
     expect(cache.listSnapshotMedia()).toEqual([]);
@@ -648,13 +648,13 @@ describe('SQLite CacheDatabase (node:sqlite)', () => {
       CREATE TABLE bylines (id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, is_guest INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL);
       CREATE TABLE media_state (storage_key TEXT PRIMARY KEY, media_id TEXT NOT NULL, local_content_hash TEXT, remote_record_ref TEXT, url TEXT NOT NULL, workspace_path TEXT, markdown_ref TEXT, status TEXT NOT NULL, uploaded_at INTEGER);
       INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
-      VALUES ('01M6KEEP000000000000000001', 'posts/published/keep.md', 'h1', '1', 'published', 'keep', 1730000000);
+      VALUES ('01M6KEEP000000000000000001', 'posts/ja/published/keep.md', 'h1', '1', 'published', 'keep', 1730000000);
       PRAGMA user_version = 5;
     `);
     rawDb.close();
 
     const migrated = new CacheDatabase(v5DbPath);
-    expect(migrated.getSchemaVersion()).toBe(8);
+    expect(migrated.getSchemaVersion()).toBe(9);
     expect(migrated.getSyncState('01M6KEEP000000000000000001')?.slug).toBe('keep');
     expect(migrated.getSnapshotMeta('posts')).toBeNull();
     migrated.close();

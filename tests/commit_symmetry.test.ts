@@ -62,10 +62,10 @@ describe('commitArticleSnapshot (Phase 0 Centralized Commit)', () => {
 
   it('guarantees localHash == calculateHash(diskContent) and baselineHash == calculateHash(canonicalContent)', () => {
     const diskContent =
-      '---\nid: 01M77VFT15HSH2M1XW8MJPTCPQ\n---\nLocal body with ../../media/image.jpg';
+      '---\nid: 01M77VFT15HSH2M1XW8MJPTCPQ\n---\nLocal body with ../../../media/image.jpg';
     const canonicalContent =
       '---\nid: 01M77VFT15HSH2M1XW8MJPTCPQ\n---\nCanonical body with /_emdash/api/media/file/img.jpg';
-    const relPath = 'posts/published/20261113_01M77VFT15HSH2M1XW8MJPTCPQ-kingfisher-photo.md';
+    const relPath = 'posts/ja/published/20261113_01M77VFT15HSH2M1XW8MJPTCPQ-kingfisher-photo.md';
 
     const result = commitArticleSnapshot(cache, tempDir, {
       id: sampleFrontmatter.id,
@@ -108,7 +108,7 @@ describe('commitArticleSnapshot (Phase 0 Centralized Commit)', () => {
   });
 
   it('supports bumpBaselineHashOnly for heal operations', () => {
-    const relPath = 'posts/published/test.md';
+    const relPath = 'posts/ja/published/test.md';
     const initialDisk = 'initial disk';
 
     commitArticleSnapshot(cache, tempDir, {
@@ -143,7 +143,7 @@ describe('commitArticleSnapshot (Phase 0 Centralized Commit)', () => {
   });
 
   it('honors skipDiskWrite when disk was already written', () => {
-    const relPath = 'posts/published/custom.md';
+    const relPath = 'posts/ja/published/custom.md';
     const fullPath = path.resolve(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, 'already on disk', 'utf8');

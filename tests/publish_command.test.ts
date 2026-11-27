@@ -36,7 +36,7 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
   }): string {
     const folder = opts.status === 'published' ? 'published' : 'draft';
     const titleSlug = opts.title.replace(/\s+/g, '-');
-    const relPath = `posts/${folder}/20261126_${opts.id}-${titleSlug}.md`;
+    const relPath = `posts/ja/${folder}/20261126_${opts.id}-${titleSlug}.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -230,7 +230,7 @@ describe('emit publish / publishArticle (v0.1.63)', () => {
     });
 
     expect(res.previousFilePath).toBe(relPath);
-    expect(res.filePath).toBe(`posts/published/20261126_${id}-Draft-To-Live.md`);
+    expect(res.filePath).toBe(`posts/ja/published/20261126_${id}-Draft-To-Live.md`);
     expect(fs.existsSync(path.join(tempDir, relPath))).toBe(false);
     expect(fs.existsSync(path.join(tempDir, res.filePath))).toBe(true);
     const parsed = parseMarkdown(fs.readFileSync(path.join(tempDir, res.filePath), 'utf8'));

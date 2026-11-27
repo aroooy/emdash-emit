@@ -127,14 +127,14 @@ describe('Guard Registry and Error Codes Invariants (L6)', () => {
       }
     }
 
-    // G1..G23 IDs must be strictly sequential 1..23 without gaps
+    // G1..G24 IDs must be strictly sequential 1..24 without gaps
     const ids = GUARD_REGISTRY.map((g) => g.id);
-    expect(ids).toEqual(Array.from({ length: 23 }, (_, i) => i + 1));
+    expect(ids).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
   });
 
   it('Rule 4: Behavior validation for code-less guards (G1, G7, G8, G11-label)', () => {
     const validUlid = '01M6ABCDEF1234567890123456';
-    const filePath = `posts/draft/20261112_${validUlid}-test.md`;
+    const filePath = `posts/ja/draft/20261112_${validUlid}-test.md`;
 
     const baseFrontmatter = {
       id: validUlid,
@@ -197,10 +197,10 @@ describe('Guard Registry and Error Codes Invariants (L6)', () => {
     const testContents = testFiles.map((file) => fs.readFileSync(file, 'utf-8'));
 
     const activeGuards = GUARD_REGISTRY.filter((g) => g.codes.length > 0);
-    expect(activeGuards.length).toBe(20);
+    expect(activeGuards.length).toBe(21);
 
     const codesToCheck = Array.from(new Set(activeGuards.flatMap((g) => g.codes)));
-    expect(codesToCheck.length).toBe(24);
+    expect(codesToCheck.length).toBe(25);
 
     const unassertedCodes: string[] = [];
     for (const code of codesToCheck) {

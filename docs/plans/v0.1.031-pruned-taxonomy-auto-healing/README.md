@@ -10,6 +10,7 @@
 ## 0. エグゼクティブサマリー
 
 ### ユーザーからの課題報告
+
 > 「タグやカテゴリを削除したあとに、その後、そのタグやカテゴリを参照している投稿を PULL しても、変更無し（skipped）と判定される。しかし実際はタグなどが削除されているので、YAML フロントマターは `[]` などになるべきではないか。」
 
 ### 根本原因と三重レビューによる技術的真実の確定
@@ -112,8 +113,14 @@ export function carriesPrunedTaxonomies(
   if (!taxonomies) return false;
 
   for (const [taxName, terms] of Object.entries(taxonomies)) {
-    if (taxName !== 'category' && taxName !== 'tag' && taxName !== 'categories' && taxName !== 'tags') continue;
-    const kind = (taxName === 'categories' || taxName === 'category') ? 'category' : 'tag';
+    if (
+      taxName !== 'category' &&
+      taxName !== 'tag' &&
+      taxName !== 'categories' &&
+      taxName !== 'tags'
+    )
+      continue;
+    const kind = taxName === 'categories' || taxName === 'category' ? 'category' : 'tag';
     if (!Array.isArray(terms)) continue;
     for (const term of terms) {
       if (!isKnownTaxonomyTerm(term, kind, maps)) {
@@ -141,7 +148,12 @@ export function pruneNonexistentTaxonomies(
 
   for (const [key, terms] of Object.entries(taxonomies)) {
     if (!Array.isArray(terms)) continue;
-    const kind = (key === 'categories' || key === 'category') ? 'category' : (key === 'tags' || key === 'tag') ? 'tag' : null;
+    const kind =
+      key === 'categories' || key === 'category'
+        ? 'category'
+        : key === 'tags' || key === 'tag'
+          ? 'tag'
+          : null;
     if (!kind) {
       prunedTaxonomies[key] = [...terms]; // 自定义 taxonomy キーはそのまま温存
       continue;
@@ -175,7 +187,12 @@ export function canonicalizeTaxonomiesForBaseline(
 ): Record<string, string[]> {
   const canon: Record<string, string[]> = {};
   for (const [key, terms] of Object.entries(taxonomies)) {
-    const kind = (key === 'categories' || key === 'category') ? 'category' : (key === 'tags' || key === 'tag') ? 'tag' : null;
+    const kind =
+      key === 'categories' || key === 'category'
+        ? 'category'
+        : key === 'tags' || key === 'tag'
+          ? 'tag'
+          : null;
     if (!kind) {
       canon[key] = [...terms];
       continue;
@@ -197,6 +214,7 @@ export function canonicalizeTaxonomiesForBaseline(
 ### 3. 【Layer 2 Pull】Fast-Path での自己修復統合（`src/sync/pull/fast_path.ts`）
 
 #### ブロッカー C 解消: フラグの完全貫通
+
 1. `PullOptions`（`src/sync/pull/types.ts`）に `canPruneTaxonomies?: boolean` を追加。
 2. CLI / MCP → `orchestrator.ts`（`pullBatch` / `pullSingleArticle`）にて：
    ```ts
@@ -207,18 +225,17 @@ export function canonicalizeTaxonomiesForBaseline(
 3. `pull/index.ts` の `FastPathContext` に `getTaxonomyMaps: () => TaxonomyLookupMaps` および `canPruneTaxonomies: boolean` を渡す。
 
 #### Fast-Path での自己修復コード
+
 ```ts
 const maps = options.getTaxonomyMaps();
 const candidates = getTaxonomyCandidates();
 
 // Epistemic rule: Only trigger pruning when taxonomy sync was performed and succeeded!
-const hasPrunedTax = Boolean(options.canPruneTaxonomies) && carriesPrunedTaxonomies(parsedCurrent.frontmatter.taxonomies, maps);
+const hasPrunedTax =
+  Boolean(options.canPruneTaxonomies) &&
+  carriesPrunedTaxonomies(parsedCurrent.frontmatter.taxonomies, maps);
 
-if (
-  carriesPercentEncodedTaxonomy(currentDiskContent) ||
-  needsDraftRevisionHeal ||
-  hasPrunedTax
-) {
+if (carriesPercentEncodedTaxonomy(currentDiskContent) || needsDraftRevisionHeal || hasPrunedTax) {
   const { prunedTaxonomies, removedTerms } = hasPrunedTax
     ? pruneNonexistentTaxonomies(parsedCurrent.frontmatter.taxonomies, maps)
     : { prunedTaxonomies: parsedCurrent.frontmatter.taxonomies, removedTerms: {} };
@@ -228,12 +245,9 @@ if (
     taxonomies: prunedTaxonomies,
   };
 
-  const respelledCanon = serializeMarkdown(
-    healedFrontmatter,
-    parsedCurrent.body,
-    candidates,
-    { hasDraftRevision: hasDraft },
-  );
+  const respelledCanon = serializeMarkdown(healedFrontmatter, parsedCurrent.body, candidates, {
+    hasDraftRevision: hasDraft,
+  });
   const respelled = localizeDiskMarkdown(respelledCanon, existingSync.localFilePath);
 
   if (respelled !== currentDiskContent) {
@@ -297,10 +311,12 @@ if (
 `src/sync/push/index.ts` および `src/sync/push/taxonomy_plan.ts` を改修：
 
 #### 1. Wiring の整合
+
 `push/index.ts:338` の `auditRemoteTaxonomies` を呼び出す update 経路において、得られた `remoteTaxAudit`（`{ categories?: string[]; tags?: string[] } | null`）を `syncArticleTaxonomies` のパラメータに渡す。
 ※ create 経路（新規作成記事）は `auditRemoteTaxonomies` が呼ばれないため（`push/index.ts:163,338`）、update 経路の audit 結果渡しのみで完全整合します。
 
 #### 2. G19 判定の厳密化（3 条件）
+
 `src/sync/push/taxonomy_plan.ts:148-167`:
 
 ```ts
@@ -308,17 +324,22 @@ if (resolvedTermIds.length === 0) {
   const baseFm = readBaselineFrontmatter(baseSnapshot);
   const prevTerms =
     taxonomyName === 'category' ? baseFm?.taxonomies?.categories : baseFm?.taxonomies?.tags;
-  
+
   if (prevTerms && prevTerms.length > 0) {
     // Review Point B: Check whether remote actually has 0 assignments via tax_audit
     const taxKey = taxonomyName === 'category' ? 'categories' : 'tags';
-    const auditKnown = params.remoteTaxAudit !== null && params.remoteTaxAudit !== undefined && Array.isArray(params.remoteTaxAudit[taxKey]);
+    const auditKnown =
+      params.remoteTaxAudit !== null &&
+      params.remoteTaxAudit !== undefined &&
+      Array.isArray(params.remoteTaxAudit[taxKey]);
     const remoteCount = auditKnown ? params.remoteTaxAudit![taxKey]!.length : null;
 
     if (remoteCount === 0) {
       // Remote already has 0 assignments: Clean bypass!
       // Remote terms are already deleted on CMS, so sending empty termIds [] cleans up orphan relations safely.
-      warnings.push(`🏷️ Remote ${taxonomyName} terms were already unassigned; synchronizing empty assignment.`);
+      warnings.push(
+        `🏷️ Remote ${taxonomyName} terms were already unassigned; synchronizing empty assignment.`,
+      );
     } else {
       // remoteCount > 0 or unknown (including --no-taxonomy-audit): Enforce G19 Guard!
       if (!options.allowWipeTaxonomies && !options.force && !options.resolveTaxonomy) {
@@ -343,7 +364,9 @@ if (resolvedTermIds.length === 0) {
 `src/presentation/article_report.ts` にフォーマッタを追加：
 
 ```ts
-export function formatPrunedTaxonomiesNotice(pruned: PrunedTaxonomiesDetail | undefined): string | null {
+export function formatPrunedTaxonomiesNotice(
+  pruned: PrunedTaxonomiesDetail | undefined,
+): string | null {
   if (!pruned) return null;
   const parts: string[] = [];
   if (pruned.categories && pruned.categories.length > 0) {
@@ -381,15 +404,15 @@ CLI（`pull.ts`）および MCP（`sync-pull.ts`）で、`res.prunedTaxonomies` 
 
 テストコードは新設する **`tests/taxonomy_key.test.ts`**（Layer 0）および **`tests/pull_taxonomy_pruning.test.ts`**（Layer 2 結合）に配置：
 
-| テスト ID | 対象ファイル | 検証内容 | 注入経路 / 測定方法 |
-|---|---|---|---|
-| **T1** | `tests/taxonomy_key.test.ts` | `isKnownTaxonomyTerm` および `pruneNonexistentTaxonomies` が、ULID、canonical slug、decoded slug、一意 name alias を正確に識別し、同一スラッグの loser ULID を誤置換せず保持すること | maps 注入による単体テスト |
-| **T2** | `tests/pull_taxonomy_pruning.test.ts` | リモートでタグが削除され `pullTaxonomies` で prune された後、未編集記事（hash match）の `pullArticle`（Fast-Path）が本文 GET（`GET /posts/{id}`）0 件でフロントマターから該当タグを除去し `healed: true` かつ `prunedTaxonomies` を返すこと | mockFetch URL 分類（`/posts/${id}` が 0 回） |
-| **T3** | `tests/pull_taxonomy_pruning.test.ts` | 全タグが削除された記事について、フロントマターの `tags` が `[]` に自己修復され、次回 `pushArticle` 時に G4 も G19 も発火せず `POST /terms/tag` (`termIds: []`) が発行されてリモートが清理されること（divergence merge 経路に入らないこと） | push 時のモックとリクエスト body assert |
-| **T4** | `tests/pull_taxonomy_pruning.test.ts` | ユーザーがローカルで記事を編集中の場合（`currentDiskHash !== existingSync.localHash`），フロントマターの未定義タグは勝手に消去されず、ローカル編集が 100% 保護されること | ローカル編集ファイルの pull 実行後のハッシュ・内容比較 |
-| **T5** | `tests/pull_taxonomy_pruning.test.ts` | バッチ Pull（`pullBatch`）において、複数記事にまたがる削除済みタグが一斉に自己修復され、`sync_state.remote_taxonomy_hash` が整合すること | 複数記事 fixture での batch pull |
-| **T6** | `tests/pull_taxonomy_pruning.test.ts` | 自己修復直後に `inspectArticleDiff`（`diff.ts:176`）を実行し、phantom diff が一切表示されないこと（Layer A 更新の検証） | `inspectArticleDiff` の差分行数 assert |
-| **T7** | `tests/pull_taxonomy_pruning.test.ts` | `--posts-only` 実行時、および `pullTaxonomies` 失敗時（`tagsFailed: true`）は、間引き処理が発火せずローカルフロントマターが保護されること（Epistemic Rule 検証） | `canPruneTaxonomies: false` 注入 |
+| テスト ID | 対象ファイル                          | 検証内容                                                                                                                                                                                                                                    | 注入経路 / 測定方法                                    |
+| --------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **T1**    | `tests/taxonomy_key.test.ts`          | `isKnownTaxonomyTerm` および `pruneNonexistentTaxonomies` が、ULID、canonical slug、decoded slug、一意 name alias を正確に識別し、同一スラッグの loser ULID を誤置換せず保持すること                                                        | maps 注入による単体テスト                              |
+| **T2**    | `tests/pull_taxonomy_pruning.test.ts` | リモートでタグが削除され `pullTaxonomies` で prune された後、未編集記事（hash match）の `pullArticle`（Fast-Path）が本文 GET（`GET /posts/{id}`）0 件でフロントマターから該当タグを除去し `healed: true` かつ `prunedTaxonomies` を返すこと | mockFetch URL 分類（`/posts/${id}` が 0 回）           |
+| **T3**    | `tests/pull_taxonomy_pruning.test.ts` | 全タグが削除された記事について、フロントマターの `tags` が `[]` に自己修復され、次回 `pushArticle` 時に G4 も G19 も発火せず `POST /terms/tag` (`termIds: []`) が発行されてリモートが清理されること（divergence merge 経路に入らないこと）  | push 時のモックとリクエスト body assert                |
+| **T4**    | `tests/pull_taxonomy_pruning.test.ts` | ユーザーがローカルで記事を編集中の場合（`currentDiskHash !== existingSync.localHash`），フロントマターの未定義タグは勝手に消去されず、ローカル編集が 100% 保護されること                                                                    | ローカル編集ファイルの pull 実行後のハッシュ・内容比較 |
+| **T5**    | `tests/pull_taxonomy_pruning.test.ts` | バッチ Pull（`pullBatch`）において、複数記事にまたがる削除済みタグが一斉に自己修復され、`sync_state.remote_taxonomy_hash` が整合すること                                                                                                    | 複数記事 fixture での batch pull                       |
+| **T6**    | `tests/pull_taxonomy_pruning.test.ts` | 自己修復直後に `inspectArticleDiff`（`diff.ts:176`）を実行し、phantom diff が一切表示されないこと（Layer A 更新の検証）                                                                                                                     | `inspectArticleDiff` の差分行数 assert                 |
+| **T7**    | `tests/pull_taxonomy_pruning.test.ts` | `--posts-only` 実行時、および `pullTaxonomies` 失敗時（`tagsFailed: true`）は、間引き処理が発火せずローカルフロントマターが保護されること（Epistemic Rule 検証）                                                                            | `canPruneTaxonomies: false` 注入                       |
 
 ---
 

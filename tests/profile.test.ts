@@ -316,7 +316,7 @@ describe('Profile Management (profiles.yaml)', () => {
     );
 
     const fromPhysical = findProfileByDirectory(
-      path.join(realA, 'posts/draft'),
+      path.join(realA, 'posts/ja/draft'),
       customProfilesPath,
     );
     expect(fromPhysical?.name).toBe('via-link');
@@ -372,7 +372,9 @@ describe('detectWorkspaceLinkDrift (v0.1.38 P2)', () => {
   it('treats a nested run inside the registered workspace as no drift', () => {
     const root = path.join(tmpDir, 'blog');
     fs.mkdirSync(root, { recursive: true });
-    expect(detectWorkspaceLinkDrift('site', root, path.join(root, 'posts', 'draft'))).toBeNull();
+    expect(
+      detectWorkspaceLinkDrift('site', root, path.join(root, 'posts', 'ja', 'draft')),
+    ).toBeNull();
   });
 
   it('treats trailing-slash and symlink spellings of the same folder as no drift', () => {

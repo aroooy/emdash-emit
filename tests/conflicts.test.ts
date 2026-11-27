@@ -73,6 +73,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     const canonicalContent = serializeMarkdown(frontmatter, body);
     const relCanonical = path.join(
       'posts',
+      'ja',
       'draft',
       `20261108_${articleId}-sample-conflict-article.md`,
     );
@@ -302,6 +303,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     const expectedRestored = path.join(
       tempDir,
       'posts',
+      'ja',
       'draft',
       `20261108_${rescueId}-restored-deleted-post.md`,
     );
@@ -406,7 +408,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
 
     // 3. Normal conflict copy whose canonical article has NO unpushed edits
     const cleanId = '01M67CLEANARTICLE0000000001';
-    const cleanCanonicalRel = `posts/draft/20261109_${cleanId}-clean.md`;
+    const cleanCanonicalRel = `posts/ja/draft/20261109_${cleanId}-clean.md`;
     const cleanCanonicalFull = path.join(tempDir, cleanCanonicalRel);
     const cleanContent = `---\nid: ${cleanId}\nslug: clean\ntitle: Clean\nstatus: draft\nlocale: ja\n---\nClean body\n`;
     fs.writeFileSync(cleanCanonicalFull, cleanContent);
@@ -697,7 +699,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
 
   it('localizes media refs in conflicted disk file and aligns localHash during 409 body conflict', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relCanonical = `posts/published/20261113_${articleId}-conflict-media.md`;
+    const relCanonical = `posts/ja/published/20261113_${articleId}-conflict-media.md`;
     const fullCanonical = path.join(tempDir, relCanonical);
     fs.mkdirSync(path.dirname(fullCanonical), { recursive: true });
 
@@ -708,7 +710,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     fs.mkdirSync(path.dirname(mediaFullPath), { recursive: true });
     fs.writeFileSync(mediaFullPath, 'fake-media-bytes', 'utf8');
 
-    const localMediaRef = `../../media/${mediaStorageKey}`;
+    const localMediaRef = `../../../media/${mediaStorageKey}`;
     const remoteMediaRef = `/_emdash/api/media/file/${mediaStorageKey}`;
 
     const mediaId = toMediaRecordId('01M6TESTMED1A0000000000000')!;
@@ -833,7 +835,7 @@ describe('Conflict Management & Resolution (emit conflicts / sync_conflicts)', (
     const { CanonicalHasUnpushedEditsError } = await import('../src/sync/conflicts.js');
 
     const articleId = '01M6RESOLVEMODIFIED0000001';
-    const relCanonical = `posts/draft/20261115_${articleId}-Resolve-Modified.md`;
+    const relCanonical = `posts/ja/draft/20261115_${articleId}-Resolve-Modified.md`;
     const fullCanonical = path.join(tempDir, relCanonical);
     const conflictRel = `posts/conflicts/20261115_${articleId}-Resolve-Modified.20261115100000.conflict.md`;
     const conflictFull = path.join(tempDir, conflictRel);

@@ -10,14 +10,14 @@ EmDash stores non-ASCII category and tag slugs on the server as lowercase percen
 
 Emit solves this with a strict **Two-Layer Representation**:
 
-| Layer | Representation | Example | Where It Lives |
-| --- | --- | --- | --- |
-| **Layer A: Canonical Transport & Baseline** | Lowercase percent-encoded slug (or ASCII slug) | `"%e6%9c%aa%e5%88%86%e9%a1%9e"`, `"tech"` | `base_snapshots.frontmatter_yaml` (JSON), `computeTaxonomyHash()`, remote API payloads |
-| **Layer B: Human & Disk Display** | Decoded Unicode string (`decodeURIComponent`) | `未分類`, `カメラレビュー`, `tech` | Article YAML frontmatter on disk (`posts/draft/*.md`, `posts/published/*.md`), taxonomy definition YAML (`categories/*.yaml`, `tags/*.yaml`), CLI/MCP hints |
+| Layer                                       | Representation                                 | Example                                   | Where It Lives                                                                                                                                                                                                                           |
+| ------------------------------------------- | ---------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Layer A: Canonical Transport & Baseline** | Lowercase percent-encoded slug (or ASCII slug) | `"%e6%9c%aa%e5%88%86%e9%a1%9e"`, `"tech"` | `base_snapshots.frontmatter_yaml` (JSON), `computeTaxonomyHash()`, remote API payloads                                                                                                                                                   |
+| **Layer B: Human & Disk Display**           | Decoded Unicode string (`decodeURIComponent`)  | `未分類`, `カメラレビュー`, `tech`        | Article YAML frontmatter on disk (`posts/<locale>/draft/*.md`, `posts/<locale>/published/*.md`), taxonomy definition YAML (`categories/<locale>/*.yaml`, `tags/<locale>/*.yaml`, including `locale` & `translationGroup`), CLI/MCP hints |
 
-### 1.1 Taxonomy Definition Files (`categories/*.yaml`, `tags/*.yaml`)
+### 1.1 Taxonomy Definition Files (`categories/<locale>/*.yaml`, `tags/<locale>/*.yaml`)
 
-Each synced category or tag is written to `<taxonomy>/<id>-<sanitizedLabel>.yaml`:
+Each synced category or tag is written to `<taxonomy>/<locale>/<id>-<sanitizedLabel>.yaml`:
 
 ```yaml
 id: 01M6CAT2ABCDEF123456789012

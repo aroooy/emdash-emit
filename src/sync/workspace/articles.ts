@@ -24,16 +24,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface WorkspaceArticleEntry {
-  relPath: string; // e.g. "posts/draft/20261121_01M...-title.md"
+  relPath: string; // e.g. "posts/ja/draft/20261121_01M...-title.md"
   fullPath: string;
   fileName: string;
   status: 'draft' | 'published' | 'conflicts';
+  locale?: string;
 }
 
 /**
- * Iterates the workspace's article files for a collection. The conflicts/ boundary and the
- * `.deleted.md` rescue backup are expressed as explicit options so the intent that currently
- * lives in six separate comments becomes one declared contract.
+ * Iterates the workspace's article files for a collection.
+ * Canonical articles live under `<collection>/<locale>/{draft,published}/`, while
+ * quarantined copies remain under `<collection>/conflicts/`.
  */
 export function* iterWorkspaceArticles(
   workspaceRoot: string,
@@ -49,26 +50,77 @@ export function* iterWorkspaceArticles(
     (options?.includeConflicts ? ['draft', 'published', 'conflicts'] : ['draft', 'published']);
   const excludeDeletedBackups = options?.excludeDeletedBackups ?? true;
 
-  for (const status of statuses) {
-    const dir = path.join(workspaceRoot, collection, status);
-    if (!fs.existsSync(dir)) continue;
+  const collectionDir = path.join(workspaceRoot, collection);
+  if (!fs.existsSync(collectionDir)) return;
 
-    let entries: string[];
+  const articleStatuses = statuses.filter(
+    (s): s is 'draft' | 'published' => s === 'draft' || s === 'published',
+  );
+  if (articleStatuses.length > 0) {
+    let topEntries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir);
+      topEntries = fs.readdirSync(collectionDir, { withFileTypes: true });
     } catch {
-      continue;
+      topEntries = [];
     }
 
-    for (const file of entries) {
-      if (!file.endsWith('.md')) continue;
-      if (excludeDeletedBackups && file.endsWith('.deleted.md')) continue;
-      yield {
-        relPath: path.posix.join(collection, status, file),
-        fullPath: path.join(dir, file),
-        fileName: file,
-        status,
-      };
+    for (const entry of topEntries) {
+      if (!entry.isDirectory()) continue;
+      const locale = entry.name;
+      if (
+        locale.startsWith('.') ||
+        locale === 'conflicts' ||
+        locale === 'draft' ||
+        locale === 'published'
+      ) {
+        continue;
+      }
+
+      for (const status of articleStatuses) {
+        const dir = path.join(collectionDir, locale, status);
+        if (!fs.existsSync(dir)) continue;
+
+        let files: string[];
+        try {
+          files = fs.readdirSync(dir);
+        } catch {
+          continue;
+        }
+
+        for (const file of files) {
+          if (!file.endsWith('.md')) continue;
+          if (excludeDeletedBackups && file.endsWith('.deleted.md')) continue;
+          yield {
+            relPath: path.posix.join(collection, locale, status, file),
+            fullPath: path.join(dir, file),
+            fileName: file,
+            status,
+            locale,
+          };
+        }
+      }
+    }
+  }
+
+  if (statuses.includes('conflicts')) {
+    const conflictsDir = path.join(collectionDir, 'conflicts');
+    if (fs.existsSync(conflictsDir)) {
+      let files: string[];
+      try {
+        files = fs.readdirSync(conflictsDir);
+      } catch {
+        files = [];
+      }
+      for (const file of files) {
+        if (!file.endsWith('.md')) continue;
+        if (excludeDeletedBackups && file.endsWith('.deleted.md')) continue;
+        yield {
+          relPath: path.posix.join(collection, 'conflicts', file),
+          fullPath: path.join(conflictsDir, file),
+          fileName: file,
+          status: 'conflicts',
+        };
+      }
     }
   }
 }

@@ -102,7 +102,7 @@ describe('MCP Tool Error Formatting', () => {
     const prune = formatToolError(
       new SyncPruneConflictError(
         'Pull aborted: 1 article has unpushed local modifications.',
-        [{ id: '01M6ABCDEF1234567890123456', slug: 'post', filePath: 'posts/draft/x.md' }],
+        [{ id: '01M6ABCDEF1234567890123456', slug: 'post', filePath: 'posts/ja/draft/x.md' }],
         100,
       ),
     );
@@ -115,7 +115,7 @@ describe('MCP Tool Error Formatting', () => {
 
     const unpushedConflict = formatToolError(
       new CanonicalHasUnpushedEditsError({
-        canonicalFilePath: 'posts/draft/post.md',
+        canonicalFilePath: 'posts/ja/draft/post.md',
         conflictFilePath: 'posts/conflicts/post.conflict.md',
         id: '01M6ABCDEF1234567890123456',
       }),
@@ -127,7 +127,7 @@ describe('MCP Tool Error Formatting', () => {
 
     const boundaryError = formatToolError(
       new QuarantinedPathRequiredError({
-        filePath: 'posts/draft/post.md',
+        filePath: 'posts/ja/draft/post.md',
         collection: 'posts',
       }),
     );
@@ -252,7 +252,7 @@ describe('MCP Tool Error Formatting', () => {
         ['sync_pull', {}],
         ['sync_pull_taxonomies', {}],
         ['sync_pull_media', {}],
-        ['sync_push', { filePath: 'posts/draft/20261108_01M6ABCDEF1234567890123456-post.md' }],
+        ['sync_push', { filePath: 'posts/ja/draft/20261108_01M6ABCDEF1234567890123456-post.md' }],
         ['sync_diff', { id: '01M6ABCDEF1234567890123456' }],
         ['sync_new', { slug: 'ambiguity-probe' }],
         ['sync_delete', { id: '01M6ABCDEF1234567890123456' }],
@@ -368,7 +368,7 @@ describe('MCP Tool Error Formatting', () => {
   });
 
   it('surfaces FrontmatterParseError as a structured MCP tool error on sync_push with invalid frontmatter', async () => {
-    const invalidRel = 'posts/draft/20261108_01M6TESTPARSEERR000000000-Invalid.md';
+    const invalidRel = 'posts/ja/draft/20261108_01M6TESTPARSEERR000000000-Invalid.md';
     const invalidFull = path.join(tempDir, invalidRel);
     fs.mkdirSync(path.dirname(invalidFull), { recursive: true });
     fs.writeFileSync(

@@ -80,13 +80,23 @@ describe('Taxonomies Sync Engine', () => {
     expect(res.categoriesCount).toBe(2);
     expect(res.tagsCount).toBe(2);
 
-    const catFile = path.join(tempDir, 'categories', '01M67MY23GDT9X8QMY0G5SEQ6M-カメラ.yaml');
+    const catFile = path.join(
+      tempDir,
+      'categories',
+      'ja',
+      '01M67MY23GDT9X8QMY0G5SEQ6M-カメラ.yaml',
+    );
     expect(fs.existsSync(catFile)).toBe(true);
     const catContent = fs.readFileSync(catFile, 'utf8');
     expect(catContent).toContain('name: カメラ');
     expect(catContent).toContain('slug: camera');
 
-    const tagFile = path.join(tempDir, 'tags', '01M65FEDZNS9GN01GD3JJRZFT2-Web-Development.yaml');
+    const tagFile = path.join(
+      tempDir,
+      'tags',
+      'ja',
+      '01M65FEDZNS9GN01GD3JJRZFT2-Web-Development.yaml',
+    );
     expect(fs.existsSync(tagFile)).toBe(true);
 
     // Test loadLocalTaxonomyCandidates
@@ -318,8 +328,8 @@ describe('Taxonomies Sync Engine', () => {
     expect(res.categoriesCount).toBe(3); // parent + child + grandchild
     expect(res.categoriesFailed).toBe(false);
 
-    // Verify all 3 YAML files exist
-    const catDir = path.join(tempDir, 'categories');
+    // Verify all 3 YAML files exist under categories/ja/
+    const catDir = path.join(tempDir, 'categories', 'ja');
     expect(fs.readdirSync(catDir)).toHaveLength(3);
 
     // Check child YAML content has parentId

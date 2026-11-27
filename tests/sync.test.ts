@@ -97,7 +97,7 @@ describe('Pull & Push Synchronization Engine', () => {
     });
 
     expect(res.id).toBe(validUlid);
-    expect(res.filePath).toBe(`posts/draft/${todayPrefix}${validUlid}-My-Remote-Post.md`);
+    expect(res.filePath).toBe(`posts/ja/draft/${todayPrefix}${validUlid}-My-Remote-Post.md`);
 
     const createdFilePath = path.join(tempDir, res.filePath);
     expect(fs.existsSync(createdFilePath)).toBe(true);
@@ -128,7 +128,7 @@ describe('Pull & Push Synchronization Engine', () => {
       invalidFm,
       'Here is an image: ![Local](./images/photo.png)',
     );
-    const targetFile = path.join(tempDir, 'posts', 'draft', `${validUlid}-invalid-post.md`);
+    const targetFile = path.join(tempDir, 'posts', 'ja', 'draft', `${validUlid}-invalid-post.md`);
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
     fs.writeFileSync(targetFile, invalidMd, 'utf8');
 
@@ -161,7 +161,7 @@ describe('Pull & Push Synchronization Engine', () => {
       bylines: [],
     };
     const invalidMd = serializeMarkdown(invalidFm, 'Valid body content');
-    const targetFile = path.join(tempDir, 'posts', 'draft', `${validUlid}-tax-post.md`);
+    const targetFile = path.join(tempDir, 'posts', 'ja', 'draft', `${validUlid}-tax-post.md`);
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
     fs.writeFileSync(targetFile, invalidMd, 'utf8');
 
@@ -211,7 +211,7 @@ describe('Pull & Push Synchronization Engine', () => {
       bylines: [],
     };
     const validMd = serializeMarkdown(validFm, 'Valid body content');
-    const targetFile = path.join(tempDir, 'posts', 'draft', `${validUlid}-valid-tax-post.md`);
+    const targetFile = path.join(tempDir, 'posts', 'ja', 'draft', `${validUlid}-valid-tax-post.md`);
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
     fs.writeFileSync(targetFile, validMd, 'utf8');
 
@@ -267,6 +267,7 @@ describe('Pull & Push Synchronization Engine', () => {
     const slugFile = path.join(
       tempDir,
       'posts',
+      'ja',
       'draft',
       `01M6ZZZZZZZZZZZZZZZZZZZZZZ-slug-tax-post.md`,
     );
@@ -303,6 +304,7 @@ describe('Pull & Push Synchronization Engine', () => {
     const mixedFile = path.join(
       tempDir,
       'posts',
+      'ja',
       'draft',
       `01M6YYYYYYYYYYYYYYYYYYYYYY-mixed-tax-post.md`,
     );
@@ -335,7 +337,7 @@ describe('Pull & Push Synchronization Engine', () => {
     };
     const draftMd = serializeMarkdown(draftFm, 'Great article body ready for publication.');
 
-    const initialRelPath = `posts/draft/${todayPrefix}${validUlid}-publishing-post.md`;
+    const initialRelPath = `posts/ja/draft/${todayPrefix}${validUlid}-publishing-post.md`;
     const initialFullPath = path.join(tempDir, initialRelPath);
     fs.mkdirSync(path.dirname(initialFullPath), { recursive: true });
     fs.writeFileSync(initialFullPath, draftMd, 'utf8');
@@ -390,7 +392,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
     expect(res.success).toBe(true);
     expect(res.rev).toBe('rev_v3');
-    expect(res.filePath).toBe(`posts/published/${todayPrefix}${validUlid}-Publishing-Post.md`);
+    expect(res.filePath).toBe(`posts/ja/published/${todayPrefix}${validUlid}-Publishing-Post.md`);
 
     // Path tracking check: Old draft file unlinked, new published file created
     expect(fs.existsSync(initialFullPath)).toBe(false);
@@ -416,7 +418,7 @@ describe('Pull & Push Synchronization Engine', () => {
     };
     const draftMd = serializeMarkdown(draftFm, 'Body content of renovated article.');
 
-    const initialRelPath = `posts/draft/${todayPrefix}${validUlid}-Old-Title.md`;
+    const initialRelPath = `posts/ja/draft/${todayPrefix}${validUlid}-Old-Title.md`;
     const initialFullPath = path.join(tempDir, initialRelPath);
     fs.mkdirSync(path.dirname(initialFullPath), { recursive: true });
     fs.writeFileSync(initialFullPath, draftMd, 'utf8');
@@ -459,7 +461,7 @@ describe('Pull & Push Synchronization Engine', () => {
     });
 
     expect(res.success).toBe(true);
-    expect(res.filePath).toBe(`posts/draft/${todayPrefix}${validUlid}-New-Renovated-Title.md`);
+    expect(res.filePath).toBe(`posts/ja/draft/${todayPrefix}${validUlid}-New-Renovated-Title.md`);
 
     // Old file with old title is deleted, new file exists
     expect(fs.existsSync(initialFullPath)).toBe(false);
@@ -494,7 +496,7 @@ describe('Pull & Push Synchronization Engine', () => {
       bylines: [],
     };
 
-    const targetRelPath = `posts/draft/${todayPrefix}${validUlid}-Conflict-Post.md`;
+    const targetRelPath = `posts/ja/draft/${todayPrefix}${validUlid}-Conflict-Post.md`;
     const targetFullPath = path.join(tempDir, targetRelPath);
     fs.mkdirSync(path.dirname(targetFullPath), { recursive: true });
     fs.writeFileSync(targetFullPath, serializeMarkdown(fm, localBody), 'utf8');
@@ -598,7 +600,7 @@ describe('Pull & Push Synchronization Engine', () => {
       bylines: ['aroooy'],
     };
     const articleMd = serializeMarkdown(articleFm, 'Testing byline slug to ULID mapping.');
-    const relPath = `posts/draft/${todayPrefix}${validUlid}-Byline-Post.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}${validUlid}-Byline-Post.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, articleMd, 'utf8');
@@ -678,7 +680,7 @@ describe('Pull & Push Synchronization Engine', () => {
       draftFm,
       'Ready for publish but remote publish endpoint fails.',
     );
-    const relPath = `posts/draft/${todayPrefix}${validUlid}-Failing-Post.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}${validUlid}-Failing-Post.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, draftMd, 'utf8');
@@ -735,7 +737,7 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(fs.existsSync(fullPath)).toBe(true);
     const publishedPath = path.join(
       tempDir,
-      `posts/published/${todayPrefix}${validUlid}-Failing-Post.md`,
+      `posts/ja/published/${todayPrefix}${validUlid}-Failing-Post.md`,
     );
     expect(fs.existsSync(publishedPath)).toBe(false);
   });
@@ -773,7 +775,7 @@ describe('Pull & Push Synchronization Engine', () => {
     ];
 
     for (const a of articles) {
-      const fullPath = path.join(tempDir, 'posts', a.sub, a.file);
+      const fullPath = path.join(tempDir, 'posts', 'ja', a.sub, a.file);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       const fm: Frontmatter = {
         id: a.id,
@@ -792,22 +794,22 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.items).toHaveLength(4);
     // Verifies newest date first, regardless of draft vs published directory
     expect(res.items[0].filePath).toBe(
-      'posts/draft/20261106_01M67N19JPWNGFZ0M6KBQ8FS04-Newest-Draft.md',
+      'posts/ja/draft/20261106_01M67N19JPWNGFZ0M6KBQ8FS04-Newest-Draft.md',
     );
     expect(res.items[1].filePath).toBe(
-      'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest-Published.md',
+      'posts/ja/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest-Published.md',
     );
     expect(res.items[2].filePath).toBe(
-      'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid-Published.md',
+      'posts/ja/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid-Published.md',
     );
     expect(res.items[3].filePath).toBe(
-      'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old-Draft.md',
+      'posts/ja/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old-Draft.md',
     );
   });
 
   it('getWorkspaceStatus surfaces invalid YAML frontmatter files and pushAll safely excludes them', async () => {
     const brokenId = '01M67N19JPWNGFZ0M6KBQ8FS99';
-    const brokenRelPath = `posts/published/20261107_${brokenId}-Broken-Post.md`;
+    const brokenRelPath = `posts/ja/published/20261107_${brokenId}-Broken-Post.md`;
     const brokenFullPath = path.join(tempDir, brokenRelPath);
     fs.mkdirSync(path.dirname(brokenFullPath), { recursive: true });
 
@@ -855,7 +857,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('pullArticle self-heals a legacy broken YAML frontmatter file even when localHash matches disk', async () => {
     const brokenId = '01M67N19JPWNGFZ0M6KBQ8FS88';
-    const relPath = `posts/published/20261107_${brokenId}-Self-Heal.md`;
+    const relPath = `posts/ja/published/20261107_${brokenId}-Self-Heal.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -980,7 +982,7 @@ describe('Pull & Push Synchronization Engine', () => {
     const relPaths: string[] = [];
 
     for (const brokenId of brokenIds) {
-      const relPath = `posts/published/20261107_${brokenId}-Batch-Heal.md`;
+      const relPath = `posts/ja/published/20261107_${brokenId}-Batch-Heal.md`;
       const fullPath = path.join(tempDir, relPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       const brokenMarkdown = [
@@ -1196,7 +1198,7 @@ describe('Pull & Push Synchronization Engine', () => {
     // With localMediaRefs ON and the mirror present, the body is spelled as an article-relative reference.
     const articlePath = batchResult.items.find((r) => r.id === articleId)!.filePath;
     const diskBody = fs.readFileSync(path.join(tempDir, articlePath), 'utf8');
-    expect(diskBody).toContain('![hero](../../media/01M67STRGKEYX0000000123456.jpg)');
+    expect(diskBody).toContain('![hero](../../../media/01M67STRGKEYX0000000123456.jpg)');
   });
 
   it('pullBatch with mediaSync disabled skips the library walk and downloads nothing', async () => {
@@ -1272,7 +1274,7 @@ describe('Pull & Push Synchronization Engine', () => {
       taxonomies: {},
       bylines: [],
     };
-    const relPath = `posts/draft/20261108_${provisionalId}-New-Post-ULID-Swap.md`;
+    const relPath = `posts/ja/draft/20261108_${provisionalId}-New-Post-ULID-Swap.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Initial draft body.'), 'utf8');
@@ -1311,7 +1313,7 @@ describe('Pull & Push Synchronization Engine', () => {
     expect(res.id).toBe(assignedServerId);
     expect(res.previousId).toBe(provisionalId);
     expect(res.previousFilePath).toBe(relPath);
-    expect(res.filePath).toBe(`posts/draft/20261108_${assignedServerId}-New-Post-ULID-Swap.md`);
+    expect(res.filePath).toBe(`posts/ja/draft/20261108_${assignedServerId}-New-Post-ULID-Swap.md`);
   });
 
   it('pushArticle reports specific suggestion when initial POST fails with 422 SLUG_CONFLICT', async () => {
@@ -1326,7 +1328,7 @@ describe('Pull & Push Synchronization Engine', () => {
       taxonomies: {},
       bylines: [],
     };
-    const relPath = `posts/draft/20261108_${provisionalId}-Slug-Conflict-Test.md`;
+    const relPath = `posts/ja/draft/20261108_${provisionalId}-Slug-Conflict-Test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Conflict draft body.'), 'utf8');
@@ -1378,7 +1380,7 @@ describe('Pull & Push Synchronization Engine', () => {
       taxonomies: {},
       bylines: [],
     };
-    const relPath = `posts/draft/20261108_${provisionalId}-Bad-Slug-Format.md`;
+    const relPath = `posts/ja/draft/20261108_${provisionalId}-Bad-Slug-Format.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Bad slug draft body.'), 'utf8');
@@ -1427,7 +1429,7 @@ describe('Pull & Push Synchronization Engine', () => {
       taxonomies: {},
       bylines: [],
     };
-    const relPath = `posts/draft/20261108_${provisionalId}-Locked-Create-Attempt.md`;
+    const relPath = `posts/ja/draft/20261108_${provisionalId}-Locked-Create-Attempt.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Contended draft body.'), 'utf8');
@@ -1471,7 +1473,7 @@ describe('Pull & Push Synchronization Engine', () => {
       taxonomies: {},
       bylines: [],
     };
-    const relPath = `posts/draft/20261108_${provisionalId}-Legacy-Server-Conflict.md`;
+    const relPath = `posts/ja/draft/20261108_${provisionalId}-Legacy-Server-Conflict.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, serializeMarkdown(fm, 'Legacy conflict draft body.'), 'utf8');
@@ -1509,7 +1511,7 @@ describe('Pull & Push Synchronization Engine', () => {
   it('pullArticle repairs an uncached invalid file and cleans up stale duplicate filenames for the same ULID', async () => {
     const uncachedId = '01M67N0TNFS6F3PJX4T96NKPKT';
     // Uncached legacy file with lowercased title slug and 20190405_ prefix (no entry in sync_state)
-    const oldBrokenRelPath = `posts/published/20190405_${uncachedId}-old-post.md`;
+    const oldBrokenRelPath = `posts/ja/published/20190405_${uncachedId}-old-post.md`;
     const oldBrokenFullPath = path.join(tempDir, oldBrokenRelPath);
     fs.mkdirSync(path.dirname(oldBrokenFullPath), { recursive: true });
     fs.writeFileSync(
@@ -1585,11 +1587,11 @@ describe('Pull & Push Synchronization Engine', () => {
     });
 
     // Preserves 20190405_ prefix from existing disk file and writes canonical title filename
-    expect(res.filePath).toBe(`posts/published/20190405_${uncachedId}-Repaired-Old-Post.md`);
+    expect(res.filePath).toBe(`posts/ja/published/20190405_${uncachedId}-Repaired-Old-Post.md`);
     // Old broken file ("-old-post.md") is removed so no duplicate remains
     expect(fs.existsSync(oldBrokenFullPath)).toBe(false);
     expect(fs.existsSync(path.join(tempDir, res.filePath))).toBe(true);
-    expect(fs.readdirSync(path.join(tempDir, 'posts/published'))).toEqual([
+    expect(fs.readdirSync(path.join(tempDir, 'posts/ja/published'))).toEqual([
       `20190405_${uncachedId}-Repaired-Old-Post.md`,
     ]);
 
@@ -1601,7 +1603,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('pullArticle performs non-destructive frontmatter heal on local files with unpushed edits, preserving local body', async () => {
     const articleId = '01M6TESTHEALBODY0000000000';
-    const relPath = `posts/draft/20261108_${articleId}-Heal-Test.md`;
+    const relPath = `posts/ja/draft/20261108_${articleId}-Heal-Test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -1717,7 +1719,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('pullArticle performs non-destructive frontmatter heal on single-article pull fetched via HTTP (D5)', async () => {
     const singleHealId = '01M67SINGLEHEAL00000000001';
-    const relPath = `posts/draft/20261109_${singleHealId}-Single-Heal.md`;
+    const relPath = `posts/ja/draft/20261109_${singleHealId}-Single-Heal.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -1799,7 +1801,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('pullArticle falls through to quarantine when frontmatter cannot be leniently healed without altering meaning (M-3)', async () => {
     const unhealableId = '01M6UNHEALABLE00000000000';
-    const relPath = `posts/draft/20261108_${unhealableId}-Unhealable.md`;
+    const relPath = `posts/ja/draft/20261108_${unhealableId}-Unhealable.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -1873,7 +1875,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('pullArticle heal maintains correct base snapshot taxonomy terms for subsequent 3-way merge when remote rev advances (NEW-1)', async () => {
     const articleId = '01M67HEAL3WAY0000000000001';
-    const relPath = `posts/draft/20261108_${articleId}-Heal-3Way.md`;
+    const relPath = `posts/ja/draft/20261108_${articleId}-Heal-3Way.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -1999,7 +2001,7 @@ describe('Pull & Push Synchronization Engine', () => {
 
   it('preserves local unpushed edits across rev formats (Base64 token vs numeric rev)', async () => {
     const articleId = '01M6TESTB64REV000000000001';
-    const relPath = 'posts/draft/20261109_01M6TESTB64REV000000000001-test.md';
+    const relPath = 'posts/ja/draft/20261109_01M6TESTB64REV000000000001-test.md';
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2089,7 +2091,7 @@ My valuable unpushed local edits
 
   it('single pull preserves local unpushed edits when rev is Base64 token on disk and numeric on remote', async () => {
     const articleId = '01M6TESTSNGLPULLB640000001';
-    const relPath = 'posts/draft/20261109_01M6TESTSNGLPULLB640000001-test.md';
+    const relPath = 'posts/ja/draft/20261109_01M6TESTSNGLPULLB640000001-test.md';
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2167,7 +2169,7 @@ Valuable local unpushed content for single pull
 
   it('pushArticle blocks with DELETE_PENDING_ARTICLE when article has delete_pending: 1 unless revive: true is passed', async () => {
     const articleId = '01M6TESTDELPEND00000000001';
-    const relPath = `posts/draft/20261109_${articleId}-del-pending.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-del-pending.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2235,7 +2237,7 @@ Content
 
   it('pushArticle converts server 400/422 on taxonomy union into TAXONOMY_UNION_REJECTED', async () => {
     const articleId = '01M6TESTUNIONREJ0000000001';
-    const relPath = `posts/draft/20261109_${articleId}-union-reject.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-union-reject.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2346,7 +2348,7 @@ Shared Body
 
   it('R1: detects out-of-band remote taxonomy changes before PUT, synthesizes 409, and merges cleanly', async () => {
     const articleId = '01M6TESTAUDIT0000000000001';
-    const relPath = `posts/draft/20261109_${articleId}-audit-diverge.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-audit-diverge.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2462,7 +2464,7 @@ Audit body
 
   it('R1: skips pre-PUT taxonomy audit when noTaxonomyAudit is passed', async () => {
     const articleId = '01M6TESTNOAUDIT00000000001';
-    const relPath = `posts/draft/20261109_${articleId}-no-audit.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-no-audit.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2541,7 +2543,7 @@ No audit body
 
   it('R2: handles taxonomy update partial failure, sets taxonomyApplyPending = 1, reverts baseline taxonomy, and enforces Guard G17 until bypassed', async () => {
     const articleId = '01M6TESTPARTIAL00000000001';
-    const relPath = `posts/draft/20261109_${articleId}-partial.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-partial.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2693,7 +2695,7 @@ Partial body
 
   it('T1-1 & T1-2: pushArticle honors resolveTaxonomy local and remote during 409 conflict', async () => {
     const articleId = '01M6TESTSTRAT0000000000001';
-    const relPath = `posts/draft/20261109_${articleId}-strategy.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-strategy.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2806,7 +2808,7 @@ Local body
 
   it('T1-5: TAXONOMY_UNION_REJECTED provides strategy-tailored guidance when strategy is used', async () => {
     const articleId = '01M6TESTSTRATREJ0000000001';
-    const relPath = `posts/draft/20261109_${articleId}-strategy-rej.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-strategy-rej.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -2931,7 +2933,7 @@ Body
 
   it('T1-6: explicit resolveTaxonomy bypasses DESTRUCTIVE_TAXONOMY_WIPE guard', async () => {
     const articleId = '01M6TESTWIPESTRAT000000001';
-    const relPath = `posts/draft/20261109_${articleId}-wipe-strat.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-wipe-strat.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3006,7 +3008,7 @@ Body
 
   it('T2-1: conflict markers trigger UNRESOLVED_CONFLICT_MARKERS (G6) before G15 taxonomy conflict check', async () => {
     const articleId = '01M6TESTG6FIRST00000000001';
-    const relPath = `posts/draft/20261109_${articleId}-g6-first.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-g6-first.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3062,7 +3064,7 @@ Remote line
 
   it('T2-2: manual body marker cleanup allows bare push and clears bodyConflictPending while retaining taxonomyConflictPending', async () => {
     const articleId = '01M6TESTT22CLEAN0000000001';
-    const relPath = `posts/draft/20261109_${articleId}-t22.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-t22.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3127,7 +3129,7 @@ Resolved clean body
 
   it('T2-4: taxonomy-only conflict triggers G15 TAXONOMY_CONFLICT_PENDING on bare push', async () => {
     const articleId = '01M6TESTT24TAXONLY00000001';
-    const relPath = `posts/draft/20261109_${articleId}-t24.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-t24.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3177,7 +3179,7 @@ Clean body with no markers
 
   it('T2-composite: composite conflict (body + taxonomy) halts at G15 when markers are clean until resolve-taxonomy is passed', async () => {
     const articleId = '01M6TESTCOMPOSITE000000001';
-    const relPath = `posts/draft/20261109_${articleId}-composite.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-composite.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3260,7 +3262,7 @@ Clean body after manual marker resolution
 
   it('T3-1: initial PUT 404 throws REMOTE_ARTICLE_DELETED with 3 escape suggestions', async () => {
     const articleId = '01M6TESTT31DEL000000000001';
-    const relPath = `posts/draft/20261109_${articleId}-t31.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-t31.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3326,7 +3328,7 @@ Body
 
   it('T3-4 & T3-5: 404 in conflict fetch or retry PUT translates to REMOTE_ARTICLE_DELETED', async () => {
     const articleId = '01M6TESTT34DEL000000000001';
-    const relPath = `posts/draft/20261109_${articleId}-t34.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-t34.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3384,7 +3386,7 @@ Body
 
   it('keeps legacy percent-encoded taxonomy disk files clean in status and diff, preventing phantom diffs', () => {
     const articleId = '01M67LEGACYSTAT00000000001';
-    const relPath = `posts/draft/20261114_${articleId}-legacy-status.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-legacy-status.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -3465,8 +3467,8 @@ describe('v0.1.29 Batch Pull Invariants & Media Dedup (T7-T9)', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-batch-pull-media-'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
   });
@@ -3784,10 +3786,10 @@ describe('v0.1.29 Batch Pull Invariants & Media Dedup (T7-T9)', () => {
     expect(res.media).toBeDefined();
     expect(res.media?.downloaded).toBe(1);
 
-    // Both files on disk are localized to ../../media/<sharedKey>
+    // Both files on disk are localized to ../../../media/<sharedKey>
     for (const item of res.items) {
       const disk = fs.readFileSync(path.join(tempDir, item.filePath), 'utf8');
-      expect(disk).toContain(`../../media/${sharedKey}`);
+      expect(disk).toContain(`../../../media/${sharedKey}`);
     }
   });
 

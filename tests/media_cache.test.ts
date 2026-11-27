@@ -624,10 +624,10 @@ describe('Offline Media Cache & Materialize (v0.1.56)', () => {
         counts,
       ),
     });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'published', '20261120_01M8PA-post-a.md'),
-      `---\nid: 01M8PA\nslug: post-a\ntitle: A\ncollection: posts\nstatus: published\n---\n\n![a](../../media/${keyA})\n`,
+      path.join(tempDir, 'posts', 'ja', 'published', '20261120_01M8PA-post-a.md'),
+      `---\nid: 01M8PA\nslug: post-a\ntitle: A\ncollection: posts\nstatus: published\n---\n\n![a](../../../media/${keyA})\n`,
       'utf8',
     );
 
@@ -797,10 +797,10 @@ describe('Offline Media Cache & Materialize (v0.1.56)', () => {
     );
 
     // Create an article referencing both images without mirroring them into media/
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'draft', '20261124_01M8POST000000000000000099-doc.md'),
-      `---\nid: 01M8POST000000000000000099\nslug: doc\ntitle: Doc\ncollection: posts\nstatus: draft\n---\n\n![v](../../media/${validKey})\n\n![c](../../media/${corruptKey})\n`,
+      path.join(tempDir, 'posts', 'ja', 'draft', '20261124_01M8POST000000000000000099-doc.md'),
+      `---\nid: 01M8POST000000000000000099\nslug: doc\ntitle: Doc\ncollection: posts\nstatus: draft\n---\n\n![v](../../../media/${validKey})\n\n![c](../../../media/${corruptKey})\n`,
       'utf8',
     );
 

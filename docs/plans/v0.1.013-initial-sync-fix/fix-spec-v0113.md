@@ -9,6 +9,7 @@
 ## R1: taxonomy 変更を entry rev と独立に検知する（EMIT-001）
 
 ### Invariant（必須不変条件）
+
 > 「remote の taxonomy 割当」が baseline 記録と異なる場合、その記事の push は
 > (a) 3-way merge を経由する、または (b) conflict pending フラグを立てて bare push を拒否する。
 > いずれでもなければ push してはならない。
@@ -50,6 +51,7 @@
 ## R2: 割当反映失敗を partial failure として扱う（EMIT-002）
 
 ### Invariant
+
 > remote に反映できていない値を baseline に書いてはならない。失敗がある限り exit code は 0 以外、
 > または解決済みとみなされない pending フラグが立つ。
 
@@ -66,6 +68,7 @@
 3. **失敗 slug は保持**: ローカル frontmatter は壊さず、原因を term 名で列挙する。
 
 ### スキーマ影響
+
 `taxonomy_apply_pending`（または同等の pending 列）も schema v2 へ同時に追加する（R1 と同一 migration）。
 ---
 
@@ -143,14 +146,14 @@
 
 ## R8: S3 インターフェース整備（EMIT-007）
 
-| 作業 | 内容 |
-|---|---|
+| 作業                         | 内容                                                                                                                                                       |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `emit doctor --strict-media` | `.option('--strict-media')` を追加し `runDoctor({ strictMedia })` へ接続（ロジックは既存 `src/sync/doctor.ts:62,419-424`）。MCP `sync_doctor` にも引数透過 |
-| MCP `sync_conflicts` | action enum に `prune` を追加（`olderThan` / `dryRun` / `allowOrphanRescues` を CLI と同じ安全条件で） |
-| MCP heartbeat | origin / profile 名 / workspace root を record に追加し、複数サイト運用で識別可能にする |
-| 旧 MCP プロセス追跡 | 現行 version・origin と異なる生存プロセスを検出して WARN |
-| heal 差分の開示 | `Repaired frontmatter syntax` の変更内容（frontmatter キー単位）と skip 理由を CLI 出力＋DB に記録 |
-| pull 時の media 台帳 | （任意）pull 後の media 冪等性を `media_state` で担保 |
+| MCP `sync_conflicts`         | action enum に `prune` を追加（`olderThan` / `dryRun` / `allowOrphanRescues` を CLI と同じ安全条件で）                                                     |
+| MCP heartbeat                | origin / profile 名 / workspace root を record に追加し、複数サイト運用で識別可能にする                                                                    |
+| 旧 MCP プロセス追跡          | 現行 version・origin と異なる生存プロセスを検出して WARN                                                                                                   |
+| heal 差分の開示              | `Repaired frontmatter syntax` の変更内容（frontmatter キー単位）と skip 理由を CLI 出力＋DB に記録                                                         |
+| pull 時の media 台帳         | （任意）pull 後の media 冪等性を `media_state` で担保                                                                                                      |
 
 ---
 
@@ -160,22 +163,22 @@ A1〜A7 は評価元の契約を維持し、A8〜A14 を追加する。全テス
 **remote terms・local terms・CLI exit code・status Flags・doctor 最終行**の 5 点に加え、
 必要に応じて `.emit/cache.db` の列値とファイルツリーで判定する。
 
-| # | 手順（out-of-band 含む） | 合否判定 |
-|---|---|---|
-| A1 | pull → 直接 API で tag 追加 → local の別 tag を追加して push → 直接 API で terms 取得 | 追加した tag が **両方残る**。CLI に merge 通知または conflict 案内。静かな消失は不可 |
-| A2 | 同上で local 側が同一 tag を削除 → push | 相互削除なら tag 消失＋警告なし、片側削除なら remote 側の意図が保持される |
-| A3 | `tags: []` で push | `DESTRUCTIVE_TAXONOMY_WIPE`（400 相当）＋ `--allow-wipe-taxonomies` 指示 |
-| A4 | `tags: [] --allow-wipe-taxonomies` | 全削除が反映され、`🏷️ Cleared all N …` 相当の警告と成功終了 |
-| A5 | `categories/`,`tags/` 無い新規 workspace で `pull <id>` → taxonomy 変更して push | NOT_FOUND が出ない（definitions 自動取得）、または **非ゼロ終了 + baseline 非更新**（remote terms は無変化） |
-| A6 | A5 失敗後に `pull-taxonomies` → 再 push | remote terms が期待値になる。baseline hash と remote terms の hash が一致 |
-| A7 | どのテスト後も `emit doctor` = HEALTHY / `status` Flags 説明可能 / `posts/conflicts/` に未解決コピーが残らない | 残る場合は **DB 直編集なしで**解除手順が CLI に存在すること |
-| A8 | 階層 taxonomy（親+子）を作り `pull-taxonomies` → local 定義件数を確認、`categories: [<childSlug>]` を push | local 定義件数 = remote フラット件数。push 成功し remote terms に子が現れる。YAML に `parentId` が保持されている |
-| A9 | taxonomy audit 中に `GET .../terms/{taxonomy}` を 500 で失敗させる（mock） | **remote 割当を `[]` と解釈しない**。baseline 割当で merge に進み `⚠️ Remote taxonomy state unknown` 相当の警告。remote terms は無変化 |
-| A10 | schema v2 化後の DB を旧バイナリ（v1 対応）で開く | `[CACHE_SCHEMA_MISMATCH]` の案内のみで終了しデータ破壊なし。`.bak-0.1.12-*` が保持されている |
-| A11 | 409 → taxonomy-only conflict を起こし、マーカー付き状態を確認 → 正常内容へ戻す | `emit status` は phantom `modified` を報告しない。`conflict_at` / `conflict_copy_path` / `conflict_copy_hash` が **すべて非 NULL**（またはすべて NULL）。`emit conflicts resolve` で解除可能 |
-| A12 | 同一 ULID を `pull <id>` → `pull`（一括）の順で実行（title を 1 度変更した場合を含む） | ファイル名が flip-flop しない。rename が起きるのは status/date 変更時のみで、その場合は通知が 1 回 |
-| A13 | fixture DB の `user_version = 3` で `emit status` / `emit diff` / `emit pull` / `emit push` | 全コマンドが `❌ … [CACHE_SCHEMA_MISMATCH] …` 1 行＋exit 1。生スタックトレースなし |
-| A14 | `posts/conflicts/` に `.conflict.md` / `.local-dropped.md` / `.deleted.md` を各 1 件残して `emit status`, `emit conflicts list`, MCP `sync_status` | 3 状態が **型を区別して** CLI と MCP の両方に警告として出る。`emit pull --force` は退避時に警告行を出す |
+| #   | 手順（out-of-band 含む）                                                                                                                           | 合否判定                                                                                                                                                                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1  | pull → 直接 API で tag 追加 → local の別 tag を追加して push → 直接 API で terms 取得                                                              | 追加した tag が **両方残る**。CLI に merge 通知または conflict 案内。静かな消失は不可                                                                                                        |
+| A2  | 同上で local 側が同一 tag を削除 → push                                                                                                            | 相互削除なら tag 消失＋警告なし、片側削除なら remote 側の意図が保持される                                                                                                                    |
+| A3  | `tags: []` で push                                                                                                                                 | `DESTRUCTIVE_TAXONOMY_WIPE`（400 相当）＋ `--allow-wipe-taxonomies` 指示                                                                                                                     |
+| A4  | `tags: [] --allow-wipe-taxonomies`                                                                                                                 | 全削除が反映され、`🏷️ Cleared all N …` 相当の警告と成功終了                                                                                                                                  |
+| A5  | `categories/`,`tags/` 無い新規 workspace で `pull <id>` → taxonomy 変更して push                                                                   | NOT_FOUND が出ない（definitions 自動取得）、または **非ゼロ終了 + baseline 非更新**（remote terms は無変化）                                                                                 |
+| A6  | A5 失敗後に `pull-taxonomies` → 再 push                                                                                                            | remote terms が期待値になる。baseline hash と remote terms の hash が一致                                                                                                                    |
+| A7  | どのテスト後も `emit doctor` = HEALTHY / `status` Flags 説明可能 / `posts/conflicts/` に未解決コピーが残らない                                     | 残る場合は **DB 直編集なしで**解除手順が CLI に存在すること                                                                                                                                  |
+| A8  | 階層 taxonomy（親+子）を作り `pull-taxonomies` → local 定義件数を確認、`categories: [<childSlug>]` を push                                         | local 定義件数 = remote フラット件数。push 成功し remote terms に子が現れる。YAML に `parentId` が保持されている                                                                             |
+| A9  | taxonomy audit 中に `GET .../terms/{taxonomy}` を 500 で失敗させる（mock）                                                                         | **remote 割当を `[]` と解釈しない**。baseline 割当で merge に進み `⚠️ Remote taxonomy state unknown` 相当の警告。remote terms は無変化                                                       |
+| A10 | schema v2 化後の DB を旧バイナリ（v1 対応）で開く                                                                                                  | `[CACHE_SCHEMA_MISMATCH]` の案内のみで終了しデータ破壊なし。`.bak-0.1.12-*` が保持されている                                                                                                 |
+| A11 | 409 → taxonomy-only conflict を起こし、マーカー付き状態を確認 → 正常内容へ戻す                                                                     | `emit status` は phantom `modified` を報告しない。`conflict_at` / `conflict_copy_path` / `conflict_copy_hash` が **すべて非 NULL**（またはすべて NULL）。`emit conflicts resolve` で解除可能 |
+| A12 | 同一 ULID を `pull <id>` → `pull`（一括）の順で実行（title を 1 度変更した場合を含む）                                                             | ファイル名が flip-flop しない。rename が起きるのは status/date 変更時のみで、その場合は通知が 1 回                                                                                           |
+| A13 | fixture DB の `user_version = 3` で `emit status` / `emit diff` / `emit pull` / `emit push`                                                        | 全コマンドが `❌ … [CACHE_SCHEMA_MISMATCH] …` 1 行＋exit 1。生スタックトレースなし                                                                                                           |
+| A14 | `posts/conflicts/` に `.conflict.md` / `.local-dropped.md` / `.deleted.md` を各 1 件残して `emit status`, `emit conflicts list`, MCP `sync_status` | 3 状態が **型を区別して** CLI と MCP の両方に警告として出る。`emit pull --force` は退避時に警告行を出す                                                                                      |
 
 ### 単体テストでのみ担保する領域（第三者検証不能）
 
@@ -189,16 +192,16 @@ A1〜A7 は評価元の契約を維持し、A8〜A14 を追加する。全テス
 
 ## Step 順と依存関係
 
-| Step | Issue | 依存 |
-|---|---|---|
-| 0 | EMIT-009 / EMIT-003 の再現確認（現行 dist で T11/T12・`pull --force` を再実行） | — |
-| 1a | EMIT-008（R5） | なし。**先に実施**すると階層 term で A1/A8 が組める |
-| 1b | EMIT-001（R1 + schema v2 migration） | R5（子 term を用いた divergence テスト）, R4（migration 失敗時の案内） |
-| 1c | EMIT-002（R2） | R1（taxonomy hash が baseline 保護の基準になる） |
-| 2a | EMIT-006（R4） | なし（先に実施すると migration エラー経験が安全になる） |
-| 2b | EMIT-004（R3 4点セット） | R1（divergence 検知で conflict 経路の発生頻度が上がる） |
-| 2c | EMIT-005（R7） | なし |
-| 3 | EMIT-007（R8）＋ EMIT-009/003 の警告文言強化（R6） | R3（conflict copy の型区別） |
+| Step | Issue                                                                           | 依存                                                                   |
+| ---- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 0    | EMIT-009 / EMIT-003 の再現確認（現行 dist で T11/T12・`pull --force` を再実行） | —                                                                      |
+| 1a   | EMIT-008（R5）                                                                  | なし。**先に実施**すると階層 term で A1/A8 が組める                    |
+| 1b   | EMIT-001（R1 + schema v2 migration）                                            | R5（子 term を用いた divergence テスト）, R4（migration 失敗時の案内） |
+| 1c   | EMIT-002（R2）                                                                  | R1（taxonomy hash が baseline 保護の基準になる）                       |
+| 2a   | EMIT-006（R4）                                                                  | なし（先に実施すると migration エラー経験が安全になる）                |
+| 2b   | EMIT-004（R3 4点セット）                                                        | R1（divergence 検知で conflict 経路の発生頻度が上がる）                |
+| 2c   | EMIT-005（R7）                                                                  | なし                                                                   |
+| 3    | EMIT-007（R8）＋ EMIT-009/003 の警告文言強化（R6）                              | R3（conflict copy の型区別）                                           |
 
 ## 完了条件
 
@@ -206,4 +209,3 @@ A1〜A7 は評価元の契約を維持し、A8〜A14 を追加する。全テス
 （`/tmp/qa.mjs`, `/tmp/qa_local.mjs`, `/tmp/qa_run_*.sh`）で合格し、collateral（テスト記事以外の記事の
 base_snapshots digest）が不変であること。AGENTS.md の §9 ガード記述と Canonical Frontmatter Schema、
 CHANGELOG を同時更新すること。
-

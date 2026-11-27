@@ -50,7 +50,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     content: string,
     isModified: boolean = false,
   ) {
-    const relPath = computeArticleRelativePath('posts', status, id, slug);
+    const relPath = computeArticleRelativePath('posts', status, id, slug, null, 'ja');
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -363,7 +363,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     // Simulate a lingering clean duplicate file for the same ULID (matching baseline hash)
     const legacyDuplicatePath = path.join(
       tempDir,
-      `posts/published/20190405_${ulid}-legacy-duplicate.md`,
+      `posts/ja/published/20190405_${ulid}-legacy-duplicate.md`,
     );
     fs.writeFileSync(legacyDuplicatePath, '# Canonical', 'utf8');
 
@@ -406,7 +406,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
     const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
     // Canonical file is clean, but a duplicate file sharing the ULID has unpushed local modifications
-    const editedDuplicateRelPath = `posts/published/20190405_${ulid}-legacy-edited-copy.md`;
+    const editedDuplicateRelPath = `posts/ja/published/20190405_${ulid}-legacy-edited-copy.md`;
     const editedDuplicateFullPath = path.join(tempDir, editedDuplicateRelPath);
     fs.writeFileSync(
       editedDuplicateFullPath,
@@ -456,7 +456,7 @@ describe('Pull Window Pruning & Unpushed Edits Guard', () => {
     const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
     const canonical = setupLocalArticle(ulid, 'canonical-post', 'published', '# Canonical');
     fs.writeFileSync(canonical.fullPath, '# Canonical\n\nLocal canonical edits.', 'utf8');
-    const duplicateRelPath = `posts/published/20190405_${ulid}-legacy-edited-copy.md`;
+    const duplicateRelPath = `posts/ja/published/20190405_${ulid}-legacy-edited-copy.md`;
     const duplicateFullPath = path.join(tempDir, duplicateRelPath);
     fs.writeFileSync(duplicateFullPath, '# Canonical\n\nLocal duplicate edits.', 'utf8');
 

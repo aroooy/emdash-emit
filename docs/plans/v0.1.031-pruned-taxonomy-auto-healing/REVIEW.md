@@ -8,19 +8,18 @@
 
 ## 0. 総評
 
-| 項目 | 判定 | 根拠 |
-|---|---|---|
-| 根本原因の特定 | ✅ **正確** | `fast_path.ts:111-266` の fast-path は `candidates` と frontmatter を突合せず `skipped: true` で return する。§0.3 の記述は実コードと一致 |
-| 自動 FORCE 却下（§1） | ✅ **妥当** | G13（`CANONICAL_HAS_UNPUSHED_EDITS`）および quarantine 不変条件と整合 |
-| 非破壊条件（未編集限定） | ✅ **正しく、実装済みのガードで自動的に成立** | 新規ロジックは `isUnmodified === true` の分岐内にのみ置ける（`fast_path.ts:151-164`）。T4 は冗長だが回帰防止として有用 |
-| レイヤリング設計（§4） | ✅ **妥当** | Layer 1 helper → Layer 2 consumer は `tests/layering.test.ts` の軸 1・2 に適合。Layer 2 兄弟結合は発生しない |
-| `resolveTaxonomyTermToId` | ❌ **存在しない関数** | §3.1 のコード片は現状コンパイル不能。§3.2 の call site も同様（→ 問題 1） |
-| 「完全な 0-GET を維持」（§2 / §4） | ❌ **誤り** | `pullArticle` は fast-path 前に `fetchAssignedTerms` を 2 回実行済み。本計画は per-article GET を追加しないが、"0-GET" は元から成立していない（→ 問題 2） |
-| ベースライン整合性（§3.3） | ❌ **重大な欠陥** | `bumpBaselineHashOnly: true` は `frontmatter_yaml` を更新しないため、計画の cache 状態は自己修復直後の `emit diff` で phantom diff を生む（→ 問題 3） |
-| テストマトリクス T1〜T5 | ⚠️ **不十分** | 上記 3 の欠陥を検出できない。追加テストが必要（→ 問題 3・4・5、§5） |
+| 項目                               | 判定                                          | 根拠                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 根本原因の特定                     | ✅ **正確**                                   | `fast_path.ts:111-266` の fast-path は `candidates` と frontmatter を突合せず `skipped: true` で return する。§0.3 の記述は実コードと一致                 |
+| 自動 FORCE 却下（§1）              | ✅ **妥当**                                   | G13（`CANONICAL_HAS_UNPUSHED_EDITS`）および quarantine 不変条件と整合                                                                                     |
+| 非破壊条件（未編集限定）           | ✅ **正しく、実装済みのガードで自動的に成立** | 新規ロジックは `isUnmodified === true` の分岐内にのみ置ける（`fast_path.ts:151-164`）。T4 は冗長だが回帰防止として有用                                    |
+| レイヤリング設計（§4）             | ✅ **妥当**                                   | Layer 1 helper → Layer 2 consumer は `tests/layering.test.ts` の軸 1・2 に適合。Layer 2 兄弟結合は発生しない                                              |
+| `resolveTaxonomyTermToId`          | ❌ **存在しない関数**                         | §3.1 のコード片は現状コンパイル不能。§3.2 の call site も同様（→ 問題 1）                                                                                 |
+| 「完全な 0-GET を維持」（§2 / §4） | ❌ **誤り**                                   | `pullArticle` は fast-path 前に `fetchAssignedTerms` を 2 回実行済み。本計画は per-article GET を追加しないが、"0-GET" は元から成立していない（→ 問題 2） |
+| ベースライン整合性（§3.3）         | ❌ **重大な欠陥**                             | `bumpBaselineHashOnly: true` は `frontmatter_yaml` を更新しないため、計画の cache 状態は自己修復直後の `emit diff` で phantom diff を生む（→ 問題 3）     |
+| テストマトリクス T1〜T5            | ⚠️ **不十分**                                 | 上記 3 の欠陥を検出できない。追加テストが必要（→ 問題 3・4・5、§5）                                                                                       |
 
 ---
-
 
 ## 1. 【必須】`resolveTaxonomyTermToId` は存在しない — ULID 判定の二重バグ
 
@@ -46,8 +45,8 @@
 ```yaml
 taxonomies:
   tags:
-    - 01M6DEADTAG00000000000000   # リモートで削除されたタームの ULID（= G4 stale の典型）
-    - tech                        # 生存ターム
+    - 01M6DEADTAG00000000000000 # リモートで削除されたタームの ULID（= G4 stale の典型）
+    - tech # 生存ターム
 ```
 
 `parseMarkdown()` は Zod で文字列をそのまま通すため、ULID は candidates 照合で必ず失敗します。
@@ -128,6 +127,7 @@ if (rawItem) {
   あとに eval される**（`index.ts:206-215` → `fast_path.ts`）ことを plan に明記すべきです。
 
 ---
+
 ## 3. 【必須・最重要】`bumpBaselineHashOnly: true` は Layer A を更新しない — phantom diff と stale baseline
 
 ### 計画のコードが生成する cache 状態
@@ -174,6 +174,7 @@ disk は `[]`、reconstruct は `[oldTag]` -> **`matchesDisk === false`**
 
 - `emit diff` / `inspectArticleDiff`（`src/sync/diff.ts:176`）が **phantom taxonomy diff を表示**。
   これは AGENTS.md の phantom-diff 防止不変条件（§5 Baseline serialization invariant）に直接違反します。
+
 3. push 時の 409 / divergence 判定が stale な Layer A に依存する：
    - `src/sync/push/tax_audit.ts:81-84` — baseline hash を `syncState.remoteTaxonomyHash` から取るため
      ここは計画の flags で救われます。
@@ -196,24 +197,27 @@ Layer A に保存されている canonical slug と disk の decoded slug は
   したがって healed frontmatter のタームを canonical slug に正規化してから渡すこと：
 
 ```ts
-const maps = getTaxonomyMaps();                       // 問題 1 で追加
-const healedTaxonomies = canonicalizeTaxonomies(      // Layer 1 helper（新規）
+const maps = getTaxonomyMaps(); // 問題 1 で追加
+const healedTaxonomies = canonicalizeTaxonomies(
+  // Layer 1 helper（新規）
   pruneNonexistentTaxonomies(parsedCurrent.frontmatter.taxonomies, maps),
-  maps,                                              // decoded slug -> canonicalSlug
+  maps, // decoded slug -> canonicalSlug
 );
 const healedFrontmatter = { ...parsedCurrent.frontmatter, taxonomies: healedTaxonomies };
 
 commitArticleSnapshot(options.cache, options.workspaceRoot, {
   id,
   relPath: existingSync.localFilePath,
-  diskContent: respelled,          // decoded 表記（disk / Layer B）
-  canonicalContent: respelledCanon,// decoded 表記（baseline hash 用）
-  frontmatter: healedFrontmatter,  // canonical slug（Layer A）
+  diskContent: respelled, // decoded 表記（disk / Layer B）
+  canonicalContent: respelledCanon, // decoded 表記（baseline hash 用）
+  frontmatter: healedFrontmatter, // canonical slug（Layer A）
   bodyMarkdown: parsedCurrent.body,
   revForTransport: existingSync.remoteRev,
   revForComparison: existingSync.remoteRev,
-  bumpBaselineHashOnly: false,     // <- Layer A を更新
-  flags: { remoteTaxonomyHash: computeTaxonomyHash(healedTaxonomies.categories, healedTaxonomies.tags) },
+  bumpBaselineHashOnly: false, // <- Layer A を更新
+  flags: {
+    remoteTaxonomyHash: computeTaxonomyHash(healedTaxonomies.categories, healedTaxonomies.tags),
+  },
 });
 ```
 
@@ -250,7 +254,6 @@ quarantine copy 参照がリセットまたは stale 化**し、G12・G14・G16 
 （`taxonomyApplyPending` は 0 にしない — 元の値を保持。）
 
 ---
-
 
 ## 5. 【重要】空配列 `[]` が Guard G19（`DESTRUCTIVE_TAXONOMY_WIPE`）と衝突する — T3 は現状では通らない
 
@@ -338,7 +341,6 @@ taxonomy 間引きは **syntax 修復ではなく content の意味変更**で�
 
 ---
 
-
 ## 8. 軽微な指摘
 
 1. **関数シグネチャの型**: `taxonomies: Record<string, string[]> | undefined` は
@@ -375,15 +377,15 @@ taxonomy 間引きは **syntax 修復ではなく content の意味変更**で�
 
 ## 10. 推奨する修正後の実装ステップ
 
-| Step | 内容 | 追加テスト |
-|---|---|---|
-| 0 | `src/utils/taxonomy-key.ts` に `isKnownTaxonomyTerm()`（Layer 0）追加。preflight G4 と taxonomy_plan を同一 predicate 経由に寄せる | `tests/taxonomy_key.test.ts`（ULID / canonical / decoded / alias / 削除後） |
-| 1 | `src/sync/taxonomies.ts` に `carriesPrunedTaxonomies` / `pruneNonexistentTaxonomies` / `canonicalizeTaxonomies`（Layer 1、maps 受け取り） | T1（+ winner/loser slug 衝突ケース） |
-| 2 | `pull/index.ts` に `getTaxonomyMaps()` memoize 追加、`FastPathContext` に maps 露出。`orchestrator.pullBatch` で maps を 1 回ロードして注入 | — |
-| 3 | `fast_path.ts` の Branch 1 レールに間引きを実装。**full baseline rewrite**（`bumpBaselineHashOnly: false`）+ Layer A は canonical slug + conflict/pending フラグ全引き継ぎ + taxonomy sync 失敗時は skip | T2（`GET /posts/{id}` 0 件を URL 分類で assert）、T4、**新規 T6: 間引き直後の `emit status`/`diff` が phantom diff を出さない**、**T7: push 時に G4 も G19 も発火せず、prev-terms 警告が間引き後ターム集合と一致** |
-| 4 | 空配列戦略（案 A or B）決定と実装 | T3（G4・G19 非発火 + remote taxonomy 解決） |
-| 5 | `PullResult.prunedTaxonomies` と Layer 3 表示（`src/presentation/` 経由）追加、CLI/MCP の文言分離 | `tests/cli.test.ts` / `tests/mcp.test.ts` に出力検証 |
-| 6 | AGENTS.md（§5・§6・§5 Development invariant）更新、`npm run check` Green、version + CHANGELOG | `tests/layering.test.ts` Green |
+| Step | 内容                                                                                                                                                                                                     | 追加テスト                                                                                                                                                                                                         |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0    | `src/utils/taxonomy-key.ts` に `isKnownTaxonomyTerm()`（Layer 0）追加。preflight G4 と taxonomy_plan を同一 predicate 経由に寄せる                                                                       | `tests/taxonomy_key.test.ts`（ULID / canonical / decoded / alias / 削除後）                                                                                                                                        |
+| 1    | `src/sync/taxonomies.ts` に `carriesPrunedTaxonomies` / `pruneNonexistentTaxonomies` / `canonicalizeTaxonomies`（Layer 1、maps 受け取り）                                                                | T1（+ winner/loser slug 衝突ケース）                                                                                                                                                                               |
+| 2    | `pull/index.ts` に `getTaxonomyMaps()` memoize 追加、`FastPathContext` に maps 露出。`orchestrator.pullBatch` で maps を 1 回ロードして注入                                                              | —                                                                                                                                                                                                                  |
+| 3    | `fast_path.ts` の Branch 1 レールに間引きを実装。**full baseline rewrite**（`bumpBaselineHashOnly: false`）+ Layer A は canonical slug + conflict/pending フラグ全引き継ぎ + taxonomy sync 失敗時は skip | T2（`GET /posts/{id}` 0 件を URL 分類で assert）、T4、**新規 T6: 間引き直後の `emit status`/`diff` が phantom diff を出さない**、**T7: push 時に G4 も G19 も発火せず、prev-terms 警告が間引き後ターム集合と一致** |
+| 4    | 空配列戦略（案 A or B）決定と実装                                                                                                                                                                        | T3（G4・G19 非発火 + remote taxonomy 解決）                                                                                                                                                                        |
+| 5    | `PullResult.prunedTaxonomies` と Layer 3 表示（`src/presentation/` 経由）追加、CLI/MCP の文言分離                                                                                                        | `tests/cli.test.ts` / `tests/mcp.test.ts` に出力検証                                                                                                                                                               |
+| 6    | AGENTS.md（§5・§6・§5 Development invariant）更新、`npm run check` Green、version + CHANGELOG                                                                                                            | `tests/layering.test.ts` Green                                                                                                                                                                                     |
 
 ---
 
@@ -401,7 +403,6 @@ taxonomy 間引きは **syntax 修復ではなく content の意味変更**で�
 
 これらを反映した Rev.2 を作成すれば実装着手可と判断します。
 
-
 ---
 
 # Rev.2 検証レビュー（第 2 ラウンド）
@@ -414,19 +415,20 @@ taxonomy 間引きは **syntax 修復ではなく content の意味変更**で�
 
 ## R2-1. 正確に検証された項目（そのまま承認）
 
-| 指摘 | 照合結果 | 追加で確認した事実 |
-|---|---|---|
+| 指摘                                              | 照合結果        | 追加で確認した事実                                                                                                                                                |
+| ------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1. `resolveTaxonomyTermToId` 不在 / ULID 誤間引き | ✅ **完全正确** | regex 検索で該当は `docs/v0131-plan/README.md` と本 REVIEW の記述のみ。`src/` 下に 1 定義もなし。`loadLocalTaxonomyMaps()`（`taxonomies.ts:363-433`）が唯一の真実 |
-| 2. 「完全な 0-GET」表現補正 | ✅ **妥当** | `pull/index.ts:196-215` で fast-path 前に terms GET ×2。単一記事 pull でも発生する点は指摘どおり |
-| 3. `bumpBaselineHashOnly` の Layer A 不更新 | ✅ **完全正确** | `commit.ts:94-102` は `{ ...existingBase, hash, savedAt }` のみ保存。`frontmatterYaml` は verbatim 通過（`db/baseline.ts:82` が JSON encode 位置） |
-| 4. `flags` 部分指定によるフラグ喪失 | ✅ **完全正确** | `commit.ts:117-126` は `saveSyncState({ ...固定値, ...input.flags })` の upsert。未指定の conflict / pending 系は stale 化または NULL 化 |
-| 6. 前提条件保護・表示文言 | ✅ **妥当** | `taxonomies.ts:224-247` は失敗時 prune しない。既存文言は `pull.ts:266-269,377-383` / `sync-pull.ts:174` |
+| 2. 「完全な 0-GET」表現補正                       | ✅ **妥当**     | `pull/index.ts:196-215` で fast-path 前に terms GET ×2。単一記事 pull でも発生する点は指摘どおり                                                                  |
+| 3. `bumpBaselineHashOnly` の Layer A 不更新       | ✅ **完全正确** | `commit.ts:94-102` は `{ ...existingBase, hash, savedAt }` のみ保存。`frontmatterYaml` は verbatim 通過（`db/baseline.ts:82` が JSON encode 位置）                |
+| 4. `flags` 部分指定によるフラグ喪失               | ✅ **完全正确** | `commit.ts:117-126` は `saveSyncState({ ...固定値, ...input.flags })` の upsert。未指定の conflict / pending 系は stale 化または NULL 化                          |
+| 6. 前提条件保護・表示文言                         | ✅ **妥当**     | `taxonomies.ts:224-247` は失敗時 prune しない。既存文言は `pull.ts:266-269,377-383` / `sync-pull.ts:174`                                                          |
 
 ---
 
 ## R2-2. 【要修正】指摘 5 の G19 分析 — 前提が 2 つとも実コードと不一致
 
 ユーザーの反論:
+
 > 「指摘 3 でベースライン（baseSnapshot）も空配列に正しく更新されていれば `prevTerms.length === 0` となり G19 は発火しません」
 
 ### 誤り 1 — Zod の `.default({})` により `taxonomies.tags` は常に truthy
@@ -528,7 +530,6 @@ const termRes = await fetchFn(termsUrl, { method: 'POST', body: JSON.stringify({
 これは remote に孤児 `post_terms` を残すため **採用不可**。`[]` を保持し、G19 判定を remote audit
 （`tax_audit.ts`）と整合させる方向に修正すれば、実装着手可と判断します。
 
-
 ---
 
 # Rev.2 計画書レビュー（第 3 ラウンド）— 設計承認と残存する 6 個の実装ブロッカー
@@ -541,17 +542,17 @@ const termRes = await fetchFn(termsUrl, { method: 'POST', body: JSON.stringify({
 
 ## R3-1. 正しく反映された点（検証済み・承認）
 
-| Rev.2 の項目 | 照合結果 |
-|---|---|
-| §3.1 `isKnownTaxonomyTerm` を Layer 0 に新設、ULID + slug/alias 両対応 | ✅ 妥当。`maps.idToSlug` → `maps.slugToId` の 2 段判定は `taxonomy_plan.ts:51-65` と同型 |
-| §3.2 `canonicalizeTaxonomiesForBaseline` が ULID を verbatim 保持 | ✅ **loser ターム保護として正しい**。`taxonomy_plan.ts:57-65`（slug 入力は winner に解決）との差異を意図的に区別できている |
-| §3.3 `bumpBaselineHashOnly: false` + Layer A canonical slug 保存 | ✅ phantom diff 障害を解消する正しい修正 |
-| §3.3 flags で conflict/pending を全引き継ぎ | ✅ 既存 `fast_path.ts:386-398` のパターンと一致 |
-| §3.4 `tags: []` 保持 + G19 remote audit 整合 | ✅ **R2-2 の是正が正しく反映済み**。孤児 `post_terms` を残さない方針 |
-| §3.3 Epistemic Rule（sync 失敗時・postsOnly で間引き不发火） | ✅ 妥当（ただし実装経路の指定が不足 → R3-4） |
-| §3.5 Layer 3 専用文言を `src/presentation/` に | ✅ 軸 3 制約（MCP は `src/cli/commands/` を import 不可）を満たす正しい配置。`article_report.ts` は既に `formatOrphanMediaWarning` / `formatMediaCoverageLine` を持つ拡張先として適切 |
-| §5 T1〜T7・テストファイル分離 | ✅ T6（`inspectArticleDiff` 経由）・T7（Epistemic）が追加され、前回指摘を網羅 |
-| §6 Step 6 で AGENTS.md 更新 | ✅ 前回の欠落が解消済み |
+| Rev.2 の項目                                                           | 照合結果                                                                                                                                                                              |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3.1 `isKnownTaxonomyTerm` を Layer 0 に新設、ULID + slug/alias 両対応 | ✅ 妥当。`maps.idToSlug` → `maps.slugToId` の 2 段判定は `taxonomy_plan.ts:51-65` と同型                                                                                              |
+| §3.2 `canonicalizeTaxonomiesForBaseline` が ULID を verbatim 保持      | ✅ **loser ターム保護として正しい**。`taxonomy_plan.ts:57-65`（slug 入力は winner に解決）との差異を意図的に区別できている                                                            |
+| §3.3 `bumpBaselineHashOnly: false` + Layer A canonical slug 保存       | ✅ phantom diff 障害を解消する正しい修正                                                                                                                                              |
+| §3.3 flags で conflict/pending を全引き継ぎ                            | ✅ 既存 `fast_path.ts:386-398` のパターンと一致                                                                                                                                       |
+| §3.4 `tags: []` 保持 + G19 remote audit 整合                           | ✅ **R2-2 の是正が正しく反映済み**。孤児 `post_terms` を残さない方針                                                                                                                  |
+| §3.3 Epistemic Rule（sync 失敗時・postsOnly で間引き不发火）           | ✅ 妥当（ただし実装経路の指定が不足 → R3-4）                                                                                                                                          |
+| §3.5 Layer 3 専用文言を `src/presentation/` に                         | ✅ 軸 3 制約（MCP は `src/cli/commands/` を import 不可）を満たす正しい配置。`article_report.ts` は既に `formatOrphanMediaWarning` / `formatMediaCoverageLine` を持つ拡張先として適切 |
+| §5 T1〜T7・テストファイル分離                                          | ✅ T6（`inspectArticleDiff` 経由）・T7（Epistemic）が追加され、前回指摘を網羅                                                                                                         |
+| §6 Step 6 で AGENTS.md 更新                                            | ✅ 前回の欠落が解消済み                                                                                                                                                               |
 
 ---
 
@@ -569,8 +570,8 @@ export interface TaxonomyLookupMaps {
 「`category` / `tag` 以外のキーを持ち得る」型へは **構造的に代入できません**。
 
 ```ts
-const maps = loadLocalTaxonomyMaps(root);        // { slugToId: { category, tag }, idToSlug: { category, tag } }
-isKnownTaxonomyTerm(term, 'tag', maps);          // ✗ 型エラー（index signature 欠落）
+const maps = loadLocalTaxonomyMaps(root); // { slugToId: { category, tag }, idToSlug: { category, tag } }
+isKnownTaxonomyTerm(term, 'tag', maps); // ✗ 型エラー（index signature 欠落）
 ```
 
 **対策**: interface を新設せず、既存関数の ReturnType を単一ソースとして使うこと。
@@ -627,7 +628,6 @@ if (prevTerms?.length && remoteCount === null) {
    このケースで G19 を bypass してはいけない — plan に明記すること。
 
 ---
-
 
 ## R3-4. 【ブロッカー C】Epistemic フラグが pull 側に存在しない・`taxonomyApplyPending: 0` は採用不可
 
@@ -713,14 +713,13 @@ T1〜T7 と Step 0〜6 の作業手順も前回指摘を網羅しており、実
 
 **実装着手の前に以下 3 点を Rev.3 で確定させること:**
 
-| # | 内容 | 影響度 |
-|---|---|---|
-| **A** | `TaxonomyLookupMaps` を `ReturnType<typeof loadLocalTaxonomyMaps>` に統一（index signature 廃止） | typecheck 失敗 |
-| **B** | G19 バイパスを「audit known かつ 0 件」の 3 条件に修正し、unknown / `noTaxonomyAudit` では発火を維持。`remoteTaxAudit` の wiring（create 経路の audit 順序）を明記 | **保護の後退**（誤 wipe を許す） |
-| **C** | Epistemic フラグの注入経路（CLI→orchestrator→pullArticle→FastPathContext）を明記し、`taxonomyApplyPending` は間引き不发火時に保持 | **G17 の喪失**（R3-4(b) の失敗シナリオ） |
+| #     | 内容                                                                                                                                                               | 影響度                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| **A** | `TaxonomyLookupMaps` を `ReturnType<typeof loadLocalTaxonomyMaps>` に統一（index signature 廃止）                                                                  | typecheck 失敗                           |
+| **B** | G19 バイパスを「audit known かつ 0 件」の 3 条件に修正し、unknown / `noTaxonomyAudit` では発火を維持。`remoteTaxAudit` の wiring（create 経路の audit 順序）を明記 | **保護の後退**（誤 wipe を許す）         |
+| **C** | Epistemic フラグの注入経路（CLI→orchestrator→pullArticle→FastPathContext）を明記し、`taxonomyApplyPending` は間引き不发火時に保持                                  | **G17 の喪失**（R3-4(b) の失敗シナリオ） |
 
 A・B・C を反映すれば Rev.3 は実装着手可と判断します。
-
 
 ---
 
@@ -760,10 +759,16 @@ index signature を外したこの型では **TS が常に truthy と判定し�
 ### (a) 3 条件の厳密化は正しい
 
 ```ts
-const auditKnown = params.remoteTaxAudit !== null && params.remoteTaxAudit !== undefined
-                && Array.isArray(params.remoteTaxAudit[taxKey]);
+const auditKnown =
+  params.remoteTaxAudit !== null &&
+  params.remoteTaxAudit !== undefined &&
+  Array.isArray(params.remoteTaxAudit[taxKey]);
 const remoteCount = auditKnown ? params.remoteTaxAudit![taxKey]!.length : null;
-if (remoteCount === 0) { /* clean bypass */ } else { /* G19 発火 */ }
+if (remoteCount === 0) {
+  /* clean bypass */
+} else {
+  /* G19 発火 */
+}
 ```
 
 - `unknown`（`null`）は `else` 側 → **G19 が発火** ✅ epistemic rule と整合
@@ -854,17 +859,15 @@ Rev.3 の配置は `isKnownTaxonomyTerm` + `TaxonomyLookupMaps` を **Layer 0**�
 
 ## R4-5. 残る軽微点と最終判定
 
-| # | 内容 | 影響度 |
-|---|---|---|
-| 1 | T7 の注入名 `taxonomiesSyncFailed` → `canPruneTaxonomies` に統一（README.md:389） | 実装者が迷う（軽微） |
-| 2 | create 経路の「G19 不发火」根拠を「audit が走らないため」に修正（README.md:298） | 文档のみ（軽微） |
-| 3 | T3 に「divergence merge 経路で消えないこと」を追加 assert（R4-2(c)） | テスト網羅性 |
-| 4 | Step 1 / Step 3 前に `tests/layering.test.ts` の allowlist を grep 確認 | Gate 失敗の予防 |
+| #   | 内容                                                                              | 影響度               |
+| --- | --------------------------------------------------------------------------------- | -------------------- |
+| 1   | T7 の注入名 `taxonomiesSyncFailed` → `canPruneTaxonomies` に統一（README.md:389） | 実装者が迷う（軽微） |
+| 2   | create 経路の「G19 不发火」根拠を「audit が走らないため」に修正（README.md:298）  | 文档のみ（軽微）     |
+| 3   | T3 に「divergence merge 経路で消えないこと」を追加 assert（R4-2(c)）              | テスト網羅性         |
+| 4   | Step 1 / Step 3 前に `tests/layering.test.ts` の allowlist を grep 確認           | Gate 失敗の予防      |
 
 **判定: Rev.3 は実装着手可。** A・B・C はコード照合の上で完全に解消を確認しました。
 上記 4 点は実装開始と同時に直せる軽微な文档・テスト上の調整であり、設計判断のやり直しは不要です。
-
-
 
 ---
 
@@ -879,20 +882,20 @@ Rev.3 の配置は `isKnownTaxonomyTerm` + `TaxonomyLookupMaps` を **Layer 0**�
 
 ## 5-1. Rev.3 承認項目の適合性（全項目 ✅）
 
-| Rev.3 指定 | 実装 | 照合箇所 |
-|---|---|---|
-| ブロッカー A: `TaxonomyLookupMaps` を `loadLocalTaxonomyMaps()` と一致 | ✅ index signature 無し、語句一致 | `taxonomy-key.ts:56-59` / `taxonomies.ts:363-366` |
-| R4-4 推奨: `PrunedTaxonomiesDetail` を Layer 0 配置 + Layer 1 が re-export | ✅ 承認済み推奨どおり | `taxonomy-key.ts:61-64`、`taxonomies.ts` の `export type { PrunedTaxonomiesDetail, TaxonomyLookupMaps }` |
-| ブロッカー B: 3 条件厳密化（audit known / 0 件 / unknown は発火） | ✅ `remoteCount === 0` のときのみ bypass、`null`/undefined は `else` で G19 発火。per-key 判定も正しい | `taxonomy_plan.ts:155-186` |
-| ブロッカー B: wiring（update 経路で audit 結果を渡す） | ✅ update 分岐のみ `remoteTaxAudit` を注入 | `push/index.ts:478`（create 分岐 `:265-275` は変更なし = Rev.3 の意図どおり） |
-| ブロッカー C: `canPruneTaxonomies` の貫通 | ✅ CLI batch / MCP batch / orchestrator single の 3 経路で計算・注入 | `cli/commands/pull.ts:272`、`mcp/tools/sync-pull.ts:252`、`orchestrator.ts:169-183,354` |
-| ブロッカー C: `taxonomyApplyPending` 保持分岐 | ✅ `hasPrunedTax ? 0 : existingSync.taxonomyApplyPending` | `fast_path.ts:262-264` |
-| Layer A 完全再構成（`bumpBaselineHashOnly: false`） | ✅ 間引き発火時のみ full rewrite、syntax-only heal は従来どおり hash-only bump を維持するよう最適化 | `fast_path.ts:276` |
-| 0-GET 維持 | ✅ T2 が `GET /posts/{id}` 0 回を assert、テスト Green | `pull_taxonomy_pruning.test.ts:141` |
-| 未編集保護（hash match のみ発火） | ✅ Branch 1 は hash-match パス内のみで評価、T4 で保護を確認 | `fast_path.ts:206-310`、test `:307` |
-| phantom diff 根絶 | ✅ T6 が `inspectArticleDiff` の additions/deletions 0 を assert | test `:428-469` |
-| Layer 3 表示（軸 3 準拠） | ✅ `src/presentation/article_report.ts` に新設、CLI/MCP 双方が import（`src/cli/commands/` 経由の共有なし） | `article_report.ts:107-124` |
-| AGENTS.md / CHANGELOG / version 更新 | ✅ §3 frontmatter invariant・§10 G19 Remote Audit Parity・0.1.31 エントリすべて記載 | commit diff |
+| Rev.3 指定                                                                 | 実装                                                                                                        | 照合箇所                                                                                                 |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| ブロッカー A: `TaxonomyLookupMaps` を `loadLocalTaxonomyMaps()` と一致     | ✅ index signature 無し、語句一致                                                                           | `taxonomy-key.ts:56-59` / `taxonomies.ts:363-366`                                                        |
+| R4-4 推奨: `PrunedTaxonomiesDetail` を Layer 0 配置 + Layer 1 が re-export | ✅ 承認済み推奨どおり                                                                                       | `taxonomy-key.ts:61-64`、`taxonomies.ts` の `export type { PrunedTaxonomiesDetail, TaxonomyLookupMaps }` |
+| ブロッカー B: 3 条件厳密化（audit known / 0 件 / unknown は発火）          | ✅ `remoteCount === 0` のときのみ bypass、`null`/undefined は `else` で G19 発火。per-key 判定も正しい      | `taxonomy_plan.ts:155-186`                                                                               |
+| ブロッカー B: wiring（update 経路で audit 結果を渡す）                     | ✅ update 分岐のみ `remoteTaxAudit` を注入                                                                  | `push/index.ts:478`（create 分岐 `:265-275` は変更なし = Rev.3 の意図どおり）                            |
+| ブロッカー C: `canPruneTaxonomies` の貫通                                  | ✅ CLI batch / MCP batch / orchestrator single の 3 経路で計算・注入                                        | `cli/commands/pull.ts:272`、`mcp/tools/sync-pull.ts:252`、`orchestrator.ts:169-183,354`                  |
+| ブロッカー C: `taxonomyApplyPending` 保持分岐                              | ✅ `hasPrunedTax ? 0 : existingSync.taxonomyApplyPending`                                                   | `fast_path.ts:262-264`                                                                                   |
+| Layer A 完全再構成（`bumpBaselineHashOnly: false`）                        | ✅ 間引き発火時のみ full rewrite、syntax-only heal は従来どおり hash-only bump を維持するよう最適化         | `fast_path.ts:276`                                                                                       |
+| 0-GET 維持                                                                 | ✅ T2 が `GET /posts/{id}` 0 回を assert、テスト Green                                                      | `pull_taxonomy_pruning.test.ts:141`                                                                      |
+| 未編集保護（hash match のみ発火）                                          | ✅ Branch 1 は hash-match パス内のみで評価、T4 で保護を確認                                                 | `fast_path.ts:206-310`、test `:307`                                                                      |
+| phantom diff 根絶                                                          | ✅ T6 が `inspectArticleDiff` の additions/deletions 0 を assert                                            | test `:428-469`                                                                                          |
+| Layer 3 表示（軸 3 準拠）                                                  | ✅ `src/presentation/article_report.ts` に新設、CLI/MCP 双方が import（`src/cli/commands/` 経由の共有なし） | `article_report.ts:107-124`                                                                              |
+| AGENTS.md / CHANGELOG / version 更新                                       | ✅ §3 frontmatter invariant・§10 G19 Remote Audit Parity・0.1.31 エントリすべて記載                         | commit diff                                                                                              |
 
 **追加で確認した安全性（実装者が明示していないが正しく動作する点）**
 
@@ -909,17 +912,16 @@ Rev.3 の配置は `isKnownTaxonomyTerm` + `TaxonomyLookupMaps` を **Layer 0**�
 
 ---
 
-
 ## 5-2. 【残存 1・要追記】G19 bypass の unknown / 非 0 側（negative test）が未網羅
 
 `taxonomy_plan.ts:155-186` の分岐は **2 とケースを扱う**のに、T3 は
 「audit が 0 件を返す」成功側しか検証していません。
 
-| ケース | 期待挙動 | テスト |
-|---|---|---|
-| `remoteCount === 0` | bypass + `POST { termIds: [] }` | ✅ T3（`:257-262` で `{ termIds: [] }` を返す mock） |
-| `remoteCount > 0` | G19 発火（`--allow-wipe-taxonomies` 無しでは throw） | ❌ 未網羅 |
-| `remoteTaxAudit === null`（unknown / `--no-taxonomy-audit`） | G19 発火 | ❌ 未網羅 |
+| ケース                                                       | 期待挙動                                             | テスト                                               |
+| ------------------------------------------------------------ | ---------------------------------------------------- | ---------------------------------------------------- |
+| `remoteCount === 0`                                          | bypass + `POST { termIds: [] }`                      | ✅ T3（`:257-262` で `{ termIds: [] }` を返す mock） |
+| `remoteCount > 0`                                            | G19 発火（`--allow-wipe-taxonomies` 無しでは throw） | ❌ 未網羅                                            |
+| `remoteTaxAudit === null`（unknown / `--no-taxonomy-audit`） | G19 発火                                             | ❌ 未網羅                                            |
 
 これは第 3 ラウンド R3-3 で「最重要」として是正した安全不変条件そのものです。
 **ロジックは正しいが、将来の退行を検知するテストが存在しません。**
@@ -929,7 +931,9 @@ Rev.3 の配置は `isKnownTaxonomyTerm` + `TaxonomyLookupMaps` を **Layer 0**�
 ```ts
 it('T8: G19 still fires when remote audit reports non-zero assignments', async () => {
   // GET /terms/tag -> { termIds: [TAG_X] }、local tags: [] で push
-  await expect(pushArticle(relPath, opts)).rejects.toMatchObject({ code: 'DESTRUCTIVE_TAXONOMY_WIPE' });
+  await expect(pushArticle(relPath, opts)).rejects.toMatchObject({
+    code: 'DESTRUCTIVE_TAXONOMY_WIPE',
+  });
 });
 
 it('T9: G19 still fires when remote audit is unavailable (--no-taxonomy-audit)', async () => {
@@ -999,5 +1003,3 @@ plan を超える正確さで実装されています。
 3. `guards.ts` の G19 `source:` が `'src/sync/push.ts:803,1232'` を指したままです（実体は
    `push/taxonomy_plan.ts:155-186` と `push/merge_stage.ts:181-195`）。guard registry の行番号は
    既存から stale ですが、新規変更でさらにずれたため次バージョンで更新するとよいです（挙動影響なし）。
-
-

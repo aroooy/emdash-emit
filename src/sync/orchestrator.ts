@@ -958,6 +958,7 @@ export async function publishArticle(
       updatedAt: typeof finalRawItem.updatedAt === 'string' ? finalRawItem.updatedAt : null,
     },
     existingPrefix,
+    updatedFrontmatter.locale || 'ja',
   );
   const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
@@ -983,6 +984,7 @@ export async function publishArticle(
     bodyMarkdown: parsed.body,
     revForTransport: finalRev,
     revForComparison: comparisonRev,
+    extraDataJson: options.cache.getBaseSnapshot(id)?.extraDataJson ?? null,
   });
 
   if (path.resolve(fullPath) !== path.resolve(newFullPath) && fs.existsSync(fullPath)) {

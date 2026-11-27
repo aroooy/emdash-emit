@@ -49,8 +49,8 @@ describe('Pull 0-GET Taxonomy Pruning & Remote Audit Parity (v0.1.31 T2-T7)', ()
     // Create categories/ and tags/ directories with local definitions
     fs.mkdirSync(path.join(tempDir, 'categories'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
 
     // Category: news
     fs.writeFileSync(
@@ -90,7 +90,7 @@ describe('Pull 0-GET Taxonomy Pruning & Remote Audit Parity (v0.1.31 T2-T7)', ()
       body = 'Initial test body.\n',
       localEdits,
     } = params;
-    const relPath = `posts/${status}/20260101_${id}-${slug}.md`;
+    const relPath = `posts/ja/${status}/20260101_${id}-${slug}.md`;
     const fullPath = path.join(tempDir, relPath);
 
     const frontmatter = {

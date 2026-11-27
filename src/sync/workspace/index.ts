@@ -60,18 +60,11 @@ export function findLocalFilesByUlid(
   id: string,
 ): string[] {
   const matches: string[] = [];
-  for (const sub of ['draft', 'published']) {
-    const subDir = path.join(workspaceRoot, collection, sub);
-    if (!fs.existsSync(subDir)) continue;
-    try {
-      for (const file of fs.readdirSync(subDir)) {
-        if (!file.endsWith('.md')) continue;
-        if (extractUlidFromFilename(file) === id) {
-          matches.push(path.join(collection, sub, file));
-        }
-      }
-    } catch {
-      // Ignore directory read errors
+  for (const entry of iterWorkspaceArticles(workspaceRoot, collection, {
+    statuses: ['draft', 'published'],
+  })) {
+    if (extractUlidFromFilename(entry.fileName) === id) {
+      matches.push(entry.relPath);
     }
   }
   return matches;
@@ -91,11 +84,12 @@ export function resolveCanonicalArticlePath(
     createdAt?: string | null;
     updatedAt?: string | null;
   },
-  existingPrefix?: string | null,
+  existingPrefix: string | null | undefined,
+  locale: string,
 ): string {
   const dateInput =
     dates.publishedAt || existingPrefix || dates.createdAt || dates.updatedAt || null;
-  return computeArticleRelativePath(collection, status, id, title, dateInput);
+  return computeArticleRelativePath(collection, status, id, title, dateInput, locale);
 }
 
 /**

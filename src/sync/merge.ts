@@ -328,6 +328,65 @@ export function mergeTaxonomies(
 }
 
 /**
+ * Merges custom `fields:` map at leaf granularity (`fields.<key>`).
+ * Non-overlapping edits to different keys both survive; true conflicts on the same leaf key
+ * prefer remote and record a warning.
+ */
+function mergeCustomFields(
+  localFields: Frontmatter['fields'],
+  baseFields: Frontmatter['fields'],
+  remoteFields: Frontmatter['fields'],
+  isEqual: (a: unknown, b: unknown) => boolean,
+): { merged: Frontmatter['fields']; warnings: string[] } {
+  const warnings: string[] = [];
+  const allKeys = Array.from(
+    new Set([
+      ...Object.keys(baseFields ?? {}),
+      ...Object.keys(localFields ?? {}),
+      ...Object.keys(remoteFields ?? {}),
+    ]),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const result: NonNullable<Frontmatter['fields']> = {};
+  for (const k of allKeys) {
+    const localVal = localFields?.[k];
+    const baseVal = baseFields?.[k];
+    const remoteVal = remoteFields?.[k];
+    const localChanged = !isEqual(localVal, baseVal);
+    const remoteChanged = !isEqual(remoteVal, baseVal);
+
+    let chosen: Frontmatter['fields'] extends Record<string, infer V> | undefined
+      ? V | undefined
+      : never;
+    if (localChanged && !remoteChanged) {
+      chosen = localVal;
+    } else if (!localChanged && remoteChanged) {
+      chosen = remoteVal;
+    } else if (localChanged && remoteChanged) {
+      if (isEqual(localVal, remoteVal)) {
+        chosen = localVal;
+      } else {
+        chosen = remoteVal;
+        warnings.push(
+          `Conflict on custom field 'fields.${k}': remote value was preferred over local changes.`,
+        );
+      }
+    } else {
+      chosen = remoteVal;
+    }
+
+    if (chosen !== undefined) {
+      result[k] = chosen;
+    }
+  }
+
+  return {
+    merged: Object.keys(result).length > 0 ? result : undefined,
+    warnings,
+  };
+}
+
+/**
  * Merges frontmatter fields key by key.
  * Never inserts conflict markers into YAML (always produces valid Frontmatter).
  * On collision (both local and remote modified the same field differently), remote takes precedence
@@ -367,9 +426,25 @@ export function mergeFrontmatter(
     'taxonomies',
     'seo',
     'bylines',
+    'fields',
   ];
 
   for (const key of keys) {
+    if (key === 'fields') {
+      const custom = mergeCustomFields(
+        local.fields,
+        base ? base.fields : undefined,
+        remote.fields,
+        isEqual,
+      );
+      if (custom.merged) {
+        merged.fields = custom.merged;
+      } else {
+        delete merged.fields;
+      }
+      warnings.push(...custom.warnings);
+      continue;
+    }
     if (key === 'taxonomies') {
       const tax = mergeTaxonomies(
         local.taxonomies,

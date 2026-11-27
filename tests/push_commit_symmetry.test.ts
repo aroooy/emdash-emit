@@ -64,7 +64,7 @@ describe('pendingFlagsFor Commit Symmetry and NULL Rules (B2b)', () => {
       mode: 'update',
       syncState: {
         id: '01TEST',
-        localFilePath: 'posts/draft/test.md',
+        localFilePath: 'posts/ja/draft/test.md',
         localHash: 'hash',
         remoteRev: '1',
         status: 'draft',
@@ -98,7 +98,7 @@ describe('pendingFlagsFor Commit Symmetry and NULL Rules (B2b)', () => {
       mode: 'update',
       syncState: {
         id: '01TEST',
-        localFilePath: 'posts/draft/test.md',
+        localFilePath: 'posts/ja/draft/test.md',
         localHash: 'hash',
         remoteRev: '1',
         status: 'draft',

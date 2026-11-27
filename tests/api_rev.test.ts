@@ -201,7 +201,7 @@ describe('Revision comparison & formatting (v0.1.22 Layer 0)', () => {
       cache.runTransaction(() => {
         cache.saveSyncState({
           id: '01M7TXTEST0000000000000001',
-          localFilePath: 'posts/draft/test.md',
+          localFilePath: 'posts/ja/draft/test.md',
           localHash: 'hash1',
           remoteRev: '1',
           status: 'draft',
@@ -220,7 +220,7 @@ describe('Revision comparison & formatting (v0.1.22 Layer 0)', () => {
         cache.runTransaction(() => {
           cache.saveSyncState({
             id: '01M7TXTEST0000000000000002',
-            localFilePath: 'posts/draft/test2.md',
+            localFilePath: 'posts/ja/draft/test2.md',
             localHash: 'hash2',
             remoteRev: '1',
             status: 'draft',

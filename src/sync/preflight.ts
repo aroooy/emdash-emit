@@ -523,7 +523,7 @@ export function runPreflightChecks(
           code: 'LOCAL_IMAGE_DETECTED',
           message: `Local image path detected in markdown body: '${trimmedLine}'. Only images placed directly under "media/drafts/" can be automatically uploaded.`,
           suggestion:
-            'Place the image in "media/drafts/<filename>" and reference it on a standalone line (e.g. ![alt](../../media/drafts/<filename>)), or upload first using EmDash MCP "media_upload" and replace with /_emdash/api/media/file/<storageKey>. If a media asset is already mirrored in this workspace, look it up with "emit media-search <keyword>" (or MCP "sync_media_search") and replace the local path with /_emdash/api/media/file/<storageKey> instead of re-uploading. Filename/alt lookup resolves only assets Emit already mirrored (media_state plus media/*.yaml); a remote-only asset must be uploaded via the official EmDash MCP or placed in media/drafts/.',
+            'Place the image in "media/drafts/<filename>" and reference it on a standalone line (e.g. ![alt](../../../media/drafts/<filename>)), or upload first using EmDash MCP "media_upload" and replace with /_emdash/api/media/file/<storageKey>. If a media asset is already mirrored in this workspace, look it up with "emit media-search <keyword>" (or MCP "sync_media_search") and replace the local path with /_emdash/api/media/file/<storageKey> instead of re-uploading. Filename/alt lookup resolves only assets Emit already mirrored (media_state plus media/*.yaml); a remote-only asset must be uploaded via the official EmDash MCP or placed in media/drafts/.',
         });
         continue;
       }
@@ -605,7 +605,7 @@ export function runPreflightChecks(
           code: 'INLINE_LOCAL_IMAGE_NOT_SUPPORTED',
           message: `Inline local image detected inside paragraph: '${fullImgSyntax}'. EmDash Portable Text only supports block-level standalone images for automatic sync.`,
           suggestion:
-            'Move the image onto its own standalone line at the beginning of the line (e.g. ![alt](../../media/drafts/<filename>)).',
+            'Move the image onto its own standalone line at the beginning of the line (e.g. ![alt](../../../media/drafts/<filename>)).',
         });
       } else {
         errors.push({
@@ -744,7 +744,7 @@ export function runPreflightChecks(
             code: 'INVALID_FEATURED_IMAGE',
             message: `Invalid featuredImage in frontmatter: '${frontmatter.featuredImage}'. It must be a valid 26-character Crockford media ULID, a local draft image path inside "media/drafts/", or null.`,
             suggestion:
-              'Place the image in "media/drafts/<filename>" (e.g. ../../media/drafts/eyecatch.jpg), or upload first using EmDash Admin or MCP "media_upload" and specify the returned 26-character ULID. To remove the featured image, set featuredImage: null. Local file paths outside "media/" are never allowed.',
+              'Place the image in "media/drafts/<filename>" (e.g. ../../../media/drafts/eyecatch.jpg), or upload first using EmDash Admin or MCP "media_upload" and specify the returned 26-character ULID. To remove the featured image, set featuredImage: null. Local file paths outside "media/" are never allowed.',
           });
         }
       }
@@ -760,6 +760,26 @@ export function runPreflightChecks(
       suggestion:
         'Resolve all conflicting regions in the body and remove the conflict markers before pushing.',
     });
+  }
+
+  // G24: Reserved keys inside frontmatter.fields are rejected
+  if (frontmatter.fields) {
+    const reservedFieldKeys = new Set([
+      'title',
+      'content',
+      'body',
+      'featured_image',
+      'featuredImage',
+    ]);
+    const offending = Object.keys(frontmatter.fields).filter((k) => reservedFieldKeys.has(k));
+    if (offending.length > 0) {
+      errors.push({
+        code: 'RESERVED_CUSTOM_FIELD_KEY',
+        message: `Reserved key(s) found inside frontmatter.fields: ${offending.join(', ')}.`,
+        suggestion:
+          'Remove reserved keys (title, content, body, featured_image, featuredImage) from frontmatter.fields and edit the top-level frontmatter field or Markdown body instead.',
+      });
+    }
   }
 
   // G7: Title duplication check (auto-trim)

@@ -155,15 +155,15 @@ describe('Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B)', () => {
 
   it('mixed-defect workspace matches the full check-by-check snapshot', async () => {
     // Unrecoverable frontmatter.
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'draft', 'broken.md'),
+      path.join(tempDir, 'posts', 'ja', 'draft', 'broken.md'),
       ['---', 'id: not-a-ulid', 'slug:', '  bad: [', '---', 'body'].join('\n'),
       'utf8',
     );
     // Healable (percent-encoded taxonomy) frontmatter.
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'draft', 'healable.md'),
+      path.join(tempDir, 'posts', 'ja', 'draft', 'healable.md'),
       [
         '---',
         'id: 01M67SNAPSH0T0000000000002',
@@ -189,7 +189,7 @@ describe('Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B)', () => {
     // Pending flags on an article whose file no longer exists.
     cache.saveSyncState({
       id: '01M67SNAPSH0T0000000000003',
-      localFilePath: 'posts/draft/gone.md',
+      localFilePath: 'posts/ja/draft/gone.md',
       localHash: 'stale-hash',
       remoteRev: 'rev-9',
       status: 'draft',
@@ -207,7 +207,7 @@ describe('Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B)', () => {
     fs.mkdirSync(mediaDir, { recursive: true });
     fs.writeFileSync(path.join(mediaDir, 'legacy_orphan.png'), 'residue', 'utf8');
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'draft', 'media-refs.md'),
+      path.join(tempDir, 'posts', 'ja', 'draft', 'media-refs.md'),
       [
         '---',
         'id: 01M67SNAPSH0T0000000000005',
@@ -234,9 +234,9 @@ describe('Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B)', () => {
   });
 
   it('media library census and file-route probe match the snapshot', async () => {
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.writeFileSync(
-      path.join(tempDir, 'posts', 'draft', 'media-census.md'),
+      path.join(tempDir, 'posts', 'ja', 'draft', 'media-census.md'),
       [
         '---',
         'id: 01M67SNAPSH0T0000000000006',

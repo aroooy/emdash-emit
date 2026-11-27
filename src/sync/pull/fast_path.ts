@@ -115,6 +115,7 @@ export async function tryFastPathOrHeal(
     const fallbackSlug = String(item.slug || existingSync.slug || '');
     const rawTitle = extractCanonicalRemoteTitle(rawObj, fallbackSlug);
     const targetStatus = String(rawObj.status || item.status || 'draft');
+    const targetLocale = String(rawObj.locale || item.locale || 'ja');
     const expectedRelPath = resolveCanonicalArticlePath(
       collection,
       targetStatus,
@@ -126,6 +127,7 @@ export async function tryFastPathOrHeal(
         updatedAt: (rawObj.updatedAt as string) || (item.updatedAt as string) || null,
       },
       existingPrefix,
+      targetLocale,
     );
 
     // If path matches and contents are unchanged, safely skip (only if local frontmatter is valid YAML)
@@ -474,6 +476,9 @@ export async function tryFastPathOrHeal(
             bodyMarkdown: remoteLocal.body,
             revForTransport: remoteRev,
             revForComparison: remoteComparisonRev,
+            extraDataJson: remoteLocal.opaqueExtraData
+              ? JSON.stringify(remoteLocal.opaqueExtraData)
+              : (existingBase?.extraDataJson ?? null),
             bumpBaselineHashOnly,
             skipDiskWrite: true,
             flags: {

@@ -48,7 +48,7 @@ taxonomies:
   categories:
     - 未分類
 ---
-![Photo](../../media/01M6TEST.jpg)`;
+![Photo](../../../media/01M6TEST.jpg)`;
 
     const spelling = resolveDiskSpelling(cleanDisk, {
       status: 'published',
@@ -75,11 +75,11 @@ title: Test
       },
       {
         workspaceRoot: '/test',
-        articleRelPath: 'posts/published/test.md',
+        articleRelPath: 'posts/ja/published/test.md',
         fs: { existsSync: () => true } as unknown as typeof import('node:fs'),
       },
     );
 
-    expect(rendered).toContain('../../media/01M6TEST.jpg');
+    expect(rendered).toContain('../../../media/01M6TEST.jpg');
   });
 });

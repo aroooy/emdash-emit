@@ -47,6 +47,9 @@ export interface TaxonomyTerm {
   parentId?: string | null;
   count?: number;
   locale?: string;
+  translationGroup?: string;
+  translation_group?: string;
+  translationGroupId?: string;
   children?: TaxonomyTerm[];
 }
 
@@ -91,6 +94,7 @@ export interface PullTaxonomiesOptions {
   token: string;
   refreshToken?: string;
   fetchFn?: typeof fetch;
+  defaultLocale?: string;
 }
 
 export interface PullTaxonomiesResult {
@@ -100,6 +104,7 @@ export interface PullTaxonomiesResult {
   deletedTagsCount: number;
   categoriesFailed?: boolean;
   tagsFailed?: boolean;
+  warnings?: string[];
 }
 
 /**
@@ -116,6 +121,8 @@ function serializeTaxonomyYaml(doc: {
   taxonomy: 'category' | 'tag';
   parentId: string | null;
   count: number;
+  locale?: string;
+  translationGroup?: string;
 }): string {
   const lines: string[] = [
     `id: ${formatYamlScalar(doc.id)}`,
@@ -128,6 +135,12 @@ function serializeTaxonomyYaml(doc: {
   lines.push(`taxonomy: ${formatYamlScalar(doc.taxonomy)}`);
   lines.push(`parentId: ${doc.parentId ? formatYamlScalar(doc.parentId) : 'null'}`);
   lines.push(`count: ${doc.count}`);
+  if (doc.locale) {
+    lines.push(`locale: ${formatYamlScalar(doc.locale)}`);
+  }
+  if (doc.translationGroup) {
+    lines.push(`translationGroup: ${formatYamlScalar(doc.translationGroup)}`);
+  }
   return lines.join('\n') + '\n';
 }
 
@@ -135,18 +148,38 @@ function writeAndPruneTaxonomyDir(params: {
   dir: string;
   items: TaxonomyTerm[];
   taxonomy: 'category' | 'tag';
-}): { count: number; deletedCount: number } {
+  defaultLocale?: string;
+}): { count: number; deletedCount: number; fallbackLocaleCount: number } {
   fs.mkdirSync(params.dir, { recursive: true });
-  const activeFileNames = new Set<string>();
+  const fallbackDefault = params.defaultLocale?.trim().toLowerCase() || 'ja';
+  const activeRelPaths = new Set<string>();
+  let fallbackLocaleCount = 0;
+
   for (const item of params.items) {
     const label = item.label || item.slug;
     const sanitized = sanitizeTitleForFilename(label);
     const fileName = `${item.id}-${sanitized}.yaml`;
-    activeFileNames.add(fileName);
-    const filePath = path.join(params.dir, fileName);
 
     const rawSlug = item.slug;
     const decodedSlug = tryDecodeTaxonomyTerm(rawSlug);
+    const rawLocale =
+      typeof item.locale === 'string' && item.locale.trim()
+        ? item.locale.trim().toLowerCase()
+        : undefined;
+    if (!rawLocale) {
+      fallbackLocaleCount++;
+    }
+    const termLocale = rawLocale || fallbackDefault;
+    const relPath = `${termLocale}/${fileName}`;
+    activeRelPaths.add(relPath);
+
+    const localeDir = path.join(params.dir, termLocale);
+    fs.mkdirSync(localeDir, { recursive: true });
+    const filePath = path.join(localeDir, fileName);
+
+    const rawGroup = item.translationGroup ?? item.translation_group ?? item.translationGroupId;
+    const translationGroup =
+      typeof rawGroup === 'string' && rawGroup.trim() ? rawGroup.trim() : undefined;
 
     const doc = {
       id: item.id,
@@ -156,31 +189,54 @@ function writeAndPruneTaxonomyDir(params: {
       taxonomy: params.taxonomy,
       parentId: item.parentId || null,
       count: item.count ?? 0,
+      locale: termLocale,
+      ...(translationGroup ? { translationGroup } : {}),
     };
     fs.writeFileSync(filePath, serializeTaxonomyYaml(doc), 'utf8');
   }
 
   let deletedCount = 0;
   if (fs.existsSync(params.dir)) {
-    for (const file of fs.readdirSync(params.dir)) {
-      if (file.endsWith('.yaml') && !activeFileNames.has(file)) {
+    for (const entry of fs.readdirSync(params.dir, { withFileTypes: true })) {
+      const fullEntry = path.join(params.dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.yaml')) {
+        // Prune legacy flat YAML files directly under categories/ or tags/
         try {
-          fs.unlinkSync(path.join(params.dir, file));
+          fs.unlinkSync(fullEntry);
           deletedCount++;
         } catch {
           // Ignore unlink errors
+        }
+      } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const subFiles = fs.readdirSync(fullEntry);
+        for (const file of subFiles) {
+          if (file.endsWith('.yaml') && !activeRelPaths.has(`${entry.name}/${file}`)) {
+            try {
+              fs.unlinkSync(path.join(fullEntry, file));
+              deletedCount++;
+            } catch {
+              // Ignore unlink errors
+            }
+          }
+        }
+        try {
+          if (fs.readdirSync(fullEntry).length === 0) {
+            fs.rmdirSync(fullEntry);
+          }
+        } catch {
+          // Ignore rmdir errors
         }
       }
     }
   }
 
-  return { count: params.items.length, deletedCount };
+  return { count: params.items.length, deletedCount, fallbackLocaleCount };
 }
 
 /**
  * Pulls categories and tags from EmDash API and saves them to local YAML files:
- * categories/<id>-<sanitizedLabel>.yaml
- * tags/<id>-<sanitizedLabel>.yaml
+ * categories/<locale>/<id>-<sanitizedLabel>.yaml
+ * tags/<locale>/<id>-<sanitizedLabel>.yaml
  */
 export async function pullTaxonomies(
   options: PullTaxonomiesOptions,
@@ -228,6 +284,7 @@ export async function pullTaxonomies(
 
   let categoriesCount = 0;
   let deletedCategoriesCount = 0;
+  const warnings: string[] = [];
 
   // Save categories and prune deleted ones (only if fetch succeeded; preserve on failure)
   if (categories !== null) {
@@ -235,9 +292,16 @@ export async function pullTaxonomies(
       dir: categoriesDir,
       items: categories,
       taxonomy: 'category',
+      defaultLocale: options.defaultLocale,
     });
     categoriesCount = res.count;
     deletedCategoriesCount = res.deletedCount;
+    if (res.fallbackLocaleCount > 0) {
+      const fallback = options.defaultLocale?.trim().toLowerCase() || 'ja';
+      warnings.push(
+        `${res.fallbackLocaleCount} category term(s) omitted "locale" in remote response; defaulted to "${fallback}".`,
+      );
+    }
   }
 
   let tagsCount = 0;
@@ -249,9 +313,16 @@ export async function pullTaxonomies(
       dir: tagsDir,
       items: tags,
       taxonomy: 'tag',
+      defaultLocale: options.defaultLocale,
     });
     tagsCount = res.count;
     deletedTagsCount = res.deletedCount;
+    if (res.fallbackLocaleCount > 0) {
+      const fallback = options.defaultLocale?.trim().toLowerCase() || 'ja';
+      warnings.push(
+        `${res.fallbackLocaleCount} tag term(s) omitted "locale" in remote response; defaulted to "${fallback}".`,
+      );
+    }
   }
 
   return {
@@ -261,6 +332,7 @@ export async function pullTaxonomies(
     deletedTagsCount,
     categoriesFailed,
     tagsFailed,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -277,6 +349,12 @@ export interface LocalTaxonomyItem {
   name: string;
   parentId?: string | null;
   count?: number;
+  locale?: string;
+  translationGroup?: string;
+}
+
+export interface LocalTaxonomyTermEntry extends LocalTaxonomyItem {
+  taxonomy: 'category' | 'tag';
 }
 
 export interface LocalTaxonomiesSummary {
@@ -293,17 +371,32 @@ export const DEFAULT_MAX_TAGS = 60;
 export const DEFAULT_MAX_CATEGORIES = 50;
 
 /**
- * Reads all taxonomy YAML files from a directory and returns typed items.
+ * Reads all taxonomy YAML files from `<dir>/<locale>/*.yaml` (and transparently from
+ * `<dir>/*.yaml` for read-only test fixture compatibility, which are pruned on the next
+ * successful `pullTaxonomies()` sync) and returns typed items.
  * Single source of truth for reading local category and tag YAML files.
  */
 export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
   if (!fs.existsSync(dir)) return [];
   try {
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'));
+    const yamlTargets: Array<{ fullPath: string; dirLocale?: string }> = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.yaml')) {
+        yamlTargets.push({ fullPath: path.join(dir, entry.name) });
+      } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const subDir = path.join(dir, entry.name);
+        for (const subFile of fs.readdirSync(subDir)) {
+          if (subFile.endsWith('.yaml')) {
+            yamlTargets.push({ fullPath: path.join(subDir, subFile), dirLocale: entry.name });
+          }
+        }
+      }
+    }
+
     const items: LocalTaxonomyItem[] = [];
-    for (const file of files) {
+    for (const { fullPath, dirLocale } of yamlTargets) {
       try {
-        const content = fs.readFileSync(path.join(dir, file), 'utf8');
+        const content = fs.readFileSync(fullPath, 'utf8');
         const data = yaml.load(content) as Record<string, unknown>;
         if (data && typeof data.id === 'string' && typeof data.slug === 'string') {
           const rawSlug = String(data.slug).trim();
@@ -332,6 +425,13 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
             canonicalSlug = rawSlug;
           }
 
+          const locale =
+            typeof data.locale === 'string' && data.locale.trim() ? data.locale.trim() : dirLocale;
+          const rawGroup =
+            data.translationGroup ?? data.translation_group ?? data.translationGroupId;
+          const translationGroup =
+            typeof rawGroup === 'string' && rawGroup.trim() ? rawGroup.trim() : undefined;
+
           items.push({
             id: data.id,
             slug,
@@ -339,6 +439,8 @@ export function readTaxonomyDir(dir: string): LocalTaxonomyItem[] {
             name: typeof data.name === 'string' ? data.name : slug,
             parentId: typeof data.parentId === 'string' ? data.parentId : null,
             count: typeof data.count === 'number' ? data.count : undefined,
+            ...(locale ? { locale } : {}),
+            ...(translationGroup ? { translationGroup } : {}),
           });
         }
       } catch {
@@ -363,6 +465,22 @@ export function compareTaxonomyTermDeterministically(
   const countDiff = (b.count ?? 0) - (a.count ?? 0);
   if (countDiff !== 0) return countDiff;
   return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+}
+
+/**
+ * Loads all local taxonomy terms from categories/ and tags/ with their taxonomy kind,
+ * locale, and translationGroup metadata preserved.
+ */
+export function loadLocalTaxonomyTerms(workspaceRoot: string): LocalTaxonomyTermEntry[] {
+  const categories = readTaxonomyDir(path.join(workspaceRoot, 'categories')).map((item) => ({
+    ...item,
+    taxonomy: 'category' as const,
+  }));
+  const tags = readTaxonomyDir(path.join(workspaceRoot, 'tags')).map((item) => ({
+    ...item,
+    taxonomy: 'tag' as const,
+  }));
+  return [...categories, ...tags];
 }
 
 /**

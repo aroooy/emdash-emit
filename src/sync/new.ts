@@ -32,8 +32,9 @@ import {
   type TaxonomyCandidates,
 } from '../utils/frontmatter.js';
 import { normalizeTaxonomyKey } from '../utils/taxonomy-key.js';
-import { loadLocalTaxonomyCandidates } from './taxonomies.js';
+import { loadLocalTaxonomyCandidates, loadLocalTaxonomyTerms } from './taxonomies.js';
 import { CANONICAL_ULID_REGEX, isCanonicalUlid } from '../utils/ulid.js';
+import { iterWorkspaceArticles } from './workspace/index.js';
 import type { CacheDatabase } from '../db/cache.js';
 
 export interface DuplicateSlugInfo {
@@ -181,52 +182,51 @@ export function findLocalDuplicateSlug(
     }
   }
 
-  // 2. Check local workspace files in <collection>/draft/ and <collection>/published/
-  const collectionDir = path.join(workspaceRoot, collection);
-  if (fs.existsSync(collectionDir)) {
-    const subdirs = ['draft', 'published'];
-    for (const sub of subdirs) {
-      const subDir = path.join(collectionDir, sub);
-      if (!fs.existsSync(subDir)) continue;
-
-      const files = fs.readdirSync(subDir).filter((f) => f.endsWith('.md'));
-      for (const file of files) {
-        const fullPath = path.join(subDir, file);
-        try {
-          const raw = fs.readFileSync(fullPath, 'utf8');
-          const parsed = parseMarkdownLenient(raw) ?? parseMarkdown(raw);
-          if (parsed.frontmatter.slug && parsed.frontmatter.slug.toLowerCase() === normalizedSlug) {
-            if (
-              normalizedTargetLocale &&
-              parsed.frontmatter.locale &&
-              parsed.frontmatter.locale.toLowerCase() !== normalizedTargetLocale
-            ) {
-              continue;
-            }
-            return {
-              slug: normalizedSlug,
-              existingId: parsed.frontmatter.id,
-              existingFilePath: path.join(collection, sub, file),
-              existingStatus: parsed.frontmatter.status || sub,
-              source: 'workspace',
-            };
-          }
-        } catch {
-          // Check filename heuristic if frontmatter parse fails
-          const withoutExt = file.replace(/\.md$/i, '');
-          if (
-            withoutExt.toLowerCase().endsWith(`-${normalizedSlug}`) ||
-            withoutExt.toLowerCase() === normalizedSlug
-          ) {
-            return {
-              slug: normalizedSlug,
-              existingId: 'unknown',
-              existingFilePath: path.join(collection, sub, file),
-              existingStatus: sub,
-              source: 'workspace',
-            };
-          }
+  // 2. Check local workspace files in <collection>/<locale>/{draft,published}/
+  for (const entry of iterWorkspaceArticles(workspaceRoot, collection, {
+    statuses: ['draft', 'published'],
+  })) {
+    try {
+      const raw = fs.readFileSync(entry.fullPath, 'utf8');
+      const parsed = parseMarkdownLenient(raw) ?? parseMarkdown(raw);
+      if (parsed.frontmatter.slug && parsed.frontmatter.slug.toLowerCase() === normalizedSlug) {
+        const entryLocale = parsed.frontmatter.locale || entry.locale;
+        if (
+          normalizedTargetLocale &&
+          entryLocale &&
+          entryLocale.toLowerCase() !== normalizedTargetLocale
+        ) {
+          continue;
         }
+        return {
+          slug: normalizedSlug,
+          existingId: parsed.frontmatter.id,
+          existingFilePath: entry.relPath,
+          existingStatus: parsed.frontmatter.status || entry.status,
+          source: 'workspace',
+        };
+      }
+    } catch {
+      // Check filename heuristic if frontmatter parse fails
+      if (
+        normalizedTargetLocale &&
+        entry.locale &&
+        entry.locale.toLowerCase() !== normalizedTargetLocale
+      ) {
+        continue;
+      }
+      const withoutExt = entry.fileName.replace(/\.md$/i, '');
+      if (
+        withoutExt.toLowerCase().endsWith(`-${normalizedSlug}`) ||
+        withoutExt.toLowerCase() === normalizedSlug
+      ) {
+        return {
+          slug: normalizedSlug,
+          existingId: 'unknown',
+          existingFilePath: entry.relPath,
+          existingStatus: entry.status,
+          source: 'workspace',
+        };
       }
     }
   }
@@ -241,6 +241,10 @@ interface ResolvedTranslationSource {
   translationGroup?: string;
   featuredImage?: string | null;
   bylines: string[];
+  taxonomies: {
+    categories: string[];
+    tags: string[];
+  };
 }
 
 function resolveTranslationSource(
@@ -266,6 +270,10 @@ function resolveTranslationSource(
       translationGroup: parsed.frontmatter.translationGroup,
       featuredImage: parsed.frontmatter.featuredImage,
       bylines: parsed.frontmatter.bylines ?? [],
+      taxonomies: {
+        categories: parsed.frontmatter.taxonomies?.categories ?? [],
+        tags: parsed.frontmatter.taxonomies?.tags ?? [],
+      },
     };
   };
 
@@ -291,21 +299,22 @@ function resolveTranslationSource(
             translationGroup: fm.translationGroup,
             featuredImage: fm.featuredImage,
             bylines: Array.isArray(fm.bylines) ? fm.bylines : [],
+            taxonomies: {
+              categories: Array.isArray(fm.taxonomies?.categories) ? fm.taxonomies.categories : [],
+              tags: Array.isArray(fm.taxonomies?.tags) ? fm.taxonomies.tags : [],
+            },
           };
         }
       } catch {
         // fall through to disk scan
       }
     }
-    for (const sub of ['draft', 'published']) {
-      const subDir = path.join(workspaceRoot, collection, sub);
-      if (!fs.existsSync(subDir)) continue;
-      for (const file of fs.readdirSync(subDir)) {
-        if (!file.endsWith('.md')) continue;
-        if (file.toUpperCase().includes(normalizedId)) {
-          const found = tryReadFromPath(path.join(collection, sub, file));
-          if (found && found.id.toUpperCase() === normalizedId) return found;
-        }
+    for (const entry of iterWorkspaceArticles(workspaceRoot, collection, {
+      statuses: ['draft', 'published'],
+    })) {
+      if (entry.fileName.toUpperCase().includes(normalizedId)) {
+        const found = tryReadFromPath(entry.relPath);
+        if (found && found.id.toUpperCase() === normalizedId) return found;
       }
     }
   }
@@ -322,6 +331,8 @@ export interface CreateArticleOptions {
   collection?: string;
   locale?: string;
   translationOf?: string;
+  inheritTaxonomies?: boolean;
+  noTaxonomies?: boolean;
   byline?: string;
   cache?: CacheDatabase;
   candidates?: TaxonomyCandidates;
@@ -416,13 +427,78 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     }
   }
 
-  const normalizedCategories = normalizeStringList(options.categories);
-  const normalizedTags = normalizeStringList(options.tags);
+  let normalizedCategories = normalizeStringList(options.categories);
+  let normalizedTags = normalizeStringList(options.tags);
 
-  if (translationSource && normalizedCategories.length === 0 && normalizedTags.length === 0) {
-    warnings.push(
-      'Categories and tags were not auto-copied from the source article because EmDash resolves taxonomy terms per locale. Assign locale-appropriate taxonomies manually.',
-    );
+  if (translationSource && !options.noTaxonomies) {
+    if (options.inheritTaxonomies) {
+      if (normalizedCategories.length === 0) {
+        normalizedCategories = [...translationSource.taxonomies.categories];
+      }
+      if (normalizedTags.length === 0) {
+        normalizedTags = [...translationSource.taxonomies.tags];
+      }
+    } else if (
+      (normalizedCategories.length === 0 && translationSource.taxonomies.categories.length > 0) ||
+      (normalizedTags.length === 0 && translationSource.taxonomies.tags.length > 0)
+    ) {
+      const localTerms = loadLocalTaxonomyTerms(options.workspaceRoot);
+      const targetLocaleLower = locale.toLowerCase();
+      const sourceLocaleLower = translationSource.locale.toLowerCase();
+
+      const autoMapSlugs = (sourceSlugs: string[], taxonomy: 'category' | 'tag'): string[] => {
+        const mapped: string[] = [];
+        for (const srcSlug of sourceSlugs) {
+          const srcKey = normalizeTaxonomyKey(srcSlug).toLowerCase();
+          const matchingSourceTerms = localTerms.filter(
+            (t) =>
+              t.taxonomy === taxonomy &&
+              (normalizeTaxonomyKey(t.slug).toLowerCase() === srcKey ||
+                (t.canonicalSlug &&
+                  normalizeTaxonomyKey(t.canonicalSlug).toLowerCase() === srcKey)),
+          );
+          const srcTerm =
+            matchingSourceTerms.find((t) => t.locale?.toLowerCase() === sourceLocaleLower) ??
+            matchingSourceTerms[0];
+
+          let targetTerm = srcTerm?.translationGroup
+            ? localTerms.find(
+                (t) =>
+                  t.taxonomy === taxonomy &&
+                  t.translationGroup === srcTerm.translationGroup &&
+                  t.locale?.toLowerCase() === targetLocaleLower,
+              )
+            : undefined;
+
+          if (!targetTerm) {
+            targetTerm = localTerms.find(
+              (t) =>
+                t.taxonomy === taxonomy &&
+                t.locale?.toLowerCase() === targetLocaleLower &&
+                (normalizeTaxonomyKey(t.slug).toLowerCase() === srcKey ||
+                  (t.canonicalSlug &&
+                    normalizeTaxonomyKey(t.canonicalSlug).toLowerCase() === srcKey)),
+            );
+          }
+
+          if (targetTerm) {
+            mapped.push(targetTerm.slug);
+          } else {
+            warnings.push(
+              `Skipped ${taxonomy} "${srcSlug}" (no matching term found for locale "${locale}" via translationGroup or slug).`,
+            );
+          }
+        }
+        return Array.from(new Set(mapped));
+      };
+
+      if (normalizedCategories.length === 0 && translationSource.taxonomies.categories.length > 0) {
+        normalizedCategories = autoMapSlugs(translationSource.taxonomies.categories, 'category');
+      }
+      if (normalizedTags.length === 0 && translationSource.taxonomies.tags.length > 0) {
+        normalizedTags = autoMapSlugs(translationSource.taxonomies.tags, 'tag');
+      }
+    }
   }
 
   let initialFeaturedImage: string | undefined;
@@ -472,7 +548,7 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
     for (const cat of normalizedCategories) {
       if (!isKnownTerm(cat, candidateCategories, candidates.slugToName?.category)) {
         warnings.push(
-          `Unknown category slug '${cat}' (not found in local categories/*.yaml definitions).`,
+          `Unknown category slug '${cat}' (not found in local categories/<locale>/*.yaml definitions).`,
         );
       }
     }
@@ -481,7 +557,9 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   if (candidateTags.length > 0) {
     for (const tag of normalizedTags) {
       if (!isKnownTerm(tag, candidateTags, candidates.slugToName?.tag)) {
-        warnings.push(`Unknown tag slug '${tag}' (not found in local tags/*.yaml definitions).`);
+        warnings.push(
+          `Unknown tag slug '${tag}' (not found in local tags/<locale>/*.yaml definitions).`,
+        );
       }
     }
   }
@@ -510,7 +588,14 @@ export function createArticleScaffold(options: CreateArticleOptions): CreateArti
   const initialBody = 'Write article body content here...\n';
   const markdownContent = serializeMarkdown(frontmatter, initialBody, candidates);
 
-  const relPath = computeArticleRelativePath(collection, 'draft', id, title || slug, new Date());
+  const relPath = computeArticleRelativePath(
+    collection,
+    'draft',
+    id,
+    title || slug,
+    new Date(),
+    locale,
+  );
   const fullPath = path.join(options.workspaceRoot, relPath);
 
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });

@@ -1250,7 +1250,7 @@ function validateAddedImageBlock(payload: Record<string, unknown>): string | nul
     url.startsWith('https://') ||
     url.startsWith('http://');
   if (!isCanonicalOrHttp) {
-    return `Added image opaque block cannot use local or relative asset.url ("${url}"). Use standard Markdown ![alt](../../media/drafts/...) for local draft images or a canonical "/_emdash/api/media/file/..." URL.`;
+    return `Added image opaque block cannot use local or relative asset.url ("${url}"). Use standard Markdown ![alt](../../../media/drafts/...) for local draft images or a canonical "/_emdash/api/media/file/..." URL.`;
   }
   if (
     typeof payload.asset.storageKey === 'string' &&

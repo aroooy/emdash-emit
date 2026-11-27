@@ -30,7 +30,7 @@ import type { ParsedMarkdown } from '../src/utils/frontmatter.js';
 
 describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
   const validUlid = '01M67MP2W0VKCK2DFWM166CR24';
-  const filePath = `posts/draft/${validUlid}-test-article.md`;
+  const filePath = `posts/ja/draft/${validUlid}-test-article.md`;
 
   const validParsed: ParsedMarkdown = {
     frontmatter: {
@@ -59,7 +59,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
   });
 
   it('G2: blocks push when filename ULID does not match frontmatter ID', () => {
-    const mismatchedPath = `posts/draft/01DIFFERENT_ULID_000000000-test-article.md`;
+    const mismatchedPath = `posts/ja/draft/01DIFFERENT_ULID_000000000-test-article.md`;
     const res = runPreflightChecks(mismatchedPath, validParsed);
 
     expect(res.valid).toBe(false);
@@ -184,7 +184,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       );
       const depthParsed: ParsedMarkdown = {
         ...validParsed,
-        body: 'Intro paragraph.\n\n![Photo](../../media/' + storageKey + ')',
+        body: 'Intro paragraph.\n\n![Photo](../../../media/' + storageKey + ')',
       };
       const resOk = runPreflightChecks(filePath, depthParsed, { workspaceRoot: tempWorkspace });
       expect(resOk.valid).toBe(true);
@@ -207,7 +207,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       fs.rmSync(path.join(tempWorkspace, 'media'), { recursive: true, force: true });
       const ghostParsed: ParsedMarkdown = {
         ...depthParsed,
-        body: '![Ghost](../../media/01M67NQTMRRED556YVG6RBT0J0.jpg)',
+        body: '![Ghost](../../../media/01M67NQTMRRED556YVG6RBT0J0.jpg)',
       };
       const resGhost = runPreflightChecks(filePath, ghostParsed, { workspaceRoot: tempWorkspace });
       expect(resGhost.valid).toBe(false);
@@ -385,9 +385,9 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         body: [
           'Intro paragraph.',
           '',
-          '![Flight Sunset](../../media/drafts/sunset.jpg)',
+          '![Flight Sunset](../../../media/drafts/sunset.jpg)',
           '',
-          '<!--ec:block {"_type":"core:custom","raw":"![ignored](../../media/drafts/nonexistent.jpg)"} -->',
+          '<!--ec:block {"_type":"core:custom","raw":"![ignored](../../../media/drafts/nonexistent.jpg)"} -->',
           '',
           '![Already Remote](/_emdash/api/media/file/01M6QM290DBY13GFC29W2WSAEP.01M6QM29S8H8DZX6VZMYP32H5E.jpeg)',
         ].join('\n'),
@@ -400,9 +400,9 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       expect(resOk.errors).toHaveLength(0);
       expect(resOk.draftImages).toHaveLength(1);
       expect(resOk.draftImages[0]).toEqual({
-        line: '![Flight Sunset](../../media/drafts/sunset.jpg)',
+        line: '![Flight Sunset](../../../media/drafts/sunset.jpg)',
         alt: 'Flight Sunset',
-        rawPath: '../../media/drafts/sunset.jpg',
+        rawPath: '../../../media/drafts/sunset.jpg',
         filename: 'sunset.jpg',
         resolvedAbsPath: sunsetPath,
       });
@@ -410,7 +410,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       // 2. Missing file under media/drafts/ -> MISSING_LOCAL_IMAGE_FILE
       const missingMd: ParsedMarkdown = {
         ...validParsed,
-        body: '![Missing](../../media/drafts/does-not-exist.png)',
+        body: '![Missing](../../../media/drafts/does-not-exist.png)',
       };
       const resMissing = runPreflightChecks(filePath, missingMd, {
         workspaceRoot: tempWorkspace,
@@ -421,7 +421,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       // 3. Inline paragraph image referencing media/drafts/ or media/ -> INLINE_LOCAL_IMAGE_NOT_SUPPORTED
       const inlineMd: ParsedMarkdown = {
         ...validParsed,
-        body: 'Here is an inline image ![Sunset](../../media/drafts/sunset.jpg) inside a sentence.',
+        body: 'Here is an inline image ![Sunset](../../../media/drafts/sunset.jpg) inside a sentence.',
       };
       const resInline = runPreflightChecks(filePath, inlineMd, {
         workspaceRoot: tempWorkspace,
@@ -437,7 +437,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
       fs.writeFileSync(badExtPath, 'pk-zip');
       const badExtMd: ParsedMarkdown = {
         ...validParsed,
-        body: '![Zip](../../media/drafts/archive.zip)',
+        body: '![Zip](../../../media/drafts/archive.zip)',
       };
       const resBadExt = runPreflightChecks(filePath, badExtMd, {
         workspaceRoot: tempWorkspace,
@@ -559,7 +559,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
           ...validParsed,
           frontmatter: {
             ...validParsed.frontmatter,
-            featuredImage: '../../media/drafts/eyecatch.jpg',
+            featuredImage: '../../../media/drafts/eyecatch.jpg',
           },
         };
 
@@ -584,9 +584,9 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
           ...validParsed,
           frontmatter: {
             ...validParsed.frontmatter,
-            featuredImage: '../../media/drafts/hero.png',
+            featuredImage: '../../../media/drafts/hero.png',
           },
-          body: '![Hero](../../media/drafts/hero.png)',
+          body: '![Hero](../../../media/drafts/hero.png)',
         };
 
         const res = runPreflightChecks(filePath, parsed, { workspaceRoot: tempWs });
@@ -616,7 +616,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
           ...validParsed,
           frontmatter: {
             ...validParsed.frontmatter,
-            featuredImage: `../../media/${storageKey}`,
+            featuredImage: `../../../media/${storageKey}`,
           },
         };
 
@@ -637,7 +637,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
           ...validParsed,
           frontmatter: {
             ...validParsed.frontmatter,
-            featuredImage: '../../media/drafts/non-existent.jpg',
+            featuredImage: '../../../media/drafts/non-existent.jpg',
           },
         };
 
@@ -660,7 +660,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
           ...validParsed,
           frontmatter: {
             ...validParsed.frontmatter,
-            featuredImage: '../../media/drafts/eyecatch.pdf',
+            featuredImage: '../../../media/drafts/eyecatch.pdf',
           },
         };
 
@@ -728,7 +728,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         // 1. Boundary: exactly 52,428,800 bytes passes without size error
         const parsedExact: ParsedMarkdown = {
           ...validParsed,
-          body: '![Exact](../../media/drafts/exact-limit.jpg)',
+          body: '![Exact](../../../media/drafts/exact-limit.jpg)',
         };
         const resExact = runPreflightChecks(filePath, parsedExact, { workspaceRoot: tempWs });
         expect(resExact.errors.some((e) => e.code === 'LOCAL_IMAGE_SIZE_EXCEEDED')).toBe(false);
@@ -736,7 +736,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         // 2. Exceeded: 52,428,801 bytes blocked by LOCAL_IMAGE_SIZE_EXCEEDED
         const parsedExceeded: ParsedMarkdown = {
           ...validParsed,
-          body: '![Exceeded](../../media/drafts/exceeded.jpg)',
+          body: '![Exceeded](../../../media/drafts/exceeded.jpg)',
         };
         const resExceeded = runPreflightChecks(filePath, parsedExceeded, { workspaceRoot: tempWs });
         expect(resExceeded.valid).toBe(false);
@@ -797,7 +797,7 @@ describe('AI Misbehavior Preflight Guards (G2 - G11)', () => {
         body: [
           '# Heading',
           '```',
-          '![Local](../../media/drafts/non-existent-img.jpg)',
+          '![Local](../../../media/drafts/non-existent-img.jpg)',
           'more code',
         ].join('\n'),
       };

@@ -58,7 +58,7 @@ describe('naming utils', () => {
 
   it('strips date prefix correctly', () => {
     expect(stripDatePrefix('20261103_my-file.md')).toBe('my-file.md');
-    expect(stripDatePrefix('posts/draft/20261103_my-file.md')).toBe('my-file.md');
+    expect(stripDatePrefix('posts/ja/draft/20261103_my-file.md')).toBe('my-file.md');
     expect(stripDatePrefix('my-file.md')).toBe('my-file.md');
   });
 
@@ -76,9 +76,10 @@ describe('naming utils', () => {
       '01M6FBAJ2JKNX8VAYXXASYSFGA',
       'My Awesome Title: Special Edition?',
       '2026-11-03',
+      'ja',
     );
     expect(rel).toBe(
-      'posts/draft/20261103_01M6FBAJ2JKNX8VAYXXASYSFGA-My-Awesome-Title-Special-Edition.md',
+      'posts/ja/draft/20261103_01M6FBAJ2JKNX8VAYXXASYSFGA-My-Awesome-Title-Special-Edition.md',
     );
   });
 
@@ -142,6 +143,7 @@ describe('naming utils', () => {
         '01M6A7AZYPW56CKSVNTXER9ASN',
         longTitle,
         '2026-11-01',
+        'ja',
       );
       const filename = rel.split('/').pop()!;
       const byteLength = Buffer.byteLength(filename, 'utf8');
@@ -155,39 +157,39 @@ describe('naming utils', () => {
   describe('compareArticleFilenameDesc', () => {
     it('sorts canonical filenames descending by date prefix (newest first)', () => {
       const files = [
-        'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
-        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
-        'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
+        'posts/ja/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
+        'posts/ja/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
+        'posts/ja/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
       ];
       files.sort(compareArticleFilenameDesc);
       expect(files).toEqual([
-        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
-        'posts/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
-        'posts/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
+        'posts/ja/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Newest.md',
+        'posts/ja/published/20250615_01M67N19JPWNGFZ0M6KBQ8FS02-Mid.md',
+        'posts/ja/draft/20240120_01M67N19JPWNGFZ0M6KBQ8FS01-Old.md',
       ]);
     });
 
     it('breaks ties on the same date using ULID descending (time order guarantee)', () => {
       const files = [
-        'posts/draft/20261105_01M6AAA0000000000000000001-First.md',
-        'posts/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
+        'posts/ja/draft/20261105_01M6AAA0000000000000000001-First.md',
+        'posts/ja/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
       ];
       files.sort(compareArticleFilenameDesc);
       expect(files).toEqual([
-        'posts/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
-        'posts/draft/20261105_01M6AAA0000000000000000001-First.md',
+        'posts/ja/draft/20261105_01M6ZZZ0000000000000000001-Later.md',
+        'posts/ja/draft/20261105_01M6AAA0000000000000000001-First.md',
       ]);
     });
 
     it('places unprefixed legacy filenames last', () => {
       const files = [
-        'posts/draft/01M67MP2000000000000000001-Legacy.md',
-        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
+        'posts/ja/draft/01M67MP2000000000000000001-Legacy.md',
+        'posts/ja/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
       ];
       files.sort(compareArticleFilenameDesc);
       expect(files).toEqual([
-        'posts/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
-        'posts/draft/01M67MP2000000000000000001-Legacy.md',
+        'posts/ja/published/20261105_01M67N19JPWNGFZ0M6KBQ8FS03-Modern.md',
+        'posts/ja/draft/01M67MP2000000000000000001-Legacy.md',
       ]);
     });
   });

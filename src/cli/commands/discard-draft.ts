@@ -37,7 +37,7 @@ export function registerDiscardDraftCommand(
     .option('-f, --force', 'Quarantine unpushed local edits to posts/conflicts/ and proceed')
     .option(
       '--local-media-refs',
-      'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk',
+      'Keep mirrored body images as article-relative "../../../media/<storageKey>" references on disk',
     )
     .option('--no-local-media-refs', 'Store canonical EmDash URLs on disk')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')

@@ -30,6 +30,7 @@ import { articleContentEndpoint, mediaDetailEndpoint } from '../../client/endpoi
 import type { CacheDatabase } from '../../db/cache.js';
 import { DEFAULT_CONFIG } from '../../utils/config.js';
 import { parseMarkdown } from '../../utils/frontmatter.js';
+import { iterWorkspaceArticles } from '../workspace/index.js';
 import { collectArticleReferencedMediaIds, collectArticleStorageKeys } from './body_scan.js';
 import { collectLocalMediaMirrorCandidates } from './companions.js';
 import { syncSingleMediaItem } from './mirror_item.js';
@@ -81,15 +82,12 @@ export async function pullArticleMedia(options: {
       // Keep articleId as fallback
     }
   } else {
-    // 2. Try finding file in draft/published
-    for (const status of ['draft', 'published']) {
-      const statusDir = path.join(options.workspaceRoot, collection, status);
-      if (!fs.existsSync(statusDir)) continue;
-      const found = fs
-        .readdirSync(statusDir)
-        .find((f) => f.endsWith('.md') && f.includes(options.article));
-      if (found) {
-        articleContent = fs.readFileSync(path.join(statusDir, found), 'utf8');
+    // 2. Try finding file in <collection>/<locale>/{draft,published}/
+    for (const entry of iterWorkspaceArticles(options.workspaceRoot, collection, {
+      statuses: ['draft', 'published'],
+    })) {
+      if (entry.fileName.includes(options.article)) {
+        articleContent = fs.readFileSync(entry.fullPath, 'utf8');
         try {
           const parsed = parseMarkdown(articleContent);
           articleId = parsed.frontmatter.id || articleId;

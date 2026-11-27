@@ -294,7 +294,7 @@ export async function pullArticle(
     bylineIdToSlug: resolvedBylineMap,
   };
 
-  const { frontmatter, body, rev } = apiResponseToLocal(rawItem, effectiveOptions);
+  const { frontmatter, body, rev, opaqueExtraData } = apiResponseToLocal(rawItem, effectiveOptions);
 
   const [categoriesTerms, tagsTerms] = await Promise.all([
     fetchAssignedTerms('category'),
@@ -334,7 +334,7 @@ export async function pullArticle(
   );
   const preferredDiskMatch =
     existingDiskMatches.find((p) =>
-      p.startsWith(`${frontmatter.collection}/${frontmatter.status}/`),
+      p.startsWith(`${frontmatter.collection}/${frontmatter.locale}/${frontmatter.status}/`),
     ) ?? existingDiskMatches[0];
   const existingPrefix = existingSync?.localFilePath
     ? extractDatePrefixFromPath(existingSync.localFilePath)
@@ -357,6 +357,7 @@ export async function pullArticle(
       updatedAt: (rawItem?.updatedAt as string) || null,
     },
     existingPrefix,
+    frontmatter.locale,
   );
 
   let mediaSummary: PullArticleMediaSummary | undefined = undefined;
@@ -483,6 +484,7 @@ export async function pullArticle(
     bodyMarkdown: body,
     revForTransport: rev,
     revForComparison: comparisonRev,
+    extraDataJson: opaqueExtraData ? JSON.stringify(opaqueExtraData) : null,
     flags: {
       remoteTaxonomyHash: computeTaxonomyHash(
         frontmatter.taxonomies?.categories,
@@ -508,6 +510,13 @@ export async function pullArticle(
 
   updateConfigSyncedVersion(options.workspaceRoot);
 
+  const pullWarnings: string[] = [];
+  if (opaqueExtraData && Object.keys(opaqueExtraData).length > 0) {
+    pullWarnings.push(
+      `Preserved ${Object.keys(opaqueExtraData).length} complex custom field(s) in cache (opaque pass-through).`,
+    );
+  }
+
   return {
     id: frontmatter.id,
     slug: frontmatter.slug,
@@ -518,5 +527,6 @@ export async function pullArticle(
     quarantined: quarantined.length > 0 ? quarantined : undefined,
     media: mediaSummary,
     preservedBlocks: countPreservedOpaqueBlocks(markdownContent),
+    ...(pullWarnings.length > 0 ? { warnings: pullWarnings } : {}),
   };
 }

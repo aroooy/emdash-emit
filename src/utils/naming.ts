@@ -213,18 +213,23 @@ export function extractUlidFromFilename(filenameOrPath: string): string | null {
 }
 
 /**
- * Computes standard relative path for an article file: <collection>/<status>/<yyyyMMdd>_<ulid>-<title>.md
+ * Computes standard relative path for an article file: <collection>/<locale>/<status>/<yyyyMMdd>_<ulid>-<title>.md
  */
 export function computeArticleRelativePath(
   collection: string,
   status: string,
   id: string,
   titleOrSlug: string,
-  dateInput?: string | Date | null,
+  dateInput: string | Date | null | undefined,
+  locale: string,
 ): string {
+  const safeLocale = locale.trim().toLowerCase();
+  if (!safeLocale) {
+    throw new Error(`computeArticleRelativePath requires a non-empty locale (got "${locale}").`);
+  }
   const prefix = formatDatePrefix(dateInput);
   const safeTitle = sanitizeTitleForFilename(titleOrSlug);
-  return `${collection}/${status}/${prefix}${id}-${safeTitle}.md`;
+  return `${collection}/${safeLocale}/${status}/${prefix}${id}-${safeTitle}.md`;
 }
 
 /**

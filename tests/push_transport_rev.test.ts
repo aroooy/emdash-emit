@@ -26,7 +26,7 @@ describe('Push Transport Token Protection (v0.1.22 Guard against 409)', () => {
 
   it('uses baseSnapshot.rev raw token in PUT payload instead of composite sync_state.remote_rev', async () => {
     const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
-    const relPath = `posts/draft/20261114_${articleId}-transport-test.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-transport-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -163,7 +163,7 @@ describe('Push Transport Token Protection (v0.1.22 Guard against 409)', () => {
 
   it('preserves raw transport token during transitionContentStatus (publish transition)', async () => {
     const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
-    const relPath = `posts/draft/20261114_${articleId}-publish-test.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-publish-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

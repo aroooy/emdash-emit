@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { extractComparisonRev } from '../../client/api.js';
+import { apiResponseToLocal } from '../../client/mapper.js';
 import { articleAdminEndpoint } from '../../client/endpoints.js';
 import { ApiError } from '../../client/error.js';
 import type { UploadMediaResult } from '../../client/media.js';
@@ -212,6 +213,7 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     actualId,
     parsed.frontmatter.title || parsed.frontmatter.slug,
     dateInput,
+    parsed.frontmatter.locale || 'ja',
   );
   const newFullPath = path.join(options.workspaceRoot, newRelPath);
 
@@ -376,6 +378,15 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     remoteTaxonomyHash: targetRemoteTaxHash,
   });
 
+  const latestOpaqueExtraData =
+    finalRawItem && typeof finalRawItem === 'object'
+      ? apiResponseToLocal(finalRawItem as Record<string, unknown>).opaqueExtraData
+      : undefined;
+  const resolvedExtraDataJson =
+    latestOpaqueExtraData && Object.keys(latestOpaqueExtraData).length > 0
+      ? JSON.stringify(latestOpaqueExtraData)
+      : (baseSnapshot?.extraDataJson ?? null);
+
   commitArticleSnapshot(options.cache, options.workspaceRoot, {
     id: actualId,
     relPath: newRelPath,
@@ -385,6 +396,7 @@ export async function commitPostPush(params: CommitPostPushParams): Promise<Push
     bodyMarkdown: parsed.body,
     revForTransport: finalRev,
     revForComparison: comparisonRev,
+    extraDataJson: resolvedExtraDataJson,
     flags,
     skipDiskWrite: true,
   });

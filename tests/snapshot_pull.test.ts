@@ -476,7 +476,7 @@ describe('Snapshot Fallback Pull (v0.1.54)', () => {
     // Extra local file on disk must NOT be pruned by snapshot fallback
     const extraFile = path.join(
       tempDir,
-      'posts/draft/20261101_01M7EXTRA00000000000000000-extra.md',
+      'posts/ja/draft/20261101_01M7EXTRA00000000000000000-extra.md',
     );
     fs.mkdirSync(path.dirname(extraFile), { recursive: true });
     fs.writeFileSync(extraFile, '# extra', 'utf8');

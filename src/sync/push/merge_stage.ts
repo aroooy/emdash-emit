@@ -48,6 +48,7 @@ export interface ConflictResolutionOutcome {
   mergedParsed?: ParsedMarkdown;
   remoteParsedRev?: string;
   mergeResult?: MergeResult;
+  remoteOpaqueExtraData?: Record<string, unknown>;
 }
 
 /**
@@ -321,6 +322,9 @@ export async function resolveConflictAndMerge(params: {
       bodyMarkdown: remoteParsed.body,
       revForTransport: remoteParsed.rev,
       revForComparison: remoteComparisonRev,
+      extraDataJson: remoteParsed.opaqueExtraData
+        ? JSON.stringify(remoteParsed.opaqueExtraData)
+        : null,
       flags,
       skipDiskWrite: true,
     });
@@ -347,5 +351,6 @@ export async function resolveConflictAndMerge(params: {
     mergedParsed: parsed,
     remoteParsedRev: remoteParsed.rev,
     mergeResult,
+    remoteOpaqueExtraData: remoteParsed.opaqueExtraData,
   };
 }

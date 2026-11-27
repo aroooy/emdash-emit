@@ -55,7 +55,7 @@ describe('Workspace Utils', () => {
     const emitDir = path.join(tempDir, '.emit');
     fs.mkdirSync(emitDir);
 
-    const deepSubdir = path.join(tempDir, 'posts', 'draft', 'sub-topic', 'archive');
+    const deepSubdir = path.join(tempDir, 'posts', 'ja', 'draft', 'sub-topic', 'archive');
     fs.mkdirSync(deepSubdir, { recursive: true });
 
     const root = findWorkspaceRoot(deepSubdir);
@@ -133,9 +133,9 @@ describe('Workspace Utils', () => {
       for (const dir of ['draft', 'published', 'conflicts']) {
         fs.mkdirSync(path.join(root, 'posts', dir), { recursive: true });
       }
-      fs.writeFileSync(path.join(root, 'posts', 'draft', 'a-draft.md'), 'draft');
-      fs.writeFileSync(path.join(root, 'posts', 'draft', 'b-draft.deleted.md'), 'deleted');
-      fs.writeFileSync(path.join(root, 'posts', 'published', 'c-pub.md'), 'pub');
+      fs.writeFileSync(path.join(root, 'posts', 'ja', 'draft', 'a-draft.md'), 'draft');
+      fs.writeFileSync(path.join(root, 'posts', 'ja', 'draft', 'b-draft.deleted.md'), 'deleted');
+      fs.writeFileSync(path.join(root, 'posts', 'ja', 'published', 'c-pub.md'), 'pub');
       fs.writeFileSync(path.join(root, 'posts', 'conflicts', 'd-conf.md'), 'conf');
       fs.writeFileSync(path.join(root, 'posts', 'conflicts', 'e-conf.deleted.md'), 'conf-del');
     }
@@ -143,7 +143,7 @@ describe('Workspace Utils', () => {
     it('defaults to draft and published while excluding conflicts and .deleted.md backups', () => {
       seedWorkspaceFiles(tempDir);
       const relPaths = Array.from(iterWorkspaceArticles(tempDir, 'posts'), (e) => e.relPath).sort();
-      expect(relPaths).toEqual(['posts/draft/a-draft.md', 'posts/published/c-pub.md']);
+      expect(relPaths).toEqual(['posts/ja/draft/a-draft.md', 'posts/ja/published/c-pub.md']);
     });
 
     it('includes conflicts when includeConflicts: true and keeps .deleted.md excluded by default', () => {
@@ -154,8 +154,8 @@ describe('Workspace Utils', () => {
       ).sort();
       expect(relPaths).toEqual([
         'posts/conflicts/d-conf.md',
-        'posts/draft/a-draft.md',
-        'posts/published/c-pub.md',
+        'posts/ja/draft/a-draft.md',
+        'posts/ja/published/c-pub.md',
       ]);
     });
 
@@ -169,9 +169,9 @@ describe('Workspace Utils', () => {
         (e) => e.relPath,
       );
       expect(relPaths).toEqual([
-        'posts/published/c-pub.md',
-        'posts/draft/a-draft.md',
-        'posts/draft/b-draft.deleted.md',
+        'posts/ja/published/c-pub.md',
+        'posts/ja/draft/a-draft.md',
+        'posts/ja/draft/b-draft.deleted.md',
       ]);
     });
   });

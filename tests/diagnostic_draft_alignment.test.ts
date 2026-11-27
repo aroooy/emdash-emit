@@ -48,7 +48,7 @@ describe('Diagnostic Alignment for Draft Revision (status vs diff vs doctor)', (
 
   it('aligns status, diff, and doctor symmetrically with 0 phantom diffs when article has draft revision', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher.md`;
 
     const fm: Frontmatter = {
       id: articleId,

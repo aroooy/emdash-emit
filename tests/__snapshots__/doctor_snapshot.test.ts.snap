@@ -22,7 +22,7 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > healthy si
     },
     {
       "id": "frontmatter_integrity",
-      "message": "All 1 article(s) have valid frontmatter syntax.",
+      "message": "All 0 article(s) have valid frontmatter syntax.",
       "name": "Frontmatter Integrity",
       "status": "ok",
     },
@@ -34,9 +34,19 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > healthy si
     },
     {
       "id": "sync_status",
-      "message": "All 1 tracked article(s) in sync with base snapshots.",
+      "message": "All 0 tracked article(s) in sync with base snapshots.",
       "name": "Sync Status",
       "status": "ok",
+    },
+    {
+      "details": {
+        "count": 1,
+        "suggestion": "Verify there are no unpushed edits, remove or archive the legacy flat directories, and run "emit pull" (plus "emit pull <id>" for out-of-window articles) to re-sync into <collection>/<locale>/{draft,published}/.",
+      },
+      "id": "legacy_flat_layout",
+      "message": "Found 1 article(s) in legacy flat directories (posts/draft/ or posts/published/). v<VERSION> stores articles under posts/<locale>/{draft,published}/.",
+      "name": "Legacy Flat Layout",
+      "status": "warning",
     },
     {
       "id": "media_references",
@@ -48,7 +58,7 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > healthy si
   "createdWithVersion": "<VERSION>",
   "emitVersion": "<VERSION>",
   "lastSyncedVersion": "<VERSION>",
-  "overallStatus": "healthy",
+  "overallStatus": "warnings",
   "workspace": "<WORKSPACE_ROOT>",
 }
 `;
@@ -139,7 +149,7 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > mixed-defe
     },
     {
       "details": [
-        "posts/draft/broken.md",
+        "posts/ja/draft/broken.md",
       ],
       "id": "frontmatter_integrity",
       "message": "1 article(s) have unrecoverable frontmatter syntax errors.",
@@ -165,7 +175,7 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > mixed-defe
     {
       "details": [
         {
-          "filePath": "posts/draft/gone.md",
+          "filePath": "posts/ja/draft/gone.md",
           "id": "01M67SNAPSH0T0000000000003",
           "slug": "ghost-post",
         },
@@ -179,7 +189,7 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > mixed-defe
     {
       "details": [
         {
-          "filePath": "posts/draft/gone.md",
+          "filePath": "posts/ja/draft/gone.md",
           "id": "01M67SNAPSH0T0000000000003",
           "slug": "ghost-post",
         },
@@ -195,18 +205,28 @@ exports[`Doctor Characterization Snapshots (v0.1.37 Phase 1 Part B) > mixed-defe
         "invalid": 2,
         "modified": 0,
         "synced": 0,
-        "total": 4,
-        "untracked": 2,
+        "total": 3,
+        "untracked": 1,
       },
       "id": "sync_status",
-      "message": "0 modified and 2 untracked article(s) pending push.",
+      "message": "0 modified and 1 untracked article(s) pending push.",
       "name": "Sync Status",
       "status": "warning",
     },
     {
+      "details": {
+        "count": 1,
+        "suggestion": "Verify there are no unpushed edits, remove or archive the legacy flat directories, and run "emit pull" (plus "emit pull <id>" for out-of-window articles) to re-sync into <collection>/<locale>/{draft,published}/.",
+      },
+      "id": "legacy_flat_layout",
+      "message": "Found 1 article(s) in legacy flat directories (posts/draft/ or posts/published/). v<VERSION> stores articles under posts/<locale>/{draft,published}/.",
+      "name": "Legacy Flat Layout",
+      "status": "warning",
+    },
+    {
       "details": [
-        "/_emdash/api/media/file/01M67FENCED00000000000000A.png (code-example/custom-block in posts/draft/media-refs.md)",
-        "/_emdash/api/media/file/01M67MISSING000000000000AA.png (malformed reference in posts/draft/media-refs.md)",
+        "/_emdash/api/media/file/01M67FENCED00000000000000A.png (code-example/custom-block in posts/ja/draft/media-refs.md)",
+        "/_emdash/api/media/file/01M67MISSING000000000000AA.png (malformed reference in posts/ja/draft/media-refs.md)",
       ],
       "id": "media_references",
       "message": "All referenced local media files exist on disk. (1 informational/custom-block reference(s) ignored; 1 malformed reference(s) skipped (not valid media file keys))",

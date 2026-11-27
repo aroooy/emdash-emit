@@ -45,6 +45,8 @@ export interface ArticleStatusItem {
   status: 'draft' | 'published';
   syncStatus: 'synced' | 'modified' | 'untracked' | 'invalid';
   filePath: string;
+  locale?: string;
+  translationGroup?: string;
   rev?: string;
   cached?: boolean;
   error?: string;
@@ -158,12 +160,16 @@ export function getWorkspaceStatus(
     };
   }
 
-  // Scan draft/ and published/ subdirectories via canonical workspace iterator
-  for (const { relPath, fullPath, fileName: file, status: sub } of iterWorkspaceArticles(
-    workspaceRoot,
-    collection,
-    { excludeDeletedBackups: false },
-  )) {
+  // Scan <collection>/<locale>/{draft,published}/ subdirectories via canonical workspace iterator
+  for (const {
+    relPath,
+    fullPath,
+    fileName: file,
+    status: sub,
+    locale: entryLocale,
+  } of iterWorkspaceArticles(workspaceRoot, collection, {
+    excludeDeletedBackups: false,
+  })) {
     const content = fs.readFileSync(fullPath, 'utf8');
 
     try {
@@ -201,6 +207,10 @@ export function getWorkspaceStatus(
         status: parsed.frontmatter.status,
         syncStatus,
         filePath: relPath,
+        locale: parsed.frontmatter.locale || entryLocale || 'ja',
+        ...(parsed.frontmatter.translationGroup
+          ? { translationGroup: parsed.frontmatter.translationGroup }
+          : {}),
         rev: formatRevForDisplay(syncState?.remoteRev),
         hasUnpublishedDraft: hasUnpublishedDraft || undefined,
         conflictPending: conflictPending || undefined,
@@ -227,6 +237,7 @@ export function getWorkspaceStatus(
         status: sub === 'conflicts' ? 'draft' : sub,
         syncStatus: 'invalid',
         filePath: relPath,
+        ...(entryLocale ? { locale: entryLocale } : {}),
         rev: formatRevForDisplay(syncState?.remoteRev),
         cached: Boolean(syncState),
         healable: healable || undefined,
@@ -292,4 +303,84 @@ export function selectPushCandidates(status: WorkspaceStatusResult): PushCandida
     return true;
   });
   return { toPush, skipped };
+}
+
+export interface TranslationCoverageEntry {
+  id: string;
+  slug: string;
+  title: string;
+  locale: string;
+  status: 'draft' | 'published';
+  syncStatus: ArticleStatusItem['syncStatus'];
+  filePath: string;
+}
+
+export interface TranslationCoverageGroup {
+  translationGroup: string;
+  locales: string[];
+  articles: TranslationCoverageEntry[];
+}
+
+export interface TranslationCoverageResult {
+  locales: string[];
+  groups: TranslationCoverageGroup[];
+  ungroupedCount: number;
+  missingPairs: Array<{
+    translationGroup: string;
+    presentLocales: string[];
+    missingLocales: string[];
+  }>;
+}
+
+/**
+ * Computes a 0-HTTP translation coverage matrix from local workspace status items.
+ */
+export function buildTranslationCoverage(items: ArticleStatusItem[]): TranslationCoverageResult {
+  const localeSet = new Set<string>();
+  const groupMap = new Map<string, TranslationCoverageEntry[]>();
+  let ungroupedCount = 0;
+
+  for (const item of items) {
+    const loc = item.locale || 'ja';
+    localeSet.add(loc);
+    if (!item.translationGroup) {
+      ungroupedCount++;
+      continue;
+    }
+    const list = groupMap.get(item.translationGroup) || [];
+    list.push({
+      id: item.id,
+      slug: item.slug,
+      title: item.title,
+      locale: loc,
+      status: item.status,
+      syncStatus: item.syncStatus,
+      filePath: item.filePath,
+    });
+    groupMap.set(item.translationGroup, list);
+  }
+
+  const locales = Array.from(localeSet).sort((a, b) => a.localeCompare(b));
+  const groups: TranslationCoverageGroup[] = [];
+  const missingPairs: TranslationCoverageResult['missingPairs'] = [];
+
+  for (const [translationGroup, articles] of Array.from(groupMap.entries()).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const presentLocales = Array.from(new Set(articles.map((a) => a.locale))).sort((a, b) =>
+      a.localeCompare(b),
+    );
+    const presentSet = new Set(presentLocales);
+    const missingLocales = locales.filter((l) => !presentSet.has(l));
+    groups.push({
+      translationGroup,
+      locales: presentLocales,
+      articles: articles.sort((a, b) => a.locale.localeCompare(b.locale)),
+    });
+    if (missingLocales.length > 0) {
+      missingPairs.push({ translationGroup, presentLocales, missingLocales });
+    }
+  }
+
+  return { locales, groups, ungroupedCount, missingPairs };
 }

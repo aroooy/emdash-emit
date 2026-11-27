@@ -101,7 +101,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
 
     expect(res.categoriesCount).toBe(2);
 
-    const catDir = path.join(tempDir, 'categories');
+    const catDir = path.join(tempDir, 'categories', 'ja');
     const files = fs.readdirSync(catDir);
     expect(files.length).toBe(2);
 
@@ -143,7 +143,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    const catDir = path.join(tempDir, 'categories');
+    const catDir = path.join(tempDir, 'categories', 'ja');
     const file = fs.readdirSync(catDir)[0];
     const rawYaml = fs.readFileSync(path.join(catDir, file), 'utf8');
 
@@ -177,7 +177,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    const tagDir = path.join(tempDir, 'tags');
+    const tagDir = path.join(tempDir, 'tags', 'ja');
     const onYaml = fs.readFileSync(
       path.join(
         tagDir,
@@ -512,7 +512,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
         fetchFn: mockFetch as unknown as typeof fetch,
       });
 
-      const tagDir = path.join(tempDir, 'tags');
+      const tagDir = path.join(tempDir, 'tags', 'ja');
       const files = fs.readdirSync(tagDir);
       const yaml = fs.readFileSync(path.join(tagDir, files[0]), 'utf8');
 
@@ -542,7 +542,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
         fetchFn: mockFetch as unknown as typeof fetch,
       });
 
-      const tagDir = path.join(tempDir, 'tags');
+      const tagDir = path.join(tempDir, 'tags', 'ja');
       const decYaml = fs.readFileSync(
         path.join(
           tagDir,
@@ -616,7 +616,7 @@ describe('Taxonomies Two-Layer Representation (v0.1.26)', () => {
       expect(res.categoriesCount).toBe(1);
       expect(res.deletedCategoriesCount).toBe(1);
       expect(fs.existsSync(path.join(catDir, '01STALE_CAT-OldCat.yaml'))).toBe(false);
-      expect(fs.existsSync(path.join(catDir, '01NEW_CAT-NewCat.yaml'))).toBe(true);
+      expect(fs.existsSync(path.join(catDir, 'ja', '01NEW_CAT-NewCat.yaml'))).toBe(true);
 
       // Tags failed -> existing tag YAML must NOT be pruned
       expect(res.tagsFailed).toBe(true);

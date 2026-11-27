@@ -41,7 +41,7 @@ const MEDIA_ID = asMediaRecordId('01M6TF1XXBS2KC9EVYG6RBT0J0');
 const STORAGE_KEY = asStorageKey('01M67P0JW605ZJ5GV4YXB7W400.jpg');
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
 /** How an article under `<collection>/draft|published/` spells its own mirror on disk. */
-const LOCAL_REF = `../../media/${STORAGE_KEY}`;
+const LOCAL_REF = `../../../media/${STORAGE_KEY}`;
 const todayPrefix = formatDatePrefix(new Date()).replace(/_$/, '');
 
 describe('Article-Relative Local Media References (pull/push round-trip)', () => {
@@ -50,7 +50,7 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-local-media-refs-'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
     // The mirror that a local reference resolves to.
@@ -159,7 +159,7 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
   });
 
   it('push rewrites the local reference to the canonical URL for remote while the disk keeps the local form', async () => {
-    const relPath = `posts/draft/${todayPrefix}_${ARTICLE_ID}-local-ref-article.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}_${ARTICLE_ID}-local-ref-article.md`;
     const localBody = ['Body paragraph.', '', `![LG 背面端子](${LOCAL_REF})`].join('\n');
     fs.writeFileSync(
       path.join(tempDir, relPath),
@@ -304,7 +304,7 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
 
   it('re-tracks the hash when a batch pull localizes an article after mirroring its asset', async () => {
     // The batch pull writes articles in the canonical spelling first (no mirror exists yet), downloads the
-    // referenced binaries, and only then re-spells each body to `../../media/<storageKey>`. Rewriting the disk
+    // referenced binaries, and only then re-spells each body to `../../../media/<storageKey>`. Rewriting the disk
     // without re-tracking `sync_state.local_hash` left every freshly pulled article reporting a phantom edit —
     // 17 "modified" for 60 untouched files — while `emit diff` showed nothing. The localize pass must move the
     // tracked hash together with the bytes it just wrote.
@@ -501,7 +501,7 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
   it('reports a localized disk file as synced when sync_state still tracks the canonical hash', async () => {
     // The exact state a workspace carries after its articles were written in the canonical spelling and then
     // re-spelled to local references without being re-tracked: `sync_state.local_hash` records the canonical
-    // bytes while the disk holds `../../media/<storageKey>`. `emit diff` already treats that as clean, so
+    // bytes while the disk holds `../../../media/<storageKey>`. `emit diff` already treats that as clean, so
     // `emit status` must not report 17 phantom edits for 60 untouched articles — the two diagnostics may never
     // disagree. The baseline proves the divergence is spelling-only.
     const res = await pullArticle('posts', ARTICLE_ID, {
@@ -598,7 +598,7 @@ describe('Article-Relative Local Media References (pull/push round-trip)', () =>
   });
 
   it('a local reference whose asset is not mirrored is rejected before any request is made', async () => {
-    const relPath = `posts/draft/${todayPrefix}_${ARTICLE_ID}-unmirrored.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}_${ARTICLE_ID}-unmirrored.md`;
     fs.writeFileSync(
       path.join(tempDir, relPath),
       [
@@ -643,7 +643,7 @@ describe('v0.1.29 Single-Article On-Demand Media Mirroring (T1-T6)', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-single-pull-media-'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
   });
@@ -977,7 +977,7 @@ describe('v0.1.29 Single-Article On-Demand Media Mirroring (T1-T6)', () => {
       fetchFn,
     });
 
-    expect(res1.filePath).toBe(`posts/draft/${todayPrefix}_${ARTICLE_ID}-Fast-Heal.md`);
+    expect(res1.filePath).toBe(`posts/ja/draft/${todayPrefix}_${ARTICLE_ID}-Fast-Heal.md`);
     const disk1 = fs.readFileSync(path.join(tempDir, res1.filePath), 'utf8');
     expect(disk1).toContain(CANONICAL_URL);
 

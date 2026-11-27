@@ -86,7 +86,7 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
 
   it('formatArticleDiffReport formats standardized diff inspection output', () => {
     const report = formatArticleDiffReport({
-      targetFile: 'posts/draft/20261103_01ABC-test.md',
+      targetFile: 'posts/ja/draft/20261103_01ABC-test.md',
       targetId: '01ABCDEF123456789012345678',
       isModified: true,
       baseRev: 'rev-1234',
@@ -96,7 +96,7 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
       unifiedDiff: '@@ -1,3 +1,5 @@\n-old line\n+new line',
     });
 
-    expect(report).toContain('--- Diff for posts/draft/20261103_01ABC-test.md');
+    expect(report).toContain('--- Diff for posts/ja/draft/20261103_01ABC-test.md');
     expect(report).toContain('Status: 🟡 Modified');
     expect(report).toContain('Base Rev: rev-1234');
     expect(report).toContain('Changes: +3 / -1 lines');
@@ -344,12 +344,12 @@ describe('Presentation Layer & CLI/MCP Symmetry (C2)', () => {
         {
           id: '01M67N0TNFS6F3PJX4T96NKPKT',
           slug: 'legacy-copy',
-          filePath: 'posts/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy.md',
+          filePath: 'posts/ja/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy.md',
         },
         {
           id: '01M67N0TNFS6F3PJX4T96NKPKT',
           slug: 'legacy-copy',
-          filePath: 'posts/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy-2.md',
+          filePath: 'posts/ja/published/20190405_01M67N0TNFS6F3PJX4T96NKPKT-legacy-copy-2.md',
         },
       ],
       30,

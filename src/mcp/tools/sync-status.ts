@@ -26,6 +26,7 @@ import type { ContextResolver } from '../context.js';
 import {
   getWorkspaceStatus,
   filterStatusItems,
+  buildTranslationCoverage,
   type WorkspaceStatusResult,
 } from '../../sync/status.js';
 import { formatToolError, formatToolSuccess, withResolvedContext } from '../tool-errors.js';
@@ -55,6 +56,10 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
         .enum(['synced', 'modified', 'untracked', 'invalid'])
         .optional()
         .describe('Filter by synchronization state'),
+      i18n: z
+        .boolean()
+        .optional()
+        .describe('Include translation group coverage matrix across locales'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },
     async (args) =>
@@ -175,6 +180,7 @@ export function registerSyncStatusTool(server: McpServer, resolveContext: Contex
                 },
               }
             : {}),
+          ...(args.i18n ? { translationCoverage: buildTranslationCoverage(status.items) } : {}),
         };
 
         return formatToolSuccess(responsePayload, ctx.meta);

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-11-27
+
+### BREAKING CHANGES
+
+- **Multi-Language First Workspace Layout (`<collection>/<locale>/{draft,published}/`)**:
+  - Articles are now stored under `<collection>/<locale>/draft/` and `<collection>/<locale>/published/` (e.g. `posts/ja/published/...`, `posts/en/draft/...`) instead of flat `<collection>/{draft,published}/`.
+  - `<collection>/conflicts/` remains at the collection root (`posts/conflicts/`) to preserve the `isQuarantinedRelativePath` contract.
+  - Relative media references inside article bodies now use `../../../media/<storageKey>.<ext>` (3 levels deep) instead of `../../media/...`.
+  - `computeArticleRelativePath()` and `resolveCanonicalArticlePath()` now require a non-empty `locale: string` parameter.
+  - **Upgrade Guide**:
+    1. Existing workspaces with `posts/{draft,published}/*.md` should re-pull (`emit pull --force`) or re-initialize into a fresh directory.
+    2. `emit doctor` detects legacy 2-tier `posts/{draft,published}/*.md` files with a `legacy_flat_layout` warning.
+    3. If `emit pull` initially runs with the default sliding window and older articles are outside the window, `emit status` may transiently omit them until `emit pull <id>` or a full `emit pull --limit <n>` fetches them into the new 3-tier layout.
+
+### Changed
+
+- **`--translation-of` Default Taxonomy Behavior (Auto-Map)**:
+  - `emit new --translation-of <fileOrId>` (and MCP `sync_new`) now automatically maps categories and tags from the source article to the target `--locale` via `translationGroup` match, falling back to same-`slug` match in the target locale, and skipping unmapped terms with a warning.
+  - Added `--inherit-taxonomies` (`inheritTaxonomies: true`) to copy raw slugs directly, and `--no-taxonomies` (`noTaxonomies: true`) to skip auto-mapping.
+
+### Added
+
+- **Taxonomy `locale` & `translationGroup` Serialization and Locale-Scoped Directories**:
+  - `pullTaxonomies()` now organizes taxonomy YAML files under `categories/<locale>/<id>-<name>.yaml` and `tags/<locale>/<id>-<name>.yaml`, serializing `locale` and `translationGroup` (accepting `translationGroup` / `translation_group` / `translationGroupId` from EmDash) and automatically pruning legacy flat files directly under `categories/` and `tags/`.
+  - Added `loadLocalTaxonomyTerms()` in `src/sync/taxonomies.ts`.
+- **0-HTTP Translation Coverage Matrix (`emit status --i18n` / `sync_status { i18n: true }`)**:
+  - Added `locale` and `translationGroup` to `ArticleStatusItem` and `buildTranslationCoverage()` in `src/sync/status.ts` to report translation groups, present locales, missing locale pairs, and ungrouped count offline.
+- **Doctor `legacy_flat_layout` Check**:
+  - `emit doctor` / `sync_doctor` warns when legacy 2-tier `posts/{draft,published}/*.md` files remain in the workspace.
+- **Structural Gate (`tests/layout_string_sync.test.ts`)**:
+  - Added a static test enforcing that CLI commands, MCP tools/server instructions, guard/preflight/portable-text messages, and documentation remain synchronized with the 3-tier layout (`posts/<locale>/{draft,published}/`, `../../../media/`).
+- **Custom Schema Fields Support (Opaque Pass-Through & Simple `fields:` Editing)**:
+  - Upgraded SQLite cache schema to **v9** (`base_snapshots.extra_data_json TEXT`) to non-destructively preserve complex custom fields (nested objects, secondary Portable Text arrays, object arrays) during `pull` → `push` cycles without cluttering Markdown frontmatter.
+  - Added optional `fields:` (`string | number | boolean | null | string[]`) to `FrontmatterSchema` and deterministic key-sorted YAML serialization (omitted entirely when empty to preserve byte identity for standard `posts`).
+  - Added leaf-level 3-Way Merge (`fields.<key>`) in `mergeFrontmatter()` (`src/sync/merge.ts`) and **Guard G24 (`RESERVED_CUSTOM_FIELD_KEY`)** in `src/sync/guards.ts` / `src/sync/preflight.ts`.
+
 ## [0.1.66] - 2026-11-27
 
 ### Added
@@ -16,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `apiResponseToLocal()` and `localToApiPayload()` (`src/client/mapper.ts`) so `POST /_emdash/api/content/{collection}` sends `translationOf` on create (never on `PUT` updates) and records the server's `translationGroup` back to disk and `base_snapshots` while clearing `translationOf`.
   - Scoped Guard **G18 (`DUPLICATE_SLUG_CONFLICT`)** to `(collection, locale, slug)` (case-insensitive `locale` comparison, matching EmDash `UNIQUE(slug, locale)`), backed by multi-row `getSyncStatesBySlug()` / `getEntriesBySlug()` lookups in `src/db/cache.ts` (zero schema migrations).
   - Added `--translation-of <fileOrId>` to `emit new [slug]` and `translationOf` to MCP `sync_new`, inheriting `slug` (when omitted), `featuredImage`, and `bylines` while keeping `categories`/`tags` empty by default (with warning) to respect EmDash's per-locale taxonomy resolution.
+  - _Note_: The first `emit pull` on existing translated articles will perform a one-time frontmatter normalization adding `translationGroup` (updating `local_hash` once).
   - _Note_: The first `emit pull` on existing translated articles will perform a one-time frontmatter normalization adding `translationGroup` (updating `local_hash` once).
 
 ## [0.1.65] - 2026-11-26

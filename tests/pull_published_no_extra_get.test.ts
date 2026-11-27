@@ -25,7 +25,7 @@ describe('Published Article Pull Zero-Overhead Invariant (v0.1.23 Layer 2)', () 
 
   it('updates published article from list API without calling single GET (zero extra HTTP requests)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-published-test.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-published-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

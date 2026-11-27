@@ -31,7 +31,7 @@ describe('Push Admin/Preview URL & emit preview (v0.1.63)', () => {
   });
 
   function writeDraftArticle(id: string, slug: string, title: string): string {
-    const relPath = `posts/draft/20261126_${id}-${slug}.md`;
+    const relPath = `posts/ja/draft/20261126_${id}-${slug}.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     const fm: Frontmatter = {

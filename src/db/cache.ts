@@ -52,6 +52,7 @@ export interface BaseSnapshot {
   frontmatterYaml: string;
   hash: string;
   savedAt: number;
+  extraDataJson?: string | null;
 }
 
 export interface SyncState {
@@ -293,14 +294,15 @@ export class CacheDatabase {
 
   public saveBaseSnapshot(snapshot: BaseSnapshot): void {
     const stmt = this.db.prepare(`
-      INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at, extra_data_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         rev = excluded.rev,
         body_markdown = excluded.body_markdown,
         frontmatter_yaml = excluded.frontmatter_yaml,
         hash = excluded.hash,
-        saved_at = excluded.saved_at
+        saved_at = excluded.saved_at,
+        extra_data_json = excluded.extra_data_json
     `);
     stmt.run(
       snapshot.id,
@@ -309,6 +311,7 @@ export class CacheDatabase {
       snapshot.frontmatterYaml,
       snapshot.hash,
       snapshot.savedAt,
+      snapshot.extraDataJson ?? null,
     );
   }
 
@@ -323,6 +326,7 @@ export class CacheDatabase {
       frontmatterYaml: String(row.frontmatter_yaml),
       hash: String(row.hash),
       savedAt: Number(row.saved_at),
+      ...(typeof row.extra_data_json === 'string' ? { extraDataJson: row.extra_data_json } : {}),
     };
   }
 

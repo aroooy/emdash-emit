@@ -186,7 +186,7 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
 
   describe('pushArticle First-Class Taxonomy Name & ULID Resolution', () => {
     it('canonicalizes human name and ULID inputs to canonical slugs and echoes resolvedTaxonomies', async () => {
-      const relPath = `posts/draft/20261108_${validUlid}-Taiwan-Post.md`;
+      const relPath = `posts/ja/draft/20261108_${validUlid}-Taiwan-Post.md`;
       const fullPath = path.join(tempDir, relPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -274,7 +274,7 @@ describe('Phase 1b: Taxonomy UX, First-Class Name Resolution & Inline Comments',
     });
 
     it('G4 preflight guard offers Levenshtein suggestions on typos', async () => {
-      const relPath = `posts/draft/20261108_${validUlid}-Typo-Post.md`;
+      const relPath = `posts/ja/draft/20261108_${validUlid}-Typo-Post.md`;
       const fullPath = path.join(tempDir, relPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

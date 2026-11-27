@@ -75,7 +75,12 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     };
     const body = options?.body ?? 'Healthy Content\n';
     const content = serializeMarkdown(frontmatter, body);
-    const relPath = path.join('posts', 'draft', `20261108_${articleId}-doctor-healthy-post.md`);
+    const relPath = path.join(
+      'posts',
+      'ja',
+      'draft',
+      `20261108_${articleId}-doctor-healthy-post.md`,
+    );
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, content, 'utf8');
@@ -219,7 +224,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('reports healable frontmatter syntax errors as a pull-repairable warning', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
     // Legacy unquoted percent-encoded taxonomy slug: invalid YAML but leniently repairable
     fs.writeFileSync(
@@ -257,7 +262,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('detects unrecoverable frontmatter syntax errors as error', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
     // Write invalid yaml that cannot be repaired
     fs.writeFileSync(
@@ -280,7 +285,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('detects missing referenced media files as warnings', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     const frontmatter: Frontmatter = {
@@ -293,7 +298,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       taxonomies: {},
       bylines: [],
     };
-    const body = 'Check this image: ![img](../../media/20261108_missing_image.png)\n';
+    const body = 'Check this image: ![img](../../../media/20261108_missing_image.png)\n';
     fs.writeFileSync(
       path.join(draftDir, `20261108_${articleId}-media-ref-post.md`),
       serializeMarkdown(frontmatter, body),
@@ -317,7 +322,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('correctly resolves canonical storageKey media references against companion YAML (D1)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -367,7 +372,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('resolves an article-relative mirror reference through the storageKey it names (D1)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -398,7 +403,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     };
     fs.writeFileSync(
       path.join(draftDir, `20261108_${articleId}-media-depth-ref-post.md`),
-      serializeMarkdown(frontmatter, '![img](../../media/sample.png)\n'),
+      serializeMarkdown(frontmatter, '![img](../../../media/sample.png)\n'),
       'utf8',
     );
 
@@ -413,7 +418,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('classifies code-span, code-fence, and placeholder media references as informational without triggering warnings (Phase 5)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     const frontmatter: Frontmatter = {
@@ -433,7 +438,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       'Placeholder: `/_emdash/api/media/file/<storageKey>`',
       '',
       '```markdown',
-      '![Fenced image](../../media/drafts/sample-shot.jpg)',
+      '![Fenced image](../../../media/drafts/sample-shot.jpg)',
       '```',
     ].join('\n');
 
@@ -445,7 +450,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     );
 
     const hash = calculateHash(content);
-    const relPath = `posts/draft/20261108_${articleId}-media-code-examples-post.md`;
+    const relPath = `posts/ja/draft/20261108_${articleId}-media-code-examples-post.md`;
     cache.saveSyncState({
       id: articleId,
       localFilePath: relPath,
@@ -480,7 +485,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   // --- Media diagnostic resolution fallbacks (Phase A) and fence classification (Phase B) ---
 
   it('resolves a media file reference when the companion YAML lacks a storageKey field (A-1 filename tail)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -525,8 +530,8 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     expect(mCheck?.status).toBe('ok');
   });
 
-  it('accepts a mirror reference spelled from the article directory (`../../media/<storageKey>`) (local media refs)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+  it('accepts a mirror reference spelled from the article directory (`../../../media/<storageKey>`) (local media refs)', async () => {
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     cache.saveMediaState({
@@ -552,7 +557,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     };
     // The reference names the storageKey outright and no file exists at that exact path, so only recorded
     // metadata can resolve it.
-    const body = '![Local](../../media/01M67LQCALKEY556YVG6RBT0J0.png)\n';
+    const body = '![Local](../../../media/01M67LQCALKEY556YVG6RBT0J0.png)\n';
     fs.writeFileSync(
       path.join(draftDir, `20261108_${articleId}-local-ref-resolved.md`),
       serializeMarkdown(frontmatter, body),
@@ -573,7 +578,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('resolves a media reference from a media_state record even with no local file (A-2)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     cache.saveMediaState({
@@ -613,7 +618,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('resolves a reference via featured_image meta.storageKey stored in the base snapshot (A-3)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     const body = '![Featured](/_emdash/api/media/file/01M67MEDIFEE00000000000000.jpg)\n';
@@ -629,7 +634,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       featuredImage: '01M67MEDIA0000000000000FF',
     };
     const content = serializeMarkdown(frontmatter, body);
-    const relPath = `posts/draft/20261108_${articleId}-media-featured-snapshot.md`;
+    const relPath = `posts/ja/draft/20261108_${articleId}-media-featured-snapshot.md`;
     fs.writeFileSync(path.join(tempDir, relPath), content, 'utf8');
 
     cache.saveSyncState({
@@ -668,7 +673,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('never reports media URLs embedded in opaque custom-block fences as missing (B-1)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     const frontmatter: Frontmatter = {
@@ -704,7 +709,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   it('classifies legacy WordPress container lines as informational without warning (B-2)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
 
     const frontmatter: Frontmatter = {
@@ -759,7 +764,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
   });
 
   const writeLegacyArticle = (slug: string, key: string): void => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
     const frontmatter: Frontmatter = {
       id: articleId,
@@ -886,7 +891,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     // A unique article id per fixture: writeLegacyArticle reuses the shared one, and a second file with
     // the same id would read as a duplicate rather than as an unresolved reference.
     const censusId = '01MJZZARTCED99999999999998';
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.writeFileSync(
       path.join(draftDir, `20210620_${censusId}-legacy-census.md`),
@@ -1007,7 +1012,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     // store a record whose storageKey ULID is NOT its record id, so such an asset must resolve
     // through its canonical companion YAML (or media_state), never by guessing the first ULID segment
     // of the body URL. Doctor must stay silent here: the reference is genuinely satisfied.
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -1044,7 +1049,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
     const wsRoot = '/Volumes/ext/github/emdash.aroooy.net';
     const targetFile = path.join(
       wsRoot,
-      'posts/published/20210620_01M67N0ZG3F9N0WH6D30EA3J5A-GoPro-Maxを一年くらい使ってみての雑なレビュー.md',
+      'posts/ja/published/20210620_01M67N0ZG3F9N0WH6D30EA3J5A-GoPro-Maxを一年くらい使ってみての雑なレビュー.md',
     );
     // This is a live-corpus smoke test, not a unit test: it reads the developer's real mirrored workspace.
     // Guard on the specific article file, not just the workspace root, so clearing or re-pulling that
@@ -1433,7 +1438,7 @@ describe('Workspace Doctor Diagnostics (emit doctor / sync_doctor)', () => {
       fs.writeFileSync(path.join(draftsDir, 'stray-draft.png'), 'png-data', 'utf8');
 
       setupHealthyArticle({
-        body: 'Article referencing one draft image: ![Draft](../../media/drafts/used-draft.jpg)\n',
+        body: 'Article referencing one draft image: ![Draft](../../../media/drafts/used-draft.jpg)\n',
       });
 
       const report = await runWorkspaceDoctor({

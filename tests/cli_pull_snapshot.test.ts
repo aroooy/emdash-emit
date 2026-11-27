@@ -275,8 +275,8 @@ describe('CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C)', (
 
     // A tracked article outside the sync window with a non-matching local hash is kept untouched
     // and reported as a warning without aborting the rest of the batch pull.
-    const relPath = 'posts/published/20260101_01M67OLDARTICLE0000000000-gamma.md';
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    const relPath = 'posts/ja/published/20260101_01M67OLDARTICLE0000000000-gamma.md';
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
     fs.writeFileSync(
       path.join(tempDir, relPath),
       '---\nid: 01M67OLDARTICLE0000000000\n---\nbody\n',
@@ -318,8 +318,8 @@ describe('CLI Batch Pull Characterization Snapshots (v0.1.37 Phase 1 Part C)', (
 
     // Same windowed-out article, but its local hash matches the recorded sync state, so pruning
     // proceeds and the 🗑️ Pruned progress branch plus the ", N pruned" summary render.
-    const relPath = 'posts/published/20260101_01M67OLDARTICLE0000000000-gamma.md';
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    const relPath = 'posts/ja/published/20260101_01M67OLDARTICLE0000000000-gamma.md';
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
     const diskContent = '---\nid: 01M67OLDARTICLE0000000000\n---\nbody\n';
     fs.writeFileSync(path.join(tempDir, relPath), diskContent, 'utf8');
     const localHash = calculateHash(diskContent);

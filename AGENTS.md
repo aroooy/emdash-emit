@@ -23,7 +23,7 @@ Before modifying any subsystem or debugging domain behavior, consult the corresp
 | **Two Media Identifier Spaces (`id` vs `storageKey`)**         | **[docs/media-id-spaces.md](docs/media-id-spaces.md)**                             | **Mandatory reading before debugging any missing or 404 image.** Defines D1 record `id` vs R2 `storageKey`, endpoint matrices, and migrated-corpus behavior.              |
 | **Local-First Media Pipeline, Mirror Naming & Pruning**        | **[docs/media-pipeline.md](docs/media-pipeline.md)**                               | Modifying `src/sync/media/*`, `media/drafts/` auto-upload & promotion, `localMediaRefs` relative path rewriting, `storageKeyToMarkdownRef` naming, or media pruning.      |
 | **Taxonomies (Two-Layer Representation) & Bylines**            | **[docs/taxonomies-and-bylines.md](docs/taxonomies-and-bylines.md)**               | Modifying category/tag sync, percent-encoded (Layer A) vs decoded CJK (Layer B) slugs, collision resolution, 0-GET deleted term auto-healing, or remote taxonomy audit.   |
-| **Safety Guardrails (G1–G23), Doctor, Search & FAQ**           | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` (`snapshotStatus` / `--live` FTS).                          |
+| **Safety Guardrails (G1–G24), Doctor, Search & FAQ**           | **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** | Modifying `GUARD_REGISTRY` (`src/sync/guards.ts`), `emit doctor` checks, or `article-search` / `media-search` (`snapshotStatus` / `--live` FTS).                          |
 | **CLI Commands & MCP Tools Complete Reference**                | **[docs/cli-and-mcp-reference.md](docs/cli-and-mcp-reference.md)**                 | Inspecting or updating CLI flags (22 top-level commands + 10 subcommands) or MCP tool schemas (19 tools).                                                                 |
 
 ---
@@ -65,10 +65,10 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
    - **Track 1 (`revForTransport`)**: Raw server tokens stored in `base_snapshots.rev` and `entries.rev`, sent verbatim in PUT `{ _rev }` payloads. Never overwrite with composite keys.
    - **Track 2 (`revForComparison`)**: Composite keys (`${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}`) stored in `sync_state.remote_rev` across all 4 save paths and compared via `isSameRev()`.
    - **Draft Selective Single GET**: Articles with `draftRevisionId` (or tracked drafts when `remoteChanged`) trigger a single `GET /posts/{id}` because the list API returns stale creation-time `data` or published `liveData`. Clean published articles reuse list payloads with **0-GET**.
-   - **Published Articles with Draft Revisions (`published*`)**: Derived solely from `hasUncommittedDraftRevision()` (`status === 'published' && remote_rev.includes('@draft:')`). Kept in `posts/published/` with frontmatter `status: published # draft revision`. Standard `push` stages a draft; `--allow-publish` publishes live.
+   - **Published Articles with Draft Revisions (`published*`)**: Derived solely from `hasUncommittedDraftRevision()` (`status === 'published' && remote_rev.includes('@draft:')`). Kept in `posts/<locale>/published/` with frontmatter `status: published # draft revision`. Standard `push` stages a draft; `--allow-publish` publishes live.
 2. **Two-Layer Representation Invariant (`docs/taxonomies-and-bylines.md`, `docs/media-pipeline.md`)**:
    - **Layer A (Internal Baseline & Remote Payloads)**: `base_snapshots` (where `frontmatter_yaml` is JSON-encoded `Frontmatter`) and remote API requests always store canonical percent-encoded taxonomy slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`) and canonical root-relative media URLs (`/_emdash/api/media/file/<storageKey>`).
-   - **Layer B (On-Disk Markdown & YAML)**: Disk files render decoded human-readable CJK slugs (`    - 未分類`) and, when `localMediaRefs: true` (default), article-relative body image paths (`../../media/<storageKey>`). Only `sync_state.local_hash` tracks the Layer B disk bytes.
+   - **Layer B (On-Disk Markdown & YAML)**: Disk files render decoded human-readable CJK slugs (`    - 未分類`) and, when `localMediaRefs: true` (default), article-relative body image paths (`../../../media/<storageKey>`). Only `sync_state.local_hash` tracks the Layer B disk bytes.
    - `resolveLocalMediaRefsOption()` lives in Layer 0 as a pure function; only the CLI (`resolveAndPersistLocalMediaRefs`) persists flag overrides to `.emit/config.json`—MCP tools must never mutate `.emit/config.json`.
 3. **Two Media ID Spaces & Mirror Naming Invariant (`docs/media-id-spaces.md`, `docs/media-pipeline.md`)**:
    - EmDash assets have two unrelated 26-char ULIDs: D1 record `id` (used by `featuredImage` and `GET /_emdash/api/media/{id}`) and R2 `storageKey` (used by `/_emdash/api/media/file/{storageKey}` and `media_state` PK). Never interchange them.
@@ -78,7 +78,7 @@ The codebase strictly enforces a 4-tier unidirectional architecture verified by 
    - **Media Ordering Is Server-Authoritative (Declared Non-Scope)**: Emit never parses image metadata (EXIF), never sorts uploads to influence `createdAt`, and never attempts to rewrite or re-sort remote media records. List order derives from EmDash's ULID-keyed record IDs (`ORDER BY id DESC` = newest-first).
    - **Epistemic Media Rule**: A 404 from `GET /_emdash/api/media/{id}` proves only that an ID-space lookup failed. Emit must **never** assert that a D1 record is missing and must **never** recommend a SQL `INSERT`.
 4. **Dual-Track Image & AST Fidelity Invariant (`docs/markdown-and-ast.md`)**:
-   - **Track A (Tier 1 Plain Images)**: Standard images without layout attributes serialize as `![alt](../../media/<storageKey>.<ext>)` for offline editor preview.
+   - **Track A (Tier 1 Plain Images)**: Standard images without layout attributes serialize as `![alt](../../../media/<storageKey>.<ext>)` for offline editor preview.
    - **Track B (Tier 3 Preserved Blocks)**: Images with layout/styling (`alignment`, `displayWidth`, `caption`, etc.) and custom EmDash blocks serialize as single-line opaque comment fences (`<!--ec:block {...} -->`) protected by Guard **G9 (`MODIFIED_OPAQUE_BLOCK`)**.
    - Only backtick code fences (` ``` `) are recognized as code blocks and exempted from image guards G5/G11; tilde fences (`~~~`) and Setext headings emit Guard **G8** warnings.
 5. **Diagnostic & Lenient Parse Alignment Invariant (`docs/markdown-and-ast.md`)**:
@@ -113,7 +113,7 @@ Every core invariant is paired with the structural mechanism (Architecture, Type
 ## 4. Product Behavior Spec: The Golden Path for Content Authoring
 
 > [!NOTE]
-> **Audience Distinction (For Repository Developers)**: This section defines the **end-user / MCP authoring workflow** that `emdash-emit` must support and enforce via `emit guide`, MCP tool descriptions, and preflight guards (`G1–G23`). When developing `emdash-emit` itself, treat this section as the product behavioral specification to preserve—**not** as instructions for editing this repository.
+> **Audience Distinction (For Repository Developers)**: This section defines the **end-user / MCP authoring workflow** that `emdash-emit` must support and enforce via `emit guide`, MCP tool descriptions, and preflight guards (`G1–G24`). When developing `emdash-emit` itself, treat this section as the product behavioral specification to preserve—**not** as instructions for editing this repository.
 
 When drafting, reviewing, or updating blog articles using Emit, content-authoring AI agents follow the **Golden Path Workflows**:
 
@@ -132,7 +132,7 @@ When drafting, reviewing, or updating blog articles using Emit, content-authorin
                                  ▼
   [2. DIRECT MARKDOWN EDIT & MEDIA STAGING]
    • Edit posts/[draft|published]/<yyyyMMdd>_<ulid>-<title>.md
-   • New local images: place in media/drafts/<file> & reference as ![alt](../../media/drafts/<file>)
+   • New local images: place in media/drafts/<file> & reference as ![alt](../../../media/drafts/<file>)
    • Existing remote images: discover via sync_media_search(query, since)
    • Preserved blocks: keep structural keys intact on <!--ec:block {...} --> lines; safe image layout/caption edits, block removal, and reordering are permitted (Guard G9)
                                  │
@@ -156,14 +156,14 @@ When drafting, reviewing, or updating blog articles using Emit, content-authorin
 3. **Never Move or Rename Files with `mv` (Guard G2)**:
    - To change `title`, `slug`, or `status`, edit the YAML frontmatter and run `sync_push`. Emit relocates and renames the file automatically while keeping `cache.db` consistent.
 4. **Frontmatter & Body Rules (Guards G3, G4, G5, G7, G9, G10, G11)**:
-   - **Always nest `categories` and `tags` under `taxonomies:`** (top-level `categories:` / `tags:` are stripped by Zod). Use existing slugs or term ULIDs from `categories/*.yaml` and `tags/*.yaml`.
+   - **Always nest `categories` and `tags` under `taxonomies:`** (top-level `categories:` / `tags:` are stripped by Zod). Use existing slugs or term ULIDs from `categories/<locale>/*.yaml` and `tags/<locale>/*.yaml`.
    - **Do not repeat `# Title` at the top of the body** (Guard G7).
    - **Do not tamper with structural keys (`_key`, `asset`, etc.) on `<!--ec:block ... -->` lines** (safe `image` layout/caption edits, block removal, and reordering are permitted with warnings; structural tampering requires `--allow-modified-opaque-blocks`, Guard G9).
-   - **Offline Draft Images**: Place new local images in `media/drafts/<filename>` and reference them on a standalone line (`![alt](../../media/drafts/<filename>)` or in `featuredImage`). `sync_push` uploads them, rewrites the URL, and moves the file to `media/<markdownRef>.<ext>`.
+   - **Offline Draft Images**: Place new local images in `media/drafts/<filename>` and reference them on a standalone line (`![alt](../../../media/drafts/<filename>)` or in `featuredImage`). `sync_push` uploads them, rewrites the URL, and moves the file to `media/<markdownRef>.<ext>`.
    - **Staging Protection (Guard G3)**: Keep `status: draft` unless explicitly asked to publish (`allowPublish: true`).
 5. **Quarantine & Conflict Resolution (`posts/conflicts/`, Guards G6, G12–G17, G19)**:
    - Never push a rescue copy under `posts/conflicts/` (blocked by Guard G12). Use `sync_conflicts` (`list`, `diff`, `resolve`, `prune`) to inspect or resolve quarantined copies.
-   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G23 specification and remediation flags.
+   - See **[docs/safety-guards-and-diagnostics.md](docs/safety-guards-and-diagnostics.md)** for the full G1–G24 specification and remediation flags.
 
 ---
 

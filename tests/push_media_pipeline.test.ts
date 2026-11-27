@@ -58,7 +58,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-push-media-pipeline-'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media', 'drafts'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
   });
@@ -80,7 +80,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
       taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
       bylines: ['aroooy'],
     };
-    const relPath = `posts/draft/${todayPrefix}_${articleId}-${slug}.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}_${articleId}-${slug}.md`;
     const serialized = serializeMarkdown(fm, body);
     fs.writeFileSync(path.join(tempDir, relPath), serialized, 'utf8');
 
@@ -130,10 +130,10 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
       [
         'Writing offline on the plane.',
         '',
-        '![Sunset from window](../../media/drafts/flight-sunset.png)',
+        '![Sunset from window](../../../media/drafts/flight-sunset.png)',
         '',
         '```markdown',
-        '![Example in code fence](../../media/drafts/flight-sunset.png)',
+        '![Example in code fence](../../../media/drafts/flight-sunset.png)',
         '```',
       ].join('\n'),
     );
@@ -260,7 +260,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     // Verify local Markdown on disk was rewritten with confirmedUrl (code fence preserved)
     const diskMd = fs.readFileSync(path.join(tempDir, res1.filePath), 'utf8');
     expect(diskMd).toContain(`![Sunset from window](${confirmedUrl})`);
-    expect(diskMd).toContain('![Example in code fence](../../media/drafts/flight-sunset.png)');
+    expect(diskMd).toContain('![Example in code fence](../../../media/drafts/flight-sunset.png)');
 
     // Verify cache.db sync_state hash matches the rewritten Markdown on disk
     const syncState = cache.getSyncState(articleId);
@@ -304,7 +304,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     const draftImgPath = path.join(tempDir, 'media', 'drafts', 'broken-upload.png');
     fs.writeFileSync(draftImgPath, TINY_PNG_BUFFER);
 
-    const originalBody = 'Paragraph.\n\n![Broken](../../media/drafts/broken-upload.png)';
+    const originalBody = 'Paragraph.\n\n![Broken](../../../media/drafts/broken-upload.png)';
     const relPath = seedTrackedArticle('abort-on-upload-fail', originalBody);
     const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
 
@@ -386,7 +386,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const relPath = seedTrackedArticle(
       'window-recovery',
-      'Testing window.\n\n![Window](../../media/drafts/window-test.png)',
+      'Testing window.\n\n![Window](../../../media/drafts/window-test.png)',
     );
     const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
 
@@ -531,7 +531,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const relPathA = seedTrackedArticle(
       'article-a',
-      'Article A.\n\n![Banner A](../../media/drafts/shared-banner.png)',
+      'Article A.\n\n![Banner A](../../../media/drafts/shared-banner.png)',
     );
 
     const secondArticleId = '01M6SECONDARTICLE000000000';
@@ -546,9 +546,9 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
       taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
       bylines: ['aroooy'],
     };
-    const relPathB = `posts/draft/${todayPrefix}_${secondArticleId}-article-b.md`;
+    const relPathB = `posts/ja/draft/${todayPrefix}_${secondArticleId}-article-b.md`;
     const bodyB =
-      'Article B sharing the same banner.\n\n![Banner B](../../media/drafts/shared-banner.png)';
+      'Article B sharing the same banner.\n\n![Banner B](../../../media/drafts/shared-banner.png)';
     fs.writeFileSync(path.join(tempDir, relPathB), serializeMarkdown(fmB, bodyB), 'utf8');
     cache.saveSyncState({
       id: secondArticleId,
@@ -657,7 +657,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     expect(uploadUrlCalls).toBe(1);
     expect(fs.existsSync(draftImgPath)).toBe(false);
 
-    // 2nd article push still references ../../media/drafts/shared-banner.png -> reuses promoted asset without error!
+    // 2nd article push still references ../../../media/drafts/shared-banner.png -> reuses promoted asset without error!
     const resB = await pushArticle(relPathB, {
       ...baseOptions,
       workspaceRoot: tempDir,
@@ -693,7 +693,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
       taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
       bylines: ['aroooy'],
     };
-    const relPath = `posts/draft/${todayPrefix}_${secondArticleId}-article-b.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}_${secondArticleId}-article-b.md`;
     fs.writeFileSync(path.join(tempDir, relPath), serializeMarkdown(fm, body), 'utf8');
     cache.saveSyncState({
       id: secondArticleId,
@@ -713,10 +713,10 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const relPathA = seedTrackedArticle(
       'article-a',
-      'Article A.\n\n![Banner A](../../media/drafts/shared-banner.png)',
+      'Article A.\n\n![Banner A](../../../media/drafts/shared-banner.png)',
     );
     const relPathB = seedSecondArticle(
-      'Article B referencing the same banner.\n\n![Banner B](../../media/drafts/shared-banner.png)',
+      'Article B referencing the same banner.\n\n![Banner B](../../../media/drafts/shared-banner.png)',
     );
 
     let uploadUrlCalls = 0;
@@ -823,7 +823,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     // Article B on disk is untouched and still references the local draft path
     const diskMdB = fs.readFileSync(path.join(tempDir, relPathB), 'utf8');
-    expect(diskMdB).toContain('![Banner B](../../media/drafts/shared-banner.png)');
+    expect(diskMdB).toContain('![Banner B](../../../media/drafts/shared-banner.png)');
     expect(diskMdB).not.toContain('/_emdash/api/media/file/');
   });
 
@@ -833,10 +833,10 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const relPathA = seedTrackedArticle(
       'article-a',
-      'Article A.\n\n![Banner A](../../media/drafts/shared-banner.png)',
+      'Article A.\n\n![Banner A](../../../media/drafts/shared-banner.png)',
     );
     const relPathB = seedSecondArticle(
-      'Article B referencing the same banner.\n\n![Banner B](../../media/drafts/shared-banner.png)',
+      'Article B referencing the same banner.\n\n![Banner B](../../../media/drafts/shared-banner.png)',
     );
 
     let uploadUrlCalls = 0;
@@ -960,7 +960,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
         '',
         'The real asset is below.',
         '',
-        '![Sunset from window](../../media/drafts/flight-sunset.png)',
+        '![Sunset from window](../../../media/drafts/flight-sunset.png)',
       ].join('\n'),
     );
 
@@ -1123,7 +1123,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
 
     const relPath = seedTrackedArticle(
       'lock-window',
-      'Article blocked by a remote entry lock.\n\n![Window test](../../media/drafts/window-test.png)',
+      'Article blocked by a remote entry lock.\n\n![Window test](../../../media/drafts/window-test.png)',
     );
 
     const stats: MediaFlowStats = {
@@ -1145,7 +1145,7 @@ describe('Offline Draft Media Auto-Upload Pipeline (P1 - P6 & Compensation)', ()
     // Nothing was promoted yet: draft file and local Markdown remain untouched
     expect(fs.existsSync(draftImgPath)).toBe(true);
     expect(fs.readFileSync(path.join(tempDir, relPath), 'utf8')).toContain(
-      '![Window test](../../media/drafts/window-test.png)',
+      '![Window test](../../../media/drafts/window-test.png)',
     );
 
     // 2nd push: the committed media record is reused instead of a second 4-phase upload
@@ -1201,7 +1201,7 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-push-media-localrefs-'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media', 'drafts'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
   });
@@ -1308,7 +1308,7 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
       taxonomies: { categories: ['tech'], tags: ['cloudflare'] },
       bylines: ['aroooy'],
     };
-    const relPath = `posts/draft/${todayPrefix}_${articleId}-${slug}.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}_${articleId}-${slug}.md`;
     const serialized = serializeMarkdown(fm, body);
     fs.writeFileSync(path.join(tempDir, relPath), serialized, 'utf8');
     cache.saveSyncState({
@@ -1337,7 +1337,7 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
 
     const relPath = seedDraftArticle(
       'local-ref-draft',
-      'Offline writing.\n\n![Local ref draft](../../media/drafts/local-ref-draft.png)',
+      'Offline writing.\n\n![Local ref draft](../../../media/drafts/local-ref-draft.png)',
     );
 
     const res = await pushArticle(relPath, {
@@ -1354,13 +1354,13 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
     expect(fs.existsSync(path.join(tempDir, 'media', confirmedStorageKey))).toBe(true);
 
     const diskMd = fs.readFileSync(path.join(tempDir, res.filePath), 'utf8');
-    expect(diskMd).toContain(`![Local ref draft](../../media/${confirmedStorageKey})`);
+    expect(diskMd).toContain(`![Local ref draft](../../../media/${confirmedStorageKey})`);
     expect(diskMd).not.toContain(confirmedUrl);
 
     // The baseline and the remote payload stay canonical.
     const base = cache.getBaseSnapshot(articleId)!;
     expect(base.bodyMarkdown).toContain(confirmedUrl);
-    expect(base.bodyMarkdown).not.toContain('../../media/');
+    expect(base.bodyMarkdown).not.toContain('../../../media/');
 
     // Disk bytes must be what sync_state tracks, or the article reports a phantom edit right after push.
     const syncState = cache.getSyncState(articleId);
@@ -1393,7 +1393,7 @@ describe('localMediaRefs with auto-uploaded draft images (promote-before-localiz
 
     const relPath = seedDraftArticle(
       'put-fail',
-      'Offline writing.\n\n![Put fail](../../media/drafts/put-fail.png)',
+      'Offline writing.\n\n![Put fail](../../../media/drafts/put-fail.png)',
     );
     const originalDiskMd = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
 

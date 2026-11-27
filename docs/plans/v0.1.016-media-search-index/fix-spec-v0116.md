@@ -135,7 +135,6 @@ export function collectLocalMirrorIndex(
 5. **pruning には使わない**。この索引は表示専用。AGENTS.md §7 の「pruning authority is remote records only」に触れない。
 6. **`collectLocalMediaIds()` を復活させない**（v0.1.15 で削除された helper、AGENTS.md が再導入を明示禁止）。
 
-
 ---
 
 ## M3: CLI `emit media-search`
@@ -145,7 +144,6 @@ export function collectLocalMirrorIndex(
 新規ファイル **`src/cli/commands/media.ts`** に `registerMediaSearchCommand(program, resolveContext)` を置き、
 `src/bin/emit.ts` の登録列（L48-55、`registerDoctorCommand` の直後）に追加する。
 第二引数は既存 command と同じ `CliContextResolver`（`src/cli/context.ts`）。`pull-media` は `src/cli/commands/pull.ts:444` に残す。
-
 
 ```text
 emit media-search <query>
@@ -186,20 +184,33 @@ Media search: "夕焼け" (scanned 500 of an unknown-size library)
 新規 **`src/mcp/tools/sync-media-search.ts`** に `registerSyncMediaSearchTool(server, resolveContext)` を置き、
 `src/mcp/server.ts` の既存登録列（L233-240、`registerSyncDoctorTool` の直後）に追加する。
 
-
 ```ts
 server.tool(
   'sync_media_search',
   'Search the remote EmDash media library by keyword (filename, alt text, caption, storageKey, or local mirror stem) and report whether Emit already mirrors each hit. Returns up to 20 items plus walk coverage fields to conserve LLM context. Use "mirroredOnly:true" when only locally available assets matter. Absence is only proven when walkComplete is true — never conclude an asset does not exist from a truncated walk, and never propose inserting a media record.',
   {
-    query: z.string().min(1).describe('Literal keyword (case-insensitive substring). Regex is not supported.'),
+    query: z
+      .string()
+      .min(1)
+      .describe('Literal keyword (case-insensitive substring). Regex is not supported.'),
     limit: z.number().optional().describe('Max hits to return (default 20, capped at 50)'),
-    maxScan: z.number().optional().describe('Records to read before stopping the walk (default 500; 0 = whole library)'),
-    mirroredOnly: z.boolean().optional().describe('Restrict output to assets already mirrored locally'),
-    suggestKeywords: z.boolean().optional().describe('Append top local tag slugs as extra search hints'),
+    maxScan: z
+      .number()
+      .optional()
+      .describe('Records to read before stopping the walk (default 500; 0 = whole library)'),
+    mirroredOnly: z
+      .boolean()
+      .optional()
+      .describe('Restrict output to assets already mirrored locally'),
+    suggestKeywords: z
+      .boolean()
+      .optional()
+      .describe('Append top local tag slugs as extra search hints'),
     profile: z.string().optional().describe('Target profile name for multi-site setups'),
   },
-  async (args) => { /* guarded */ },
+  async (args) => {
+    /* guarded */
+  },
 );
 ```
 
@@ -264,29 +275,27 @@ official EmDash MCP or placed in media/drafts/.
 **文面の必須条件**: 「filename/alt による解決は mirror 済み資産に限る」を error message 側でも言う。
 `findAlreadyPromotedMedia()`（`src/sync/preflight.ts:175-275`）が `media_state` と companion YAML の**記録された metadata**に照合する実装であり、文件名推測ではないことと揃える（AGENTS.md §7 "never by filename guessing"）。code 自体は変更しない — Guard **G5** の codes（`LOCAL_IMAGE_DETECTED`, `INLINE_LOCAL_IMAGE_NOT_SUPPORTED`: `src/sync/guards.ts:123`）と Guard **G11** の codes（`MISSING_LOCAL_IMAGE_FILE`, `PROMOTED_MEDIA_NOT_FOUND_REMOTE` 等: `src/sync/guards.ts:178-181`）は不変とし、`tests/guards.test.ts` の整合検査を通す。
 
-
 ---
 
 ## M8: ドキュメント正本化
 
-| ファイル | 変更 |
-| --- | --- |
-| `README.md` | Division of Labor 表に検索行を追加（README §6 の表を転記）。`emit media-search` をコマンド一覧と MCP tool 一覧に記載。`pull-media` 説明に `--storage-key` を追記 |
-| `AGENTS.md` | §7 に epistemic rule を 1 項目追加（README §6 の引用文）。§5 Golden Path の [2. NEW/CHECK] に「画像を選ぶ場合の補助手順」として記載。**新規 Guard は追加しない**（G1〜G19 の連番体系を壊さない） |
-| `docs/media-id-spaces.md` | identifier matrix に「media-search は両 id を併記するが、本文へ書けるのは storageKey だけ」の注记を追加 |
-| `CHANGELOG.md` | `[Unreleased]` → `[0.1.16]`。Added: media search index / targeted storageKey mirror / keyword hints。Changed: G5/G11 suggestion 文面 |
+| ファイル                  | 変更                                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `README.md`               | Division of Labor 表に検索行を追加（README §6 の表を転記）。`emit media-search` をコマンド一覧と MCP tool 一覧に記載。`pull-media` 説明に `--storage-key` を追記                                 |
+| `AGENTS.md`               | §7 に epistemic rule を 1 項目追加（README §6 の引用文）。§5 Golden Path の [2. NEW/CHECK] に「画像を選ぶ場合の補助手順」として記載。**新規 Guard は追加しない**（G1〜G19 の連番体系を壊さない） |
+| `docs/media-id-spaces.md` | identifier matrix に「media-search は両 id を併記するが、本文へ書けるのは storageKey だけ」の注记を追加                                                                                          |
+| `CHANGELOG.md`            | `[Unreleased]` → `[0.1.16]`。Added: media search index / targeted storageKey mirror / keyword hints。Changed: G5/G11 suggestion 文面                                                             |
 
 ---
 
 ## 受け入れ条件（A1〜A7）
 
-| ID | 条件 |
-| --- | --- |
-| **A1** | 未 mirror のリモート資産が `mirrored: false` / `localPath: null` で一覧に出、提案文が pull-media へ誘導する |
-| **A2** | filename が ULID のみの移行資産でも `alt` だけでヒットし、`matchedOn` に `alt` が入る |
-| **A3** | サーバーへ送る URL に `q=` が含まれない（fetch stub で検証） |
+| ID     | 条件                                                                                                                 |
+| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| **A1** | 未 mirror のリモート資産が `mirrored: false` / `localPath: null` で一覧に出、提案文が pull-media へ誘導する          |
+| **A2** | filename が ULID のみの移行資産でも `alt` だけでヒットし、`matchedOn` に `alt` が入る                                |
+| **A3** | サーバーへ送る URL に `q=` が含まれない（fetch stub で検証）                                                         |
 | **A4** | `maxScan` 到達時に `walkComplete: false` と `[WALK_INCOMPLETE]` が出、文言が不在を断言しない。完全 walk 時は警告なし |
-| **A5** | ミラー済み行の `localPath` が record id を含まない（衝突サフィックス以外の ULID を文件名に載せない） |
-| **A6** | MCP の全失敗経路（context 解決含む）が `formatToolError()` 経由で `[CODE]` / status / suggestion を保つ |
-| **A7** | CLI と MCP が同一 sync 層を呼び、同一 workspace・同一 query で件数と語彙が一致する |
-
+| **A5** | ミラー済み行の `localPath` が record id を含まない（衝突サフィックス以外の ULID を文件名に載せない）                 |
+| **A6** | MCP の全失敗経路（context 解決含む）が `formatToolError()` 経由で `[CODE]` / status / suggestion を保つ              |
+| **A7** | CLI と MCP が同一 sync 層を呼び、同一 workspace・同一 query で件数と語彙が一致する                                   |

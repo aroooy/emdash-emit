@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPackageVersion } from '../utils/version.js';
 
-export const CURRENT_CACHE_SCHEMA_VERSION = 8;
+export const CURRENT_CACHE_SCHEMA_VERSION = 9;
 
 function pruneBackups(dbPath: string): void {
   if (dbPath === ':memory:') return;
@@ -109,7 +109,8 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
       body_markdown TEXT NOT NULL,
       frontmatter_yaml TEXT NOT NULL,
       hash TEXT NOT NULL,
-      saved_at INTEGER NOT NULL
+      saved_at INTEGER NOT NULL,
+      extra_data_json TEXT
     );
   `);
 
@@ -446,6 +447,15 @@ export function runCacheMigrations(db: DatabaseSync, dbPath = ':memory:'): void 
     }
     if (!snapshotMediaColNames.has('content_hash')) {
       db.exec('ALTER TABLE snapshot_media ADD COLUMN content_hash TEXT;');
+    }
+
+    // Migration 9 (v9): extend base_snapshots with extra_data_json for opaque custom field pass-through
+    const baseSnapshotCols = db.prepare("PRAGMA table_info('base_snapshots');").all() as Array<
+      Record<string, unknown>
+    >;
+    const baseSnapshotColNames = new Set(baseSnapshotCols.map((c) => String(c.name)));
+    if (!baseSnapshotColNames.has('extra_data_json')) {
+      db.exec('ALTER TABLE base_snapshots ADD COLUMN extra_data_json TEXT;');
     }
 
     db.exec(`PRAGMA user_version = ${CURRENT_CACHE_SCHEMA_VERSION};`);

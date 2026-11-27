@@ -94,12 +94,12 @@ describe('resolveArticleTarget & inspectArticleDiff', () => {
   let tempDir: string;
   let cache: CacheDatabase;
   const articleId = '01M6ABCDEF1234567890123456';
-  const relPath = `posts/draft/20261107_${articleId}-test-article.md`;
+  const relPath = `posts/ja/draft/20261107_${articleId}-test-article.md`;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-diff-test-'));
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
   });
 
   afterEach(() => {
@@ -143,7 +143,7 @@ describe('resolveArticleTarget & inspectArticleDiff', () => {
     const res = inspectArticleDiff({
       workspaceRoot: tempDir,
       cache,
-      filePath: 'posts/draft/typo-name.md',
+      filePath: 'posts/ja/draft/typo-name.md',
     });
     expect(res.ok).toBe(false);
     expect(res.status).toBe('not_found');
@@ -185,7 +185,7 @@ describe('resolveArticleTarget & inspectArticleDiff', () => {
   });
 
   it('resolves the ULID from a well-named path even when the file is absent', () => {
-    const ghostPath = `posts/draft/20200101_${articleId}-ghost.md`;
+    const ghostPath = `posts/ja/draft/20200101_${articleId}-ghost.md`;
     const resolved = resolveArticleTarget({
       workspaceRoot: tempDir,
       cache,
@@ -279,7 +279,7 @@ describe('resolveArticleTarget & inspectArticleDiff', () => {
 
   it('produces zero phantom diff on untouched article with taxonomy inline comments', () => {
     const articleId = '01M67TAXPHANTOMDIFFTEST0001';
-    const relPath = 'posts/draft/01M67TAXPHANTOMDIFFTEST0001-phantom-diff.md';
+    const relPath = 'posts/ja/draft/01M67TAXPHANTOMDIFFTEST0001-phantom-diff.md';
 
     // Create local categories/ directory with a term
     const catDir = path.join(tempDir, 'categories');

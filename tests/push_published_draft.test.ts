@@ -26,7 +26,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('does NOT call status transition /publish endpoint when allowPublish is false (stages draft on remote)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher-diary.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -183,7 +183,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('calls status transition /publish endpoint when allowPublish is true', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher-diary.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -324,7 +324,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('does NOT emit draft staging warning when pushing a clean published article without remote draft (@live:)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP1';
-    const relPath = `posts/published/20261113_${articleId}-clean-pub.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-clean-pub.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -427,7 +427,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('retains draft revision comment if remote publish response still returns a draftRevisionId (6(c) regression test)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP2';
-    const relPath = `posts/published/20261113_${articleId}-still-has-draft.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-still-has-draft.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -549,7 +549,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('emits draft staging warning when pushing a clean published article (@live:) if remote returns draftRevisionId (T1-1 / v0.1.41 P1)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP3';
-    const relPath = `posts/published/20261113_${articleId}-live-to-draft.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-live-to-draft.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -668,7 +668,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('does NOT emit draft staging warning when push aborts due to 409 conflict markers (T1-8 / v0.1.41 P1)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP8';
-    const relPath = `posts/published/20261113_${articleId}-conflict-abort.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-conflict-abort.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -783,7 +783,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('emits draft staging warning after clean 3-way merge PUT retry (T1-9 / v0.1.41 P1)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP9';
-    const relPath = `posts/published/20261113_${articleId}-clean-merge.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-clean-merge.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -910,7 +910,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('does NOT emit draft staging warning for draft post push (T1-4 / v0.1.41 P1)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP4';
-    const relPath = `posts/draft/20261113_${articleId}-draft-post.md`;
+    const relPath = `posts/ja/draft/20261113_${articleId}-draft-post.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -1011,7 +1011,7 @@ describe('Push Semantics for Published Post with Draft Revision (v0.1.24)', () =
 
   it('does NOT emit draft staging warning on create with allowPublish (T1-5 / v0.1.41 P1)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCP5';
-    const relPath = `posts/published/20261113_${articleId}-create-pub.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-create-pub.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

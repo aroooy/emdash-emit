@@ -17,7 +17,7 @@ flowchart TD
         PFast["0-GET Fast-Path & In-Place Self-Healing (pull/fast_path.ts): Heal legacy media refs, decode %-slugs, lenient YAML repair, 0-GET deleted taxonomy prune"]
         PGet["Draft Selective Single GET: Fetch full draft if hasDraftRevision or tracked draft"]
         PQ["Quarantine local edits to posts/conflicts/*.conflict.md if disk diverged"]
-        PSave["Write Layer B Markdown (decoded slugs, ../../media/) & save Layer A base_snapshots"]
+        PSave["Write Layer B Markdown (decoded slugs, ../../../media/) & save Layer A base_snapshots"]
 
         P1 --> P2 --> P3
         P3 -->|"YES (0-GET)"| PFast
@@ -32,7 +32,7 @@ flowchart TD
         S5["5. Distributed Mutex Lock (client/lock.ts): POST /lock (7-min lease + heartbeat, try/finally release)"]
         S6["6. Pre-PUT Remote Taxonomy Audit & Transport (tax_audit.ts -> transport.ts): Audit live remote terms, PUT article with Track 1 raw _rev + POST /terms"]
         S7["7. Hybrid 3-Way Merge (merge_stage.ts on HTTP 409 / Taxonomy Divergence): Key-by-key frontmatter + Set-based taxonomies + node-diff3 body"]
-        S8["8. Local Commit & Finalization (push/commit.ts): Localize body links to ../../media/<storageKey> on disk, keep canonical URLs in base_snapshots, update cache.db"]
+        S8["8. Local Commit & Finalization (push/commit.ts): Localize body links to ../../../media/<storageKey> on disk, keep canonical URLs in base_snapshots, update cache.db"]
 
         S1 --> S2 --> S3 --> S4 --> S5 --> S6
         S6 -->|"200 OK"| S8
@@ -62,7 +62,7 @@ flowchart TD
 2. **`list.ts`**: OpenAPI max batch limit discovery, cursor-based pagination (`listRemoteArticles`), and canonical title extraction (`extractCanonicalRemoteTitle`).
 3. **`quarantine.ts`**: Quarantine notice formatting (`formatQuarantineNotice`), divergent local copy preservation (`quarantineDivergentLocalCopies`), and 404/410 remote deletion handling (`handleRemoteDeletedArticle`).
 4. **`fast_path.ts`**: `tryFastPathOrHeal()` — 0-GET fast-path skip and in-place self-healing when the remote revision has not advanced (`isSameRev === true`):
-   - **Legacy depth-free media ref healing**: Re-spells `media/<storageKey>` to article-relative `../../media/<storageKey>` and re-tracks `local_hash` without touching baseline values.
+   - **Legacy depth-free media ref healing**: Re-spells `media/<storageKey>` to article-relative `../../../media/<storageKey>` and re-tracks `local_hash` without touching baseline values.
    - **Percent-encoded taxonomy display upgrade**: Re-serializes legacy `%e6...` terms on disk to human-readable decoded CJK (`未分類`).
    - **Lenient frontmatter syntax repair**: Repairs unquoted `%` slugs or indentation errors via `lenientRepairMarkdownFrontmatter()`, re-serializing clean YAML and updating `local_hash`.
    - **0-GET deleted taxonomy term pruning**: When `canPruneTaxonomies` is true and the local file is untouched (`currentDiskHash === existingSync.localHash`), removes taxonomy terms that no longer exist in `categories/` or `tags/`, rewriting both disk and baseline (`bumpBaselineHashOnly: false`) to prevent phantom diffs. If all terms in a taxonomy are removed, `tags: []` is kept so remote orphan relations are cleared on the next push.
@@ -78,10 +78,10 @@ EmDash updates `draftRevisionId` (ULID) on draft saves without incrementing `pos
 
 ### 3.1 Track 1 (`revForTransport`) vs Track 2 (`revForComparison`)
 
-| Track | Format / Example | Storage Columns | Usage Contract |
-| --- | --- | --- | --- |
-| **Track 1: Transport Token (`revForTransport`)** | Raw server token (e.g. Base64 `version:updatedAt` or integer string `"3"`) | `base_snapshots.rev`, `entries.rev` | Sent verbatim in `PUT /_emdash/api/content/{collection}/{id}` `{ _rev }` payloads (`push/index.ts` prioritizes `baseSnapshot?.rev` over `syncState?.remoteRev`). **Must NEVER be contaminated with `@draft:` or `@live:` composite suffixes.** For offline `--from-snapshot` restores (`src/sync/pull/snapshot_pull.ts`), `base_snapshots.rev` stores the explicit sentinel `'snapshot:' + comparisonRev` — this prefix is the **sole canonical marker** of a snapshot-derived baseline (`sync_state.remote_rev` holds a standard Track 2 composite key and must never be used to guess snapshot origin), and referenced media cached in `media/_cache/` is materialized offline via `restoreSnapshotReferencedMedia()` unless `--no-media-restore` is passed. `evaluatePrePreflightGuards` blocks push with `PULL_REQUIRED_BEFORE_PUSH` until an online `pull` confirms `isSameRev` and promotes `base_snapshots.rev` to the live Track 1 token (preserving offline local edits). |
-| **Track 2: Comparison Key (`revForComparison`)** | Composite key: `${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}` | `sync_state.remote_rev` | Stored across all 4 save paths (`pull/index.ts`, `pull/fast_path.ts`, `push/commit.ts`, `push/merge_stage.ts`). Evaluated by `isSameRev()` during pull to detect remote draft saves even when `version` is unchanged. |
+| Track                                            | Format / Example                                                                            | Storage Columns                     | Usage Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Track 1: Transport Token (`revForTransport`)** | Raw server token (e.g. Base64 `version:updatedAt` or integer string `"3"`)                  | `base_snapshots.rev`, `entries.rev` | Sent verbatim in `PUT /_emdash/api/content/{collection}/{id}` `{ _rev }` payloads (`push/index.ts` prioritizes `baseSnapshot?.rev` over `syncState?.remoteRev`). **Must NEVER be contaminated with `@draft:` or `@live:` composite suffixes.** For offline `--from-snapshot` restores (`src/sync/pull/snapshot_pull.ts`), `base_snapshots.rev` stores the explicit sentinel `'snapshot:' + comparisonRev` — this prefix is the **sole canonical marker** of a snapshot-derived baseline (`sync_state.remote_rev` holds a standard Track 2 composite key and must never be used to guess snapshot origin), and referenced media cached in `media/_cache/` is materialized offline via `restoreSnapshotReferencedMedia()` unless `--no-media-restore` is passed. `evaluatePrePreflightGuards` blocks push with `PULL_REQUIRED_BEFORE_PUSH` until an online `pull` confirms `isSameRev` and promotes `base_snapshots.rev` to the live Track 1 token (preserving offline local edits). |
+| **Track 2: Comparison Key (`revForComparison`)** | Composite key: `${version}@draft:${draftRevisionId}` or `${version}@live:${liveRevisionId}` | `sync_state.remote_rev`             | Stored across all 4 save paths (`pull/index.ts`, `pull/fast_path.ts`, `push/commit.ts`, `push/merge_stage.ts`). Evaluated by `isSameRev()` during pull to detect remote draft saves even when `version` is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 - **Presentation Separation (`formatRevForDisplay`)**: Composite suffixes (`@draft:...`, `@live:...`) are stripped in CLI and MCP display outputs (`emit status`, `emit diff`) so users see clean version numbers.
 
@@ -90,9 +90,11 @@ EmDash updates `draftRevisionId` (ULID) on draft saves without incrementing `pos
 EmDash's list endpoint (`GET /_emdash/api/content/{collection}`) returns stale creation-time `posts.data` for draft articles and published `liveData` for published articles that hold an unpublished `draftRevisionId`.
 
 Therefore, `pullArticle` evaluates:
+
 ```ts
 const needsFullDraftFetch = hasDraftRevision || (isDraft && Boolean(existingSync));
 ```
+
 When `needsFullDraftFetch && remoteChanged` (or on initial pull of an untracked article carrying `draftRevisionId`), Emit discards the list item payload and issues a targeted single `GET /_emdash/api/content/{collection}/{id}` to retrieve the canonical draft revision content. Clean published articles (`draftRevisionId === null`) reuse the list payload with zero extra HTTP requests (**0-GET**).
 
 ### 3.3 Published Articles with Uncommitted Draft Revisions (`published*`)
@@ -100,7 +102,7 @@ When `needsFullDraftFetch && remoteChanged` (or on initial pull of an untracked 
 In EmDash, a live published article can hold uncommitted draft changes (`status: "published"` with non-null `draftRevisionId`).
 
 - **Single Source of Truth (`hasUncommittedDraftRevision` in `src/utils/draft-revision.ts`)**: Derived strictly from `status === 'published' && sync_state.remote_rev.includes('@draft:')`.
-- **No Directory Churn**: The file remains in `posts/published/`.
+- **No Directory Churn**: The file remains in `posts/<locale>/published/`.
 - **Visual Indicators**:
   - `emit status` displays `🟣 [synced  ] published* <path> [has unpublished draft]`.
   - Disk frontmatter serializes `status: published # draft revision` (`src/utils/disk-spelling.ts`). AI agents and users must not manually edit or remove `# draft revision`; Emit manages it automatically.
@@ -118,7 +120,7 @@ In EmDash, a live published article can hold uncommitted draft changes (`status:
 2. **`guards.ts`**: Evaluation rails for Guard G12 (`QUARANTINED_COPY_NOT_PUSHABLE`), G15 (`DELETE_PENDING_ARTICLE`), G16 (`TAXONOMY_CONFLICT_PENDING`), and G17 (`TAXONOMY_APPLY_PENDING`).
 3. **`preflight_stage.ts`**: Runs `runPreflightChecks` (G2–G11), applies redundant `# Title` auto-trim (G7), and discovers offline draft images in `media/drafts/`.
    - **Evaluation Precedence Invariant**: `runPreflightChecks` (specifically Guard **G6 `UNRESOLVED_CONFLICT_MARKERS`**) is evaluated **strictly before** Guard **G16 (`TAXONOMY_CONFLICT_PENDING`)**, ensuring files with conflict markers in the body receive body-marker instructions rather than taxonomy conflict prompts.
-4. **`taxonomy_plan.ts`**: Resolves category/tag slugs and ULIDs against local definitions (`categories/*.yaml`, `tags/*.yaml`) and evaluates Guard **G19 (`DESTRUCTIVE_TAXONOMY_WIPE`)**.
+4. **`taxonomy_plan.ts`**: Resolves category/tag slugs and ULIDs against local definitions (`categories/<locale>/*.yaml`, `tags/<locale>/*.yaml`) and evaluates Guard **G19 (`DESTRUCTIVE_TAXONOMY_WIPE`)**.
 5. **`media_stage.ts`**: Uploads staged offline draft images (`media/drafts/*`), verifies reused promoted assets via `GET /_emdash/api/media/{id}`, rewrites Markdown body links to canonical `/_emdash/api/media/file/<storageKey>` URLs, and promotes local files to `media/<markdownRef>.<ext>`.
 6. **`tax_audit.ts`**: Pre-PUT remote taxonomy audit (`auditRemoteTaxonomies`) to detect out-of-band remote taxonomy changes (which do not bump article `version` on EmDash) before sending the article update.
 7. **`transport.ts`**: Pure HTTP transport calls for article creation (`POST`), update (`PUT`), taxonomy term synchronization (`POST /terms`), and publish status transitions.
@@ -145,7 +147,7 @@ Before executing remote mutations in `pushArticle`:
 
 When a remote article has advanced since the local workspace's `base_snapshots` (detected either via HTTP 409 on PUT or via pre-PUT taxonomy audit):
 
-1. Emit loads three states: **Base** (`base_snapshots`), **Ours** (local working file in canonical Layer A representation), and **Theirs** (latest remote state fetched via single GET).
+1. Emit loads three states: **Base** (`base_snapshots`, including `extra_data_json` for opaque complex custom fields), **Ours** (local working file in canonical Layer A representation), and **Theirs** (latest remote state fetched via single GET). Custom `fields:` are merged at leaf granularity (`fields.<key>`).
 2. **Frontmatter Field-Level 3-Way Merge**:
    - Scalar fields (`title`, `slug`, `status`, `publishedAt`, `locale`, `featuredImage`, `seo`, `bylines`) are merged key-by-key. If only one side changed a key, that change wins; if both sides changed the same key to different values, a frontmatter conflict is recorded.
    - **Taxonomy Set 3-Way Merge**: Compares Base, Ours, and Theirs term sets. If both sides modified a taxonomy incompatibly, Emit records `taxonomy_conflict_pending = 1` in `sync_state` and blocks subsequent bare pushes under Guard **G16 (`TAXONOMY_CONFLICT_PENDING`)** until resolved via `--resolve-taxonomy <union|local|remote>`.

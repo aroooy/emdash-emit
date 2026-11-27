@@ -47,7 +47,7 @@ export function registerSyncDiscardDraftTool(
         .boolean()
         .optional()
         .describe(
-          'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk. Defaults to .emit/config.json.',
+          'Keep mirrored body images as article-relative "../../../media/<storageKey>" references on disk. Defaults to .emit/config.json.',
         ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },

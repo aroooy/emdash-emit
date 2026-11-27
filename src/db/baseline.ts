@@ -63,6 +63,24 @@ export function readBaselineFrontmatter(snapshot?: BaseSnapshot | null): Frontma
 }
 
 /**
+ * Safely decodes opaque extra data preserved in `base_snapshots.extra_data_json`.
+ */
+export function readBaselineExtraData(
+  snapshot?: BaseSnapshot | null,
+): Record<string, unknown> | undefined {
+  if (!snapshot?.extraDataJson) return undefined;
+  try {
+    const parsed = JSON.parse(snapshot.extraDataJson);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.keys(parsed).length > 0 ? (parsed as Record<string, unknown>) : undefined;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Build a canonical `BaseSnapshot` object from raw parts.
  * Encapsulates the JSON-encoding of `frontmatter` into the `frontmatterYaml` field.
  */
@@ -73,6 +91,7 @@ export function createBaseSnapshot(params: {
   frontmatter: Frontmatter;
   hash: string;
   savedAt?: number;
+  extraDataJson?: string | null;
 }): BaseSnapshot {
   return {
     id: params.id,
@@ -82,6 +101,7 @@ export function createBaseSnapshot(params: {
     frontmatterYaml: JSON.stringify(params.frontmatter),
     hash: params.hash,
     savedAt: params.savedAt ?? Math.floor(Date.now() / 1000),
+    ...(params.extraDataJson !== undefined ? { extraDataJson: params.extraDataJson } : {}),
   };
 }
 

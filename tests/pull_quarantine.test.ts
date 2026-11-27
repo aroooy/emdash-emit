@@ -51,7 +51,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
   let cache: CacheDatabase;
   const ulid = '01M67N0TNFS6F3PJX4T96NKPKT';
   const options = { origin: 'https://example.com', token: 'fake-token' };
-  const brokenRelPath = `posts/published/20190405_${ulid}-Broken-Title.md`;
+  const brokenRelPath = `posts/ja/published/20190405_${ulid}-Broken-Title.md`;
 
   const remoteItem = (overrides: Record<string, unknown> = {}) => ({
     id: ulid,
@@ -140,7 +140,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     });
 
     expect(res.updated).toBe(true);
-    expect(res.filePath).toBe(`posts/published/20190405_${ulid}-Remote-Title.md`);
+    expect(res.filePath).toBe(`posts/ja/published/20190405_${ulid}-Remote-Title.md`);
     expect(res.quarantined).toHaveLength(1);
     expect(res.quarantined?.[0].sourceFilePath).toBe(brokenRelPath);
     expect(res.quarantined?.[0].reason).toBe('no-cache-baseline');
@@ -202,7 +202,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     });
 
     expect(res.updated).toBe(true);
-    expect(res.filePath).toBe(`posts/published/20190405_${ulid}-Remote-Title.md`);
+    expect(res.filePath).toBe(`posts/ja/published/20190405_${ulid}-Remote-Title.md`);
     expect(res.quarantined).toBeUndefined();
     expect(countQuarantinedCopies(tempDir)).toBe(0);
     const articleFetches = neverFetch.mock.calls.filter(
@@ -229,7 +229,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
       },
       'Original remote body.',
     );
-    const staleRelPath = `posts/published/20190405_${ulid}-Old-Title.md`;
+    const staleRelPath = `posts/ja/published/20190405_${ulid}-Old-Title.md`;
     const staleFull = path.join(tempDir, staleRelPath);
     fs.mkdirSync(path.dirname(staleFull), { recursive: true });
     fs.writeFileSync(staleFull, baselineContent, 'utf8');
@@ -257,7 +257,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
     });
 
     expect(res.updated).toBe(true);
-    expect(res.filePath).toBe(`posts/published/20190406_${ulid}-Remote-Title.md`);
+    expect(res.filePath).toBe(`posts/ja/published/20190406_${ulid}-Remote-Title.md`);
     expect(res.quarantined?.[0].reason).toBe('diverged-from-baseline');
     expect(
       fs.readFileSync(path.join(tempDir, res.quarantined![0].quarantineFilePath), 'utf8'),
@@ -327,7 +327,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
 
     // The canonical file was repaired and the stale broken copy is gone.
     const repaired = fs.readFileSync(
-      path.join(tempDir, `posts/published/20190405_${ulid}-Remote-Title.md`),
+      path.join(tempDir, `posts/ja/published/20190405_${ulid}-Remote-Title.md`),
       'utf8',
     );
     expect(() => parseMarkdown(repaired)).not.toThrow();
@@ -344,9 +344,9 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
       isQuarantinedRelativePath(`posts/${CONFLICTS_SUBDIR}/20190405_${ulid}-X.conflict.md`),
     ).toBe(true);
     expect(isQuarantinedRelativePath('notes/conflicts/20190405_x.conflict.md')).toBe(true);
-    expect(isQuarantinedRelativePath(`posts/published/20190405_${ulid}-X.md`)).toBe(false);
+    expect(isQuarantinedRelativePath(`posts/ja/published/20190405_${ulid}-X.md`)).toBe(false);
     // A slug that merely contains the word "conflicts" must not be mistaken for a rescue copy.
-    expect(isQuarantinedRelativePath(`posts/draft/20190405_${ulid}-conflicts.md`)).toBe(false);
+    expect(isQuarantinedRelativePath(`posts/ja/draft/20190405_${ulid}-conflicts.md`)).toBe(false);
     expect(isQuarantinedRelativePath(`${CONFLICTS_SUBDIR}/orphan.md`)).toBe(false);
   });
 
@@ -405,7 +405,7 @@ describe('Pull Data Safety: Quarantine of Divergent Local Copies', () => {
 
   it('T3-2: pull <id> --force quarantines unpushed local edits to .local-dropped.md on remote 404', async () => {
     const articleId = '01M6TESTT32FORCE0000000001';
-    const relPath = `posts/draft/20261109_${articleId}-t32.md`;
+    const relPath = `posts/ja/draft/20261109_${articleId}-t32.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -510,7 +510,7 @@ Unpushed edits to be preserved
       },
       'Original remote body.',
     );
-    const staleRelPath = `posts/published/20190405_${ulid}-Broken-Title.md`;
+    const staleRelPath = `posts/ja/published/20190405_${ulid}-Broken-Title.md`;
     const staleFull = path.join(tempDir, staleRelPath);
     fs.mkdirSync(path.dirname(staleFull), { recursive: true });
     fs.writeFileSync(staleFull, baselineContent, 'utf8');
@@ -603,7 +603,9 @@ Unpushed edits to be preserved
       '01M6TESTTITLEPRECEDENCE01',
       extractCanonicalRemoteTitle(itemWithDataTitle),
       { publishedAt: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      null,
+      'ja',
     );
-    expect(path1).toBe('posts/draft/20261101_01M6TESTTITLEPRECEDENCE01-Nested-Data-Title.md');
+    expect(path1).toBe('posts/ja/draft/20261101_01M6TESTTITLEPRECEDENCE01-Nested-Data-Title.md');
   });
 });

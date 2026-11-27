@@ -1000,7 +1000,7 @@ describe('Emit CLI (Commander)', () => {
       });
 
       // Running from posts/draft inside the linked workspace is normal, not drift.
-      const warning = resolveWithCapturedWarnings(path.join(tempDir, 'posts', 'draft'));
+      const warning = resolveWithCapturedWarnings(path.join(tempDir, 'posts', 'ja', 'draft'));
       expect(warning).not.toContain('is registered to');
     });
   });
@@ -1081,7 +1081,13 @@ describe('Emit CLI (Commander)', () => {
       expect(delErr).not.toContain('file://');
 
       // 4. emit push on invalid frontmatter must report clean error without stack trace (D4)
-      const brokenFilePath = path.join(tempDir, 'posts', 'draft', '20261109_01M6TEST-broken.md');
+      const brokenFilePath = path.join(
+        tempDir,
+        'posts',
+        'ja',
+        'draft',
+        '20261109_01M6TEST-broken.md',
+      );
       fs.writeFileSync(brokenFilePath, '---\n:::invalid yaml:::\n---\nbody\n', 'utf8');
       await runCli(['push', brokenFilePath]);
       expect(exitCode).toBe(1);
@@ -1213,7 +1219,7 @@ describe('Emit CLI (Commander)', () => {
         new DuplicateSlugError({
           slug: 'dup-slug',
           existingId: '01M6ABCDEF1234567890123456',
-          existingFilePath: 'posts/draft/dup-slug.md',
+          existingFilePath: 'posts/ja/draft/dup-slug.md',
           existingStatus: 'draft',
           source: 'workspace',
         }),
@@ -1230,7 +1236,7 @@ describe('Emit CLI (Commander)', () => {
       // 3. QuarantinedPathRequiredError uses dynamic error.code and suggestion
       invokeFailure(
         new QuarantinedPathRequiredError({
-          filePath: 'posts/draft/some.md',
+          filePath: 'posts/ja/draft/some.md',
           collection: 'posts',
         }),
       );
@@ -1258,7 +1264,7 @@ describe('Emit CLI (Commander)', () => {
       const { SyncPruneConflictError } = await import('../src/sync/orchestrator.js');
       invokeFailure(
         new SyncPruneConflictError('Pull aborted: 1 file(s) have unpushed local edits!', [
-          { id: '01M6ABCDEF1234567890123456', slug: 'old-post', filePath: 'posts/draft/old.md' },
+          { id: '01M6ABCDEF1234567890123456', slug: 'old-post', filePath: 'posts/ja/draft/old.md' },
         ]),
       );
       expect(exitCode).toBe(1);
@@ -1281,7 +1287,7 @@ describe('Emit CLI (Commander)', () => {
     process.env.EMDASH_TOKEN = 'test-token';
 
     const sampleUlid = '01M6ABCDEF1234567890123456';
-    const canonicalRelPath = `posts/draft/20261115_${sampleUlid}-sample-title.md`;
+    const canonicalRelPath = `posts/ja/draft/20261115_${sampleUlid}-sample-title.md`;
 
     // 1. Resolve by lexical path containing ULID
     const resFromLexical = resolveArticleTarget({
@@ -1298,7 +1304,7 @@ describe('Emit CLI (Commander)', () => {
     expect(resFromId.id).toBe(sampleUlid);
 
     // 3. Resolve by disk frontmatter when filename does not have ULID
-    const nonUlidRelPath = 'posts/draft/custom-named-post.md';
+    const nonUlidRelPath = 'posts/ja/draft/custom-named-post.md';
     const nonUlidFullPath = path.join(tempDir, nonUlidRelPath);
     fs.mkdirSync(path.dirname(nonUlidFullPath), { recursive: true });
     fs.writeFileSync(
@@ -1316,7 +1322,7 @@ describe('Emit CLI (Commander)', () => {
     // 4. Unresolved path returns undefined id
     const resUnresolved = resolveArticleTarget({
       workspaceRoot: tempDir,
-      filePath: 'posts/draft/does-not-exist.md',
+      filePath: 'posts/ja/draft/does-not-exist.md',
     });
     expect(resUnresolved.id).toBeUndefined();
 
@@ -1339,7 +1345,7 @@ describe('Emit CLI (Commander)', () => {
       const prevCwd = process.cwd();
       process.chdir(tempDir);
       try {
-        await program.parseAsync(['node', 'emit', 'pull', 'posts/draft/does-not-exist.md']);
+        await program.parseAsync(['node', 'emit', 'pull', 'posts/ja/draft/does-not-exist.md']);
       } catch (err) {
         if (err !== EXIT_SENTINEL) throw err;
       } finally {
@@ -1349,7 +1355,7 @@ describe('Emit CLI (Commander)', () => {
       expect(exitCode).toBe(1);
       const out = errLines.join('\n');
       expect(out).toContain('[ARTICLE_TARGET_UNRESOLVED]');
-      expect(out).toContain('Could not resolve article target: "posts/draft/does-not-exist.md"');
+      expect(out).toContain('Could not resolve article target: "posts/ja/draft/does-not-exist.md"');
       expect(out).not.toContain('    at ');
     } finally {
       console.error = originalError;
@@ -1527,6 +1533,7 @@ describe('Emit CLI (Commander)', () => {
         const untrackedPath = path.join(
           tempDir,
           'posts',
+          'ja',
           'draft',
           '20261122_01M8UNTRACKED0000000000001-u.md',
         );
@@ -1548,7 +1555,7 @@ describe('Emit CLI (Commander)', () => {
             '01M8DIFFMOD000000000000001',
             '01M8DIFFMOD000000000000002',
           ].entries()) {
-            const rel = `posts/draft/20261122_${id}-mod-${idx + 1}.md`;
+            const rel = `posts/ja/draft/20261122_${id}-mod-${idx + 1}.md`;
             const full = path.join(tempDir, rel);
             const mod = `---\nid: ${id}\nslug: mod-${idx + 1}\ntitle: "Mod ${idx + 1}"\nstatus: draft\n---\n\nEdited ${idx + 1}\n`;
             fs.writeFileSync(full, mod, 'utf8');
@@ -1642,7 +1649,7 @@ describe('Emit CLI (Commander)', () => {
 
         // 1 candidate in non-TTY without --yes -> exit 1
         const id1 = '01M8PUSHONE000000000000001';
-        const p1 = path.join(tempDir, 'posts', 'draft', `20261122_${id1}-one.md`);
+        const p1 = path.join(tempDir, 'posts', 'ja', 'draft', `20261122_${id1}-one.md`);
         fs.mkdirSync(path.dirname(p1), { recursive: true });
         fs.writeFileSync(
           p1,
@@ -1689,7 +1696,7 @@ describe('Emit CLI (Commander)', () => {
         try {
           logLines.length = 0;
           await program.parseAsync(['node', 'emit', 'push', '--yes']);
-          expect(logLines.join('\n')).toContain(`Pushing posts/draft/20261122_${id1}-one.md...`);
+          expect(logLines.join('\n')).toContain(`Pushing posts/ja/draft/20261122_${id1}-one.md...`);
           expect(logLines.join('\n')).toContain(`Successfully pushed ${id1}`);
         } finally {
           globalThis.fetch = origFetch;
@@ -1706,7 +1713,7 @@ describe('Emit CLI (Commander)', () => {
           'utf8',
         );
         const id2 = '01M8PUSHTWO000000000000002';
-        const p2 = path.join(tempDir, 'posts', 'draft', `20261122_${id2}-two.md`);
+        const p2 = path.join(tempDir, 'posts', 'ja', 'draft', `20261122_${id2}-two.md`);
         fs.writeFileSync(
           p2,
           `---\nid: ${id2}\nslug: two\ntitle: "Two"\nstatus: draft\n---\n\nBody\n`,
@@ -1760,7 +1767,7 @@ describe('Emit CLI (Commander)', () => {
 
       try {
         const id1 = '01M8OPAQUE0000000000000001';
-        const relPath = `posts/draft/20261122_${id1}-opaque.md`;
+        const relPath = `posts/ja/draft/20261122_${id1}-opaque.md`;
         const absPath = path.join(tempDir, relPath);
         fs.mkdirSync(path.dirname(absPath), { recursive: true });
         const baseBody = '<!--ec:block {"_type":"core:gallery","_key":"k1"} -->\n\nBody';

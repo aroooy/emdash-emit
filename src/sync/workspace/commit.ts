@@ -54,6 +54,8 @@ export interface ArticleCommitInput {
   savedAt?: number;
   /** Whether to skip writing diskContent to disk (e.g. when already written or conflict quarantine only) */
   skipDiskWrite?: boolean;
+  /** Optional JSON-serialized opaque complex custom fields preserved for non-destructive push pass-through. */
+  extraDataJson?: string | null;
 }
 
 export interface ArticleCommitResult {
@@ -101,6 +103,10 @@ export function commitArticleSnapshot(
         });
       }
     } else {
+      const resolvedExtraDataJson =
+        input.extraDataJson !== undefined
+          ? input.extraDataJson
+          : (cache.getBaseSnapshot(input.id)?.extraDataJson ?? null);
       cache.saveBaseSnapshot(
         createBaseSnapshot({
           id: input.id,
@@ -109,6 +115,7 @@ export function commitArticleSnapshot(
           frontmatter: input.frontmatter,
           hash: baselineHash,
           savedAt: timestamp,
+          extraDataJson: resolvedExtraDataJson,
         }),
       );
     }

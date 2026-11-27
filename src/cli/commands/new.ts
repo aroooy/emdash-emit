@@ -40,6 +40,11 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
       'Create a localized translation linked to an existing article (file path or 26-char ULID)',
     )
     .option(
+      '--inherit-taxonomies',
+      'Copy raw taxonomy slugs directly from the --translation-of source article',
+    )
+    .option('--no-taxonomies', 'Skip taxonomy auto-mapping when using --translation-of')
+    .option(
       '-b, --byline <slug>',
       'Author byline slug (defaults to first cached non-guest author by slug)',
     )
@@ -48,7 +53,7 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
     .option('-d, --description <desc>', 'Article excerpt or SEO description')
     .option(
       '-f, --featured-image <pathOrId>',
-      'Featured image (local draft path like "../../media/drafts/cover.jpg" or 26-char media ULID)',
+      'Featured image (local draft path like "../../../media/drafts/cover.jpg" or 26-char media ULID)',
     )
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action(async (slug, options) => {
@@ -63,6 +68,8 @@ export function registerNewCommand(program: Command, resolveContext: CliContextR
           collection,
           locale,
           translationOf: options.translationOf,
+          inheritTaxonomies: options.inheritTaxonomies,
+          noTaxonomies: options.taxonomies === false,
           byline: options.byline,
           categories: options.categories,
           tags: options.tags,

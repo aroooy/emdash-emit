@@ -127,17 +127,13 @@ export function findCanonicalArticlePath(
   articleId?: string,
   collection = 'posts',
 ): string | null {
-  const candidateDraft = path.join(collection, 'draft', `${baseName}.md`);
-  if (fs.existsSync(path.join(workspaceRoot, candidateDraft))) {
-    return candidateDraft;
+  for (const { relPath, fileName } of iterWorkspaceArticles(workspaceRoot, collection)) {
+    if (fileName === `${baseName}.md`) {
+      return relPath;
+    }
   }
 
-  const candidatePublished = path.join(collection, 'published', `${baseName}.md`);
-  if (fs.existsSync(path.join(workspaceRoot, candidatePublished))) {
-    return candidatePublished;
-  }
-
-  // If exact baseName doesn't match, attempt search by ULID in draft and published dirs
+  // If exact baseName doesn't match, attempt search by ULID in <collection>/<locale>/{draft,published}/
   if (articleId && articleId.length === 26) {
     for (const { relPath, fileName } of iterWorkspaceArticles(workspaceRoot, collection)) {
       if (fileName.includes(articleId)) {
@@ -464,8 +460,9 @@ export function resolveConflict(options: {
       }
     }
   } else {
-    // Recreate target file in collection/status/baseName.md
-    canonicalRel = path.join(collection, status, `${baseName}.md`);
+    // Recreate target file in <collection>/<locale>/<status>/<baseName>.md
+    const targetLocale = (parsedConflict?.frontmatter.locale || 'ja').trim().toLowerCase() || 'ja';
+    canonicalRel = path.join(collection, targetLocale, status, `${baseName}.md`);
   }
 
   const canonicalFull = path.join(options.workspaceRoot, canonicalRel);

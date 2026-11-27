@@ -44,7 +44,7 @@ const MEDIA_RECORD_ID = '01M67PG2WTXPEJVMS4W5N3FC48';
 const STORAGE_KEY_STEM = '01M67P2N0A44G4KHK6QZZGMRW7';
 const STORAGE_KEY = `${STORAGE_KEY_STEM}.webp`;
 const CANONICAL_URL = `/_emdash/api/media/file/${STORAGE_KEY}`;
-const LOCAL_REF = `../../media/${STORAGE_KEY}`;
+const LOCAL_REF = `../../../media/${STORAGE_KEY}`;
 
 describe('Baseline Reconstruction & Sync-State-Only Hash Retracking (v0.1.27 P1/P2)', () => {
   let tempDir: string;
@@ -104,7 +104,7 @@ describe('Baseline Reconstruction & Sync-State-Only Hash Retracking (v0.1.27 P1/
     const staleHash = calculateHash(canonicalBytes);
     const localizedHash = calculateHash(localizedBytes);
 
-    const relPath = `posts/draft/20261115_${ARTICLE_ID}-Localized-Article.md`;
+    const relPath = `posts/ja/draft/20261115_${ARTICLE_ID}-Localized-Article.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, localizedBytes, 'utf8');
@@ -340,7 +340,7 @@ describe('Baseline Reconstruction & Sync-State-Only Hash Retracking (v0.1.27 P1/
     expect(existingSync.localHash).toBe(staleHash);
 
     // Create a duplicate ULID file with the same localized bytes (whose raw hash !== staleHash, but matches reconstructed baseline)
-    const dupRelPath = `posts/draft/20261115_${ARTICLE_ID}-Old-Title.md`;
+    const dupRelPath = `posts/ja/draft/20261115_${ARTICLE_ID}-Old-Title.md`;
     const dupFullPath = path.join(tempDir, dupRelPath);
     const localizedContent = fs.readFileSync(path.join(tempDir, relPath), 'utf8');
     fs.writeFileSync(dupFullPath, localizedContent, 'utf8');

@@ -37,7 +37,7 @@ describe('Orchestrator Batch Pull Taxonomy Synchronization (v0.1.32 TS-1 - TS-3)
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
     fs.mkdirSync(path.join(tempDir, 'categories'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
   });
 
   afterEach(() => {
@@ -94,12 +94,14 @@ describe('Orchestrator Batch Pull Taxonomy Synchronization (v0.1.32 TS-1 - TS-3)
     expect(res.taxonomies?.error).toBeUndefined();
     expect(callbackCounts).toEqual(res.taxonomies);
 
-    // Verify local files were written
+    // Verify local files were written under <locale>/
     expect(
-      fs.existsSync(path.join(tempDir, 'categories', '01M67MY23GDT9X8QMY0G5SEQ6M-camera.yaml')),
+      fs.existsSync(
+        path.join(tempDir, 'categories', 'ja', '01M67MY23GDT9X8QMY0G5SEQ6M-camera.yaml'),
+      ),
     ).toBe(true);
     expect(
-      fs.existsSync(path.join(tempDir, 'tags', '01M65FEDZNS9GN01GD3JJRZFT2-webdev.yaml')),
+      fs.existsSync(path.join(tempDir, 'tags', 'ja', '01M65FEDZNS9GN01GD3JJRZFT2-webdev.yaml')),
     ).toBe(true);
   });
 

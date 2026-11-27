@@ -35,7 +35,7 @@ export function registerSyncDeleteTool(server: McpServer, resolveContext: Contex
         .string()
         .optional()
         .describe(
-          'Workspace-relative file path to delete (e.g. posts/draft/20261108_01M6...-my-slug.md)',
+          'Workspace-relative file path to delete (e.g. posts/ja/draft/20261108_01M6...-my-slug.md)',
         ),
       id: z.string().optional().describe('Article ULID to delete'),
       allowDeletePublished: z

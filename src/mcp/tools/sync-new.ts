@@ -30,7 +30,7 @@ import { formatToolTextWithMeta, withResolvedContext } from '../tool-errors.js';
 export function registerSyncNewTool(server: McpServer, resolveContext: ContextResolver): void {
   server.tool(
     'sync_new',
-    'Create a new article draft scaffold in posts/draft/ with standardized frontmatter (ULID, slug, title, default bylines). Returns the created relative file path and available categories/tags hints (sorted by usage) so you can edit the Markdown file directly before pushing.',
+    'Create a new article draft scaffold in posts/<locale>/draft/ with standardized frontmatter (ULID, slug, title, default bylines). Returns the created relative file path and available categories/tags hints (sorted by usage) so you can edit the Markdown file directly before pushing.',
     {
       slug: z
         .string()
@@ -48,6 +48,16 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         .describe(
           'Source article file path or 26-char ULID to link this new draft as a translation',
         ),
+      inheritTaxonomies: z
+        .boolean()
+        .optional()
+        .describe(
+          'Copy raw taxonomy slugs directly from the translationOf source article instead of auto-mapping by locale',
+        ),
+      noTaxonomies: z
+        .boolean()
+        .optional()
+        .describe('Skip taxonomy auto-mapping when translationOf is specified'),
       byline: z
         .string()
         .optional()
@@ -57,14 +67,14 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         .or(z.string())
         .optional()
         .describe(
-          'Array of category slugs (e.g. ["tech"] or ["news", "gadget"]). Valid slugs are defined in categories/*.yaml. Can also be a comma-separated string.',
+          'Array of category slugs (e.g. ["tech"] or ["news", "gadget"]). Valid slugs are defined in categories/<locale>/*.yaml. Can also be a comma-separated string.',
         ),
       tags: z
         .array(z.string())
         .or(z.string())
         .optional()
         .describe(
-          'Array of tag slugs (e.g. ["typescript", "ai"]). Valid slugs are defined in tags/*.yaml. Can also be a comma-separated string.',
+          'Array of tag slugs (e.g. ["typescript", "ai"]). Valid slugs are defined in tags/<locale>/*.yaml. Can also be a comma-separated string.',
         ),
       description: z
         .string()
@@ -74,7 +84,7 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
         .string()
         .optional()
         .describe(
-          'Local draft image path (e.g. "../../media/drafts/cover.jpg" or "media/drafts/cover.jpg") ' +
+          'Local draft image path (e.g. "../../../media/drafts/cover.jpg" or "media/drafts/cover.jpg") ' +
             'or a 26-char remote media record ULID (e.g. "01M67P0MBMJQQXH2K95HHCYRYB"). ' +
             'If a local draft path is given, Emit will automatically upload it and resolve the canonical ULID on sync_push.',
         ),
@@ -91,6 +101,8 @@ export function registerSyncNewTool(server: McpServer, resolveContext: ContextRe
           title: args.title,
           locale: args.locale || ctx.config.defaultLocale,
           translationOf: args.translationOf,
+          inheritTaxonomies: args.inheritTaxonomies,
+          noTaxonomies: args.noTaxonomies,
           byline: args.byline,
           categories: args.categories,
           tags: args.tags,

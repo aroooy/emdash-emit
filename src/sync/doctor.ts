@@ -614,6 +614,31 @@ function runContentIntegrityChecks(
       message: `All ${wsStatus.summary.synced} tracked article(s) in sync with base snapshots.`,
     });
   }
+
+  // Legacy flat layout check (<collection>/{draft,published}/*.md from v0.1.x)
+  let legacyFlatCount = 0;
+  for (const sub of ['draft', 'published']) {
+    const legacyDir = path.join(options.workspaceRoot, collection, sub);
+    if (!fs.existsSync(legacyDir)) continue;
+    try {
+      legacyFlatCount += fs.readdirSync(legacyDir).filter((f) => f.endsWith('.md')).length;
+    } catch {
+      // ignore
+    }
+  }
+  if (legacyFlatCount > 0) {
+    checks.push({
+      id: 'legacy_flat_layout',
+      name: 'Legacy Flat Layout',
+      status: 'warning',
+      message: `Found ${legacyFlatCount} article(s) in legacy flat directories (${collection}/draft/ or ${collection}/published/). v0.2.0 stores articles under ${collection}/<locale>/{draft,published}/.`,
+      details: {
+        count: legacyFlatCount,
+        suggestion:
+          'Verify there are no unpushed edits, remove or archive the legacy flat directories, and run "emit pull" (plus "emit pull <id>" for out-of-window articles) to re-sync into <collection>/<locale>/{draft,published}/.',
+      },
+    });
+  }
 }
 
 /**

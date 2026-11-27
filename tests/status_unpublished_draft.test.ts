@@ -33,6 +33,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     const pubWithDraftPath = path.join(
       tempDir,
       'posts',
+      'ja',
       'published',
       `20261113_${pubWithDraftId}-pub-draft.md`,
     );
@@ -55,7 +56,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     fs.writeFileSync(pubWithDraftPath, content1, 'utf8');
     cache.saveSyncState({
       id: pubWithDraftId,
-      localFilePath: `posts/published/20261113_${pubWithDraftId}-pub-draft.md`,
+      localFilePath: `posts/ja/published/20261113_${pubWithDraftId}-pub-draft.md`,
       localHash: calculateHash(content1),
       remoteRev: '19@draft:01M7CD9YGWNPAEP1Z7NC8600ZD',
       status: 'published',
@@ -67,6 +68,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     const pubCleanPath = path.join(
       tempDir,
       'posts',
+      'ja',
       'published',
       `20261113_${pubCleanId}-pub-clean.md`,
     );
@@ -85,7 +87,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     fs.writeFileSync(pubCleanPath, content2, 'utf8');
     cache.saveSyncState({
       id: pubCleanId,
-      localFilePath: `posts/published/20261113_${pubCleanId}-pub-clean.md`,
+      localFilePath: `posts/ja/published/20261113_${pubCleanId}-pub-clean.md`,
       localHash: calculateHash(content2),
       remoteRev: '19@live:01M7CCGC748FQWMC3FDBP4WDY7',
       status: 'published',
@@ -97,6 +99,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     const draftPath = path.join(
       tempDir,
       'posts',
+      'ja',
       'draft',
       `20261114_${draftArticleId}-draft-article.md`,
     );
@@ -115,7 +118,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     fs.writeFileSync(draftPath, content3, 'utf8');
     cache.saveSyncState({
       id: draftArticleId,
-      localFilePath: `posts/draft/20261114_${draftArticleId}-draft-article.md`,
+      localFilePath: `posts/ja/draft/20261114_${draftArticleId}-draft-article.md`,
       localHash: calculateHash(content3),
       remoteRev: '3@draft:01M7DRAFT000000000000000000',
       status: 'draft',
@@ -161,7 +164,13 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
       profilesPath,
     );
 
-    const pubPath = path.join(tempDir, 'posts', 'published', `20261113_${articleId}-pub-draft.md`);
+    const pubPath = path.join(
+      tempDir,
+      'posts',
+      'ja',
+      'published',
+      `20261113_${articleId}-pub-draft.md`,
+    );
     fs.mkdirSync(path.dirname(pubPath), { recursive: true });
     const fm: Frontmatter = {
       id: articleId,
@@ -181,7 +190,7 @@ describe('Unpublished Draft Status Visualization (v0.1.24)', () => {
     const diskCache = new CacheDatabase(path.join(emitDir, 'cache.db'));
     diskCache.saveSyncState({
       id: articleId,
-      localFilePath: `posts/published/20261113_${articleId}-pub-draft.md`,
+      localFilePath: `posts/ja/published/20261113_${articleId}-pub-draft.md`,
       localHash: calculateHash(content),
       remoteRev: '19@draft:01M7CD9YGWNPAEP1Z7NC8600ZD',
       status: 'published',

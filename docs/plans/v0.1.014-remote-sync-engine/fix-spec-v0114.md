@@ -22,25 +22,26 @@ Rev.1 の本文要点は **付録 B** に監査用として保持する（実装
 
 Rev.1 の `issues-v0114.md` の記述のうち、ソース照合で以下 3 点を訂正する。**課題の結論（P1〜P6 は実在）は変わらない**が、テストの期待値と修正対象箇所が変わる。
 
-| # | Rev.1 の記述 | 実測（v0.1.13 ソース） | 影響 |
-|---|---|---|---|
-| C1 | 「3 戦略すべてで union が `{t1, t3}`」 | Base `{t1,t2}` / Local `{t1}` / Remote `{t1,t2,t3}` の union は **`{t1,t2,t3}`**（remote は `t2` を削除していない）。`merge.ts:196-201` の集合代数は正しい | 結論（local の削除意図が失われる）は有効。T1-1 の期待値を `{t1,t2,t3}` 基準へ修正 |
-| C2 | 「マーカーが残っていれば Guard **G8**（`UNRESOLVED_CONFLICT_MARKERS`）で停止する」 | `UNRESOLVED_CONFLICT_MARKERS` は **preflight G6**（`src/sync/preflight.ts:522-529`）。**G8 は `UNSUPPORTED_SYNTAX_WARNING`**。かつ評価順序は `push.ts:654`（pending guard）→ `push.ts:679`（preflight G1–G11）なので、マーカー残存時は **先に `TAXONOMY_CONFLICT_PENDING` で停止し G6 に到達しない** | Rev.1 が描いた「循環」は現状一部発生しない。真因は §R2 の通りフラグ共有 |
-| C3 | 「`TAXONOMY_APPLY_PENDING` の案内文が `--resolve-taxonomy` を誘導している」（修正として提示） | `push.ts:670-677` の suggestion は既に `emit pull-taxonomies` / `--allow-unapplied-taxonomies` を案内し、`--resolve-taxonomy` に言及しない | R2(3) は**新規修正ではなく現行挙動の regression lock**。実測された循環の本体は doctor 側（`src/sync/doctor.ts:295` が本文競合由来 pending にも `--resolve-taxonomy=union|local|remote` を勧める）→ R2 の修正対象に doctor を追加 |
+| #   | Rev.1 の記述                                                                                  | 実測（v0.1.13 ソース）                                                                                                                                                                                                                                                                               | 影響                                                                                                                                                                     |
+| --- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| C1  | 「3 戦略すべてで union が `{t1, t3}`」                                                        | Base `{t1,t2}` / Local `{t1}` / Remote `{t1,t2,t3}` の union は **`{t1,t2,t3}`**（remote は `t2` を削除していない）。`merge.ts:196-201` の集合代数は正しい                                                                                                                                           | 結論（local の削除意図が失われる）は有効。T1-1 の期待値を `{t1,t2,t3}` 基準へ修正                                                                                        |
+| C2  | 「マーカーが残っていれば Guard **G8**（`UNRESOLVED_CONFLICT_MARKERS`）で停止する」            | `UNRESOLVED_CONFLICT_MARKERS` は **preflight G6**（`src/sync/preflight.ts:522-529`）。**G8 は `UNSUPPORTED_SYNTAX_WARNING`**。かつ評価順序は `push.ts:654`（pending guard）→ `push.ts:679`（preflight G1–G11）なので、マーカー残存時は **先に `TAXONOMY_CONFLICT_PENDING` で停止し G6 に到達しない** | Rev.1 が描いた「循環」は現状一部発生しない。真因は §R2 の通りフラグ共有                                                                                                  |
+| C3  | 「`TAXONOMY_APPLY_PENDING` の案内文が `--resolve-taxonomy` を誘導している」（修正として提示） | `push.ts:670-677` の suggestion は既に `emit pull-taxonomies` / `--allow-unapplied-taxonomies` を案内し、`--resolve-taxonomy` に言及しない                                                                                                                                                           | R2(3) は**新規修正ではなく現行挙動の regression lock**。実測された循環の本体は doctor 側（`src/sync/doctor.ts:295` が本文競合由来 pending にも `--resolve-taxonomy=union | local | remote` を勧める）→ R2 の修正対象に doctor を追加 |
 
 **ガード番号の正式対応（本書の一貫した表記）**
 
-| 記号 | code | 実装位置 |
-|---|---|---|
-| **G6** | `UNRESOLVED_CONFLICT_MARKERS` | `src/sync/preflight.ts:522` |
-| **G12** | `QUARANTINED_COPY_NOT_PUSHABLE` | `src/sync/push.ts:549-562` |
-| **G13** | `CANONICAL_HAS_UNPUSHED_EDITS` | `src/sync/conflicts.ts:422-439` |
-| **G14** | `QUARANTINED_PATH_REQUIRED` | `src/sync/conflicts.ts`（resolve/diff 入口） |
-| **G15** | `TAXONOMY_CONFLICT_PENDING` | `src/sync/push.ts:654-662` |
-| **G16** | `DELETE_PENDING_ARTICLE` | `src/sync/push.ts:643-651` |
-| **G17** | `TAXONOMY_APPLY_PENDING` | `src/sync/push.ts:665-677` |
+| 記号    | code                            | 実装位置                                     |
+| ------- | ------------------------------- | -------------------------------------------- |
+| **G6**  | `UNRESOLVED_CONFLICT_MARKERS`   | `src/sync/preflight.ts:522`                  |
+| **G12** | `QUARANTINED_COPY_NOT_PUSHABLE` | `src/sync/push.ts:549-562`                   |
+| **G13** | `CANONICAL_HAS_UNPUSHED_EDITS`  | `src/sync/conflicts.ts:422-439`              |
+| **G14** | `QUARANTINED_PATH_REQUIRED`     | `src/sync/conflicts.ts`（resolve/diff 入口） |
+| **G15** | `TAXONOMY_CONFLICT_PENDING`     | `src/sync/push.ts:654-662`                   |
+| **G16** | `DELETE_PENDING_ARTICLE`        | `src/sync/push.ts:643-651`                   |
+| **G17** | `TAXONOMY_APPLY_PENDING`        | `src/sync/push.ts:665-677`                   |
 
 ---
+
 ## R1: Taxonomy 解決戦略（`--resolve-taxonomy union|local|remote`）の履行保証と決定点の一元化（P1 対応）
 
 ### 1. Invariant（不変条件）
@@ -54,11 +55,11 @@ Rev.1 の `issues-v0114.md` の記述のうち、ソース照合で以下 3 点�
 
 `base / local / remote` の各集合に対し、差分のある taxonomy name について:
 
-| strategy | 採用結果 | 他側の変更 | 記録 |
-|---|---|---|---|
-| `union`（既定） | `(base \ (localRemoved ∪ remoteRemoved)) ∪ localAdded ∪ remoteAdded` | 統合 | `autoMergedTaxonomies{remoteAdded, remoteRemoved}` |
-| `local` | `local` をそのまま採用 | **追加も削除も区別なく破棄** | `strategyAdopted{name, side:'local', discardedRemoteAdded, discardedRemoteRemoved}` |
-| `remote` | `remote` をそのまま採用 | **追加も削除も区別なく破棄** | `strategyAdopted{name, side:'remote', discardedLocalAdded, discardedLocalRemoved}` |
+| strategy        | 採用結果                                                             | 他側の変更                   | 記録                                                                                |
+| --------------- | -------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------- |
+| `union`（既定） | `(base \ (localRemoved ∪ remoteRemoved)) ∪ localAdded ∪ remoteAdded` | 統合                         | `autoMergedTaxonomies{remoteAdded, remoteRemoved}`                                  |
+| `local`         | `local` をそのまま採用                                               | **追加も削除も区別なく破棄** | `strategyAdopted{name, side:'local', discardedRemoteAdded, discardedRemoteRemoved}` |
+| `remote`        | `remote` をそのまま採用                                              | **追加も削除も区別なく破棄** | `strategyAdopted{name, side:'remote', discardedLocalAdded, discardedLocalRemoved}`  |
 
 - 差分のない taxonomy（`eq(l,r)` / 単側変更）は戦略の対象外（既存の clean 路径を維持）。
 - **wipe guard との関係**: strategy 指定時は union 由来の destructive wipe 検知（`merge.ts:212-219`）に依存しない。local 採用で local が空集合になる場合、または remote 採用で remote が空集合になる場合は、**戦略が明示されたことをもって確認済みとみなす**。ただし `--force` 由来の暗黙 union はこの免除を与えない（G15 の `--force` 経路は union を選び、`DESTRUCTIVE_TAXONOMY_WIPE`（`push.ts:1154-1167`）は従来通り発火させる）。
@@ -114,6 +115,7 @@ if (localChanged && remoteChanged) {
 - **A1-5**: strategy 採用後にサーバが拒否した場合、`strategyAdoptions` が空でも専用案内が発火する。
 
 ---
+
 ## R2: pending 種別の分離と誘導文の適正化（P2 対応・R4 と統合）
 
 ### 1. Invariant（不変条件）
@@ -144,12 +146,12 @@ ALTER TABLE sync_state ADD COLUMN taxonomy_conflict_pending INTEGER NOT NULL DEF
 
 #### (2) ガードの再配線（`src/sync/push.ts`）
 
-| 条件 | 発動 code | 案内文 |
-|---|---|---|
-| `body_conflict_pending = 1` かつ canonical にマーカー残存 | **G6** `UNRESOLVED_CONFLICT_MARKERS`（pending guard より前に評価） | 「マーカーを解消して再 push」または「`emit conflicts diff/resolve` で退避コピーと照合」 |
-| `body_conflict_pending = 1` かつマーカー無し（手動解消済み） | **発動しない**（bare push を通し、解決扱いで pending を clear） | — |
-| `taxonomy_conflict_pending = 1` かつ strategy/force 未指定 | **G15** `TAXONOMY_CONFLICT_PENDING` | `--resolve-taxonomy=union\|local\|remote`（or `--force`）のみ |
-| `taxonomy_apply_pending = 1` | **G17**（現状維持） | `emit pull-taxonomies` → re-push、または `--allow-unapplied-taxonomies`（`--resolve-taxonomy` に言及しない） |
+| 条件                                                         | 発動 code                                                          | 案内文                                                                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `body_conflict_pending = 1` かつ canonical にマーカー残存    | **G6** `UNRESOLVED_CONFLICT_MARKERS`（pending guard より前に評価） | 「マーカーを解消して再 push」または「`emit conflicts diff/resolve` で退避コピーと照合」                      |
+| `body_conflict_pending = 1` かつマーカー無し（手動解消済み） | **発動しない**（bare push を通し、解決扱いで pending を clear）    | —                                                                                                            |
+| `taxonomy_conflict_pending = 1` かつ strategy/force 未指定   | **G15** `TAXONOMY_CONFLICT_PENDING`                                | `--resolve-taxonomy=union\|local\|remote`（or `--force`）のみ                                                |
+| `taxonomy_apply_pending = 1`                                 | **G17**（現状維持）                                                | `emit pull-taxonomies` → re-push、または `--allow-unapplied-taxonomies`（`--resolve-taxonomy` に言及しない） |
 
 - **評価順序の固定**: ① G6（マーカー）→ ② G15（taxonomy pending）→ ③ G17（apply pending）→ ④ preflight G1–G11。Rev.1 の「マーカー検査の先行」は、pending guard を**種別ごとに分割した上で**成立させる（単に前倒ししても I2-a は満たされない）。
 - `--force` は Rev.1 通り全 pending を bypass できるが、**どの pending をどう解決したかを warnings に必ず記録**する（暗黙解決の不可視化防止）。
@@ -170,6 +172,7 @@ ALTER TABLE sync_state ADD COLUMN taxonomy_conflict_pending INTEGER NOT NULL DEF
 - **A2-4**: `taxonomy_apply_pending = 1` の案内文に `--resolve-taxonomy` が現れない（Rev.1 T2-3 を regression lock として維持）。
 
 ---
+
 ## R3: リモート削除＋ローカル編集状態の脱出経路（P3 対応）
 
 ### 1. Invariant（不変条件）
@@ -184,11 +187,11 @@ ALTER TABLE sync_state ADD COLUMN taxonomy_conflict_pending INTEGER NOT NULL DEF
 
 実測の詰まりは PUT 応答そのものより **conflict 解決中の remote GET** で起きる。3 経路すべてで `REMOTE_ARTICLE_DELETED` を発火させる:
 
-| 経路 | 現状の code | 改修後 |
-|---|---|---|
-| 初回 PUT の応答（`push.ts:1057-1064` → `:1331-1340`） | `PUSH_FAILED` | `REMOTE_ARTICLE_DELETED` (404) |
+| 経路                                                                                                    | 現状の code                    | 改修後                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------ |
+| 初回 PUT の応答（`push.ts:1057-1064` → `:1331-1340`）                                                   | `PUSH_FAILED`                  | `REMOTE_ARTICLE_DELETED` (404) |
 | 合成 409（taxonomy divergence, `push.ts:1050-1056`）→ conflict 解決の remote GET（`push.ts:1085-1102`） | `CONFLICT_REMOTE_FETCH_FAILED` | `REMOTE_ARTICLE_DELETED` (404) |
-| auto-merge 後の再 PUT（`push.ts:1293-1328`） | `PUSH_RETRY_FAILED` | 上位分岐で 404 を先に処理 |
+| auto-merge 後の再 PUT（`push.ts:1293-1328`）                                                            | `PUSH_RETRY_FAILED`            | 上位分岐で 404 を先に処理      |
 
 **案内文（3 経路共通、順序付き）**
 
@@ -240,6 +243,7 @@ if (res.status === 404 || res.status === 410) {
 #### (4) 既存経路での脱出可能性の切り分け（実装前の必須確認）
 
 新規経路を増やす前に、**既存機構で足りるケースをテストで確定**する:
+
 - `emit conflicts resolve --accept-canonical` は canonical を保ったまま退避コピーだけ除去するが、**cache を一切更新しない**（`conflicts.ts:379-388`）→ pending が残り bare push 不能。R4 でクリアされれば脱出経路として機能しうる。
 - 足りる／足りないを T3-6 で観測し、足りない場合のみ (2)(3) の新規経路を有効化する（過剰実装の防止）。
 
@@ -251,6 +255,7 @@ if (res.status === 404 || res.status === 410) {
 - **A3-4**: 脱出後に `emit status` / `emit doctor` が当該記事を orphan・pending として報告しない。
 
 ---
+
 ## R4: pending 解消時の退避メタデータ整合（P4 対応・R2 の schema v3 と一体）
 
 ### 1. Invariant（不変条件）
@@ -338,6 +343,7 @@ ON CONFLICT(id) DO UPDATE SET
 - **A5-3**: 退避コピーを手動削除した taxonomy pending が doctor 実行で auto-clear され、続けて bare push が成功する。
 
 ---
+
 ## R6: DB バックアップ機構の置換と空バックアップ抑止（P6 対応）
 
 ### 1. Invariant（不変条件）
@@ -359,13 +365,13 @@ Rev.1 の `stats.size > 0` チェックは原因特定（`cache.ts:214-218` に�
 
 ```typescript
 if (this.dbPath !== ':memory:') {
-  const version = getPackageVersion();               // package.json version（取得不能時 CURRENT_CACHE_SCHEMA_VERSION にフォールバック）
+  const version = getPackageVersion(); // package.json version（取得不能時 CURRENT_CACHE_SCHEMA_VERSION にフォールバック）
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const bakPath = `${this.dbPath}.bak-${version}-${timestamp}`;
-  this.db.prepare('VACUUM INTO ?').run(bakPath);      // 0 バイト DB からも有効な SQLite へ正規化される
+  this.db.prepare('VACUUM INTO ?').run(bakPath); // 0 バイト DB からも有効な SQLite へ正規化される
 }
 // 生成有無に関わらず必ず掃引を走らせる（Rev.1 の条件付き prune を無条件化）
-pruneCacheBackups(this.dbPath, { maxKeep: 3 });       // size === 0 を常に削除 → その上で newest 3 を保持
+pruneCacheBackups(this.dbPath, { maxKeep: 3 }); // size === 0 を常に削除 → その上で newest 3 を保持
 ```
 
 - `PRAGMA wal_checkpoint(TRUNCATE)` は不要になる（`VACUUM INTO` が整合した単一ファイルを書く）。ただし**既存 backup との互換性のため撤去は本リリースで同時に行う**（片方だけ残すと WAL 中間コピーが残り続ける）。
@@ -390,50 +396,58 @@ pruneCacheBackups(this.dbPath, { maxKeep: 3 });       // size === 0 を常に削
 - `emit pull` の prune / fast-path 算法、`resolveCanonicalArticlePath` の title 解決順序（`docs/v0114-backlog.md` §1）は本仕様のスコープ外。
 
 ---
+
 ## 付録 A: Rev.1 → Rev.2 差分一覧
 
-| # | Rev.1 の記述 | Rev.2 の変更 | 理由 |
-|---|---|---|---|
-| **D1** | R2(2)「マーカーの有無で `TAXONOMY_CONFLICT_PENDING` 発動を分岐」/ R4「`conflict_pending = 0` なら全 conflict 列 NULL」 | **schema v3 で `body_conflict_pending` / `taxonomy_conflict_pending` に分離**し、R2 と R4 を単一の設計変更として記述。UPSERT は種別単位（全 pending が 0 のときのみ退避列 NULL） | 真因は「1 系統フラグの共有」。Rev.1 案は (a) taxonomy-only conflict で canonical にマーカーが書かれないため taxonomy pending を素通し、(b) 本文競合解決で taxonomy 退避情報を消す、という 2 つの副作用を持つ |
-| **D2** | R1「`hybrid3WayMerge` に `options.resolveTaxonomy` を渡す」＋ post-merge 解決ブロック（`push.ts:1179-1208`）は現状維持 | **決定点を merge 層に一元化**。post-merge ブロックは strategy 未指定時の fallback に縮小。Case 2（remote 削除 vs local 変更）にも戦略を適用。`strategyAdoptions` を新設し `TAXONOMY_UNION_REJECTED` の発火条件を拡張 | Rev.1 では merge 層解決と post-merge 上書きが併存し二重解決。Case 2 未対応で路径依存。strategy=local でサーバ拒否時の案内経路（`autoMergedTaxonomies` 要求）が消える |
-| **D3** | R1 invariant「local: ローカルの変更が完全に優先、リモートの追加・変更は破棄」 | **Git の ours/theirs と同じ単側採用**と明記し、無変更 term も落ちうる破壊性を invariant に格上げ。union 由来 wipe guard への免除関係を明文化（`--force` 由来の暗黙 union は免除しない） | v0.1.13 に無かった破壊的挙動の解禁であり、警告での可視化と確認条件を仕様上固定する必要があるため |
-| **D4** | R3(2)「`posts/conflicts/<filename>.local-orphan.md` に退避」/ R3(3)「`emit delete --force`」 | **既存 `.local-dropped.md`（`quarantineLocalCopy(..., {isForce:true})`）へ統一**。delete の force は新規 `--discard-local-edits` として導入。加えて脱出の要否を切り分ける T3-6 を実装前確認として追加 | 退避体系は既に `'conflict' \| 'dropped' \| 'deleted' \| 'unknown'`（`conflicts.ts:30`）で 3 種定義済み。第 4 種別は list/diff/resolve/prune/doctor/AGENTS.md の同時改修と新規 guard を要求し利得が無い。delete の `--force` は published 保護等と意味が衝突する |
-| **D5** | issues-v0114「Guard G8（`UNRESOLVED_CONFLICT_MARKERS`）」、R2(3)「案内文から `--resolve-taxonomy` を除去」 | §0 でガード番号を実コードに照合（G6 / G12 / G13 / G14 / G15 / G16 / G17）し全面修正。R2(3) は regression lock へ降格、**doctor の案内文（`doctor.ts:295`）を修正対象に追加**。404 検知は 3 経路すべてに拡張 | `UNRESOLVED_CONFLICT_MARKERS` は preflight G6（G8 は syntax warning）。評価順序上マーカー残存時は G15 が先で G6 に到達しない。apply pending の案内は現行 already 正しい。実測された循環の本体は doctor。詰まりの実経路は conflict 解決中の remote GET 404 |
-| **D6** | R6「`stats.size > 0` で backup 生成をスキップ」＋「prune 処理内で既存 0 バイト削除」 | **`VACUUM INTO` へ置換**（WAL checkpoint 不要）、名称を package.json version から導出、**掃引を生成有無に関わらず無条件実行**し size 0 を常時削除 | Rev.1 案は対症療法で復旧能力の低下を検知できない。prune は新規 backup 生成時にしか走らない（`cache.ts:220-237`）ため既存空 backup が残る。名称の `0.1.12` ハードコードは次版でもズレる |
-| **D7** | （Rev.1 に記載なし） | R4(3)「accept-canonical は cache を更新しない（`conflicts.ts:379-388`）」「accept-local は conflict 列なしで saveSyncState（`:462-470`）」を修正対象として追加。R5 に `delete_pending` 検査と auto-clear 条件再定義を追加 | Rev.1 が見落とした 2 つの閉塞（bare push 不能の固定、pending の暗黙クリア）と doctor の網羅性 invariant への欠落 |
-| **D8** | issues-v0114「union は `{t1, t3}`」 | §0 C1 で `{t1,t2,t3}` に訂正（T1-1 の期待値基準を変更） | remote が `t2` を削除していないため集合代数の結果は `{t1,t2,t3}`。結論（local の削除意図喪失）は不変 |
+| #      | Rev.1 の記述                                                                                                           | Rev.2 の変更                                                                                                                                                                                                              | 理由                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **D1** | R2(2)「マーカーの有無で `TAXONOMY_CONFLICT_PENDING` 発動を分岐」/ R4「`conflict_pending = 0` なら全 conflict 列 NULL」 | **schema v3 で `body_conflict_pending` / `taxonomy_conflict_pending` に分離**し、R2 と R4 を単一の設計変更として記述。UPSERT は種別単位（全 pending が 0 のときのみ退避列 NULL）                                          | 真因は「1 系統フラグの共有」。Rev.1 案は (a) taxonomy-only conflict で canonical にマーカーが書かれないため taxonomy pending を素通し、(b) 本文競合解決で taxonomy 退避情報を消す、という 2 つの副作用を持つ                                                    |
+| **D2** | R1「`hybrid3WayMerge` に `options.resolveTaxonomy` を渡す」＋ post-merge 解決ブロック（`push.ts:1179-1208`）は現状維持 | **決定点を merge 層に一元化**。post-merge ブロックは strategy 未指定時の fallback に縮小。Case 2（remote 削除 vs local 変更）にも戦略を適用。`strategyAdoptions` を新設し `TAXONOMY_UNION_REJECTED` の発火条件を拡張      | Rev.1 では merge 層解決と post-merge 上書きが併存し二重解決。Case 2 未対応で路径依存。strategy=local でサーバ拒否時の案内経路（`autoMergedTaxonomies` 要求）が消える                                                                                            |
+| **D3** | R1 invariant「local: ローカルの変更が完全に優先、リモートの追加・変更は破棄」                                          | **Git の ours/theirs と同じ単側採用**と明記し、無変更 term も落ちうる破壊性を invariant に格上げ。union 由来 wipe guard への免除関係を明文化（`--force` 由来の暗黙 union は免除しない）                                   | v0.1.13 に無かった破壊的挙動の解禁であり、警告での可視化と確認条件を仕様上固定する必要があるため                                                                                                                                                                |
+| **D4** | R3(2)「`posts/conflicts/<filename>.local-orphan.md` に退避」/ R3(3)「`emit delete --force`」                           | **既存 `.local-dropped.md`（`quarantineLocalCopy(..., {isForce:true})`）へ統一**。delete の force は新規 `--discard-local-edits` として導入。加えて脱出の要否を切り分ける T3-6 を実装前確認として追加                     | 退避体系は既に `'conflict' \| 'dropped' \| 'deleted' \| 'unknown'`（`conflicts.ts:30`）で 3 種定義済み。第 4 種別は list/diff/resolve/prune/doctor/AGENTS.md の同時改修と新規 guard を要求し利得が無い。delete の `--force` は published 保護等と意味が衝突する |
+| **D5** | issues-v0114「Guard G8（`UNRESOLVED_CONFLICT_MARKERS`）」、R2(3)「案内文から `--resolve-taxonomy` を除去」             | §0 でガード番号を実コードに照合（G6 / G12 / G13 / G14 / G15 / G16 / G17）し全面修正。R2(3) は regression lock へ降格、**doctor の案内文（`doctor.ts:295`）を修正対象に追加**。404 検知は 3 経路すべてに拡張               | `UNRESOLVED_CONFLICT_MARKERS` は preflight G6（G8 は syntax warning）。評価順序上マーカー残存時は G15 が先で G6 に到達しない。apply pending の案内は現行 already 正しい。実測された循環の本体は doctor。詰まりの実経路は conflict 解決中の remote GET 404       |
+| **D6** | R6「`stats.size > 0` で backup 生成をスキップ」＋「prune 処理内で既存 0 バイト削除」                                   | **`VACUUM INTO` へ置換**（WAL checkpoint 不要）、名称を package.json version から導出、**掃引を生成有無に関わらず無条件実行**し size 0 を常時削除                                                                         | Rev.1 案は対症療法で復旧能力の低下を検知できない。prune は新規 backup 生成時にしか走らない（`cache.ts:220-237`）ため既存空 backup が残る。名称の `0.1.12` ハードコードは次版でもズレる                                                                          |
+| **D7** | （Rev.1 に記載なし）                                                                                                   | R4(3)「accept-canonical は cache を更新しない（`conflicts.ts:379-388`）」「accept-local は conflict 列なしで saveSyncState（`:462-470`）」を修正対象として追加。R5 に `delete_pending` 検査と auto-clear 条件再定義を追加 | Rev.1 が見落とした 2 つの閉塞（bare push 不能の固定、pending の暗黙クリア）と doctor の網羅性 invariant への欠落                                                                                                                                                |
+| **D8** | issues-v0114「union は `{t1, t3}`」                                                                                    | §0 C1 で `{t1,t2,t3}` に訂正（T1-1 の期待値基準を変更）                                                                                                                                                                   | remote が `t2` を削除していないため集合代数の結果は `{t1,t2,t3}`。結論（local の削除意図喪失）は不変                                                                                                                                                            |
 
 ### 差分の検証状態（Rev.2 起草時に実測済み）
 
-| 主張 | 実測方法 | 結果 |
-|---|---|---|
-| `VACUUM INTO ?` は node:sqlite でバインド可能・WAL DB から完全な単一ファイルを出力 | Node v26.11.1 / `prepare('VACUUM INTO ?').run(path)` を WAL 有効 DB で実行 | 8192 byte の有効 DB が生成され、内容（テーブル・行）が一致 |
-| `PRAGMA user_version = ?` はバインド不可（リテラル必須） | 同上で `prepare('PRAGMA user_version = ?').run(3)` | `near "?": syntax error` → R6 の「version 書き込みは exec() リテラル維持」の根拠 |
-| R4 の UPSERT 規則（全 pending 0 のときのみ退避列 NULL、他種別は保持） | `sync_state` 相当テーブルで A2-2/A4-2・A4-1 の SQL を実行 | 本文解消直後 `conflict_copy_path` は残存（`posts/conflicts/x.conflict.md`）、全解消後に `NULL`／`conflict_pending = 0`。I4-a と I4-b が両立することを確認 |
+| 主張                                                                               | 実測方法                                                                   | 結果                                                                                                                                                      |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VACUUM INTO ?` は node:sqlite でバインド可能・WAL DB から完全な単一ファイルを出力 | Node v26.11.1 / `prepare('VACUUM INTO ?').run(path)` を WAL 有効 DB で実行 | 8192 byte の有効 DB が生成され、内容（テーブル・行）が一致                                                                                                |
+| `PRAGMA user_version = ?` はバインド不可（リテラル必須）                           | 同上で `prepare('PRAGMA user_version = ?').run(3)`                         | `near "?": syntax error` → R6 の「version 書き込みは exec() リテラル維持」の根拠                                                                          |
+| R4 の UPSERT 規則（全 pending 0 のときのみ退避列 NULL、他種別は保持）              | `sync_state` 相当テーブルで A2-2/A4-2・A4-1 の SQL を実行                  | 本文解消直後 `conflict_copy_path` は残存（`posts/conflicts/x.conflict.md`）、全解消後に `NULL`／`conflict_pending = 0`。I4-a と I4-b が両立することを確認 |
 
 ---
+
 ## 付録 B: Rev.1 本文の保持（監査用）
 
 以下は Rev.1 の R1〜R6 の原文要点であり、上の Rev.2 が置き換える。**参照用のみ**（実装は Rev.2 に従う）。Rev.1 全文の照合は git 履歴の `fix-spec-v0114.md`（Rev.1 commit）を参照すること。
 
 ### Rev.1 R1
+
 - `TaxonomyMergeOptions` に `strategy?: 'union' | 'local' | 'remote'` を追加。両側変更時 `strategy === 'local'` → `merged[name] = lRaw`（`autoMergedTaxonomies.push({ name, remoteAdded: [], remoteRemoved: [] })`）、`strategy === 'remote'` → `merged[name] = rRaw`、既定 union。
 - `src/sync/push.ts`: `hybrid3WayMerge` / `mergeFrontmatter` 呼び出しに `options.resolveTaxonomy` を伝達。
 
 ### Rev.1 R2
+
 - マーカー検査（`UNRESOLVED_CONFLICT_MARKERS`）を pending guard より先行。マーカー無しで真の taxonomy 競合がある場合のみ `TAXONOMY_CONFLICT_PENDING`。本文競合解消後は `--resolve-taxonomy` を要求しない。
 - `TAXONOMY_APPLY_PENDING` の suggestion を `Run "emit pull-taxonomies" then re-push, or pass --allow-unapplied-taxonomies (or --force).` に固定。
 
 ### Rev.1 R3
+
 - PUT 404 で `[REMOTE_ARTICLE_DELETED]`（404）を発報。案内: `emit pull <id> --force` / `emit delete <file> --force` / frontmatter の `id` を削除して再 push。
 - `pullArticle`: 404/410 + 未 push 編集 + `options.force` → `posts/conflicts/<filename>.local-orphan.md` へ退避、canonical 削除、`deleteEntry(id)`、`deleted: true, quarantined: true`。force なしは orphan 保護 + 案内追加。
 - `deleteArticle`: remote 404 でも退避後に local/DB を削除完了。
 
 ### Rev.1 R4
+
 - UPSERT を `conflict_pending = 0` なら conflict 列（`conflict_copy_hash`, `conflict_copy_path`, `conflict_at`）を無条件 NULL に改修。
 
 ### Rev.1 R5
+
 - doctor に `row.taxonomy_apply_pending === 1` の走査を追加（WARN + `pull-taxonomies` → push 案内）。README / AGENTS.md に status のオフラインファースト設計を明記。
 
 ### Rev.1 R6
+
 - backup 生成前に `fs.statSync(this.dbPath).size > 0` を検査、名称を `bak-0.1.13-<timestamp>` へ更新、既存 0 バイト `.bak-*` は prune 内で削除。

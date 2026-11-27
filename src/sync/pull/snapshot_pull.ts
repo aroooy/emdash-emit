@@ -209,6 +209,7 @@ function restoreSnapshotArticle(
       updatedAt: row.updatedAt ?? null,
     },
     existingPrefix,
+    frontmatter.locale,
   );
 
   const useLocalMediaRefs = options.localMediaRefs !== false;

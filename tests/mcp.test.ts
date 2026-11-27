@@ -73,7 +73,7 @@ describe('Emit MCP Server', () => {
     const instructions = (server.server as unknown as { _instructions?: string })._instructions;
     expect(instructions).toBeDefined();
     expect(instructions).toContain('The Golden Path');
-    expect(instructions).toContain('posts/published');
+    expect(instructions).toContain('posts/<locale>/published');
     expect(instructions).toContain('taxonomies');
     // The two media ID spaces are the most common source of agent confusion, so the instructions must
     // name both identifiers and point at the standalone specification document.
@@ -167,7 +167,7 @@ describe('Emit MCP Server', () => {
 
   it('correctly resolves ULID from filePath with yyyyMMdd_ date prefix in sync_pull', () => {
     // Test the regex logic used in sync_pull
-    const filePath = 'posts/draft/20261103_01M6FBAJ2JKNX8VAYXXASYSFGA-test-title.md';
+    const filePath = 'posts/ja/draft/20261103_01M6FBAJ2JKNX8VAYXXASYSFGA-test-title.md';
     const filename = path.basename(filePath);
     const baseWithoutDate = filename.replace(/^\d{8}_/, '');
     const match = baseWithoutDate.match(/^([0-9A-Z]{26})-/);
@@ -270,13 +270,13 @@ describe('Emit MCP Server', () => {
       categories: ['tech', 'unknown-cat'],
       tags: 'nodejs, unknown-tag',
       description: 'A test excerpt',
-      featuredImage: '../../media/drafts/eyecatch.jpg',
+      featuredImage: '../../../media/drafts/eyecatch.jpg',
     });
 
     const text = res.content[0].text;
     expect(text).toContain("Created new draft article 'extended-post'");
     expect(text).toContain(
-      '- Assigned: categories=[tech, unknown-cat], tags=[nodejs, unknown-tag], featuredImage=../../media/drafts/eyecatch.jpg, description="A test excerpt"',
+      '- Assigned: categories=[tech, unknown-cat], tags=[nodejs, unknown-tag], featuredImage=../../../media/drafts/eyecatch.jpg, description="A test excerpt"',
     );
     expect(text).toContain('⚠️ Warnings:');
     expect(text).toContain("Unknown category slug 'unknown-cat'");
@@ -376,7 +376,7 @@ describe('Emit MCP Server', () => {
   });
 
   it('sync_status caps invalid items at 10 and includes invalidTruncated + repairHint', async () => {
-    const pubDir = path.join(tempDir, 'posts', 'published');
+    const pubDir = path.join(tempDir, 'posts', 'ja', 'published');
     fs.mkdirSync(pubDir, { recursive: true });
 
     // Create 15 broken markdown files with unquoted %-prefixed taxonomy terms
@@ -527,8 +527,8 @@ describe('Emit MCP Server', () => {
   });
 
   it('provides summary-first structure with capped actionRequired, recentArticles, and search filters (§3.2)', async () => {
-    const draftDir = path.join(tempDir, 'posts', 'draft');
-    const pubDir = path.join(tempDir, 'posts', 'published');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
+    const pubDir = path.join(tempDir, 'posts', 'ja', 'published');
     fs.mkdirSync(draftDir, { recursive: true });
     fs.mkdirSync(pubDir, { recursive: true });
 
@@ -575,7 +575,7 @@ describe('Emit MCP Server', () => {
       const hash = calculateHash(content);
       cache.saveSyncState({
         id,
-        localFilePath: path.join('posts', 'published', file),
+        localFilePath: path.join('posts', 'ja', 'published', file),
         localHash: hash,
         remoteRev: 'rev-1',
         status: 'published',
@@ -743,6 +743,7 @@ describe('Emit MCP Server', () => {
     const postWithMedia = path.join(
       tempDir,
       'posts',
+      'ja',
       'draft',
       `20261108_${articleId}-media-test.md`,
     );
@@ -1083,7 +1084,7 @@ Inline body
     )._registeredTools;
 
     const id = '01M8MCPOPAQUE0000000000001';
-    const relPath = `posts/draft/20261122_${id}-mcp-opaque.md`;
+    const relPath = `posts/ja/draft/20261122_${id}-mcp-opaque.md`;
     const absPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     fs.writeFileSync(

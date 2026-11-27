@@ -48,7 +48,7 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
 
     expect(res.id).toHaveLength(26);
     expect(res.slug).toBe('my-slug');
-    expect(res.filePath).toMatch(/^posts\/draft\/\d{8}_[0-9A-HJ-NP-Z]{26}-my-slug\.md$/);
+    expect(res.filePath).toMatch(/^posts\/ja\/draft\/\d{8}_[0-9A-HJ-NP-Z]{26}-my-slug\.md$/);
     expect(parsed.frontmatter.id).toBe(res.id);
     expect(parsed.frontmatter.slug).toBe('my-slug');
     expect(parsed.frontmatter.status).toBe('draft');
@@ -73,7 +73,9 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
     const titledParsed = parseMarkdown(fs.readFileSync(titled.fullPath, 'utf8'));
     expect(titledParsed.frontmatter.title).toBe('Explicit Title');
     expect(titledParsed.frontmatter.locale).toBe('en');
-    expect(titled.filePath).toMatch(/^notes\/draft\/\d{8}_[0-9A-HJ-NP-Z]{26}-Explicit-Title\.md$/);
+    expect(titled.filePath).toMatch(
+      /^notes\/en\/draft\/\d{8}_[0-9A-HJ-NP-Z]{26}-Explicit-Title\.md$/,
+    );
   });
 
   it('uses the first cached non-guest byline by slug ASC as the default author', () => {
@@ -249,13 +251,13 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       const res = createArticleScaffold({
         workspaceRoot: tempDir,
         slug: 'with-local-fi',
-        featuredImage: '../../media/drafts/hero.png',
+        featuredImage: '../../../media/drafts/hero.png',
         cache,
       });
       const parsed = parseMarkdown(fs.readFileSync(res.fullPath, 'utf8'));
 
-      expect(parsed.frontmatter.featuredImage).toBe('../../media/drafts/hero.png');
-      expect(res.assigned.featuredImage).toBe('../../media/drafts/hero.png');
+      expect(parsed.frontmatter.featuredImage).toBe('../../../media/drafts/hero.png');
+      expect(res.assigned.featuredImage).toBe('../../../media/drafts/hero.png');
     });
 
     it('uppercases 26-character ULID featuredImage before writing to disk (G4)', () => {
@@ -292,8 +294,8 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       });
 
       expect(res.warnings).toEqual([
-        "Unknown category slug 'unknown-cat' (not found in local categories/*.yaml definitions).",
-        "Unknown tag slug 'unknown-tag' (not found in local tags/*.yaml definitions).",
+        "Unknown category slug 'unknown-cat' (not found in local categories/<locale>/*.yaml definitions).",
+        "Unknown tag slug 'unknown-tag' (not found in local tags/<locale>/*.yaml definitions).",
       ]);
     });
 
@@ -305,7 +307,7 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
         categories: ['tech', 'gadget'],
         tags: ['typescript', 'ai'],
         description: 'Full featured article scaffold description.',
-        featuredImage: '../../media/drafts/cover.jpg',
+        featuredImage: '../../../media/drafts/cover.jpg',
         byline: 'custom-author',
         cache,
       });
@@ -317,7 +319,7 @@ describe('createArticleScaffold (emit new / sync_new)', () => {
       expect(parsed.frontmatter.slug).toBe('one-shot-complete');
       expect(parsed.frontmatter.title).toBe('One-Shot Complete Test');
       expect(parsed.frontmatter.status).toBe('draft');
-      expect(parsed.frontmatter.featuredImage).toBe('../../media/drafts/cover.jpg');
+      expect(parsed.frontmatter.featuredImage).toBe('../../../media/drafts/cover.jpg');
       expect(parsed.frontmatter.taxonomies.categories).toEqual(['tech', 'gadget']);
       expect(parsed.frontmatter.taxonomies.tags).toEqual(['typescript', 'ai']);
       expect(parsed.frontmatter.seo?.description).toBe(

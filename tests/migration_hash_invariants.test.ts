@@ -78,7 +78,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
     ];
 
     for (const a of articles) {
-      const relPath = `posts/published/20261101_${a.id}-${a.slug}.md`;
+      const relPath = `posts/ja/published/20261101_${a.id}-${a.slug}.md`;
       const fullPath = path.join(tempDir, relPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -265,7 +265,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
         captured_at INTEGER NOT NULL
       );
       INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
-      VALUES ('01M7MIG1', 'posts/published/20261101_01M7MIG1-test.md', 'hash_abc', '3@live:01L1', 'published', 'test', 1700000000);
+      VALUES ('01M7MIG1', 'posts/ja/published/20261101_01M7MIG1-test.md', 'hash_abc', '3@live:01L1', 'published', 'test', 1700000000);
       INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at)
       VALUES ('01M7MIG1', '3', 'body', '{}', 'hash_abc', 1700000000);
       INSERT INTO snapshot_articles (id, collection, slug, title, status, comparison_rev, body_markdown, body_source, captured_at)
@@ -320,7 +320,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
         size INTEGER, alt TEXT, caption TEXT, created_at TEXT, captured_at INTEGER NOT NULL
       );
       INSERT INTO sync_state (id, local_file_path, local_hash, remote_rev, status, slug, last_synced_at)
-      VALUES ('01M8MIG1', 'posts/published/20261101_01M8MIG1-test.md', 'hash_v7', '3@live:01L1', 'published', 'test', 1700000000);
+      VALUES ('01M8MIG1', 'posts/ja/published/20261101_01M8MIG1-test.md', 'hash_v7', '3@live:01L1', 'published', 'test', 1700000000);
       INSERT INTO base_snapshots (id, rev, body_markdown, frontmatter_yaml, hash, saved_at)
       VALUES ('01M8MIG1', '3', 'body', '{}', 'hash_v7', 1700000000);
       INSERT INTO snapshot_media (media_id, storage_key, filename, mime_type, size, captured_at)
@@ -331,7 +331,7 @@ describe('Migration Hash Invariants & Workspace Upgrade Safety', () => {
 
     const upgraded = new CacheDatabase(v7DbPath);
     try {
-      expect(upgraded.getSchemaVersion()).toBe(8);
+      expect(upgraded.getSchemaVersion()).toBe(9);
       expect(upgraded.getSyncState('01M8MIG1')?.localHash).toBe('hash_v7');
       expect(upgraded.getBaseSnapshot('01M8MIG1')?.hash).toBe('hash_v7');
       const media = upgraded.getSnapshotMediaByStorageKey('01M8KEY0000000000000000001.png');

@@ -204,8 +204,9 @@ describe('Frontmatter & Markdown Serialization', () => {
       validUlid,
       'My First Post!',
       '2026-11-03',
+      'ja',
     );
-    expect(p1).toBe(`posts/draft/20261103_${validUlid}-My-First-Post!.md`);
+    expect(p1).toBe(`posts/ja/draft/20261103_${validUlid}-My-First-Post!.md`);
 
     const p2 = computeArticleRelativePath(
       'posts',
@@ -213,8 +214,9 @@ describe('Frontmatter & Markdown Serialization', () => {
       validUlid,
       '日本語タイトル / テスト: 特殊文字',
       '2026-01-25',
+      'ja',
     );
-    expect(p2).toBe(`posts/published/20260125_${validUlid}-日本語タイトル-テスト-特殊文字.md`);
+    expect(p2).toBe(`posts/ja/published/20260125_${validUlid}-日本語タイトル-テスト-特殊文字.md`);
   });
 
   it('quotes %-prefixed slugs, reserved words, dates, and all-digit ULIDs while keeping standard ASCII/CJK scalars unquoted', () => {

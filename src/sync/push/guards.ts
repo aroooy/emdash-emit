@@ -49,7 +49,7 @@ export function assertNotQuarantinedCopy(originalRelPath: string): void {
           'Rescue copies hold stale divergent content captured before a pull overwrote it; ' +
           'pushing one would overwrite the canonical article of the same ULID and recreate duplicate local files.',
         suggestion:
-          'Merge the valuable lines into the canonical article file (posts/draft/... or posts/published/...), then delete this copy. ' +
+          'Merge the valuable lines into the canonical article file (posts/<locale>/draft/... or posts/<locale>/published/...), then delete this copy. ' +
           'To intentionally replace the remote version, copy the rescue file over the canonical path and push that canonical path instead.',
       },
     ]);

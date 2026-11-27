@@ -32,6 +32,16 @@ export const FrontmatterSeoSchema = z.object({
   image: z.string().nullable().optional(),
 });
 
+export const CustomFieldScalarSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string()),
+]);
+
+export type CustomFieldScalar = z.infer<typeof CustomFieldScalarSchema>;
+
 export const FrontmatterSchema = z.object({
   id: z.string().length(26, 'ID must be a 26-character ULID'),
   slug: z.string().min(1, 'Slug cannot be empty'),
@@ -46,6 +56,7 @@ export const FrontmatterSchema = z.object({
   taxonomies: z.record(z.array(z.string())).optional().default({}),
   seo: FrontmatterSeoSchema.optional(),
   bylines: z.array(z.string()).optional().default([]),
+  fields: z.record(CustomFieldScalarSchema).optional(),
 });
 
 export type Frontmatter = z.infer<typeof FrontmatterSchema>;
@@ -522,6 +533,31 @@ export function formatFrontmatterYaml(
   } else {
     for (const byline of bylines) {
       lines.push(`  - ${formatYamlScalar(byline)}`);
+    }
+  }
+
+  // Custom simple fields (omitted entirely when undefined or empty to preserve byte identity)
+  if (data.fields && Object.keys(data.fields).length > 0) {
+    lines.push('fields:');
+    for (const key of Object.keys(data.fields).sort((a, b) => a.localeCompare(b))) {
+      const val = data.fields[key];
+      const safeKey = /^[A-Za-z0-9_-]+$/.test(key) ? key : formatYamlScalar(key);
+      if (Array.isArray(val)) {
+        if (val.length === 0) {
+          lines.push(`  ${safeKey}: []`);
+        } else {
+          lines.push(`  ${safeKey}:`);
+          for (const item of val) {
+            lines.push(`    - ${formatYamlScalar(item)}`);
+          }
+        }
+      } else if (val === null) {
+        lines.push(`  ${safeKey}: null`);
+      } else if (typeof val === 'number' || typeof val === 'boolean') {
+        lines.push(`  ${safeKey}: ${String(val)}`);
+      } else {
+        lines.push(`  ${safeKey}: ${formatYamlScalar(val)}`);
+      }
     }
   }
 

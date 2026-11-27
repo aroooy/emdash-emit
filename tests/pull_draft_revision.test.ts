@@ -26,7 +26,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
 
   it('pulls server draft updates when version is unchanged but draftRevisionId advanced', async () => {
     const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
-    const relPath = `posts/draft/20261114_${articleId}-draft-rev-test.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-draft-rev-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -130,7 +130,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(result1.skipped).toBeUndefined();
 
     // Verify disk content was updated at canonical title-cased path
-    expect(result1.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Rev-Test.md`);
+    expect(result1.filePath).toBe(`posts/ja/draft/20261114_${articleId}-Draft-Rev-Test.md`);
     const updatedContent = fs.readFileSync(path.join(tempDir, result1.filePath), 'utf8');
     const parsedUpdated = parseMarkdown(updatedContent);
     expect(parsedUpdated.body).toContain('New body edited on server with image.');
@@ -158,7 +158,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
 
   it('discards stale rawItem from list API on draft update and fetches full content via single GET', async () => {
     const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
-    const relPath = `posts/draft/20261114_${articleId}-draft-batch-test.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-draft-batch-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -301,7 +301,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(singleGetCallCount).toBe(1);
 
     // Verify disk content contains the full content from single GET, NOT the stale list content
-    expect(result.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Batch-Test.md`);
+    expect(result.filePath).toBe(`posts/ja/draft/20261114_${articleId}-Draft-Batch-Test.md`);
     const updatedContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(updatedContent).toContain('Full 7-block content with image from single GET.');
     expect(updatedContent).toContain('追加テキスト');
@@ -310,7 +310,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
 
   it('safely quarantines unpushed local edits and flags bodyConflictPending when remote draft advances', async () => {
     const articleId = '01M7BZH06K515A5NQWZ36QK7NQ';
-    const relPath = `posts/draft/20261114_${articleId}-draft-conflict-test.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-draft-conflict-test.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -428,14 +428,14 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
     expect(syncState?.conflictCopyPath).toBeTruthy();
 
     // Verify canonical disk file has the server content
-    expect(result.filePath).toBe(`posts/draft/20261114_${articleId}-Draft-Conflict-Test.md`);
+    expect(result.filePath).toBe(`posts/ja/draft/20261114_${articleId}-Draft-Conflict-Test.md`);
     const canonicalContent = fs.readFileSync(path.join(tempDir, result.filePath), 'utf8');
     expect(canonicalContent).toContain('Server content advancing draft revision.');
   });
 
   it('fetches full draft content via single GET when a published article has unpublished draft changes (v0.1.24)', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher-diary.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -607,7 +607,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
 
   it('safely quarantines unpushed local edits for published article with advancing draftRevisionId and refuses rescue copy push with G12', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher-diary.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher-diary.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -763,7 +763,7 @@ describe('Draft Revision Tracking (v0.1.22 Layer 2)', () => {
 
   it('heals missing `# draft revision` in-place on untouched published file without extra network fetch', async () => {
     const articleId = '01M77VFT15HSH2M1XW8MJPTCPQ';
-    const relPath = `posts/published/20261113_${articleId}-kingfisher.md`;
+    const relPath = `posts/ja/published/20261113_${articleId}-kingfisher.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

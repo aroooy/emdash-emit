@@ -84,7 +84,7 @@ describe('featuredImage Push Payload Shaping', () => {
       bylines: [],
       ...(featuredImage === undefined ? {} : { featuredImage }),
     };
-    const relPath = `posts/draft/${todayPrefix}${validUlid}-${slug}.md`;
+    const relPath = `posts/ja/draft/${todayPrefix}${validUlid}-${slug}.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(
@@ -115,7 +115,7 @@ describe('featuredImage Push Payload Shaping', () => {
     });
     cache.saveSyncState({
       id: validUlid,
-      localFilePath: `posts/draft/${todayPrefix}${validUlid}-${slug}.md`,
+      localFilePath: `posts/ja/draft/${todayPrefix}${validUlid}-${slug}.md`,
       localHash: 'hash_old',
       remoteRev: 'rev_v1',
       status: 'draft',
@@ -344,7 +344,7 @@ describe('featuredImage Push Payload Shaping', () => {
     expect(res.success).toBe(true);
     // Push rewrites the canonical file (renamed from the frontmatter title), so locate
     // whatever file currently exists under posts/draft.
-    const draftDir = path.join(tempDir, 'posts', 'draft');
+    const draftDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const files = fs.readdirSync(draftDir);
     expect(files).toHaveLength(1);
     const contentOnDisk = fs.readFileSync(path.join(draftDir, files[0]), 'utf8');
@@ -553,7 +553,7 @@ describe('featuredImage Push Payload Shaping', () => {
       fs.mkdirSync(draftsDir, { recursive: true });
       fs.writeFileSync(path.join(draftsDir, 'eyecatch.png'), tinyPng);
 
-      const relPath = writeArticle('fi-auto-upload', '../../media/drafts/eyecatch.png');
+      const relPath = writeArticle('fi-auto-upload', '../../../media/drafts/eyecatch.png');
       const mock = createMediaPushMock();
 
       const res = await pushArticle(relPath, {
@@ -596,16 +596,16 @@ describe('featuredImage Push Payload Shaping', () => {
         locale: 'ja',
         taxonomies: {},
         bylines: [],
-        featuredImage: '../../media/drafts/shared-hero.png',
+        featuredImage: '../../../media/drafts/shared-hero.png',
       };
-      const relPath = `posts/draft/${todayPrefix}${validUlid}-fi-shared-dedup.md`;
+      const relPath = `posts/ja/draft/${todayPrefix}${validUlid}-fi-shared-dedup.md`;
       const fullPath = path.join(tempDir, relPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       fs.writeFileSync(
         fullPath,
         serializeMarkdown(
           fm,
-          'Here is hero:\n\n![Hero](../../media/drafts/shared-hero.png)\n\nMore text.',
+          'Here is hero:\n\n![Hero](../../../media/drafts/shared-hero.png)\n\nMore text.',
         ),
         'utf8',
       );
@@ -659,7 +659,7 @@ describe('featuredImage Push Payload Shaping', () => {
         }),
       );
 
-      const relPath = writeArticle('fi-conflict', '../../media/drafts/conflict-eyecatch.png');
+      const relPath = writeArticle('fi-conflict', '../../../media/drafts/conflict-eyecatch.png');
 
       const mock = createMediaPushMock({ conflictOnPut: true, remoteFiOnConflict: remoteUlid });
 
@@ -687,7 +687,7 @@ describe('featuredImage Push Payload Shaping', () => {
       fs.writeFileSync(path.join(draftsDir, 'update-eyecatch.png'), tinyPng);
 
       seedTrackedArticle('fi-update', null);
-      const relPath = writeArticle('fi-update', '../../media/drafts/update-eyecatch.png');
+      const relPath = writeArticle('fi-update', '../../../media/drafts/update-eyecatch.png');
 
       const mock = createMediaPushMock();
       const res = await pushArticle(relPath, {

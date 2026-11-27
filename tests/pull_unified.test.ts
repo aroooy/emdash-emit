@@ -89,13 +89,13 @@ describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
     expect(fs.existsSync(path.join(tempDir, 'categories'))).toBe(true);
     expect(fs.existsSync(path.join(tempDir, 'tags'))).toBe(true);
 
-    const catFile = path.join(tempDir, 'categories', '01M6CAT00000000000000001-Tech.yaml');
+    const catFile = path.join(tempDir, 'categories', 'ja', '01M6CAT00000000000000001-Tech.yaml');
     expect(fs.existsSync(catFile)).toBe(true);
     const catContent = fs.readFileSync(catFile, 'utf8');
     expect(catContent).toContain('slug: tech');
     expect(catContent).toContain('name: Tech');
 
-    const tagFile = path.join(tempDir, 'tags', '01M6TAG00000000000000001-Nodejs.yaml');
+    const tagFile = path.join(tempDir, 'tags', 'ja', '01M6TAG00000000000000001-Nodejs.yaml');
     expect(fs.existsSync(tagFile)).toBe(true);
     const tagContent = fs.readFileSync(tagFile, 'utf8');
     expect(tagContent).toContain('slug: nodejs');
@@ -156,7 +156,7 @@ describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
   it('heals valid legacy percent-encoded taxonomy article to decoded on 1st pull and no-ops on 2nd pull', async () => {
     const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
     const articleId = '01M67HEALVALID000000000001';
-    const relPath = `posts/draft/20261114_${articleId}-Heal-Valid.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-Heal-Valid.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 
@@ -257,7 +257,7 @@ describe('Unified Pull: Taxonomy Auto-Sync Behavior', () => {
     const cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
     const articleId = '01M67SLUGENC00000000000001';
     const slug = '%e6%97%a5%e6%9c%ac%e8%aa%9e-slug';
-    const relPath = `posts/draft/20261114_${articleId}-Japanese-Slug.md`;
+    const relPath = `posts/ja/draft/20261114_${articleId}-Japanese-Slug.md`;
     const fullPath = path.join(tempDir, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
 

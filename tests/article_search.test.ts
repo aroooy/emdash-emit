@@ -69,7 +69,7 @@ describe('Article Search & Snapshot-First Engine (v0.1.55)', () => {
   it('T1: default search runs 0-HTTP across local workspace + snapshot with tag, category, status, slug, and date filters', async () => {
     writeArticleFile(
       tempDir,
-      'posts/published/20261110_01M7ART0000000000000000001-local-pub.md',
+      'posts/ja/published/20261110_01M7ART0000000000000000001-local-pub.md',
       [
         'id: 01M7ART0000000000000000001',
         'slug: local-pub',

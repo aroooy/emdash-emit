@@ -32,7 +32,7 @@ export function registerPublishCommand(program: Command, resolveContext: CliCont
     .option('-f, --force', 'Proceed even if an active web co-editing room is detected (G23)')
     .option(
       '--local-media-refs',
-      'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk',
+      'Keep mirrored body images as article-relative "../../../media/<storageKey>" references on disk',
     )
     .option('--no-local-media-refs', 'Store canonical EmDash URLs on disk')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')

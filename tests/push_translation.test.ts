@@ -109,7 +109,7 @@ describe('i18n Translation Lifecycle (v0.1.66)', () => {
     expect(enRes.slug).toBe('shared-slug');
     expect(enRes.assigned.featuredImage).toBe('01M67P0MBMJQQXH2K95HHCYRYB');
     expect(enRes.assigned.categories).toEqual([]);
-    expect(enRes.warnings.some((w) => w.includes('not auto-copied'))).toBe(true);
+    expect(enRes.warnings.some((w) => w.includes('Skipped category'))).toBe(true);
 
     const parsedEn = parseMarkdown(fs.readFileSync(enRes.fullPath, 'utf8'));
     expect(parsedEn.frontmatter.locale).toBe('en');

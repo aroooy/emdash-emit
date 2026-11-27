@@ -37,7 +37,7 @@ describe('Initial Draft Pull Single GET Guarantee (v0.1.32 TD-1 & TD-2)', () => 
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
     fs.mkdirSync(path.join(tempDir, 'categories'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'tags'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'draft'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'draft'), { recursive: true });
   });
 
   afterEach(() => {

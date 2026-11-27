@@ -34,7 +34,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
       filePath: z
         .string()
         .describe(
-          'Target markdown file path relative to workspace root (e.g. "posts/draft/20261103_01...-my-article.md")',
+          'Target markdown file path relative to workspace root (e.g. "posts/ja/draft/20261103_01...-my-article.md")',
         ),
       allowPublish: z
         .boolean()
@@ -78,7 +78,7 @@ export function registerSyncPushTool(server: McpServer, resolveContext: ContextR
         .boolean()
         .optional()
         .describe(
-          'Keep mirrored body images as article-relative "../../media/<storageKey>" references on disk while pushing the canonical URL. Defaults to the workspace setting in .emit/config.json.',
+          'Keep mirrored body images as article-relative "../../../media/<storageKey>" references on disk while pushing the canonical URL. Defaults to the workspace setting in .emit/config.json.',
         ),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),
     },

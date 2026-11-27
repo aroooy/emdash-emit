@@ -26,8 +26,25 @@ import {
   type PortableTextBlock,
 } from './portable-text.js';
 import { unwrapItem, extractRev } from './api.js';
-import type { Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
+import type { CustomFieldScalar, Frontmatter, ParsedMarkdown } from '../utils/frontmatter.js';
 import { isCanonicalUlid, toCanonicalUlid } from '../utils/ulid.js';
+
+export const RESERVED_CUSTOM_FIELD_KEYS = new Set([
+  'title',
+  'content',
+  'body',
+  'featured_image',
+  'featuredImage',
+]);
+
+export function isSimpleCustomFieldValue(val: unknown): val is CustomFieldScalar {
+  if (val === null) return true;
+  if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return true;
+  if (Array.isArray(val)) {
+    return val.every((item) => typeof item === 'string');
+  }
+  return false;
+}
 
 export interface ContentBylineInput {
   bylineId: string;
@@ -55,6 +72,8 @@ export interface MapperOptions {
   includeTranslationOf?: boolean;
   bylineSlugToId?: Record<string, string>;
   bylineIdToSlug?: Record<string, string>;
+  /** Opaque complex custom fields preserved from base_snapshots.extra_data_json for non-destructive pass-through. */
+  opaqueExtraData?: Record<string, unknown>;
 }
 
 /**
@@ -115,12 +134,23 @@ export function localToApiPayload(
   const { frontmatter, body } = parsed;
 
   const ptBody = markdownToPortableText(body);
+  const opaqueExtraData = options?.opaqueExtraData ?? {};
+  const simpleFields: Record<string, unknown> = {};
+  if (frontmatter.fields) {
+    for (const [k, v] of Object.entries(frontmatter.fields)) {
+      if (!RESERVED_CUSTOM_FIELD_KEYS.has(k)) {
+        simpleFields[k] = v;
+      }
+    }
+  }
   const payload: ContentUpdatePayload = {
     id: frontmatter.id,
     collection: frontmatter.collection,
     slug: frontmatter.slug,
     locale: frontmatter.locale,
     data: {
+      ...opaqueExtraData,
+      ...simpleFields,
       title: frontmatter.title,
       content: ptBody,
       ...(frontmatter.featuredImage !== undefined
@@ -260,7 +290,12 @@ export function extractFeaturedImageFromRaw(
 export function apiResponseToLocal(
   raw: Record<string, unknown>,
   options?: MapperOptions,
-): { frontmatter: Frontmatter; body: string; rev: string } {
+): {
+  frontmatter: Frontmatter;
+  body: string;
+  rev: string;
+  opaqueExtraData?: Record<string, unknown>;
+} {
   const item = unwrapItem<Record<string, unknown>>(raw);
   const rev = extractRev(raw);
 
@@ -299,6 +334,17 @@ export function apiResponseToLocal(
       ? rawTranslationGroup
       : undefined;
 
+  const fields: Record<string, CustomFieldScalar> = {};
+  const opaqueExtraData: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (RESERVED_CUSTOM_FIELD_KEYS.has(k) || v === undefined) continue;
+    if (isSimpleCustomFieldValue(v)) {
+      fields[k] = v;
+    } else {
+      opaqueExtraData[k] = v;
+    }
+  }
+
   const frontmatter: Frontmatter = {
     id,
     slug,
@@ -312,7 +358,13 @@ export function apiResponseToLocal(
     taxonomies,
     seo,
     bylines,
+    ...(Object.keys(fields).length > 0 ? { fields } : {}),
   };
 
-  return { frontmatter, body, rev };
+  return {
+    frontmatter,
+    body,
+    rev,
+    ...(Object.keys(opaqueExtraData).length > 0 ? { opaqueExtraData } : {}),
+  };
 }

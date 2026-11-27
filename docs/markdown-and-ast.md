@@ -19,7 +19,7 @@ publishedAt: null # ISO 8601 timestamp string (e.g. "2026-11-04T12:00:00.000Z") 
 locale: ja # Locale code (defaults to "ja")
 translationOf: 01M7S6TX8RPWADQJVVNHAV6F6F # Optional 26-char ULID of source article (create-only; sent on POST and cleared once translationGroup is assigned)
 translationGroup: 01M7GROUP00000000000000001 # Optional 26-char server-assigned translation group ULID (omitted when absent)
-featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # 26-char media record ULID (uppercase-normalized), local draft path ("../../media/drafts/cover.jpg"), or null — NEVER a bare R2 storageKey
+featuredImage: '01M67P0MBMJQQXH2K95HHCYRYB' # 26-char media record ULID (uppercase-normalized), local draft path ("../../../media/drafts/cover.jpg"), or null — NEVER a bare R2 storageKey
 taxonomies: # Nested map of taxonomy key -> array of term slugs (or canonical term ULIDs)
   categories:
     - 未分類 # Human-readable decoded CJK or ASCII slug
@@ -34,6 +34,9 @@ seo: # Optional SEO metadata block
   image: null # SEO image string or null
 bylines: # Author byline slugs (resolved via cached bylines table)
   - aroooy
+fields: # Optional custom simple fields (string | number | boolean | null | string[]; omitted entirely when empty)
+  price: 19800
+  inStock: true
 ---
 ```
 
@@ -45,6 +48,7 @@ bylines: # Author byline slugs (resolved via cached bylines table)
 4. **Draft Revision Annotation (`status: published # draft revision`)**: Managed exclusively by `src/utils/disk-spelling.ts` based on `hasUncommittedDraftRevision()` (`sync_state.remote_rev.includes('@draft:')`). Never add, edit, or strip this comment manually.
 5. **No Duplicate `# Title` in Body**: The article title lives in frontmatter `title:`. Do not repeat `# Article Title` as the first line of the Markdown body (Preflight Guard **G7** detects and automatically trims redundant top-level title headings).
 6. **Multi-Language Translation Fields (`translationOf` / `translationGroup`)**: Both fields are optional 26-character ULIDs (`z.string().length(26).optional()`) and are omitted from serialized YAML when absent (preserving byte-for-byte compatibility for single-locale articles). `translationOf` is create-only: `emit push` sends it exclusively on `POST /_emdash/api/content/{collection}` (never on `PUT` updates) and clears `translationOf` once the server returns `translationGroup`.
+7. **Custom Simple Fields (`fields:`) & Opaque Pass-Through**: `FrontmatterSchema` accepts an optional `fields: z.record(CustomFieldScalarSchema).optional()` (`string | number | boolean | null | string[]`). `formatFrontmatterYaml()` serializes keys in deterministic alphabetical order (`a.localeCompare(b)`) and omits the `fields:` block completely when undefined or empty (preserving byte identity for standard `posts`). Reserved keys (`title`, `content`, `body`, `featured_image`, `featuredImage`) inside `fields:` are rejected by Preflight Guard **G24 (`RESERVED_CUSTOM_FIELD_KEY`)**. Complex custom fields (nested objects, secondary Portable Text arrays, object arrays) are never emitted to frontmatter; instead they are preserved in `base_snapshots.extra_data_json` (Schema v9) and merged back into `payload.data` on `push`. To explicitly clear a simple field on both replace- and merge-semantic servers, set `fields.<key>: null`.
 
 ---
 
@@ -90,11 +94,11 @@ flowchart TD
         A_Rev["Revisions: Track 1 raw _rev in base_snapshots.rev + Track 2 version@draft:id in sync_state"]
     end
 
-    subgraph LayerB ["LAYER B: Local Disk Markdown (posts/draft|published/*.md)"]
+    subgraph LayerB ["LAYER B: Local Disk Markdown (posts/<locale>/draft|published/*.md)"]
         B_Tax["Taxonomies: Decoded human-readable Unicode (- 未分類) via formatYamlScalar()"]
         B_Draft["Draft Annotation: status: published # draft revision (when @draft: revision exists)"]
         B_T1["Tier 1 & 2 Prose: ATX Headings, Lists, Marks, GFM Tables (| col |), Thematic Breaks (---)"]
-        B_TrackA["Track A (Tier 1 Plain Image): ![alt](../../media/<storageKey>) (Offline Editor Preview)"]
+        B_TrackA["Track A (Tier 1 Plain Image): ![alt](../../../media/<storageKey>) (Offline Editor Preview)"]
         B_TrackB["Track B (Tier 3 Preserved Block): <!--ec:block {...} --> (Protected by Guard G9)"]
     end
 
@@ -102,12 +106,12 @@ flowchart TD
     LayerB -->|"emit push (Canonicalize + markdownToPortableText)"| LayerA
 ```
 
-| Aspect                       | Layer A (Internal Baseline & Remote Payloads)                                                       | Layer B (On-Disk Markdown File)                                                           |
-| ---------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **Storage Location**         | `base_snapshots.frontmatter_yaml` (**JSON-encoded** `Frontmatter`) & `base_snapshots.body_markdown` | `posts/draft/*.md`, `posts/published/*.md`                                                |
-| **Taxonomy Slugs**           | Canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`)                                   | Decoded human-readable Unicode (`未分類`)                                                 |
-| **Mirrored Body Media URLs** | Canonical root-relative URLs (`/_emdash/api/media/file/<storageKey>`)                               | Article-relative paths (`../../media/<storageKey>`) when `localMediaRefs: true` (default) |
-| **Published Draft Status**   | `status: "published"` (with `@draft:<ULID>` in `sync_state.remote_rev`)                             | `status: published # draft revision`                                                      |
+| Aspect                       | Layer A (Internal Baseline & Remote Payloads)                                                       | Layer B (On-Disk Markdown File)                                                              |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Storage Location**         | `base_snapshots.frontmatter_yaml` (**JSON-encoded** `Frontmatter`) & `base_snapshots.body_markdown` | `posts/<locale>/draft/*.md`, `posts/<locale>/published/*.md`                                 |
+| **Taxonomy Slugs**           | Canonical percent-encoded slugs (`"%e6%9c%aa%e5%88%86%e9%a1%9e"`)                                   | Decoded human-readable Unicode (`未分類`)                                                    |
+| **Mirrored Body Media URLs** | Canonical root-relative URLs (`/_emdash/api/media/file/<storageKey>`)                               | Article-relative paths (`../../../media/<storageKey>`) when `localMediaRefs: true` (default) |
+| **Published Draft Status**   | `status: "published"` (with `@draft:<ULID>` in `sync_state.remote_rev`)                             | `status: published # draft revision`                                                         |
 
 ### Baseline Reconstruction (`src/sync/baseline-reconstruction.ts`)
 
@@ -146,7 +150,7 @@ To balance **Local-First offline editing** with **100% CMS round-trip fidelity**
 
 | Track                                 | Target Block                                                                              | Markdown Representation                                                                   |     Local Editor Preview     | Core Purpose & Behavior                                                                                                                                                     |
 | ------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | :--------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Track A: Plain Image (Tier 1)**     | Image blocks with only standard `_type: 'image'`, `_key`, `alt`, and `asset: { url }`     | `![alt](../../media/<storageKey>.<ext>)`                                                  |        🖼️ **Visible**        | Mirrored into `media/` and rewritten to article-relative paths (`localMediaRefs: true`) for offline preview in VS Code / Obsidian.                                          |
+| **Track A: Plain Image (Tier 1)**     | Image blocks with only standard `_type: 'image'`, `_key`, `alt`, and `asset: { url }`     | `![alt](../../../media/<storageKey>.<ext>)`                                               |        🖼️ **Visible**        | Mirrored into `media/` and rewritten to article-relative paths (`localMediaRefs: true`) for offline preview in VS Code / Obsidian.                                          |
 | **Track B: Preserved Block (Tier 3)** | Styled images (`alignment`, `displayWidth`, `caption`, etc.) & custom non-standard blocks | `<!--ec:block {"_type":"image",...,"url":"/_emdash/api/media/file/<storageKey>",...} -->` | ❌ **Hidden** (HTML comment) | Standard Markdown lacks layout/width syntax. Wrapping the raw Portable Text JSON in a single-line opaque comment fence prevents destructive reset of CMS styling on `push`. |
 
 ### Guard G9 (`MODIFIED_OPAQUE_BLOCK`) & Authoring Rules
@@ -156,7 +160,7 @@ To balance **Local-First offline editing** with **100% CMS round-trip fidelity**
   - **Class 2 (Pure removal / reordering)**: Removing existing blocks or reordering matched blocks emits a warning and is permitted.
   - **Class 3 (Tampering / invalid references)**: Invalid JSON, altering structural keys (`_key`, `asset`, `crop`, `hotspot`, etc.), editing unknown custom blocks, or adding an `image` block with a relative/`media/drafts/` `asset.url` blocks the push unless `--allow-modified-opaque-blocks` (`allowModifiedOpaqueBlocks: true`) is explicitly passed.
 - **Allowed Operations on Preserved Blocks**:
-  - **Adding a new image**: Always write standard Markdown `![alt](../../media/drafts/new-image.png)`. If you hand-craft an `<!--ec:block {"_type":"image",...} -->` fence, `asset.url` must be a canonical `/_emdash/api/media/file/<storageKey>` or `http(s)://` URL (local relative paths are blocked because `media_stage` skips opaque fences).
+  - **Adding a new image**: Always write standard Markdown `![alt](../../../media/drafts/new-image.png)`. If you hand-craft an `<!--ec:block {"_type":"image",...} -->` fence, `asset.url` must be a canonical `/_emdash/api/media/file/<storageKey>` or `http(s)://` URL (local relative paths are blocked because `media_stage` skips opaque fences).
   - **Reordering a preserved block**: Cut and paste the entire single-line `<!--ec:block ... -->` comment to a new line (emits a reordering warning).
   - **Removing a preserved block**: Delete the entire `<!--ec:block ... -->` line (emits a removal warning). Pass `--allow-modified-opaque-blocks` only when intentionally bypassing Class 3 structural tampering checks.
 - **Referenced Media Mirroring Inside Opaque Fences**: Even though Track B images keep canonical `/_emdash/api/media/file/<storageKey>` URLs inside their JSON payload, `collectArticleStorageKeys()` (`src/sync/media/body_scan.ts`) scans inside `<!--ec:block ... -->` fences as well, so their binary assets are still mirrored into `media/` and protected from media pruning.

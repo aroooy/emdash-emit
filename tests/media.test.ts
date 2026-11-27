@@ -171,7 +171,7 @@ describe('Media Sync Engine', () => {
     // walk reported, or a key a companion YAML records.
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
 
     // A mirror this run's walk never reaches. Its companion records the key, so a reference it satisfies is
@@ -458,7 +458,7 @@ Duplicate reference:
 
   it('pulls only targeted media referenced by an article via pullMedia({ article: ... })', async () => {
     // 1. Setup local article file
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     const articleFilePath = path.join(postsDir, '20261108_01M67ART000000000000000001-test.md');
     fs.writeFileSync(
@@ -574,7 +574,7 @@ Body with targeted image:
   });
 
   it('reports an orphan storageKey when the media record lookup fails (legacy WP assets)', async () => {
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, '20210620_01M67ART000000000000000009-legacy.md'),
@@ -626,7 +626,7 @@ locale: ja
   });
 
   it('mirrors a healthy asset whose record reports the body storageKey without orphan reporting', async () => {
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, '20210620_01M67ART000000000000000010-healthy.md'),
@@ -699,7 +699,7 @@ locale: ja
     // with the real record whose own storageKey differs. The asset is mirrored under its true key; the
     // body key must be reported as verified, never as missing, because a "missing" report invites a
     // duplicate registration of a record that demonstrably exists.
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, '20210620_01M67ART000000000000000012-mismatch.md'),
@@ -822,7 +822,7 @@ locale: ja
   });
 
   it('does not re-download a mirrored asset whose storageKey is already local (idempotent pull)', async () => {
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, '20210620_01M67ART000000000000000011-idempotent.md'),
@@ -926,7 +926,7 @@ locale: ja
     // storageKey ULID is NOT its record id, so matching by "the first segment of the body URL" would
     // hit no record and falsely report an existing asset as orphaned. The canonical path must resolve
     // the real record and mirror it under that record's own filename.
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, '20210620_01M67ARTICLEIDXY0000000123-mixed-id-space.md'),
@@ -1102,7 +1102,7 @@ locale: ja
     // media/ companion YAML already records both ids for the same asset. A confirmed local match must
     // downgrade the reference to verified instead of reporting it as unresolved, because declaring it
     // missing would invite a duplicate registration of a record that exists under another primary key.
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     const mediaDir = path.join(tempDir, 'media');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -1231,7 +1231,7 @@ locale: ja
     const candidates = collectLocalMediaMirrorCandidates(mediaDir);
     expect(candidates.get(OLD_RECORD)?.storageKey).toBe(`${OLD_DISK_KEY}.jpg`);
 
-    const postsDir = path.join(tempDir, 'posts', 'draft');
+    const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
     fs.mkdirSync(postsDir, { recursive: true });
     fs.writeFileSync(
       path.join(postsDir, `20210620_${OLD_ARTICLE}-old.md`),
@@ -1846,7 +1846,7 @@ locale: ja
         });
       });
 
-      const postsDir = path.join(tempDir, 'posts', 'draft');
+      const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
       fs.mkdirSync(postsDir, { recursive: true });
       fs.writeFileSync(
         path.join(postsDir, `20261115_${OLD_ARTICLE}-bounded.md`),
@@ -2078,7 +2078,7 @@ locale: ja
 
     it('protects a mirrored asset an article body still references from pruning', async () => {
       const mediaDir = path.join(tempDir, 'media');
-      const postsDir = path.join(tempDir, 'posts', 'draft');
+      const postsDir = path.join(tempDir, 'posts', 'ja', 'draft');
       fs.mkdirSync(mediaDir, { recursive: true });
       fs.mkdirSync(postsDir, { recursive: true });
 
@@ -2122,7 +2122,7 @@ locale: ja
 
     it('protects a mirror whose record id is named by an article featuredImage', async () => {
       const mediaDir = path.join(tempDir, 'media');
-      const postsDir = path.join(tempDir, 'posts', 'published');
+      const postsDir = path.join(tempDir, 'posts', 'ja', 'published');
       fs.mkdirSync(mediaDir, { recursive: true });
       fs.mkdirSync(postsDir, { recursive: true });
 

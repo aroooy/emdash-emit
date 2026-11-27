@@ -112,13 +112,6 @@ export function initWorkspace(
     fs.mkdirSync(paths.emitDir, { recursive: true });
   }
 
-  const postsDraftDir = path.join(paths.postsDir, 'draft');
-  const postsPublishedDir = path.join(paths.postsDir, 'published');
-  fs.mkdirSync(postsDraftDir, { recursive: true });
-  fs.mkdirSync(postsPublishedDir, { recursive: true });
-
-  const currentVersion = getPackageVersion();
-
   let existing: Partial<EmitConfig> = {};
   if (fs.existsSync(paths.configPath)) {
     try {
@@ -128,6 +121,20 @@ export function initWorkspace(
       existing = {};
     }
   }
+
+  const defaultLocale = (
+    initialConfig?.defaultLocale ??
+    existing.defaultLocale ??
+    DEFAULT_CONFIG.defaultLocale
+  )
+    .trim()
+    .toLowerCase();
+  const postsDraftDir = path.join(paths.postsDir, defaultLocale, 'draft');
+  const postsPublishedDir = path.join(paths.postsDir, defaultLocale, 'published');
+  fs.mkdirSync(postsDraftDir, { recursive: true });
+  fs.mkdirSync(postsPublishedDir, { recursive: true });
+
+  const currentVersion = getPackageVersion();
 
   const config: EmitConfig = {
     ...DEFAULT_CONFIG,

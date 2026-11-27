@@ -345,6 +345,16 @@ export const GUARD_REGISTRY: readonly GuardMeta[] = [
     description:
       'Web管理画面でCo-editingセッション中の記事への書き込み（push / publish / discard-draft）を抑止',
   },
+  {
+    id: 24,
+    name: 'RESERVED_CUSTOM_FIELD_KEY',
+    codes: ['RESERVED_CUSTOM_FIELD_KEY'],
+    stage: 'preflight',
+    severity: 'error',
+    source: 'src/sync/preflight.ts',
+    description:
+      'frontmatter.fields 内の予約キー（title, content, body, featured_image, featuredImage）指定を拒否',
+  },
 ] as const;
 
 /**
@@ -421,6 +431,9 @@ const REMEDIATION_MAP: Record<string, string> = {
   // G23
   ACTIVE_COEDITING_SESSION:
     'Wait until the browser editor closes the co-editing tab, or pass "--force" to proceed anyway (note: in push/discard-draft, "--force" also applies conflict/quarantine overrides).',
+  // G24
+  RESERVED_CUSTOM_FIELD_KEY:
+    'Remove reserved keys (title, content, body, featured_image, featuredImage) from frontmatter.fields and use the corresponding top-level frontmatter field or Markdown body instead.',
   // Standing protections
   UNPUSHED_CHANGES_PROTECTION:
     'The article has unpushed modifications. Push changes first with "emit push" or specify force if deletion is intentional.',

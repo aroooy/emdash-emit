@@ -34,8 +34,8 @@ Authors and AI agents can draft articles completely offline by placing new image
 flowchart TD
     subgraph Stage1 ["1. OFFLINE AUTHORING (Staging in media/drafts/)"]
         D1["Binary placed at: media/drafts/sunset.png"]
-        D2["Body reference: ![Sunset](../../media/drafts/sunset.png) (standalone line)"]
-        D3["Or frontmatter: featuredImage: '../../media/drafts/sunset.png'"]
+        D2["Body reference: ![Sunset](../../../media/drafts/sunset.png) (standalone line)"]
+        D3["Or frontmatter: featuredImage: '../../../media/drafts/sunset.png'"]
         D4["Preflight G5/G10/G11: Verifies standalone line, extension, and size <= 50MiB"]
         D1 --> D2 & D3 --> D4
     end
@@ -54,7 +54,7 @@ flowchart TD
         M1["Moves media/drafts/sunset.png -> media/<markdownRef>.<ext> (where markdownRef = storageKeyToMarkdownRef)"]
         M2["Writes companion media/<markdownRef>.yaml (records both D1 id & R2 storageKey)"]
         M3["Upserts SQLite media_state (PK: storage_key, status: 'ready')"]
-        M4["Rewrites article body on disk to ../../media/<storageKey> (localMediaRefs: true)"]
+        M4["Rewrites article body on disk to ../../../media/<storageKey> (localMediaRefs: true)"]
         M5["Cross-article reuse: Subsequent articles verify GET /_emdash/api/media/{id} (0 re-uploads)"]
         M1 --> M2 --> M3 --> M4 --> M5
     end
@@ -64,13 +64,13 @@ flowchart TD
 
 ### 2.1 Supported Locations & Preflight Guards (G5, G10, G11)
 
-- **Body Images (`![alt](../../media/drafts/<filename>)`)**:
-  - Must appear on a **standalone line** (EmDash Portable Text models images as top-level blocks). Inline images inside a paragraph (`Text ![alt](../../media/drafts/a.png) more text`) are rejected by Guard **G5 (`INLINE_LOCAL_IMAGE_NOT_SUPPORTED`)**.
+- **Body Images (`![alt](../../../media/drafts/<filename>)`)**:
+  - Must appear on a **standalone line** (EmDash Portable Text models images as top-level blocks). Inline images inside a paragraph (`Text ![alt](../../../media/drafts/a.png) more text`) are rejected by Guard **G5 (`INLINE_LOCAL_IMAGE_NOT_SUPPORTED`)**.
   - Must reside under `media/drafts/` (or resolve to an already-promoted asset under `media/`). Arbitrary paths outside `media/` (e.g. `./hero.png`, `/Users/...`) are rejected by Guard **G5 (`LOCAL_IMAGE_DETECTED`)**.
   - Guard **G11 (`LOCAL_IMAGE_AUTO_UPLOAD`)** verifies that the file exists (`MISSING_LOCAL_IMAGE_FILE`), has a supported image extension (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.avif`, `.svg`; otherwise `INVALID_LOCAL_IMAGE_TYPE`), and is ≤ 50 MiB (`LOCAL_IMAGE_SIZE_EXCEEDED`).
   - **Code Fence Exemption**: Only backtick code fences (` ``` `) are exempted from G5/G11 image scanning (`FENCE_POLICY.guard`). Tilde fences (`~~~`) are **not** exempted because the Portable Text parser treats tilde fences as normal paragraphs.
 - **Frontmatter `featuredImage`**:
-  - Accepts a 26-character D1 media record ULID, a local draft image path (`../../media/drafts/cover.jpg`), an already-promoted `media/` path, or `null`.
+  - Accepts a 26-character D1 media record ULID, a local draft image path (`../../../media/drafts/cover.jpg`), an already-promoted `media/` path, or `null`.
   - When a local draft image path is provided, `pushArticle` automatically uploads it, resolves its D1 `mediaId`, and writes the canonical 26-character ULID into frontmatter on disk. Guard **G10 (`INVALID_FEATURED_IMAGE`)** rejects invalid paths or malformed IDs before network calls.
 
 ### 2.2 The 4-Stage Upload & Promotion Flow (`src/sync/push/media_stage.ts`)
@@ -81,12 +81,12 @@ During `emit push` / `sync_push`, each discovered draft image undergoes:
 2. **Binary Upload**: `PUT` binary payload to the signed upload endpoint (cleaning up any orphan `pending` record if upload fails midway).
 3. **Confirmation**: `POST /_emdash/api/media/{id}/confirm` to finalize the D1 record and obtain the canonical `id` and `storageKey`.
 4. **In-Place Promotion (Move, Not Copy)**:
-   - The Markdown body reference is rewritten to the canonical `/_emdash/api/media/file/<storageKey>` URL for the remote payload (and localized to `../../media/<storageKey>` on disk if `localMediaRefs: true`).
+   - The Markdown body reference is rewritten to the canonical `/_emdash/api/media/file/<storageKey>` URL for the remote payload (and localized to `../../../media/<storageKey>` on disk if `localMediaRefs: true`).
    - The binary file in `media/drafts/<filename>` is **moved** to `media/<markdownRef>.<ext>` alongside a generated companion `media/<markdownRef>.yaml`, and recorded in `media_state` (`status: 'ready'`). Removing the file from `media/drafts/` keeps the staging directory clean.
 
 ### 2.3 Cross-Article Reuse of Already-Promoted Assets
 
-If a second article references the same `../../media/drafts/<filename>` (or directly references `../../media/<markdownRef>.<ext>`):
+If a second article references the same `../../../media/drafts/<filename>` (or directly references `../../../media/<markdownRef>.<ext>`):
 
 - Emit resolves the asset through `media_state` and `media/*.yaml` companions (matching the mirror basename or companion `filename:`) instead of re-uploading.
 - Before baking the reused URL into the pushed article body, Emit verifies that the record still exists remotely via `GET /_emdash/api/media/{id}`:
@@ -130,7 +130,7 @@ A `storageKey`-derived stem frequently starts with a 26-character ULID (the stor
 
 When `localMediaRefs` is `true` (the default in `.emit/config.json`):
 
-1. **Disk Spelling Only**: Mirrored body images (`Track A` plain images) are written to the local Markdown file using article-relative paths (`../../media/<storageKey>` for articles in `<collection>/draft|published/`, computed via `mediaRefPrefixForArticle(relPath) + "media/"`). This enables immediate offline image preview in VS Code, Cursor, and Obsidian.
+1. **Disk Spelling Only**: Mirrored body images (`Track A` plain images) are written to the local Markdown file using article-relative paths (`../../../media/<storageKey>` for articles in `<collection>/<locale>/draft|published/`, computed via `mediaRefPrefixForArticle(relPath) + "media/"`). This enables immediate offline image preview in VS Code, Cursor, and Obsidian.
 2. **Canonical Baseline & Remote Payload**: `base_snapshots.body_markdown`, the canonical hash (`calculateHash`), and every remote `PUT`/`POST` payload retain the canonical `/_emdash/api/media/file/<storageKey>` URL. Only `sync_state.local_hash` tracks the localized disk bytes.
 3. **Scope Exclusion**: Frontmatter `featuredImage` and Track B `<!--ec:block ... -->` opaque fences are **never** rewritten by `localMediaRefs`; `featuredImage` remains the 26-character D1 record ULID.
 4. **Layer 0 Pure Precedence Resolver (`resolveLocalMediaRefsOption` in `src/utils/media-ref-precedence.ts`)**:

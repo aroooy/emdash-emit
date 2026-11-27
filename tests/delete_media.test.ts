@@ -50,7 +50,7 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emit-delete-media-ws-'));
     fs.mkdirSync(path.join(tempDir, '.emit'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'media'), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, 'posts', 'published'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'posts', 'ja', 'published'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'posts', 'conflicts'), { recursive: true });
     cache = new CacheDatabase(path.join(tempDir, '.emit', 'cache.db'));
   });
@@ -146,7 +146,7 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
     writeMirror(mediaId1, storageKey1, stem1, '.png');
     writeMirror(mediaId2, storageKey2, stem2, '.jpg');
 
-    const articleRel = 'posts/published/20261123_01M6ARTICLE000000000000001-trip.md';
+    const articleRel = 'posts/ja/published/20261123_01M6ARTICLE000000000000001-trip.md';
     fs.writeFileSync(
       path.join(tempDir, articleRel),
       [
@@ -158,7 +158,7 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
         `featuredImage: ${mediaId2}`,
         '---',
         '',
-        `![Hero](../../media/${storageKey1})`,
+        `![Hero](../../../media/${storageKey1})`,
         '',
       ].join('\n'),
       'utf8',
@@ -197,7 +197,7 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
         'conflicts',
         '20261123_01M6ARTICLE000000000000001-trip.deleted.md',
       ),
-      `---\nid: 01M6ARTICLE000000000000001\nslug: trip\ntitle: "Trip"\nstatus: draft\n---\n\n![Hero](../../media/${storageKey1})\n`,
+      `---\nid: 01M6ARTICLE000000000000001\nslug: trip\ntitle: "Trip"\nstatus: draft\n---\n\n![Hero](../../../media/${storageKey1})\n`,
       'utf8',
     );
 
@@ -311,7 +311,7 @@ describe('deleteMedia (v0.1.53: Standalone Media Deletion & Guard G20 Reference 
     ).rejects.toMatchObject({ code: 'MEDIA_COMPANION_NOT_FOUND' });
 
     // 5. GET 404 (already-deleted) + batch partial completion when 2nd item is refused by G20
-    const articleRel = 'posts/published/20261123_01M6ARTICLE000000000000002-use2.md';
+    const articleRel = 'posts/ja/published/20261123_01M6ARTICLE000000000000002-use2.md';
     fs.writeFileSync(
       path.join(tempDir, articleRel),
       `---\nid: 01M6ARTICLE000000000000002\nslug: use2\ntitle: "Use2"\nstatus: published\nfeaturedImage: ${mediaId2}\n---\n\nBody\n`,

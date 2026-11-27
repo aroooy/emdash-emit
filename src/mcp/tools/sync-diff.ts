@@ -35,7 +35,7 @@ export function registerSyncDiffTool(server: McpServer, resolveContext: ContextR
         .string()
         .optional()
         .describe(
-          'Relative path to the markdown file to inspect (e.g. "posts/draft/20261103_01...-my-article.md")',
+          'Relative path to the markdown file to inspect (e.g. "posts/ja/draft/20261103_01...-my-article.md")',
         ),
       id: z.string().optional().describe('Article ID (ULID) to inspect'),
       profile: z.string().optional().describe('Target profile name for multi-site setups'),

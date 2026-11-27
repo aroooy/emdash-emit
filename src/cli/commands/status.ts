@@ -21,7 +21,11 @@
  */
 
 import type { Command } from 'commander';
-import { getWorkspaceStatus, filterStatusItems } from '../../sync/status.js';
+import {
+  getWorkspaceStatus,
+  filterStatusItems,
+  buildTranslationCoverage,
+} from '../../sync/status.js';
 import { inspectArticleDiff } from '../../sync/diff.js';
 import { formatSnapshotAge, formatSnapshotTimestamp } from '../../presentation/article_report.js';
 import type { CliContextResolver } from '../context.js';
@@ -107,6 +111,7 @@ export function registerStatusInitCommands(
     .option('--slug <slug>', 'Filter articles by slug')
     .option('--status <status>', 'Filter by publication status (draft or published)')
     .option('--sync-status <status>', 'Filter by sync state (synced, modified, untracked, invalid)')
+    .option('--i18n', 'Show translation group coverage matrix across locales')
     .option('-p, --profile <name>', 'Explicitly use a specific connection profile')
     .action((options) => {
       try {
@@ -238,6 +243,34 @@ export function registerStatusInitCommands(
             `📸 Snapshot: ${formatSnapshotTimestamp(snapIso)} (${formatSnapshotAge(snapIso)}) · ${snapMeta.articleCount} articles · ${snapMeta.mediaCount} media${snapStale}\n`,
           );
         }
+
+        if (options.i18n) {
+          const coverage = buildTranslationCoverage(status.items);
+          console.log(
+            `--- Translation Coverage (${coverage.locales.join(', ') || 'none'} | ${coverage.groups.length} group(s), ${coverage.ungroupedCount} ungrouped) ---`,
+          );
+          if (coverage.groups.length === 0) {
+            console.log('  (No translation groups found in local workspace)\n');
+          } else {
+            for (const group of coverage.groups) {
+              const missingEntry = coverage.missingPairs.find(
+                (m) => m.translationGroup === group.translationGroup,
+              );
+              const missingNote = missingEntry
+                ? ` | missing: [${missingEntry.missingLocales.join(', ')}]`
+                : ' | complete';
+              console.log(
+                `  🌐 ${group.translationGroup}: [${group.locales.join(', ')}]${missingNote}`,
+              );
+              for (const art of group.articles) {
+                console.log(
+                  `     - [${art.locale}] (${art.status}, ${art.syncStatus}) ${art.filePath}`,
+                );
+              }
+            }
+            console.log('');
+          }
+        }
       } catch (err) {
         reportActionFailure(err);
       }
@@ -327,12 +360,12 @@ export function registerStatusInitCommands(
 
 ■ 4-Step Article Authoring Flow
   1. Scaffold:      emit new <slug> --title "Article Title"
-                    --> Automatically generates posts/draft/<yyyyMMdd>_<ulid>-<title>.md
-  2. Write & Edit:  Freely edit posts/draft/*.md with editor or AI.
+                    --> Automatically generates posts/<locale>/draft/<yyyyMMdd>_<ulid>-<title>.md
+  2. Write & Edit:  Freely edit posts/<locale>/draft/*.md with editor or AI.
                     --> No need to write a redundant # Title header in the body.
                     --> Reference frontmatter taxonomies for categories and tags.
                     --> Place offline images in media/drafts/<file> and reference them on a
-                        standalone line: ![alt](../../media/drafts/<file>)
+                        standalone line: ![alt](../../../media/drafts/<file>)
   3. Push Draft:    emit push <file>
                     --> Auto-uploads media/drafts/* images, rewrites URLs, and syncs draft.
   4. Publish Live:  Update frontmatter status to "published", then run:

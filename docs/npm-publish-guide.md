@@ -6,15 +6,15 @@
 
 ## 1. パッケージ概要
 
-| 項目 | 設定値 / 説明 |
-|---|---|
-| **npm パッケージ名** | `emdash-emit` |
-| **CLI 実行コマンド** | `emit` |
-| **MCP サーバー名** | `emit`（起動引数: `emit mcp` または `npx -y emdash-emit mcp`） |
-| **レジストリ** | npm Public Registry (`https://registry.npmjs.org/`) |
-| **アクセス設定** | Public (`--access public`) |
-| **モジュール形式** | Node.js ESM (`"type": "module"`) |
-| **対応 Node.js バージョン** | `>=22.0.0` |
+| 項目                        | 設定値 / 説明                                                  |
+| --------------------------- | -------------------------------------------------------------- |
+| **npm パッケージ名**        | `emdash-emit`                                                  |
+| **CLI 実行コマンド**        | `emit`                                                         |
+| **MCP サーバー名**          | `emit`（起動引数: `emit mcp` または `npx -y emdash-emit mcp`） |
+| **レジストリ**              | npm Public Registry (`https://registry.npmjs.org/`)            |
+| **アクセス設定**            | Public (`--access public`)                                     |
+| **モジュール形式**          | Node.js ESM (`"type": "module"`)                               |
+| **対応 Node.js バージョン** | `>=22.0.0`                                                     |
 
 ---
 
@@ -30,6 +30,7 @@
 ```
 
 ### 同梱されるもの
+
 - `dist/`: TypeScript のコンパイル成果物（JS、型定義 `.d.ts`、ソースマップ `.map`）
   - `dist/bin/emit.js`: CLI エントリポイント（シバン `#!/usr/bin/env node` 付き）
   - `dist/mcp/server.js`: MCP サーバー本体
@@ -38,6 +39,7 @@
 - `package.json`: 依存関係およびメタデータ定義
 
 ### 自動除外されるもの
+
 - `src/`（TypeScript 原本ソース）
 - `tests/`（Vitest テストコード・フィクスチャ）
 - `.git/`, `.gitignore`, `tsconfig.json`, `vitest.config.ts`, `.prettierrc.json`
@@ -91,6 +93,7 @@ npm version minor
 # メジャーバージョン（破壊的変更あり）: 0.1.0 -> 1.0.0
 npm version major
 ```
+
 ※ `npm version` コマンドにより、`package.json` のバージョン書き換えと Git コミット・タグ作成が自動で行われます。
 
 ### 3.4. 公開実行（Publish）
@@ -147,6 +150,7 @@ npx emdash-emit pull
 Claude Desktop や Antigravity 等の MCP クライアントから `emit` を呼び出す設定方法です。
 
 ### パターン A: グローバルインストール済みの場合（高速起動）
+
 設定ファイル（例: `~/.gemini/config/mcp_config.json` や Claude Desktop の設定）に以下を記述します。
 
 ```json
@@ -161,6 +165,7 @@ Claude Desktop や Antigravity 等の MCP クライアントから `emit` を呼
 ```
 
 ### パターン B: npx 経由で起動する場合（インストール不要・ポータブル）
+
 マシンへの事前インストールなしで、設定ファイルのみで動作させたい場合です。
 
 ```json
@@ -203,10 +208,11 @@ emit pull-media
 ## 7. トラブルシューティング（公開・運用時）
 
 ### Q1: `npm publish` 時に `E403 Forbidden` または `404 Not Found` が発生する
+
 - `npm whoami` で正しいアカウントにログインしているか確認してください。
 - 初回公開時はスコープなしパッケージの場合 `--access public` の付与が必須です。
 
 ### Q2: 誤って公開したバージョンを取り消したい
+
 - 公開後 **72時間以内** かつ依存関係が少ない場合に限り `npm unpublish emdash-emit@x.y.z` が可能です。
 - 通常はアンパブリッシュせず、バグ修正後にバージョンをインクリメント（`npm version patch`）して再公開することが推奨されます。
-
